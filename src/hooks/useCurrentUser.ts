@@ -31,7 +31,7 @@ export function useCurrentUser() {
   // AppSigner serves `decrypt` from the persistent cache; signerWithNudge toasts
   // on slow remote signs. Only this signer — not the NIP-46 transport key or AUTH signer.
   const cached = useCallback(
-    (user: NUser, isBunkerConnected?: () => boolean): NUser =>
+    (user: NUser, isBunkerConnected?: () => boolean, bunkerRelays?: string[]): NUser =>
       new NUser(
         user.method,
         user.pubkey,
@@ -40,7 +40,7 @@ export function useCurrentUser() {
           isBunkerConnected,
           // A NIP-46 or NIP-55 signature may wait on the user approving it in the signer app.
           user.method === "bunker"
-            ? { remote: true, hardTimeoutMs: NIP46_SIGN_TIMEOUT_MS + 10_000 }
+            ? { remote: true, signerRelays: bunkerRelays, hardTimeoutMs: NIP46_SIGN_TIMEOUT_MS + 10_000 }
             : user.method === "x-android-signer"
               ? { hardTimeoutMs: NIP46_SIGN_TIMEOUT_MS + 10_000 }
               : undefined,
@@ -87,6 +87,7 @@ export function useCurrentUser() {
             ),
             // Lets the nudge say "signer relay unreachable" when all bunker sockets are down.
             () => transport.isConnected(),
+            bunkerRelays,
           );
         }
         case "extension":

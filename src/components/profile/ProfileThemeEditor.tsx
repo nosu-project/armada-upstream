@@ -1,6 +1,7 @@
-import { Image as ImageIcon, Loader2, Trash2, Upload } from "lucide-react";
-import { useRef, useState } from "react";
+import { Loader2 } from "lucide-react";
+import { useState } from "react";
 
+import { ThemeBackgroundField } from "@/components/ThemeBackgroundField";
 import { ThemeBuilderFields } from "@/components/ThemeBuilderFields";
 import { Button } from "@/components/ui/button";
 import { ChromeDialogContent, Dialog } from "@/components/ui/dialog";
@@ -15,7 +16,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { usePublishProfileTheme } from "@/hooks/usePublishProfileTheme";
-import { useUploadFile } from "@/hooks/useUploadFile";
 import { toast } from "@/hooks/useToast";
 import { loadThemeFont } from "@/lib/fontLoader";
 import { themeFontOptions, type ThemeFontCategory } from "@/lib/themeFonts";
@@ -103,8 +103,7 @@ function FontSelect({
 
 function ThemeEditorForm({ current, onDone }: { current?: DittoTheme; onDone: () => void }) {
   const { save, remove, isPending } = usePublishProfileTheme();
-  const { mutateAsync: uploadFile, isPending: uploading } = useUploadFile();
-  const fileRef = useRef<HTMLInputElement>(null);
+  const [uploading, setUploading] = useState(false);
 
   const [colors, setColors] = useState<CoreThemeColors>(current?.colors ?? builderStarterColors);
   const [title, setTitle] = useState(current?.title === "Untitled theme" ? "" : current?.title ?? "");
@@ -112,22 +111,9 @@ function ThemeEditorForm({ current, onDone }: { current?: DittoTheme; onDone: ()
   const [titleFontFamily, setTitleFontFamily] = useState(current?.titleFont?.family ?? "");
   const [background, setBackground] = useState<ThemeBackground | undefined>(current?.background);
 
-  const pickBackground = async (file: File | undefined) => {
-    if (!file) return;
-    try {
-      const tags = await uploadFile(file);
-      const url = tags[0][1];
-      const mimeType = tags.find(([n]) => n === "m")?.[1];
-      const dimensions = tags.find(([n]) => n === "dim")?.[1];
-      setBackground({ url, mode: background?.mode ?? "cover", mimeType, dimensions });
-    } catch (e) {
-      toast({
-        title: "Couldn't upload background",
-        description: e instanceof Error ? e.message : "Upload failed.",
-        variant: "destructive",
-      });
-    }
-  };
+  const unchanged = !!current
+    && JSON.stringify([colors, background, fontFamily, titleFontFamily])
+      === JSON.stringify([current.colors, current.background, current.font?.family ?? "", current.titleFont?.family ?? ""]);
 
   const doSave = async () => {
     try {
@@ -138,7 +124,9 @@ function ThemeEditorForm({ current, onDone }: { current?: DittoTheme; onDone: ()
         titleFont: titleFontFamily ? { family: titleFontFamily } : undefined,
         background,
         description: current?.description,
-        sourceRef: current?.sourceRef,
+        // The creator stays credited only while the theme is still their work.
+        sourceRef: unchanged ? current?.sourceRef : undefined,
+        source: unchanged ? current?.source : undefined,
       });
       toast({ title: "Profile theme saved" });
       onDone();
@@ -197,70 +185,7 @@ function ThemeEditorForm({ current, onDone }: { current?: DittoTheme; onDone: ()
         />
       </div>
 
-      <div className="space-y-1.5">
-        <Label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-          Background image
-        </Label>
-        <input
-          ref={fileRef}
-          type="file"
-          accept="image/*"
-          className="hidden"
-          onChange={(e) => {
-            void pickBackground(e.target.files?.[0]);
-            e.target.value = "";
-          }}
-        />
-        <div className="flex items-center gap-2">
-          {background?.url ? (
-            <div
-              className="size-11 shrink-0 clip-corner-lg bg-cover bg-center bg-secondary"
-              style={{ backgroundImage: `url("${background.url}")` }}
-            />
-          ) : (
-            <div className="flex size-11 shrink-0 items-center justify-center clip-corner-lg bg-secondary text-muted-foreground">
-              <ImageIcon className="size-5" />
-            </div>
-          )}
-          <Button
-            variant="secondary"
-            size="sm"
-            className="clip-corner-lg"
-            disabled={uploading}
-            onClick={() => fileRef.current?.click()}
-          >
-            {uploading ? <Loader2 className="size-4 animate-spin" /> : <Upload className="size-4" />}
-            {background?.url ? "Replace" : "Upload"}
-          </Button>
-          {background?.url && (
-            <>
-              <Select
-                value={background.mode ?? "cover"}
-                onValueChange={(v) =>
-                  setBackground({ ...background, mode: v === "tile" ? "tile" : "cover" })
-                }
-              >
-                <SelectTrigger className="h-9 w-24">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="cover">Fill</SelectItem>
-                  <SelectItem value="tile">Tile</SelectItem>
-                </SelectContent>
-              </Select>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="size-9 text-muted-foreground hover:text-destructive"
-                aria-label="Remove background"
-                onClick={() => setBackground(undefined)}
-              >
-                <Trash2 className="size-4" />
-              </Button>
-            </>
-          )}
-        </div>
-      </div>
+      <ThemeBackgroundField value={background} onChange={setBackground} onUploadingChange={setUploading} />
 
       <div className="space-y-2">
         <Button className="w-full clip-corner-lg" onClick={doSave} disabled={isPending || uploading}>

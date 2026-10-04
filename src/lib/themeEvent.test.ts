@@ -3,8 +3,11 @@ import { describe, expect, it } from "vitest";
 import {
   ACTIVE_THEME_KIND,
   THEME_DEFINITION_KIND,
+  buildActiveThemeEvent,
   buildThemeDefinitionEvent,
+  isAdoptedTheme,
   parseDittoTheme,
+  themeEventToConfig,
 } from "@/lib/themeEvent";
 import { hslStringToHex } from "@/lib/colorUtils";
 
@@ -136,5 +139,48 @@ describe("parseDittoTheme", () => {
     built.tags = built.tags.filter(([n]) => n !== "title");
 
     expect(parseDittoTheme(asRumor(built))!.title).toBe("the-slug");
+  });
+});
+
+describe("creator credit on adopted themes", () => {
+  const CREATOR = "c".repeat(64);
+  const KEEPER = "b".repeat(64);
+
+  it("credits the creator with `a` and `p`, and reads it back", () => {
+    const built = buildThemeDefinitionEvent("Dusk", COLORS, "dusk-copy", {
+      source: { pubkey: CREATOR, identifier: "dusk" },
+    });
+    expect(built.tags).toContainEqual(["a", `${THEME_DEFINITION_KIND}:${CREATOR}:dusk`]);
+    expect(built.tags).toContainEqual(["p", CREATOR]);
+
+    const event = { ...asRumor(built), pubkey: KEEPER };
+    expect(parseDittoTheme(event)!.source).toEqual({ pubkey: CREATOR, identifier: "dusk" });
+    expect(isAdoptedTheme(event)).toBe(true);
+  });
+
+  it("falls back to `p` when there is no well-formed `a`", () => {
+    const built = buildActiveThemeEvent(COLORS, { source: { pubkey: CREATOR } });
+    built.tags.push(["a", "36767:not-hex:x"]);
+    expect(parseDittoTheme({ ...asRumor(built), pubkey: KEEPER })!.source).toEqual({ pubkey: CREATOR });
+  });
+
+  it("ignores credit that names the event's own author or a malformed pubkey", () => {
+    const self = buildThemeDefinitionEvent("Mine", COLORS, "mine", { source: { pubkey: CREATOR } });
+    expect(isAdoptedTheme({ ...asRumor(self), pubkey: CREATOR })).toBe(false);
+
+    const bad = buildThemeDefinitionEvent("Bad", COLORS, "bad");
+    bad.tags.push(["p", "nope"]);
+    expect(parseDittoTheme({ ...asRumor(bad), pubkey: KEEPER })!.source).toBeUndefined();
+  });
+
+  it("adopting credits a definition's author, or a copy's original creator", () => {
+    const original = { ...asRumor(buildThemeDefinitionEvent("Dusk", COLORS, "dusk")), pubkey: CREATOR };
+    expect(themeEventToConfig(original)!.source).toEqual({ pubkey: CREATOR, identifier: "dusk" });
+
+    const copy = {
+      ...asRumor(buildThemeDefinitionEvent("Dusk", COLORS, "dusk-copy", { source: { pubkey: CREATOR, identifier: "dusk" } })),
+      pubkey: KEEPER,
+    };
+    expect(themeEventToConfig(copy)!.source).toEqual({ pubkey: CREATOR, identifier: "dusk" });
   });
 });

@@ -38,7 +38,7 @@ import {
   type DiscoverCuration,
 } from "@/lib/discoverSource";
 import { normalizeRelayUrl } from "@/lib/platform";
-import { THEME_DEFINITION_KIND, parseDittoTheme } from "@/lib/themeEvent";
+import { THEME_DEFINITION_KIND, isAdoptedTheme, parseDittoTheme } from "@/lib/themeEvent";
 
 import type { NostrFilter } from "@nostrify/nostrify";
 import type { NostrRumor } from "@/lib/nostrRumor";
@@ -728,7 +728,8 @@ export function useDiscoverThemes(query: string): DiscoverFeed<NostrRumor> {
   const data = useMemo(() => {
     if (!result.data) return undefined;
     const events = newestPerAddr(result.data.pages.flatMap((p) => p.events));
-    let usable = events.filter((e) => parseDittoTheme(e) !== null);
+    // Credited copies kept in someone's library aren't new themes.
+    let usable = events.filter((e) => parseDittoTheme(e) !== null && !isAdoptedTheme(e));
     if (q) {
       const needle = q.toLowerCase();
       usable = usable.filter((e) => parseDittoTheme(e)?.title.toLowerCase().includes(needle));

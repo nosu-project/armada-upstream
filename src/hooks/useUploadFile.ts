@@ -6,10 +6,12 @@ import { useCallback } from "react";
 import { z } from "zod";
 
 import { getEffectiveBlossomServers, normalizeBlossomServerUrl } from "@/lib/blossom";
+import { mediaSrc } from "@/lib/mediaPolicy";
 import { preflightRefusal, uploadTimeoutMs, type PreflightRequest } from "@/lib/blossomPreflight";
 
 import { useAppContext } from "./useAppContext";
 import { useCurrentUser } from "./useCurrentUser";
+import { useMediaPolicy } from "./useMediaPolicy";
 
 import type { NostrSigner } from "@nostrify/nostrify";
 
@@ -202,6 +204,74 @@ function finishTags(tags: UploadTags, filename: string): UploadTags {
   const ext = getFileExtension(filename);
   if (ext) tags[0][1] = appendExtensionIfMissing(tags[0][1], ext);
   return tags;
+}
+
+/**
+ * Copy a remote file onto the user's own Blossom servers and return the new URL,
+ * so borrowed content (an adopted theme's background) survives its owner
+ * deleting or swapping it. Tries a server-side BUD-04 mirror (Blossom blob URLs
+ * only), else downloads through the media policy and uploads. A file already on
+ * one of the user's servers is returned as-is.
+ */
+export function useRehostFile() {
+  const { config } = useAppContext();
+  const { user } = useCurrentUser();
+  const policy = useMediaPolicy();
+
+  return useMutation({
+    mutationFn: async (sourceUrl: string): Promise<string> => {
+      if (!user) throw new Error("Must be logged in to upload files");
+
+      const servers = getEffectiveBlossomServers(
+        config.appBlossomServers,
+        config.blossomServerMetadata,
+        config.useAppBlossomServers,
+        config.preferredBlossomServer,
+      );
+      const originOf = (u: string) => {
+        try {
+          return new URL(u).origin;
+        } catch {
+          return undefined;
+        }
+      };
+      const sourceOrigin = originOf(sourceUrl);
+      if (servers.some((s) => originOf(s) === sourceOrigin)) return sourceUrl;
+
+      const uploader = new BlossomUploader({
+        servers,
+        signer: user.signer,
+        fetch: (input, init) =>
+          globalThis.fetch(input, {
+            ...init,
+            signal: init?.signal
+              ? AbortSignal.any([init.signal, AbortSignal.timeout(60_000)])
+              : AbortSignal.timeout(60_000),
+          }),
+      });
+
+      let tags: string[][];
+      try {
+        tags = await uploader.mirror(sourceUrl);
+      } catch {
+        // Fetching the creator's host from here is a sender-named load like any image.
+        const src = mediaSrc(sourceUrl, policy);
+        if (!src) throw new Error("This file can't be copied.");
+        const response = await globalThis.fetch(src, { signal: AbortSignal.timeout(60_000) });
+        if (!response.ok) throw new Error(`Download failed (${response.status})`);
+        const blob = await response.blob();
+        const name = new URL(sourceUrl).pathname.split("/").pop() || "file";
+        tags = await uploader.upload(new File([blob], name, { type: blob.type }));
+      }
+
+      const url = repairDoubledScheme(tags[0][1]);
+      const mirrorServers = servers.filter((s) => originOf(s) !== originOf(url));
+      if (mirrorServers.length > 0) {
+        mirrorToServers(url, mirrorServers, user.signer).catch(() => { /* best-effort */ });
+      }
+      return url;
+    },
+  });
 }
 
 /**

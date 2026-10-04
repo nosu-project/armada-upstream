@@ -1,22 +1,25 @@
-import { BookmarkPlus, Check, Link2, Loader2, Palette } from "lucide-react";
+import { BookmarkPlus, Check, Link2, Loader2, Palette, Pencil } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { useQueryClient } from "@tanstack/react-query";
 
 import { DisplayName } from "@/components/DisplayName";
 import { ProfilePreviewCard } from "@/components/chat/ProfilePreviewCard";
+import { ThemeCreatorDialog } from "@/components/discover/ThemeCreatorDialog";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useMediaSrc } from "@/hooks/useMediaPolicy";
 import { useNaddrLink } from "@/hooks/useNaddrLink";
-import { useNostrPublish } from "@/hooks/useNostrPublish";
 import { useTheme } from "@/hooks/useTheme";
+import { useThemeLibrary } from "@/hooks/useThemeLibrary";
+import { useUserThemes } from "@/hooks/useUserThemes";
 import { toast } from "@/hooks/useToast";
 import { getAvatarShape } from "@/lib/avatarShape";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { naddrPath } from "@/lib/naddrLink";
-import { buildThemeDefinitionEvent, parseDittoTheme } from "@/lib/themeEvent";
+import { parseDittoTheme, themeEventToConfig } from "@/lib/themeEvent";
+import { startThemePreview } from "@/lib/themePreview";
 import { cn } from "@/lib/utils";
 import { coreToTokens } from "@/themes";
 
@@ -27,39 +30,61 @@ interface ThemeDiscoverCardProps {
   className?: string;
 }
 
-/** A kind-36767 theme card: preview, author, Apply (local only), Save to library, Copy link. */
+/**
+ * A kind-36767 theme card: preview, creator, Try (a local preview until confirmed),
+ * Save to library (credited copy) or Edit for the user's own, Copy link.
+ */
 export function ThemeDiscoverCard({ event, className }: ThemeDiscoverCardProps) {
   const theme = useMemo(() => parseDittoTheme(event), [event]);
-  const { customTheme, theme: mode, applyCustomTheme } = useTheme();
+  const { customTheme, theme: mode } = useTheme();
   const { user } = useCurrentUser();
-  const { mutateAsync: publishEvent, isPending: saving } = useNostrPublish();
-  const queryClient = useQueryClient();
-  const author = useAuthor(event.pubkey);
+  const { data: userThemes } = useUserThemes();
+  const { publishTheme, isPending: saving } = useThemeLibrary();
+  // A credited copy shows the theme's creator, not whoever kept it.
+  const creator = theme?.source?.pubkey ?? event.pubkey;
+  const author = useAuthor(creator);
   const metadata = author.data?.metadata;
-  const displayName = getDisplayName(metadata, event.pubkey);
-  const [justApplied, setJustApplied] = useState(false);
-  const [saved, setSaved] = useState(false);
+  const displayName = getDisplayName(metadata, creator);
+  const [justSaved, setJustSaved] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
   const { naddr, copied, copy } = useNaddrLink(event);
+  const backgroundSrc = useMediaSrc(theme?.background?.url);
 
   const tokens = useMemo(() => (theme ? coreToTokens(theme.colors) : null), [theme]);
 
   if (!theme || !tokens) return null;
 
+  const isOwn = !!user && event.pubkey === user.pubkey;
+  const config = themeEventToConfig(event);
+  const savedCopy = !isOwn && config?.source
+    ? userThemes?.find((t) =>
+      t.source?.pubkey === config.source?.pubkey && t.source?.identifier === config.source?.identifier)
+    : undefined;
+  const saved = justSaved || !!savedCopy;
+
   const isActive =
     mode === "custom" &&
     !!customTheme &&
-    JSON.stringify(customTheme.colors) === JSON.stringify(theme.colors);
+    JSON.stringify(customTheme.colors) === JSON.stringify(theme.colors) &&
+    customTheme.background?.url === config?.background?.url;
 
-  const onApply = () => {
-    applyCustomTheme({ title: theme.title, colors: theme.colors });
-    setJustApplied(true);
+  const onTry = () => {
+    if (config) startThemePreview(config);
   };
 
   const onSave = async () => {
+    if (!config || saved) return;
     try {
-      await publishEvent(buildThemeDefinitionEvent(theme.title, theme.colors));
-      setSaved(true);
-      void queryClient.invalidateQueries({ queryKey: ["user-themes"] });
+      await publishTheme({
+        title: theme.title,
+        colors: theme.colors,
+        font: theme.font,
+        titleFont: theme.titleFont,
+        background: theme.background,
+        description: theme.description,
+        source: config.source,
+      });
+      setJustSaved(true);
       toast({ title: "Saved to your themes", description: theme.title });
     } catch (e) {
       toast({
@@ -70,8 +95,6 @@ export function ThemeDiscoverCard({ event, className }: ThemeDiscoverCardProps) 
     }
   };
 
-  const applied = isActive || justApplied;
-
   return (
     <div
       className={cn(
@@ -81,14 +104,24 @@ export function ThemeDiscoverCard({ event, className }: ThemeDiscoverCardProps) 
       onClick={(e) => e.stopPropagation()}
     >
       <div
-        className="flex items-end gap-1.5 p-3 h-20"
+        className="relative flex items-end gap-1.5 p-3 h-20"
         style={{ backgroundColor: `hsl(${tokens.background})` }}
       >
-        <span className="size-6 rounded-full" style={{ backgroundColor: `hsl(${tokens.primary})` }} />
-        <span className="size-6 rounded-full" style={{ backgroundColor: `hsl(${tokens.secondary})` }} />
-        <span className="flex-1 h-2 rounded-full" style={{ backgroundColor: `hsl(${tokens.muted})` }} />
+        {backgroundSrc && (
+          <img
+            src={backgroundSrc}
+            alt=""
+            aria-hidden
+            className="absolute inset-0 size-full object-cover opacity-50"
+            decoding="async"
+            loading="lazy"
+          />
+        )}
+        <span className="relative size-6 rounded-full" style={{ backgroundColor: `hsl(${tokens.primary})` }} />
+        <span className="relative size-6 rounded-full" style={{ backgroundColor: `hsl(${tokens.secondary})` }} />
+        <span className="relative flex-1 h-2 rounded-full" style={{ backgroundColor: `hsl(${tokens.muted})` }} />
         <span
-          className="clip-corner-lg px-2 py-1 text-xs font-medium"
+          className="relative clip-corner-lg px-2 py-1 text-xs font-medium"
           style={{ backgroundColor: `hsl(${tokens.primary})`, color: `hsl(${tokens.primaryForeground})` }}
         >
           Aa
@@ -111,10 +144,10 @@ export function ThemeDiscoverCard({ event, className }: ThemeDiscoverCardProps) 
           <span
             className={cn(
               "text-[10px] px-1.5 py-px rounded-full shrink-0",
-              applied ? "bg-success/15 text-success" : "bg-secondary text-muted-foreground",
+              isActive ? "bg-success/15 text-success" : "bg-secondary text-muted-foreground",
             )}
           >
-            {applied ? "Applied" : "Theme"}
+            {isActive ? "Applied" : "Theme"}
           </span>
         </div>
 
@@ -122,7 +155,7 @@ export function ThemeDiscoverCard({ event, className }: ThemeDiscoverCardProps) 
           <p className="text-xs text-muted-foreground line-clamp-2 -mt-1">{theme.description}</p>
         )}
 
-        <ProfilePreviewCard pubkey={event.pubkey}>
+        <ProfilePreviewCard pubkey={creator}>
           <button
             type="button"
             className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground min-w-0"
@@ -134,31 +167,41 @@ export function ThemeDiscoverCard({ event, className }: ThemeDiscoverCardProps) 
               </AvatarFallback>
             </Avatar>
             <span className="truncate">
-              by <DisplayName pubkey={event.pubkey} name={displayName} />
+              by <DisplayName pubkey={creator} name={displayName} />
             </span>
           </button>
         </ProfilePreviewCard>
 
         <div className="mt-auto flex items-center gap-2">
-          {applied ? (
+          {isActive ? (
             <Button variant="secondary" className="flex-1 clip-corner-lg" disabled>
               <Check className="size-4" />
               Applied
             </Button>
           ) : (
-            <Button className="flex-1 clip-corner-lg" onClick={onApply}>
+            <Button className="flex-1 clip-corner-lg" onClick={onTry}>
               <Palette className="size-4" />
-              Apply
+              Try this theme
             </Button>
           )}
-          {user && (
+          {isOwn ? (
+            <Button
+              variant="secondary"
+              className="shrink-0 clip-corner-lg"
+              onClick={() => setEditOpen(true)}
+              aria-label="Edit theme"
+              title="Edit theme"
+            >
+              <Pencil className="size-4" />
+            </Button>
+          ) : user && (
             <Button
               variant="secondary"
               className="shrink-0 clip-corner-lg"
               onClick={onSave}
               disabled={saving || saved}
-              aria-label="Save to my themes"
-              title="Save to my themes"
+              aria-label={saved ? "In your themes" : "Save to my themes"}
+              title={saved ? "In your themes" : "Save to my themes"}
             >
               {saving ? (
                 <Loader2 className="size-4 animate-spin" />
@@ -182,6 +225,10 @@ export function ThemeDiscoverCard({ event, className }: ThemeDiscoverCardProps) 
           )}
         </div>
       </div>
+
+      {isOwn && editOpen && (
+        <ThemeCreatorDialog open={editOpen} onOpenChange={setEditOpen} editing={{ ...theme, event }} />
+      )}
     </div>
   );
 }

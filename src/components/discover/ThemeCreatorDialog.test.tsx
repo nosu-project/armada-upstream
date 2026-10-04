@@ -24,6 +24,13 @@ vi.mock("@/hooks/useTheme", () => ({
   useTheme: () => ({ applyCustomTheme: h.applyCustomTheme }),
 }));
 vi.mock("@/hooks/useToast", () => ({ toast: h.toast }));
+vi.mock("@/hooks/useCurrentUser", () => ({
+  useCurrentUser: () => ({ user: { pubkey: "a".repeat(64) } }),
+}));
+// Background uploads go to Blossom; not exercised here.
+vi.mock("@/hooks/useUploadFile", () => ({
+  useUploadFile: () => ({ mutateAsync: vi.fn(), isPending: false }),
+}));
 vi.mock("@/hooks/useAppContext", () => ({
   useAppContext: () => ({ config: { appRelays: ["wss://relay.example"] } }),
 }));
@@ -234,5 +241,74 @@ describe("ThemeCreatorDialog", () => {
     expect(h.applyCustomTheme).not.toHaveBeenCalled();
     expect(onOpenChange).not.toHaveBeenCalled();
     expect(queryClient.getQueryData<NostrRumor[]>(BROWSE_KEY)).toEqual([{ id: "existing-theme" }]);
+  });
+
+  describe("editing one of the user's themes", () => {
+    const OWN = {
+      id: "own-theme-event",
+      kind: THEME_DEFINITION_KIND,
+      pubkey: "a".repeat(64),
+      created_at: 1,
+      content: "",
+      tags: [
+        ["d", "dusk-1a2b3c"],
+        ["title", "Dusk"],
+        ["c", "#100b15", "background"],
+        ["c", "#ffffff", "text"],
+        ["c", "#ff6600", "primary"],
+      ],
+    } as NostrRumor;
+    const EDITING = {
+      identifier: "dusk-1a2b3c",
+      title: "Dusk",
+      colors: { background: "275 31% 6%", text: "0 0% 100%", primary: "24 100% 50%" },
+      event: OWN,
+    };
+
+    function renderEditor() {
+      const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      queryClient.setQueryData(["user-themes", "a".repeat(64)], [EDITING]);
+      const onOpenChange = vi.fn();
+      render(
+        <QueryClientProvider client={queryClient}>
+          <ThemeCreatorDialog open onOpenChange={onOpenChange} editing={EDITING} />
+        </QueryClientProvider>,
+      );
+      return { queryClient, onOpenChange };
+    }
+
+    it("republishes under the same d-tag, replacing the old event", async () => {
+      h.publishEvent.mockResolvedValue({ ...OWN, id: "edited" });
+      renderEditor();
+      fireEvent.change(nameField(), { target: { value: "Dusk II" } });
+      fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+
+      await waitFor(() => expect(h.publishEvent).toHaveBeenCalledTimes(1));
+      const template = h.publishEvent.mock.calls[0][0];
+      expect(template.tags).toContainEqual(["d", "dusk-1a2b3c"]);
+      expect(template.tags).toContainEqual(["title", "Dusk II"]);
+      expect(template.prev).toBe(OWN);
+      // Editing doesn't silently re-skin the app.
+      expect(h.applyCustomTheme).not.toHaveBeenCalled();
+    });
+
+    it("deletes by address after confirming, and drops it from the library", async () => {
+      h.publishEvent.mockResolvedValue({ id: "deletion" });
+      const { queryClient, onOpenChange } = renderEditor();
+      fireEvent.click(screen.getByRole("button", { name: "Delete theme" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Delete" }));
+
+      await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+      expect(h.publishEvent).toHaveBeenCalledWith({
+        kind: 5,
+        content: "",
+        tags: [
+          ["e", "own-theme-event"],
+          ["a", `${THEME_DEFINITION_KIND}:${"a".repeat(64)}:dusk-1a2b3c`],
+          ["k", String(THEME_DEFINITION_KIND)],
+        ],
+      });
+      expect(queryClient.getQueryData(["user-themes", "a".repeat(64)])).toEqual([]);
+    });
   });
 });

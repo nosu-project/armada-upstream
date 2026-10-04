@@ -9,10 +9,33 @@ export interface CoreThemeColors {
   primary: string;
 }
 
+/** A theme background image (`bg` tag, imeta-style key-value entries). */
+export interface ThemeBackground {
+  url: string;
+  /** How the image fills the page. Default: cover. */
+  mode?: "cover" | "tile";
+  mimeType?: string;
+  /** `<width>x<height>` as published. */
+  dimensions?: string;
+  blurhash?: string;
+}
+
+/** The original creator of a theme adopted from someone else. */
+export interface ThemeSource {
+  /** Hex pubkey of the theme's author. */
+  pubkey: string;
+  /** d-tag of the author's kind-36767 definition, when the theme came from one. */
+  identifier?: string;
+}
+
 /** A theme as stored in `AppConfig.customTheme`. */
 export interface ThemeConfig {
   title?: string;
   colors: CoreThemeColors;
+  /** Image painted behind the app's surfaces. */
+  background?: ThemeBackground;
+  /** Who made this theme, when it was adopted from another user. Dropped on edit. */
+  source?: ThemeSource;
 }
 
 /** Full CSS token set, derived via `deriveTokensFromCore`. */

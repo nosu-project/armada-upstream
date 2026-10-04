@@ -9,6 +9,10 @@
  * don't store ephemeral 24133, so a sleeping signer only sees a copy published
  * after it reconnects, and signers key prompts by request id. A signature waits
  * minutes, since the user may have to go approve it.
+ *
+ * Every copy can cost the signer a wake-up (Clave: one APNs push and one NSE
+ * run per event, deduped by event id only), so copies back off, only a few
+ * RPCs are in flight at once, and user-visible work goes ahead of decrypts.
  */
 
 import type { NostrEvent, NostrSigner } from "@nostrify/nostrify";
@@ -23,18 +27,26 @@ export interface Nip46SignerOpts {
   bunkerPubkey: string;
   /** Local ephemeral client signer (the pairing's client key). */
   clientSigner: NostrSigner;
-  /** Re-publish an unanswered request this often. Default 30s. */
+  /** First re-publish of an unanswered request; later gaps double. Default 30s. */
   attemptTimeoutMs?: number;
   /** How many publishes a non-signing RPC gets before it fails. Default 2. */
   attempts?: number;
   /** How long a `sign_event` waits for the user to approve it. Default 5 min. */
   signTimeoutMs?: number;
+  /** RPCs published and awaiting an answer at once; the rest queue. Default 4. */
+  maxInFlight?: number;
 }
 
 /** Long enough to switch to the signer app, find the request and approve it. */
 export const NIP46_SIGN_TIMEOUT_MS = 5 * 60_000;
 
 const NIP46_KIND = 24133;
+
+/** Re-publish gaps double from `attemptTimeoutMs` up to this multiple of it. */
+const MAX_GAP_FACTOR = 4;
+
+/** Bulk work that may wait behind anything the user is looking at. */
+const BACKGROUND_METHODS = new Set(["nip04_decrypt", "nip44_decrypt"]);
 
 /** Thrown when the bunker answered with an explicit error. Never retried. */
 class BunkerResponseError extends Error {}
@@ -68,10 +80,14 @@ export class Nip46Signer implements NostrSigner, BtcSigner {
   private readonly attemptTimeoutMs: number;
   private readonly attempts: number;
   private readonly signTimeoutMs: number;
+  private readonly maxInFlight: number;
 
+  private inFlight = 0;
+  /** RPCs waiting for a slot: foreground ones ahead of background ones. */
+  private readonly waiting: { start: () => void; background: boolean }[] = [];
   private readonly pending = new Map<string, PendingRpc>();
   /** Re-publish of each unanswered request, by request id. */
-  private readonly republish = new Map<string, () => Promise<void>>();
+  private readonly republish = new Map<string, (relay?: string) => Promise<void>>();
   private readonly abort = new AbortController();
   private clientPubkey: string | undefined;
 
@@ -85,19 +101,36 @@ export class Nip46Signer implements NostrSigner, BtcSigner {
     this.attemptTimeoutMs = opts.attemptTimeoutMs ?? 30_000;
     this.attempts = opts.attempts ?? 2;
     this.signTimeoutMs = opts.signTimeoutMs ?? NIP46_SIGN_TIMEOUT_MS;
+    this.maxInFlight = opts.maxInFlight ?? 4;
     this.ready = this.subscribe();
-    // A backgrounded page's timers stall; coming back is when the signer most
-    // likely just woke, so give it a fresh copy of everything outstanding.
-    if (typeof document !== "undefined") {
-      document.addEventListener("visibilitychange", () => {
-        if (document.visibilityState === "visible") this.resendPending();
-      }, { signal: this.abort.signal });
-    }
+    // A copy sent on a socket that then dropped never reached the relay.
+    const off = this.transport.onReopen?.((relay) => this.resendPending(relay));
+    if (off) this.abort.signal.addEventListener("abort", off, { once: true });
   }
 
   /** Re-publish every unanswered request now (same ids, so no duplicate prompts). */
-  resendPending(): void {
-    for (const publish of this.republish.values()) void publish().catch(() => undefined);
+  resendPending(relay?: string): void {
+    for (const publish of this.republish.values()) void publish(relay).catch(() => undefined);
+  }
+
+  private async acquireSlot(method: string): Promise<void> {
+    if (this.inFlight < this.maxInFlight) {
+      this.inFlight++;
+      return;
+    }
+    const background = BACKGROUND_METHODS.has(method);
+    await new Promise<void>((start) => {
+      const entry = { start, background };
+      const at = background ? -1 : this.waiting.findIndex((w) => w.background);
+      if (at === -1) this.waiting.push(entry);
+      else this.waiting.splice(at, 0, entry);
+    });
+  }
+
+  private releaseSlot(): void {
+    const next = this.waiting.shift();
+    if (next) next.start();
+    else this.inFlight--;
   }
 
   /** Open the session-lived response subscription and pump it forever. */
@@ -146,6 +179,15 @@ export class Nip46Signer implements NostrSigner, BtcSigner {
    */
   private async cmd(method: string, params: string[]): Promise<string> {
     await this.ready;
+    await this.acquireSlot(method);
+    try {
+      return await this.run(method, params);
+    } finally {
+      this.releaseSlot();
+    }
+  }
+
+  private async run(method: string, params: string[]): Promise<string> {
     const request: NostrConnectRequest = { id: crypto.randomUUID(), method, params };
     const budgetMs = method === "sign_event" ? this.signTimeoutMs : this.attemptTimeoutMs * this.attempts;
     const t0 = Date.now();
@@ -154,7 +196,7 @@ export class Nip46Signer implements NostrSigner, BtcSigner {
       this.pending.set(request.id, { resolve, method });
     });
     let copies = 0;
-    const publish = async () => {
+    const publish = async (relay?: string) => {
       copies++;
       const event = await this.clientSigner.signEvent({
         kind: NIP46_KIND,
@@ -162,13 +204,14 @@ export class Nip46Signer implements NostrSigner, BtcSigner {
         created_at: Math.floor(Date.now() / 1000),
         tags: [["p", this.bunkerPubkey]],
       });
-      await this.transport.event(event, { signal: AbortSignal.timeout(this.attemptTimeoutMs) });
+      await this.transport.event(event, { signal: AbortSignal.timeout(this.attemptTimeoutMs), relay });
     };
     this.republish.set(request.id, publish);
     logSync("nip46", `→ ${method} ${request.id.slice(0, 8)}`);
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       let lastErr: unknown;
+      let gap = this.attemptTimeoutMs;
       for (;;) {
         try {
           await publish();
@@ -177,7 +220,8 @@ export class Nip46Signer implements NostrSigner, BtcSigner {
           lastErr = err;
           logSync("nip46", `✗ ${method} publish failed: ${err instanceof Error ? err.message : String(err)}`);
         }
-        const wait = Math.min(this.attemptTimeoutMs, deadline - Date.now());
+        const wait = Math.min(gap, deadline - Date.now());
+        gap = Math.min(gap * 2, this.attemptTimeoutMs * MAX_GAP_FACTOR);
         const outcome = await Promise.race([
           response,
           new Promise<undefined>((r) => {

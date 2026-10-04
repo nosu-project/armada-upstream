@@ -521,7 +521,12 @@ function NostrSyncInner() {
         if (!event || cancelled) return;
         const theme = parseDittoTheme(event);
         if (theme && !cancelled) {
-          applyCustomTheme({ title: theme.title, colors: theme.colors });
+          applyCustomTheme({
+            title: theme.title,
+            colors: theme.colors,
+            ...(theme.background && { background: theme.background }),
+            ...(theme.source && { source: theme.source }),
+          });
         }
       } catch { /* ignore */ }
     })();

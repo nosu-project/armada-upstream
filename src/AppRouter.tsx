@@ -16,6 +16,7 @@ import {
 import { BlankSplash, BootSplash } from "@/components/brand/BootSplash";
 import { LocationRefProvider } from "@/components/LocationRefProvider";
 import { Nip19Route } from "@/components/Nip19Route";
+import { ThemePreviewBar } from "@/components/ThemePreviewBar";
 import { VersionCheck } from "@/components/VersionCheck";
 import { DesktopUpdateToast } from "@/components/DesktopUpdateToast";
 import { Toaster } from "@/components/ui/toaster";
@@ -387,6 +388,7 @@ export function AppRouter() {
       <DesktopUpdateToast />
       {/* MUST be inside <BrowserRouter>: toasts can carry router <Link> actions. */}
       <Toaster />
+      <ThemePreviewBar />
       <LocationRefProvider>
         <AppRoutes />
       </LocationRefProvider>

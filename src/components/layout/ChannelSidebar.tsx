@@ -1,4 +1,4 @@
-import { Bell, BellOff, CheckCheck, ChevronDown, FolderGit2, Hash, Headphones, IdCard, Inbox, Link as LinkIcon, Loader2, Lock, MessageSquareText, Plus, RefreshCw, Trash2, Volume2 } from "lucide-react";
+import { Bell, BellOff, CheckCheck, ChevronDown, CircleAlert, FolderGit2, Hash, Headphones, IdCard, Inbox, Link as LinkIcon, Loader2, Lock, MessageSquareText, Plus, RefreshCw, Trash2, Volume2, X } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { NavLink } from "react-router-dom";
 
@@ -35,6 +35,9 @@ import { useRelayGroups } from "@/hooks/useRelayGroups";
 import { useRelayInbox } from "@/hooks/useRelayInbox";
 import { useRelayUnread, type GroupUnread } from "@/hooks/useRelayUnread";
 import { useServerActions } from "@/hooks/useServerActions";
+import { toast } from "@/hooks/useToast";
+import { useUpdateUserGroupList, useUserGroupList } from "@/hooks/useUserGroupList";
+import { groupRefsOn, missingGroupIds } from "@/lib/nip29";
 import { relayToRouteParam } from "@/lib/platform";
 import { sanitizeImageSrc } from "@/lib/sanitizeUrl";
 import { cn } from "@/lib/utils";
@@ -161,6 +164,53 @@ function ChannelLink({
   );
 }
 
+/**
+ * A channel in the user's kind 10009 that the relay has no metadata for: never created
+ * (a relay without NIP-29 accepts the 9007 anyway) or since deleted. Not a link, since
+ * there is no channel to open.
+ */
+function MissingChannelRow({ relayUrl, groupId }: { relayUrl: string; groupId: string }) {
+  const { data: list } = useUserGroupList();
+  const { mutateAsync: updateList, isPending } = useUpdateUserGroupList();
+  const remove = async () => {
+    // Every spelling of this relay the list carries for the id.
+    const refs = groupRefsOn(list?.groups ?? [], relayUrl).filter((ref) => ref.id === groupId);
+    for (const ref of refs) await updateList({ type: "remove-group", ref });
+  };
+
+  return (
+    <div className="flex items-center gap-2 pl-3 pr-1 text-sm text-muted-foreground opacity-60">
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span className="flex flex-1 min-w-0 items-center gap-2 py-1.5 touch:py-3">
+            <CircleAlert className="size-4 shrink-0" />
+            <span className="truncate font-mono text-xs">{groupId}</span>
+          </span>
+        </TooltipTrigger>
+        <TooltipContent>Not found on this server. It may not support NIP-29 groups, or the channel was deleted.</TooltipContent>
+      </Tooltip>
+      <Button
+        variant="ghost"
+        size="icon"
+        className="size-6 touch:size-11 shrink-0"
+        disabled={isPending}
+        onClick={() =>
+          void remove().catch((e: unknown) =>
+            toast({
+              title: "Couldn't update your channel list",
+              description: e instanceof Error ? e.message : undefined,
+              variant: "destructive",
+            }),
+          )
+        }
+        aria-label={`Remove ${groupId} from your channel list`}
+      >
+        <X className="size-3.5" />
+      </Button>
+    </div>
+  );
+}
+
 interface ChannelSidebarProps {
   relayUrl: string;
   onNavigate?: () => void;
@@ -169,8 +219,9 @@ interface ChannelSidebarProps {
 
 /** Channel list for a NIP-29 server, with create-channel and the account area. */
 export function ChannelSidebar({ relayUrl, onNavigate, className }: ChannelSidebarProps) {
-  const { data: groups, isLoading, isError, refetch, relayInfo } = useRelayGroups(relayUrl);
+  const { data: groups, isLoading, isFetching, isError, refetch, relayInfo } = useRelayGroups(relayUrl);
   const { user } = useCurrentUser();
+  const { data: userGroupList } = useUserGroupList();
   const { registerCallBarSlot } = useCall();
   const callBarRef = useRef<HTMLDivElement>(null);
   const [createOpen, setCreateOpen] = useState(false);
@@ -203,6 +254,15 @@ export function ChannelSidebar({ relayUrl, onNavigate, className }: ChannelSideb
     }
     return { streams, forums, dms, archived };
   }, [isBuzz, groups, hiddenDms]);
+
+  // Only after a settled read: a just-joined channel is missing until its refetch lands.
+  const missingIds = useMemo(
+    () =>
+      user && !isBuzz && groups && !isFetching
+        ? missingGroupIds(userGroupList?.groups ?? [], relayUrl, groups)
+        : [],
+    [user, isBuzz, groups, isFetching, userGroupList?.groups, relayUrl],
+  );
 
   // Create permission doesn't carry over to another server.
   useEffect(() => {
@@ -495,10 +555,24 @@ export function ChannelSidebar({ relayUrl, onNavigate, className }: ChannelSideb
             </div>
           )}
         </>
-      ) : groups && groups.length > 0 ? (
-        groups.map((group) => (
-          <ChannelLink key={group.id} group={group} unread={byGroup[group.id]} onNavigate={onNavigate} />
-        ))
+      ) : (groups && groups.length > 0) || missingIds.length > 0 ? (
+        <>
+          {(groups ?? []).map((group) => (
+            <ChannelLink key={group.id} group={group} unread={byGroup[group.id]} onNavigate={onNavigate} />
+          ))}
+          {missingIds.length > 0 && (
+            <div className="space-y-0.5 pt-2">
+              <div className="pl-4 pr-2 py-1">
+                <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground/70">
+                  Not found on this server
+                </span>
+              </div>
+              {missingIds.map((id) => (
+                <MissingChannelRow key={id} relayUrl={relayUrl} groupId={id} />
+              ))}
+            </div>
+          )}
+        </>
       ) : isError && !groups ? (
         <div className="px-3 py-8 text-center text-sm text-muted-foreground space-y-3">
           <p>Couldn&rsquo;t reach this server. It may be offline or unreachable.</p>

@@ -1,3 +1,4 @@
+import { useNostr } from "@nostrify/react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 import { useNostrPublish } from "@/hooks/useNostrPublish";
@@ -7,10 +8,12 @@ import {
   KIND_DELETE_EVENT,
   KIND_DELETE_GROUP,
   KIND_EDIT_METADATA,
+  KIND_GROUP_METADATA,
   KIND_PUT_USER,
   KIND_REMOVE_USER,
 } from "@/lib/nip29";
 
+import type { NostrFilter, NRelay } from "@nostrify/nostrify";
 import type { NostrRumor } from "@/lib/nostrRumor";
 
 export interface GroupMetadataPatch {
@@ -151,19 +154,65 @@ export function useGroupModeration(relayUrl: string, groupId: string) {
   return { putUser, removeUser, deleteEvent, editMetadata, deleteGroup, createInvite };
 }
 
+/** Re-reads after a 9007, in ms from the OK. relay29 publishes the 39000 before answering. */
+const CREATE_POLL_MS = [0, 750, 2_000, 4_500];
+
+export const GROUP_NOT_CREATED_MESSAGE =
+  "The server accepted the request but didn't create the channel. It may not support NIP-29 groups.";
+
+/**
+ * Whether the relay published the kind 39000 a NIP-29 relay emits on accepting a 9007.
+ * A plain relay stores the 9007 and answers OK, so the OK alone proves nothing.
+ */
+export async function waitForGroupMetadata(
+  relay: Pick<NRelay, "query">,
+  groupId: string,
+  relaySelf: string | undefined,
+  delays: number[] = CREATE_POLL_MS,
+): Promise<boolean> {
+  const filter: NostrFilter = {
+    kinds: [KIND_GROUP_METADATA],
+    "#d": [groupId],
+    ...(relaySelf ? { authors: [relaySelf] } : {}),
+    limit: 1,
+  };
+  let elapsed = 0;
+  for (const at of delays) {
+    if (at > elapsed) await new Promise((resolve) => setTimeout(resolve, at - elapsed));
+    elapsed = at;
+    try {
+      const events = await relay.query([filter], { signal: AbortSignal.timeout(5_000) });
+      if (events.some((e) => e.kind === KIND_GROUP_METADATA)) return true;
+    } catch {
+      // A failed read is not an answer; try the next one.
+    }
+  }
+  return false;
+}
+
 export function useCreateGroup(relayUrl: string) {
+  const { nostr } = useNostr();
   const { mutateAsync: publishEvent } = useNostrPublish();
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async ({ groupId, extraTags }: { groupId: string; extraTags?: string[][] }) => {
-      return publishEvent({
+    mutationFn: async ({ groupId, extraTags, verify }: {
+      groupId: string;
+      extraTags?: string[][];
+      /** Require the relay's 39000 before resolving; `relaySelf` narrows it to the relay's key. */
+      verify?: { relaySelf?: string };
+    }) => {
+      const event = await publishEvent({
         kind: KIND_CREATE_GROUP,
         content: "",
         // Buzz takes metadata inline on the 9007 (`name` REQUIRED); NIP-29 relays use a follow-up 9002.
         tags: [["h", groupId], ...(extraTags ?? [])],
         relay: relayUrl,
       });
+      if (verify && !(await waitForGroupMetadata(nostr.relay(relayUrl), groupId, verify.relaySelf))) {
+        throw new Error(GROUP_NOT_CREATED_MESSAGE);
+      }
+      return event;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["nip29", "groups", relayUrl] });

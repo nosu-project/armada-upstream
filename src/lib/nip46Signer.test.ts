@@ -16,11 +16,24 @@ type RelayMsg = ["EVENT", string, NostrEvent];
  */
 function makeFakeTransport() {
   const published: NostrEvent[] = [];
+  /** The relay each publish was limited to, if any (parallel to `published`). */
+  const publishedTo: (string | undefined)[] = [];
   const listeners = new Set<(event: NostrEvent) => void>();
+  const reopenListeners = new Set<(url: string) => void>();
   let onPublish: ((event: NostrEvent) => void) | undefined;
 
   const transport = {
     published,
+    publishedTo,
+    onReopen(fn: (url: string) => void) {
+      reopenListeners.add(fn);
+      return () => {
+        reopenListeners.delete(fn);
+      };
+    },
+    reopen(url: string) {
+      for (const fn of reopenListeners) fn(url);
+    },
     emit(event: NostrEvent) {
       for (const l of [...listeners]) l(event);
     },
@@ -60,8 +73,9 @@ function makeFakeTransport() {
         },
       };
     },
-    async event(event: NostrEvent, _opts?: { signal?: AbortSignal }) {
+    async event(event: NostrEvent, opts?: { signal?: AbortSignal; relay?: string }) {
       published.push(event);
+      publishedTo.push(opts?.relay);
       onPublish?.(event);
     },
   };
@@ -118,7 +132,7 @@ const bunkerPubkey = getPublicKey(bunkerSk);
 
 function makeSigner(
   transport: FakeTransport,
-  opts?: { attemptTimeoutMs?: number; attempts?: number; signTimeoutMs?: number },
+  opts?: { attemptTimeoutMs?: number; attempts?: number; signTimeoutMs?: number; maxInFlight?: number },
 ) {
   return new Nip46Signer({
     transport: transport as unknown as Nip46Transport,
@@ -127,6 +141,7 @@ function makeSigner(
     attemptTimeoutMs: opts?.attemptTimeoutMs ?? 200,
     attempts: opts?.attempts ?? 2,
     signTimeoutMs: opts?.signTimeoutMs,
+    maxInFlight: opts?.maxInFlight,
   });
 }
 
@@ -221,6 +236,59 @@ describe("Nip46Signer", () => {
     expect(pendingSize(signer)).toBe(0);
   });
 
+  it("doubles the gap between copies of an unanswered signature, up to a cap", async () => {
+    const transport = makeFakeTransport();
+    attachBunker(transport, async () => null);
+    const times: number[] = [];
+    const t0 = Date.now();
+    transport.setOnPublish(() => times.push(Date.now() - t0));
+    const signer = makeSigner(transport, { attemptTimeoutMs: 100, signTimeoutMs: 2_000 });
+
+    await expect(signer.signEvent({ kind: 20013, content: "", tags: [], created_at: 1 })).rejects.toThrow(/timed out/);
+    // Copies at ~0, 100, 300, 700, 1100, 1500, 1900 (gaps 100, 200, 400, then capped at 400);
+    // a flat 100ms gap would have sent ~20.
+    expect(times.length).toBeGreaterThanOrEqual(5);
+    expect(times.length).toBeLessThanOrEqual(7);
+    const gaps = times.slice(1).map((t, i) => t - times[i]);
+    expect(gaps[1]).toBeGreaterThan(gaps[0] * 1.5);
+    expect(Math.max(...gaps)).toBeLessThan(600);
+  });
+
+  it("keeps at most maxInFlight RPCs published, letting a signature ahead of queued decrypts", async () => {
+    const transport = makeFakeTransport();
+    const answer: (() => void)[] = [];
+    const order: string[] = [];
+    attachBunker(transport, (req) => {
+      order.push(req.method);
+      return new Promise((r) => answer.push(() => r({
+        result: req.method === "sign_event"
+          ? JSON.stringify({ ...JSON.parse(req.params[0]), id: "a".repeat(64), pubkey: bunkerPubkey, sig: "b".repeat(128) })
+          : "plain",
+      })));
+    });
+    const signer = makeSigner(transport, { attemptTimeoutMs: 60_000, maxInFlight: 2 });
+
+    const decrypts = Array.from({ length: 5 }, () => signer.nip44.decrypt("aa".repeat(32), "ct"));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(transport.published).toHaveLength(2);
+
+    const sign = signer.signEvent({ kind: 20013, content: "", tags: [], created_at: 1 });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(transport.published).toHaveLength(2);
+
+    answer.shift()!();
+    await new Promise((r) => setTimeout(r, 50));
+    expect(order).toEqual(["nip44_decrypt", "nip44_decrypt", "sign_event"]);
+
+    while (answer.length > 0 || order.length < 6) {
+      answer.shift()?.();
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    await expect(sign).resolves.toMatchObject({ kind: 20013 });
+    await expect(Promise.all(decrypts)).resolves.toHaveLength(5);
+    expect(pendingSize(signer)).toBe(0);
+  });
+
   it("gives up on a signature after the sign budget", async () => {
     const transport = makeFakeTransport();
     attachBunker(transport, async () => null);
@@ -232,7 +300,7 @@ describe("Nip46Signer", () => {
     expect(pendingSize(signer)).toBe(0);
   });
 
-  it("resendPending re-publishes an outstanding request under its id", async () => {
+  it("re-publishes an outstanding request under its id to a relay that reconnected", async () => {
     const transport = makeFakeTransport();
     let answer: (() => void) | undefined;
     attachBunker(transport, (req) =>
@@ -246,9 +314,10 @@ describe("Nip46Signer", () => {
     await new Promise((r) => setTimeout(r, 50));
     expect(transport.published).toHaveLength(1);
 
-    signer.resendPending();
+    transport.reopen("wss://bunker.example");
     await new Promise((r) => setTimeout(r, 50));
     expect(transport.published).toHaveLength(2);
+    expect(transport.publishedTo[1]).toBe("wss://bunker.example");
     expect(new Set(await publishedRequestIds(transport)).size).toBe(1);
     answer?.();
     await pending;

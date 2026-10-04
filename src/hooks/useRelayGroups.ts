@@ -8,6 +8,7 @@ import { fetchRelayInfoDoc, useRelayInfo } from "@/hooks/useRelayInfo";
 import { useUserGroupList } from "@/hooks/useUserGroupList";
 import {
   buildRelayGroups,
+  groupRefsOn,
   KIND_GROUP_METADATA,
   KIND_PUT_USER,
   reconcileRelayGroups,
@@ -40,10 +41,9 @@ export function useRelayGroups(relayUrl: string | undefined) {
 
   const selfPubkey = user?.pubkey;
   const relaySelf = relayInfo?.self || relayInfo?.pubkey;
-  const rememberedIds = (userList?.groups ?? [])
-    .filter((ref) => ref.relay === relayUrl)
-    .map((ref) => ref.id)
-    .sort();
+  const rememberedIds = relayUrl
+    ? [...new Set(groupRefsOn(userList?.groups ?? [], relayUrl).map((ref) => ref.id))].sort()
+    : [];
 
   const queryKey = ["nip29", "groups", relayUrl, selfPubkey ?? null];
 

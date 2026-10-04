@@ -261,7 +261,7 @@ function ProfileView({ pubkey, onClose }: { pubkey: string; onClose: () => void 
 
   return (
     <div
-      className="relative h-full overflow-hidden bg-background text-foreground"
+      className="theme-scope relative h-full overflow-hidden bg-background text-foreground"
       style={pageStyle}
     >
       {background && backgroundSrc && (
