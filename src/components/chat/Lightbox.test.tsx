@@ -127,6 +127,22 @@ describe("Lightbox", () => {
     expect(onClose).toHaveBeenCalled();
   });
 
+  it("keeps a right-click from reaching the message row it was opened from", () => {
+    const onRowMenu = vi.fn();
+    render(
+      wrap(
+        <div onContextMenu={onRowMenu}>
+          <Lightbox media={[IMAGE]} currentIndex={0} onClose={vi.fn()} onNext={vi.fn()} onPrev={vi.fn()} />
+        </div>,
+      ),
+    );
+
+    fireEvent.contextMenu(document.querySelector("[data-lightbox-strip] img")!);
+    fireEvent.contextMenu(document.querySelector("[data-lightbox-content]")!);
+
+    expect(onRowMenu).not.toHaveBeenCalled();
+  });
+
   it("leaves the arrow keys to a focused video so they seek instead of paging", () => {
     const media = [VIDEO, IMAGE];
     const onNext = vi.fn();
