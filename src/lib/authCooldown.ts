@@ -5,7 +5,8 @@
  * geometrically instead of prompting forever. A local key only collapses bursts.
  */
 export const AUTH_MIN_INTERVAL_MS = 5_000;
-const PROMPT_MAX_INTERVAL_MS = 10 * 60_000;
+/** A minute at most: longer reads as the relay being down once the network settles. */
+const PROMPT_MAX_INTERVAL_MS = 60_000;
 /** A sign this long after the previous one starts a fresh streak. */
 export const AUTH_STREAK_WINDOW_MS = 15 * 60_000;
 

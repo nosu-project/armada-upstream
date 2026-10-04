@@ -8,9 +8,9 @@ describe("authCooldownMs", () => {
     expect(authCooldownMs(50, false)).toBe(AUTH_MIN_INTERVAL_MS);
   });
 
-  it("backs a prompting signer off geometrically, capped at ten minutes", () => {
-    expect([1, 2, 3, 4, 5, 9].map((n) => authCooldownMs(n, true))).toEqual([
-      5_000, 20_000, 80_000, 320_000, 600_000, 600_000,
+  it("backs a prompting signer off geometrically, capped at one minute", () => {
+    expect([1, 2, 3, 4, 9].map((n) => authCooldownMs(n, true))).toEqual([
+      5_000, 20_000, 60_000, 60_000, 60_000,
     ]);
   });
 });
