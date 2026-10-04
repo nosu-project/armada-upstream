@@ -3,6 +3,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  callsForTabAttention,
   desktopSafeNotificationIcon,
   foregroundPushRoomKey,
   pageMayShowOsNotification,
@@ -293,6 +294,18 @@ function loadWorker(options: {
     openWindow,
   };
 }
+
+describe("favicon badge", () => {
+  it("badges only DMs and direct mentions, not channel traffic or reactions", () => {
+    expect(callsForTabAttention({ plane: "dm", mention: true })).toBe(true);
+    expect(callsForTabAttention({ plane: "dm", mention: true, reaction: true })).toBe(true);
+    expect(callsForTabAttention({ plane: "c2", mention: true })).toBe(true);
+    expect(callsForTabAttention({ plane: "nip29", mention: true })).toBe(true);
+    expect(callsForTabAttention({ plane: "c2", mention: false })).toBe(false);
+    expect(callsForTabAttention({ plane: "nip29", mention: false })).toBe(false);
+    expect(callsForTabAttention({ plane: "c2", mention: true, reaction: true })).toBe(false);
+  });
+});
 
 describe("page / service-worker presentation ownership", () => {
   it("resolves relay-scoped NIP-29 identity before an early self/mute suppression", () => {

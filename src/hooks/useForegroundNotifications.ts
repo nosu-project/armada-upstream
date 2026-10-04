@@ -79,6 +79,17 @@ function levelAdmits(level: NotifLevel, mention: boolean): boolean {
 }
 
 /**
+ * The favicon dot promises something addressed to the viewer: a DM or a mention. Ordinary
+ * channel traffic and reactions may still notify per the room's level, but don't badge.
+ */
+export function callsForTabAttention(
+  candidate: Pick<NotifyCandidate, "plane" | "mention" | "reaction">,
+): boolean {
+  if (candidate.plane === "dm") return true;
+  return candidate.mention && !candidate.reaction;
+}
+
+/**
  * The page may show an OS notification only after proving there's no background
  * push (a Web Push subscription, or Tenna subscriptions). Fail closed to avoid
  * duplicates.
@@ -743,7 +754,7 @@ export function useForegroundNotifications(): void {
         const silent = roomAlertSilent(roomKey);
 
         // Page-owned cues need no permission; one sound per batch. The favicon badge is idempotent.
-        markTabAttention();
+        if (callsForTabAttention(cand)) markTabAttention();
 
         // Play the sound here at ingest, not after the presentation handoff: the worker can't play
         // audio and OS notifications are always silent.
