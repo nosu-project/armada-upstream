@@ -112,7 +112,7 @@ export function WalletSettings() {
           <div className="text-sm font-medium">Connect a wallet (NWC)</div>
           <p className="text-xs text-muted-foreground">
             Paste a Nostr Wallet Connect string from your wallet (Alby Hub, Coinos, Primal,
-            lnbits…). It authorizes payments, so it stays on this device only — never synced.
+            lnbits…). It authorizes payments, so it stays on this device and is never synced.
           </p>
           <Input
             value={uri}
@@ -185,13 +185,13 @@ export function WalletSettings() {
         }
       >
         <span className={`text-xs font-medium ${webln ? "text-primary" : "text-muted-foreground"}`}>
-          {webln ? "Detected" : "—"}
+          {webln ? "Detected" : "Not detected"}
         </span>
       </SettingsRow>
 
       <SettingsRow
         label="Display amounts in"
-        description="The unit every amount is shown and entered in — zaps, fees, and totals."
+        description="The unit for zaps, fees and totals."
       >
         <div className="flex items-center gap-1 rounded-lg border border-border p-0.5">
           <button

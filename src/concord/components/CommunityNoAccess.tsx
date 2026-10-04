@@ -28,7 +28,7 @@ export function CommunityNoAccess() {
         {currentUser ? (
           <>
             This account isn't a member, so it holds none of the keys needed to read
-            anything here. If you joined with a different account, switch to it — or ask
+            anything here. If you joined with a different account, switch to it, or ask
             a member for an invite link.
           </>
         ) : (

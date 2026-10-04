@@ -99,7 +99,7 @@ export function useSignupKey(): SignupKey {
         toast({
           title: "Key not saved",
           description:
-            "Save the file — or reveal the key and copy it — before continuing. It's your only login.",
+            "Save the file or copy the key before continuing. It's your only login.",
         });
         return;
       }
@@ -115,7 +115,7 @@ export function useSignupKey(): SignupKey {
       setBackedUp(true);
       toast({
         title: "Key saved",
-        description: `Saved to ${result.location}. Keep it — it's your only login.`,
+        description: `Saved to ${result.location}. Keep it safe. It's your only login.`,
       });
     } finally {
       setSaving(false);
@@ -148,7 +148,7 @@ export function GenerateStepBody({ onGenerate }: { onGenerate: () => void }) {
         </h1>
         <p className="text-sm leading-relaxed text-muted-foreground">
           Your identity is a secret key that lives on your device.
-          No email, no phone number, no password to forget.
+          There's no email or password.
         </p>
       </div>
       <div className="w-full space-y-3">
@@ -200,8 +200,8 @@ export function SaveKeyStepBody({
               This key is your only login
             </p>
             <p className="text-xs leading-relaxed text-destructive/90">
-              No reset, no recovery. Lose it and the account is gone; share it and
-              whoever has it is you.
+              It can't be reset. Lose it and the account is gone. Anyone you share it
+              with can act as you.
             </p>
           </div>
         </div>

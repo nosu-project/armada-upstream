@@ -256,7 +256,7 @@ export function ScreenShareQualityDialog({
                       value={codec.id}
                       disabled={!supportedCodecs.has(codec.id)}
                     >
-                      {codec.label} — {codec.description}
+                      {codec.label}: {codec.description}
                       {!supportedCodecs.has(codec.id) &&
                         ` (unavailable: ${screenShareCodecUnavailableReason(codec.id, {
                           endToEndEncrypted,
@@ -295,7 +295,7 @@ export function ScreenShareQualityDialog({
                 <SelectContent portalContainer={portalContainer}>
                   {SCREEN_SHARE_DELIVERY_MODES.map((mode) => (
                     <SelectItem key={mode.id} value={mode.id}>
-                      {mode.label} — {mode.description}
+                      {mode.label}: {mode.description}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -315,10 +315,10 @@ export function ScreenShareQualityDialog({
                 </SelectTrigger>
                 <SelectContent portalContainer={portalContainer}>
                   <SelectItem value="compatibility">
-                    Software compatibility — reliable encrypted H.264
+                    Software compatibility: reliable encrypted H.264
                   </SelectItem>
                   <SelectItem value="hardware">
-                    Hardware acceleration — best for working VP8/VP9 drivers
+                    Hardware acceleration: best with working VP8/VP9 drivers
                   </SelectItem>
                 </SelectContent>
               </Select>

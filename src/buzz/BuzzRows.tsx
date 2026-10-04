@@ -184,7 +184,7 @@ export function BuzzWorkflowEventRow({ event }: { event: NostrRumor }) {
   return (
     <SystemLine icon={<Workflow className="size-3.5 shrink-0" />} createdAt={event.created_at}>
       <span className="font-medium text-foreground/80">{workflowKindLabel(event.kind)}</span>
-      {preview && <span className="opacity-80"> — {preview.length > 160 ? `${preview.slice(0, 159)}…` : preview}</span>}
+      {preview && <span className="opacity-80">: {preview.length > 160 ? `${preview.slice(0, 159)}…` : preview}</span>}
     </SystemLine>
   );
 }

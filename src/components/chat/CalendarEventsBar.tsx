@@ -134,7 +134,7 @@ export function CalendarEventsBar({
           <div className="max-h-60 overflow-y-auto space-y-0.5 pr-0.5">
             {ordered.length === 0 ? (
               <p className="px-2 py-3 text-center text-[12px] text-muted-foreground">
-                No events scheduled{canModerate ? " — create one above." : "."}
+                No events scheduled{canModerate ? ". Create one above." : "."}
               </p>
             ) : (
               ordered.map((event) => (

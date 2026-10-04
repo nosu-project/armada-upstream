@@ -65,7 +65,7 @@ interface CommunityListingCardProps {
  * Control, vended/peeked channels): community activity, not message activity.
  */
 const ACTIVITY_HINT =
-  "Newest activity on the streams this invite can see — channel messages, join requests and admin changes.";
+  "Newest activity on the streams this invite can see: channel messages, join requests and admin changes.";
 
 export function CommunityListingCardSkeleton({ className }: { className?: string }) {
   return (
@@ -435,7 +435,7 @@ export function CommunityListingCard({
           ) : isMember ? (
             <Button variant="secondary" className="min-w-0 flex-1 clip-corner-lg" onClick={onOpen}>
               <Check className="size-4" />
-              Joined — Open
+              Open
             </Button>
           ) : (
             <Button className="min-w-0 flex-1 clip-corner-lg" onClick={onJoin}>

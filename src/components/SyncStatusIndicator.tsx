@@ -44,7 +44,7 @@ export function SyncStatusIndicator({
       <PopoverContent side="bottom" className="w-64 p-3 text-xs font-normal text-muted-foreground">
         <span className="text-foreground font-medium">
           Syncing {task.label}
-          {task.detail ? ` — ${task.detail}` : "…"}
+          {task.detail ? `: ${task.detail}` : "…"}
         </span>
         {more > 0 && (
           <span className="mt-1 block">

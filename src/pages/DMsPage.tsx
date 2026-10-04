@@ -1147,7 +1147,7 @@ const Conversation = memo(function Conversation({
               <Search className="size-10 text-muted-foreground/40 mb-3" />
               <p className="text-sm text-muted-foreground">No matching messages</p>
               <p className="text-xs text-muted-foreground/60 mt-1">
-                Only loaded messages are searched — scroll up to load more.
+                Only loaded messages are searched. Scroll up to load more.
               </p>
             </div>
           ) : (

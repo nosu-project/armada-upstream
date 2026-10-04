@@ -414,7 +414,7 @@ function VolumeMenu({
         <div className="flex items-center justify-between gap-2 mb-2">
           <span className="text-sm font-medium truncate">
             <DisplayName pubkey={verified ? pubkey : undefined} name={displayName} />
-            {target === "screenShare" && " — screen share"}
+            {target === "screenShare" && "'s screen share"}
           </span>
           <span className="text-xs text-muted-foreground tabular-nums">{pct}%</span>
         </div>
@@ -645,7 +645,7 @@ function VideoTile({
       ) : null}
       <span className="truncate">
         <DisplayName pubkey={verified ? pubkey : undefined} name={displayName} />
-        {isScreenShare && " — screen"}
+        {isScreenShare && "'s screen"}
         {isLocal && " (you)"}
       </span>
     </>
@@ -879,7 +879,7 @@ function LocalHevcScreenShareTile({
           )}
         >
           <ScreenShare className="size-3 shrink-0" />
-          <span className="truncate">Your screen — H.265 (you)</span>
+          <span className="truncate">Your screen (H.265)</span>
         </div>
         {fullscreen && (
           <div

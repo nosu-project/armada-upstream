@@ -45,7 +45,7 @@ export function CategoryNameDialog({
           <p className="text-sm text-muted-foreground">
             {renaming
               ? count > 1
-                ? `Renames it for all ${count} channels in it — a category is only ever the channels naming it, so each one is re-filed.`
+                ? `Renames the category for all ${count} channels in it.`
                 : "A category is only ever the channels naming it, so renaming re-files the channel in it."
               : "A heading to group channels under in the sidebar. It exists for as long as a channel is in it."}
           </p>

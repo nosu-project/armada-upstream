@@ -146,7 +146,7 @@ describe("ThemeCreatorDialog", () => {
     expect(h.toast).toHaveBeenCalledWith(
       expect.objectContaining({
         title: "Theme published",
-        description: "Sunset — applied as your theme",
+        description: "Sunset, applied as your theme",
       }),
     );
 
@@ -207,7 +207,7 @@ describe("ThemeCreatorDialog", () => {
     expect(h.toast).toHaveBeenCalledWith(
       expect.objectContaining({
         title: "Theme published",
-        description: "Sunset — applied as your theme (syncing when the network is back)",
+        description: "Sunset, applied as your theme (syncing when the network is back)",
       }),
     );
     expect(h.applyCustomTheme).toHaveBeenCalledWith(expect.objectContaining({ title: "Sunset" }));

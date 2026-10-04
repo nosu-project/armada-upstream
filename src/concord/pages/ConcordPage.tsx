@@ -1428,7 +1428,7 @@ export function ConcordPage() {
             return;
           }
           const opened = openedById.get(event.id);
-          if (!opened) throw new Error("That message isn't loaded here any more — scroll to it and try again.");
+          if (!opened) throw new Error("That message isn't loaded anymore. Scroll to it and try again.");
           await pins.pin({ opened });
           toast({ title: "Pinned", description: "Everyone in this channel can see it, now and after any key rotation." });
         } catch (e) {
@@ -2515,7 +2515,7 @@ export function ConcordPage() {
     if (!canRekeyChannel) {
       toast({
         title: "Channel keys not rotated",
-        description: "They lost access to a private channel, but rotating its key needs the Manage-channels permission — ask an admin to rotate it.",
+        description: "They lost access to a private channel, but rotating its key needs the Manage channels permission. Ask an admin to rotate it.",
         variant: "destructive",
       });
       return;
@@ -3520,7 +3520,7 @@ export function ConcordPage() {
                           </p>
                         ) : (
                           <p className="px-2 py-8 text-center text-sm text-muted-foreground">
-                            No messages yet. Say something — only members can read it.
+                            No messages yet. Only members can read this channel.
                           </p>
                         )
                       ) : undefined
@@ -3598,7 +3598,7 @@ export function ConcordPage() {
                         <p className="font-medium">You no longer have access to this community.</p>
                         <p className="text-muted-foreground">
                           A moderator rotated its keys without you. Your history stays readable; new
-                          messages won't. It reappears if you're re-invited — or you can leave.
+                          messages won't. It reappears if you're re-invited, or you can leave.
                         </p>
                       </div>
                       <Button

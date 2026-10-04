@@ -91,7 +91,7 @@ export function ServerProfileDialog({ relayUrl, open, onOpenChange }: ServerProf
             server identity
           </h2>
           <p className="text-sm text-muted-foreground">
-            A nickname, label and color that apply only on this server — never on other
+            A nickname, label and color for this server only. They don't change other
             servers or your global profile.
           </p>
         </div>

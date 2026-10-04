@@ -443,7 +443,7 @@ export function VoiceDeviceSettings() {
           </div>
         )}
         {testing && !permissionError && (
-          <p className="text-xs text-muted-foreground">Speak — the meter should move.</p>
+          <p className="text-xs text-muted-foreground">Speak and the meter should move.</p>
         )}
       </div>
 
@@ -574,7 +574,7 @@ export function VoiceDeviceSettings() {
         />
         {voiceServerInvalid ? (
           <p className="text-xs text-destructive">
-            Not a usable server address — enter a host like armada.example.com (https only).
+            Not a valid server address. Enter a host like armada.example.com (https only).
           </p>
         ) : checkingServer ? (
           <p className="text-xs text-muted-foreground">Checking voice server…</p>
@@ -582,7 +582,7 @@ export function VoiceDeviceSettings() {
           <p className="text-xs text-success">Voice server reachable: {reachableServer}</p>
         ) : (
           <p className="text-xs text-destructive">
-            No voice server reachable — calls can’t start. Check the address or your connection.
+            No voice server reachable, so calls can’t start. Check the address or your connection.
           </p>
         )}
         <p className="text-xs text-muted-foreground">

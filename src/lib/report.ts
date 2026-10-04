@@ -90,6 +90,6 @@ export function reportAudience(destination: ReportDestination): string {
       return "Sent to this server's moderators.";
     case "network":
       // Their own words go out in the clear; say so.
-      return "This report is public — anyone can read it, including your comment.";
+      return "This report is public. Anyone can read it, including your comment.";
   }
 }

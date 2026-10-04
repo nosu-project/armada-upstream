@@ -717,7 +717,7 @@ export function ThreadPanel({ root, rootTitle, transport, relayUrl, groupId, can
           <span className="italic">
             {rootMuted
               ? "You blocked the person who started this thread."
-              : "Original message not loaded — it may be older than the channel window."}
+              : "Original message not loaded. It may be older than the channel window."}
           </span>
         </div>
       ) : (

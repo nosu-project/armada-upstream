@@ -96,7 +96,7 @@ function JoinBanner({ relayUrl, groupId, isClosed }: { relayUrl: string; groupId
         {inviteCode ? (
           <>You've been invited to this channel on <span className="font-medium">{displayHost(relayUrl)}</span>.</>
         ) : (
-          <>You're not a member of this channel{isClosed ? " — it's invite-only" : ""}.</>
+          <>You're not a member of this {isClosed ? "invite-only " : ""}channel.</>
         )}
       </span>
       {isClosed && (
@@ -398,7 +398,7 @@ export function GroupPage() {
               <TooltipTrigger asChild>
                 <Lock className="size-4 text-muted-foreground" aria-label="Members-only channel" />
               </TooltipTrigger>
-              <TooltipContent>Members-only — only members can read</TooltipContent>
+              <TooltipContent>Only members can read this channel</TooltipContent>
             </Tooltip>
           )}
           {hasVoice && !inThisCall && (

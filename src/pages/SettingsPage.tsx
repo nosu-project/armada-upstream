@@ -576,8 +576,8 @@ export function SettingsPage({
                         ? "Press once to copy your signed lists, encrypted settings, community recovery state, invite authority, and DM roster to every NIP-65 write relay. Later private setting changes will sync automatically."
                         : "Press once to copy your signed lists and encrypted recovery state. Future private Armada setting changes remain on this device until you press Sync now or enable automatic sync."}
                     <span className="mt-2 block">
-                      Pull latest setup reads those records—including communities and DM
-                      conversations—back from your NIP-65 relays without publishing anything.
+                      Pull latest setup reads those records back from your NIP-65 relays, including
+                      communities and DM conversations. It publishes nothing.
                     </span>
                     <span className="mt-2 block">
                       Device hardware, audio processing, notification permission, Bluetooth, and
@@ -671,7 +671,7 @@ export function SettingsPage({
                 relays={config.communityRelays}
                 onChange={setCommunityRelays}
                 onReset={() => setCommunityRelays([...COMMUNITY_RELAYS])}
-                emptyText="No community relays — new communities fall back to the shared Concord relays."
+                emptyText="No community relays. New communities use the shared Concord relays."
               />
             </SettingsRow>
           </>
@@ -690,7 +690,7 @@ export function SettingsPage({
                 relays={config.searchRelays}
                 onChange={setSearchRelays}
                 onReset={() => setSearchRelays([...SEARCH_RELAYS])}
-                emptyText="No search relays — search falls back to your app relays."
+                emptyText="No search relays. Search uses your app relays."
               />
             </SettingsRow>
           </>
@@ -854,7 +854,7 @@ export function SettingsPage({
         return (
           <SettingsRow
             label="Clean up links"
-            description="Remove tracking parameters from links — YouTube's ?si=, utm_ campaign tags, and the click ids ad networks add. Applied to links you send, so they're clean for everyone who reads them, and to links you receive, so nothing they carry reaches the sites your app loads previews from. Only known tracking parameters are removed; the link still goes to the same page."
+            description="Remove tracking parameters like YouTube's ?si=, utm_ tags and ad click IDs from links you send and receive. Links still go to the same page."
           >
             <Switch
               checked={config.stripTrackingParams}
@@ -900,7 +900,7 @@ export function SettingsPage({
             {rnnoiseSupported() && (
               <SettingsRow
                 label="Noise cancellation"
-                description="ML background-noise removal (RNNoise) — removes keyboards, fans, and chatter. Applied to your next call."
+                description="Filters out keyboards, fans and chatter (RNNoise). Applies to your next call."
               >
                 <Switch
                   checked={voiceProcessing.rnnoise}

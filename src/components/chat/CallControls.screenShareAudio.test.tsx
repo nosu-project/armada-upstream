@@ -182,7 +182,7 @@ describe("silent screen share indicator", () => {
     // sharing one. The options button now says so, in the accessible name.
     expect(
       screen.getByRole("button", {
-        name: "Screen share options — audio is not being captured",
+        name: "Screen share options (audio not captured)",
       }),
     ).toBeInTheDocument();
   });
@@ -197,7 +197,7 @@ describe("silent screen share indicator", () => {
     ).toBeInTheDocument();
     expect(
       screen.queryByRole("button", {
-        name: "Screen share options — audio is not being captured",
+        name: "Screen share options (audio not captured)",
       }),
     ).not.toBeInTheDocument();
   });

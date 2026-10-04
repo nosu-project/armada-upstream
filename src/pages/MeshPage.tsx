@@ -596,7 +596,7 @@ function ChatHeader({
           <Button
             variant="ghost"
             size="icon"
-            aria-label={incognito ? "Incognito on — showing an anonymous name" : "Incognito off — showing your name"}
+            aria-label={incognito ? "Incognito on, showing an anonymous name" : "Incognito off, showing your name"}
             aria-pressed={incognito}
             className={cn(
               "size-8 touch:size-11 shrink-0",
@@ -741,8 +741,8 @@ function DisabledState({ onEnable }: { onEnable: () => void }) {
         <Bluetooth className="size-12 opacity-30" />
         <p className="text-sm font-medium text-foreground">Mesh chat is off</p>
         <p className="text-xs text-muted-foreground/70">
-          Chat with nearby Armada and bitchat devices directly over Bluetooth — no
-          internet needed. Turning it on asks for Bluetooth permission and keeps a
+          Chat with nearby Armada and bitchat devices over Bluetooth, without the
+          internet. Turning it on asks for Bluetooth permission and keeps a
           background connection (with a persistent notification) while active.
         </p>
         <Button className="mt-2 clip-corner-lg" onClick={onEnable}>

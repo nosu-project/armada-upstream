@@ -137,7 +137,7 @@ export function InvitesView({ community }: { community: Community }) {
       const parts: string[] = [];
       if (revoked > 0) parts.push(`${revoked} revoked`);
       if (delisted > revoked) parts.push(`${delisted - revoked} delisted from the registry`);
-      if (failed > 0) parts.push(`${failed} failed — try revoking ${failed === 1 ? "it" : "them"} individually`);
+      if (failed > 0) parts.push(`${failed} failed. Try revoking ${failed === 1 ? "it" : "them"} individually`);
       toast({
         title: failed > 0 ? "Some invite links couldn't be revoked" : "Invite links revoked",
         description: parts.join(", ") + ".",
@@ -276,7 +276,7 @@ export function InvitesView({ community }: { community: Community }) {
                   <div className="flex items-start gap-1.5 rounded bg-amber-500/10 px-2 py-1.5 text-[11px] text-amber-700 dark:text-amber-400">
                     <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />
                     <span>
-                      This link is on epoch {servedEpoch} — the community has since moved to epoch{" "}
+                      This link is on epoch {servedEpoch}, but the community has since moved to epoch{" "}
                       {epoch}. Someone joining now could land on the old keys. It refreshes
                       automatically when you reopen this community from a device that holds it;
                       if it lingers, revoke and mint a fresh link.
@@ -326,7 +326,7 @@ export function InvitesView({ community }: { community: Community }) {
         </h3>
         <p className="text-xs text-muted-foreground">
           Every member who has live invite links, and how many. Only a link's creator can see
-          its actual URL — this shows who invited and how many links they hold.
+          its URL. This list shows who invited and how many links they hold.
         </p>
         {registry.length === 0 ? (
           <p className="text-sm text-muted-foreground">No live invite links.</p>

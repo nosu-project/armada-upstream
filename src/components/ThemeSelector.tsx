@@ -293,7 +293,7 @@ function ThemeBuilderDialog({ open, onOpenChange, initial, onApply }: BuilderPro
             custom theme
           </h2>
           <p className="text-sm text-muted-foreground">
-            Pick three colors — every other shade is derived automatically.
+            Pick three colors. Every other shade is derived from them.
           </p>
         </div>
 

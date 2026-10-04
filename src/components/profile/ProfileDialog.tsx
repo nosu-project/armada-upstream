@@ -703,7 +703,7 @@ function BadgeTile({ badge }: { badge: ProfileBadge }) {
       <div className="mt-1 text-xs text-center truncate">{badge.name}</div>
     </>
   );
-  const title = badge.description ? `${badge.name} — ${badge.description}` : badge.name;
+  const title = badge.description ? `${badge.name}: ${badge.description}` : badge.name;
   return href ? (
     <a href={href} target="_blank" rel="noopener noreferrer" title={title} className="block min-w-0 hover:opacity-80 transition-opacity">
       {inner}

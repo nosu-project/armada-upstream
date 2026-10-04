@@ -71,7 +71,7 @@ export function MicButton({ className }: { className?: string }) {
   const { isMicrophoneEnabled, pushToTalk, toggle } = useMicToggle();
   const label = pushToTalk.ready
     ? pushToTalk.pressed
-      ? "Talking — click to mute and stop push to talk"
+      ? "Talking. Click to mute and stop push to talk"
       : `Hold ${pushToTalk.bindingLabel || "your shortcut"} to talk`
     : isMicrophoneEnabled
       ? "Mute microphone"
@@ -370,12 +370,12 @@ export function ScreenShareButton({
             type="button"
             aria-label={
               screenShareAudioMissing
-                ? "Screen share options — audio is not being captured"
+                ? "Screen share options (audio not captured)"
                 : "Screen share options"
             }
             title={
               screenShareAudioMissing
-                ? "Screen share options — audio is not being captured"
+                ? "Screen share options (audio not captured)"
                 : "Screen share options"
             }
             disabled={working}

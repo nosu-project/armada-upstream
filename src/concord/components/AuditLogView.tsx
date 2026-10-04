@@ -185,7 +185,7 @@ function AuditRowItem({ row, community }: { row: AuditRow; community: Community 
           open={jsonOpen}
           onOpenChange={setJsonOpen}
           source={row.rumor}
-          description="The raw, unsigned control-plane edition — the bytes its author signed. Its Schnorr signature is on the seal that carried it, which is stored separately."
+          description="The raw, unsigned control-plane edition its author signed. The signature is on the seal that carried it, which is stored separately."
         />
       )}
     </>
@@ -223,7 +223,7 @@ function ValidityBadge({ validity }: { validity: Validity }) {
       icon: <XCircle className="size-3" />,
       label: "Not applied",
       cls: "bg-destructive/15 text-destructive",
-      hint: "The fold did not honor this action — unauthorized, forged, or it lost a same-version fork.",
+      hint: "This action wasn't applied. It was unauthorized, forged, or lost a same-version fork.",
     },
   }[validity];
   return (

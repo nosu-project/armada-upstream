@@ -253,7 +253,7 @@ export function MembersView({
     setSelection(emptySelection());
     toast({
       title: `Sent current keys to ${sent} member${sent === 1 ? "" : "s"}`,
-      description: failed.length > 0 ? `${failed.length} failed — try them again shortly.` : undefined,
+      description: failed.length > 0 ? `${failed.length} failed. Try them again shortly.` : undefined,
       variant: failed.length > 0 ? "destructive" : undefined,
     });
   };
@@ -315,7 +315,7 @@ export function MembersView({
           }`}
         >
           <TriangleAlert className="size-4 shrink-0" />
-          {behindCount} member{behindCount === 1 ? " was" : "s were"} last seen on an older epoch — they
+          {behindCount} member{behindCount === 1 ? " was" : "s were"} last seen on an older epoch and
           never adopted a key rotation.
           <span className="ml-auto shrink-0 text-xs underline">{behindOnly ? "Show all" : "Show them"}</span>
         </button>
@@ -525,8 +525,8 @@ export function MembersView({
 
 const JOIN_PROVENANCE: Record<MemberDirectoryRow["joinKind"], string> = {
   join: "From their own join.",
-  snapshot: "Estimated — carried over by a key rotation, so this is the rotation's time, not the true join.",
-  observed: "Unknown — inferred from activity; no join was observed.",
+  snapshot: "Estimated. This is the time of a key rotation, not the actual join.",
+  observed: "Unknown. Inferred from activity because no join was observed.",
 };
 
 function MemberRow({
@@ -600,7 +600,7 @@ function MemberRow({
           </TooltipTrigger>
           <TooltipContent className="max-w-60 text-xs">
             Tried to make {describeAttempts(suspicion.attempts)} without permission. None of it
-            worked — nothing in the community actually changed.
+            worked, and nothing in the community changed.
           </TooltipContent>
         </Tooltip>
       )}

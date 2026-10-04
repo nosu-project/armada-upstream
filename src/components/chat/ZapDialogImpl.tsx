@@ -212,7 +212,7 @@ export default function ZapDialogImpl({ target, sendZap, sendOnchainZap, onDone 
         toast({
           title: `Sent ${formatSatsAmount(amountSats)} ⚡`,
           description:
-            "The payment went through, but the wallet hasn't provided the proof a private zap tally needs. We'll keep checking for a couple of minutes and count the zap if it turns up — wallets like Alby Hub, Coinos, or lnbits provide it reliably.",
+            "The payment went through, but the wallet hasn't provided the proof a private zap tally needs. We'll keep checking for a couple of minutes and count the zap if it turns up. Alby Hub, Coinos and lnbits provide it reliably.",
         });
         setSuccess({ kind: "lightning", amountSats });
       }
@@ -448,7 +448,7 @@ function LightningZapPane({
 
       {walletRequired && (
         <p className="text-xs text-amber-500">
-          Private zaps need a payment proof, so connect a wallet (Settings → Wallet) — or
+          Private zaps need a payment proof. Connect a wallet (Settings → Wallet) or
           switch to Bitcoin or another method from the menu above.
         </p>
       )}

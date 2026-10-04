@@ -105,7 +105,7 @@ function KeyRotationDivider() {
     <div
       className="flex items-center gap-3 px-2 py-1 select-none"
       role="separator"
-      aria-label="Key rotated — earlier messages use a previous key"
+      aria-label="Key rotated. Earlier messages use a previous key"
     >
       <div className="h-px flex-1 bg-amber-500/50" />
       <span

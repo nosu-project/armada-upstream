@@ -1575,7 +1575,7 @@ function ChannelRow({
                 if (!confirm(
                   `Rotate #${channel.name}'s key?\n\n` +
                   "It gets a fresh key delivered only to members who hold one of its roles right now. " +
-                  "Anyone else — including someone who kept a key from an earlier setting — loses access to what's said next.",
+                  "Anyone else, including someone who kept a key from an earlier setting, loses access to what's said next.",
                 )) return;
                 void run(async () => {
                   await onRotateKey();

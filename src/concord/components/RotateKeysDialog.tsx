@@ -84,7 +84,7 @@ export function RotateKeysDialog({
 
         <ul className="space-y-1 text-sm text-muted-foreground">
           <li>
-            {memberCount === 1 ? "1 member keeps" : `${memberCount} members keep`} access — nobody is
+            {memberCount === 1 ? "1 member keeps" : `${memberCount} members keep`} access. Nobody is
             removed.
           </li>
           {privateChannelCount > 0 && (
@@ -112,7 +112,7 @@ export function RotateKeysDialog({
         {stuck && busy && (
           <p className="text-sm text-muted-foreground">
             This is taking longer than expected. Your signer may be slow or offline. You can close
-            this and try again — a rotation that already landed is picked up on its own.
+            this and try again. A rotation that already landed is picked up automatically.
           </p>
         )}
 

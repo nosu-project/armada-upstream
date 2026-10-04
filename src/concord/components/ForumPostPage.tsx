@@ -288,7 +288,7 @@ export function ForumPostPage({
                   <span className="italic">
                     {rootMuted
                       ? "You blocked the person who wrote this post."
-                      : "The post itself isn't loaded — it may be older than the channel window."}
+                      : "The post isn't loaded. It may be older than the channel window."}
                   </span>
                 </div>
               ) : (

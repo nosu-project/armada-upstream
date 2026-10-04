@@ -169,7 +169,7 @@ function RolesBody({ community }: { community: Community }) {
     const winner = ahead[ahead.length - 1];
     return `${wanted.name} can't go there: the only position free for it is ${wanted.position}, which ${peers
       .map((r) => r.name)
-      .join(" and ")} already ${peers.length === 1 ? "holds" : "hold"}, and a tie is decided by the lower role id — so it would render${
+      .join(" and ")} already ${peers.length === 1 ? "holds" : "hold"}, and ties go to the lower role id, so it would render${
       winner ? ` behind ${winner.name}` : " out of order"
     }, not where you dropped it. Nothing was published.`;
   };
@@ -202,8 +202,8 @@ function RolesBody({ community }: { community: Community }) {
       );
       setError(
         shared.length > 0
-          ? `${why} ${done} of ${moved.length} roles moved, leaving two or more roles on position ${shared.join(" and ")}. Nothing was undone. Roles at one position are peers and render by role id, so the list may look unchanged — drag one of them again and take the offer to even out the positions.`
-          : `${why} ${done} of ${moved.length} roles moved; the rest kept their old position. Nothing was undone — reorder again to finish.`,
+          ? `${why} ${done} of ${moved.length} roles moved, leaving two or more roles on position ${shared.join(" and ")}. Nothing was undone. Roles at one position are peers and render by role id, so the list may look unchanged. Drag one of them again and accept the offer to even out the positions.`
+          : `${why} ${done} of ${moved.length} roles moved; the rest kept their old position. Nothing was undone. Reorder again to finish.`,
       );
     }
   };
@@ -316,7 +316,7 @@ function RolesBody({ community }: { community: Community }) {
     } catch (e) {
       const why = e instanceof Error ? e.message : "Couldn't revoke the role.";
       setError(
-        `${why} ${stripped} of ${strippable.length} grants were stripped and the role still carries its permissions. Nothing was undone — revoke again to finish.`,
+        `${why} ${stripped} of ${strippable.length} grants were stripped and the role still carries its permissions. Nothing was undone. Revoke again to finish.`,
       );
     }
   };
@@ -354,7 +354,7 @@ function RolesBody({ community }: { community: Community }) {
             Roles can't be deleted: they're part of the community's signed history, which every member's app
             replays so that everyone sees the same list. So it stays here, holding one of the
             community's {MAX_ROLES_PER_COMMUNITY} role slots, but grants nothing
-            {skipped.length === 0 ? " — and you can rename it later to reuse the slot." : "."}
+            {skipped.length === 0 ? ". You can rename it later to reuse the slot." : "."}
           </p>
         </div>
         {error && (
@@ -531,8 +531,8 @@ function RolesBody({ community }: { community: Community }) {
       {/* CORD-04 §2 cap; revoked roles count (no tombstone). */}
       {roles.length >= MAX_ROLES_PER_COMMUNITY && (
         <p className="text-xs text-muted-foreground">
-          This community has reached the limit of {MAX_ROLES_PER_COMMUNITY} roles. Roles can't be deleted —
-          every member's app replays the same signed history — so revoked ones still count. To make room,
+          This community has reached the limit of {MAX_ROLES_PER_COMMUNITY} roles. Revoked roles still count,
+          since roles are part of the signed history and can't be deleted. To make room,
           rename a revoked role that nobody holds and give it new permissions.
         </p>
       )}
@@ -709,7 +709,7 @@ export function RoleEditor({
           // community-wide; staff bits also mail the `control_root`.
           <p className="rounded-md bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
             These bits are <span className="font-medium">community-wide</span>, not limited to
-            #{selectedChannel.name} — the protocol has no channel-limited permissions. Ticking one
+            #{selectedChannel.name}. The protocol has no channel-limited permissions. Ticking one
             of Manage roles, Manage channels, Manage community, Ban, Create invites or Pin messages
             also makes the holder staff and sends them the community's control key. For access
             alone, leave every box unchecked.

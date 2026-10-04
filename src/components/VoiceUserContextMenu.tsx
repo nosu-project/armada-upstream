@@ -112,7 +112,7 @@ function useVoiceMenuItems(
         <Label className="flex items-center justify-between gap-2">
           <span className="truncate">
             <DisplayName pubkey={verified ? pubkey : undefined} name={displayName} />
-            {volumeTarget === "screenShare" && " — screen share"}
+            {volumeTarget === "screenShare" && "'s screen share"}
           </span>
           {showVolume && (
             <span className="text-xs text-muted-foreground tabular-nums font-normal">{pct}%</span>
