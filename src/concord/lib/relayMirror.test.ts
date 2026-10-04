@@ -1,8 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 
 import { bytesToHex, random32 } from "@/concord/lib/derive";
 import { KIND_WRAP } from "@/concord/lib/kinds";
-import { mirrorGroups, mirrorHistoryToRelays, type MirrorNostr } from "@/concord/lib/relayMirror";
+import {
+  _configureMirrorBackoffForTests,
+  mirrorGroups,
+  mirrorHistoryToRelays,
+  type MirrorNostr,
+} from "@/concord/lib/relayMirror";
 import type { Community } from "@/concord/lib/types";
 
 import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
@@ -41,6 +46,8 @@ function wrapAt(pubkey: string, createdAt: number, seq: number): NostrEvent {
 class FakeRelay {
   published: NostrEvent[] = [];
   failOnce = new Set<string>();
+  /** Answer `rate-limited:` to this many publishes, whichever events they are. */
+  rateLimitNext = 0;
   constructor(
     public store: NostrEvent[] = [],
     public rejectIds = new Set<string>(),
@@ -64,6 +71,10 @@ class FakeRelay {
   }
 
   async event(ev: NostrEvent): Promise<void> {
+    if (this.rateLimitNext > 0) {
+      this.rateLimitNext--;
+      throw new Error("rate-limited: slow down");
+    }
     if (this.rejectIds.has(ev.id)) throw new Error("blocked: event too old");
     if (this.failOnce.has(ev.id)) {
       this.failOnce.delete(ev.id);
@@ -161,6 +172,50 @@ describe("mirrorHistoryToRelays", () => {
 
     const report = await mirrorHistoryToRelays(poolOf(relays), community, ["wss://new.example"]);
     expect(report.perRelay.get("wss://new.example")).toEqual({ accepted: 2, rejected: 1 });
+  });
+
+  describe("a rate-limited target", () => {
+    beforeEach(() => _configureMirrorBackoffForTests({ initialMs: 1, maxMs: 4, giveUpMs: 180_000 }));
+
+    function setup(count: number) {
+      const community = makeCommunity();
+      const [control] = mirrorGroups(community);
+      const wraps = Array.from({ length: count }, (_, i) => wrapAt(control.pk, 100 + i, i));
+      const target = new FakeRelay();
+      const relays = {
+        "wss://old-a.example": new FakeRelay(wraps),
+        "wss://old-b.example": new FakeRelay(),
+        "wss://new.example": target,
+      };
+      return { community, target, relays, wraps };
+    }
+
+    it("waits and sends again until the relay takes every wrap", async () => {
+      const { community, target, relays, wraps } = setup(25);
+      // More refusals than one retry would absorb.
+      target.rateLimitNext = 30;
+      const report = await mirrorHistoryToRelays(poolOf(relays), community, ["wss://new.example"]);
+      expect(report.perRelay.get("wss://new.example")).toEqual({ accepted: 25, rejected: 0 });
+      expect(new Set(target.published.map((e) => e.id))).toEqual(new Set(wraps.map((e) => e.id)));
+    });
+
+    it("gives up on a relay that never stops, counting the rest as rejected", async () => {
+      _configureMirrorBackoffForTests({ giveUpMs: 20 });
+      const { community, target, relays } = setup(5);
+      target.rateLimitNext = Number.POSITIVE_INFINITY;
+      const report = await mirrorHistoryToRelays(poolOf(relays), community, ["wss://new.example"]);
+      expect(report.perRelay.get("wss://new.example")).toEqual({ accepted: 0, rejected: 5 });
+    });
+
+    it("stops waiting when the copy is cancelled", async () => {
+      _configureMirrorBackoffForTests({ initialMs: 60_000, maxMs: 60_000 });
+      const { community, target, relays } = setup(3);
+      target.rateLimitNext = 1;
+      const controller = new AbortController();
+      const copy = mirrorHistoryToRelays(poolOf(relays), community, ["wss://new.example"], { signal: controller.signal });
+      setTimeout(() => controller.abort(), 10);
+      await expect(copy).rejects.toThrow(/cancelled/);
+    });
   });
 
   it("never reads from the relays it is seeding", async () => {
