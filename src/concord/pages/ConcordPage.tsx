@@ -1978,9 +1978,13 @@ export function ConcordPage() {
   }, [roster, memberPubkeys]);
 
   // A private channel's member panel lists only those entitled to its key (CORD-03).
+  // Gated on view === "channel": `channel` falls back to the last-viewed channel
+  // outside a channel view, which would otherwise leak that channel's scoping into
+  // panes like "All Messages" and hide members with no channel access yet.
   const entitledHere = useCallback(
-    (pk: string) => !channel?.isPrivate || isEntitled(roster, ownerHex, pk, channel.idHex),
-    [channel, roster, ownerHex],
+    (pk: string) =>
+      view !== "channel" || !channel?.isPrivate || isEntitled(roster, ownerHex, pk, channel.idHex),
+    [view, channel, roster, ownerHex],
   );
   const panelMembers = useMemo(() => memberPubkeys.filter(entitledHere), [memberPubkeys, entitledHere]);
   const panelAdmins = useMemo(() => memberAdmins.filter((a) => entitledHere(a.pubkey)), [memberAdmins, entitledHere]);
@@ -1990,15 +1994,16 @@ export function ConcordPage() {
   );
 
   // "Add members" = grant a scoped Role (vends the key); shown only if the viewer
-  // outranks one.
+  // outranks one. Gated on view === "channel" for the same reason as entitledHere:
+  // `channel` outside a channel view is the last-viewed channel, not the current one.
   const addableChannelRoles = useMemo(() => {
-    if (!channel?.isPrivate) return [];
+    if (view !== "channel" || !channel?.isPrivate) return [];
     const assignable = new Set((roleCatalog ?? []).filter((r) => r.assignable).map((r) => r.id));
     return (channelRoleCatalog.get(channel.idHex) ?? []).filter((r) => assignable.has(r.id));
-  }, [channel, channelRoleCatalog, roleCatalog]);
+  }, [view, channel, channelRoleCatalog, roleCatalog]);
   const addMemberCandidates = useMemo(
-    () => (channel?.isPrivate ? memberPubkeys.filter((pk) => !entitledHere(pk)) : []),
-    [channel, memberPubkeys, entitledHere],
+    () => (view === "channel" && channel?.isPrivate ? memberPubkeys.filter((pk) => !entitledHere(pk)) : []),
+    [view, channel, memberPubkeys, entitledHere],
   );
 
   useEffect(() => setAddMembersOpen(false), [channel?.idHex]);
