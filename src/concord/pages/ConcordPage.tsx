@@ -1156,6 +1156,9 @@ export function ConcordPage() {
   // Projects data loads lazily (tab opened, or a ticket conversation opens).
   const [projectsTouched, setProjectsTouched] = useState(false);
   const [openTicket, setOpenTicket] = useState<GitTicket | undefined>();
+  const [ticketExpanded, setTicketExpanded] = useState(false);
+  // The ticket and a chat thread share the right-hand slot; opening one closes the other.
+  const closeThreadRef = useRef<() => void>(() => {});
   // Close the ticket panel on community/channel/pane change during render. Uses
   // the ROUTE's channel, since the persisted fallback lags a switch.
   const ticketContextKey = `${communityId ?? ""}|${routeChannelId ?? ""}|${view}`;
@@ -1457,12 +1460,14 @@ export function ConcordPage() {
   const openProjectItem = useCallback((item: ProjectWorkItem) => {
     const ticket = projects.ticketsById.get(item.id);
     if (!ticket) return;
+    closeThreadRef.current();
     setOpenTicket(ticket);
     void projects.refreshTicket(ticket);
   }, [projects]);
   // Stable identity (depends on `refreshTicket`, not the rebuilt result object).
   const refreshChannelTicket = gitActivity.refreshTicket;
   const openChannelTicket = useCallback((ticket: GitTicket) => {
+    closeThreadRef.current();
     setOpenTicket(ticket);
     void refreshChannelTicket(ticket);
   }, [refreshChannelTicket]);
@@ -1495,8 +1500,8 @@ export function ConcordPage() {
   const ticketActions = useMemo(() => ({
     viewerPubkey: user?.pubkey,
     onComment: user
-      ? async (ticket: GitTicket, content: string, media?: readonly string[][]) => {
-          await gitActions.commentOnTicket(ticket, content, projects.relaysForCoordinates(ticket.repositoryAddresses.map((address) => address.coordinate)), media);
+      ? async (ticket: GitTicket, content: string, tags?: readonly string[][]) => {
+          await gitActions.commentOnTicket(ticket, content, projects.relaysForCoordinates(ticket.repositoryAddresses.map((address) => address.coordinate)), tags);
         }
       : undefined,
     onEditComment: user
@@ -1818,6 +1823,12 @@ export function ConcordPage() {
     onOpenThread: onOpenThreadCb,
     closeThread,
   } = useThreadPanel({ room: channelRoute, messages: allMessages, canWrite });
+  closeThreadRef.current = closeThread;
+  const [ticketThreadKey, setTicketThreadKey] = useState(threadRoot?.id);
+  if (ticketThreadKey !== threadRoot?.id) {
+    setTicketThreadKey(threadRoot?.id);
+    if (threadRoot) setOpenTicket(undefined);
+  }
 
   // Search survives channel switches, resets on community change.
   const [searchCommunityKey, setSearchCommunityKey] = useState(communityId);
@@ -3254,7 +3265,11 @@ export function ConcordPage() {
 
           <div className="relative flex flex-1 min-h-0">
             <ComposerBoundsProvider value={composerBoundsRef}>
-            <div className={cn("flex-1 min-w-0 flex flex-col", chatColumnClass)}>
+            <div className={cn(
+              "flex-1 min-w-0 flex flex-col",
+              chatColumnClass,
+              openTicket && ticketExpanded && "thread:flex-none thread:w-0 thread:opacity-0 thread:overflow-hidden thread:pointer-events-none",
+            )}>
               {view === "all" ? (
                 <div className="flex-1 min-h-0 overflow-y-auto overflow-x-clip overscroll-contain scrollbar-stable pb-safe">
                   <AllMessagesView
@@ -3668,7 +3683,7 @@ export function ConcordPage() {
               )}
             </div>
 
-            <TicketSidePanel ticket={openTicket} members={memberSet} activities={panelActivities} onClose={() => setOpenTicket(undefined)} actions={ticketActions} />
+            <TicketSidePanel ticket={openTicket} members={memberSet} activities={panelActivities} onClose={() => setOpenTicket(undefined)} onExpandChange={setTicketExpanded} actions={ticketActions} />
             <MountWhenOpened open={creatingChannel}>
               <NewChannelDialog
                 open={creatingChannel}

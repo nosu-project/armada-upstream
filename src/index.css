@@ -599,6 +599,16 @@
   }
 }
 
+/* Settings search (src/components/settings/settingsSearch.ts). An attribute
+   rather than `hidden`, which a row's own `flex` class would override. */
+[data-search-hidden] {
+  display: none !important;
+}
+::highlight(settings-search) {
+  background-color: hsl(var(--primary) / 0.35);
+  color: inherit;
+}
+
 /*
  * Syntax highlighting for fenced code blocks — highlight.js scope classes,
  * emitted by lowlight in src/lib/highlighter.ts and rendered as spans by
