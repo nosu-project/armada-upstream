@@ -267,6 +267,11 @@ export interface AppConfig {
    * a foreground service). Per-device.
    */
   meshEnabled: boolean;
+  /**
+   * Android back from a revealed list pane (default on): leave the app, as from
+   * a root screen. Off walks history back through earlier chats. Per-device.
+   */
+  androidBackLeavesApp: boolean;
   /** Unit money amounts are shown/entered in. Synced (wallet connections stay local). */
   currencyDisplay: CurrencyDisplay;
   /**
@@ -381,6 +386,7 @@ export const PER_DEVICE_CONFIG_KEYS = [
   "lastChannelByServer",
   "meshIncognito",
   "meshEnabled",
+  "androidBackLeavesApp",
 ] as const satisfies ReadonlyArray<keyof AppConfig>;
 
 export const defaultConfig: AppConfig = {
@@ -429,6 +435,7 @@ export const defaultConfig: AppConfig = {
   trustedMediaHosts: [],
   meshIncognito: true,
   meshEnabled: false,
+  androidBackLeavesApp: true,
   currencyDisplay: "usd",
   defaultZapMethod: "bitcoin",
   zapsEnabled: true,

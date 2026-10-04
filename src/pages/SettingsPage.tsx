@@ -1,3 +1,4 @@
+import { Capacitor } from "@capacitor/core";
 import {
   Activity,
   AlertTriangle,
@@ -351,6 +352,11 @@ export function SettingsPage({
       ...current,
       sendOnEnter: { ...current.sendOnEnter, [key]: value },
     }));
+  };
+
+  /** Toggle Android back from the revealed list pane: leave the app vs. walk history. Per-device. */
+  const setAndroidBackLeavesApp = (value: boolean) => {
+    updateConfig((current) => ({ ...current, androidBackLeavesApp: value }));
   };
 
   const navGroups = useMemo<NavGroup[]>(() => {
@@ -836,19 +842,32 @@ export function SettingsPage({
         );
       case "chat":
         return (
-          <SettingsRow
-            label="Send with Enter"
-            description={
-              isTouch
-                ? "Enter sends the message. Off, Enter is a new line and you send with the button."
-                : "Enter sends; Shift+Enter for a new line. Off, Ctrl/Cmd+Enter sends."
-            }
-          >
-            <Switch
-              checked={sendsOnEnter(config.sendOnEnter, isTouch)}
-              onCheckedChange={setSendOnEnter}
-            />
-          </SettingsRow>
+          <>
+            <SettingsRow
+              label="Send with Enter"
+              description={
+                isTouch
+                  ? "Enter sends the message. Off, Enter is a new line and you send with the button."
+                  : "Enter sends; Shift+Enter for a new line. Off, Ctrl/Cmd+Enter sends."
+              }
+            >
+              <Switch
+                checked={sendsOnEnter(config.sendOnEnter, isTouch)}
+                onCheckedChange={setSendOnEnter}
+              />
+            </SettingsRow>
+            {Capacitor.getPlatform() === "android" && (
+              <SettingsRow
+                label="Back leaves the app"
+                description="Going back from the channel list leaves Armada. Off, back returns through the chats you visited before."
+              >
+                <Switch
+                  checked={config.androidBackLeavesApp}
+                  onCheckedChange={setAndroidBackLeavesApp}
+                />
+              </SettingsRow>
+            )}
+          </>
         );
       case "links":
         return (

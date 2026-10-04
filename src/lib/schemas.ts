@@ -155,6 +155,7 @@ export const AppConfigSchema = z.object({
   accountStandingSeen: z.boolean().catch(defaultConfig.accountStandingSeen),
   meshIncognito: z.boolean().catch(defaultConfig.meshIncognito),
   meshEnabled: z.boolean().catch(defaultConfig.meshEnabled),
+  androidBackLeavesApp: z.boolean().catch(defaultConfig.androidBackLeavesApp),
 });
 
 // Encrypted NIP-78 settings documents: one kind-30078 per domain, NIP-44 to self
