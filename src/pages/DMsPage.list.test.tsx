@@ -1,4 +1,4 @@
-import { act, cleanup, render } from "@testing-library/react";
+import { act, cleanup, fireEvent, render } from "@testing-library/react";
 import { generateSecretKey, getPublicKey } from "nostr-tools/pure";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -14,7 +14,10 @@ import type { ReactNode } from "react";
  * is about which rows MOUNT and nothing else.
  */
 
-const spies = vi.hoisted(() => ({ useAuthor: vi.fn() }));
+const spies = vi.hoisted(() => ({
+  useAuthor: vi.fn(),
+  follows: [] as { pubkey: string; metadata: { name: string }; event: { tags: string[][] } }[],
+}));
 
 vi.mock("@/hooks/useAuthor", () => ({
   useAuthor: (pubkey?: string) => {
@@ -50,6 +53,13 @@ vi.mock("@/hooks/useMuteList", () => ({
 vi.mock("@/hooks/useToast", () => ({ useToast: () => ({ toast: () => {} }) }));
 vi.mock("@/hooks/useOpenProfile", () => ({ useOpenProfile: () => () => {} }));
 vi.mock("@/hooks/useSharedCommunities", () => ({ useSharedCommunities: () => new Map() }));
+vi.mock("@/hooks/useSearchProfiles", () => ({
+  useSearchProfiles: () => ({ data: [], isFetching: false, followedPubkeys: new Set() }),
+  useFollowSearch: (query: string, enabled: boolean) =>
+    enabled && query.trim()
+      ? spies.follows.filter((p) => p.metadata.name.includes(query.trim().toLowerCase()))
+      : [],
+}));
 vi.mock("@/hooks/useDmMessageSearch", () => ({ useDmMessageSearch: () => new Map() }));
 // Composes the row's title from every participant's profile, which means a
 // query client and the profile sync topic. The names are not what this file
@@ -169,6 +179,7 @@ function list(rows: DmListRow[], extra?: Record<string, unknown>): ReactNode {
       onMarkAllRead={() => {}}
       onCompose={() => {}}
       openPeer={() => {}}
+      startDm={() => {}}
       closePeer={() => {}}
       loadMore={async () => 0}
       hasMore={false}
@@ -187,6 +198,7 @@ afterEach(() => {
   cleanup();
   vi.clearAllMocks();
   vi.unstubAllGlobals();
+  spies.follows = [];
 });
 
 describe("ConversationList viewport gating", () => {
@@ -257,6 +269,29 @@ describe("ConversationList viewport gating", () => {
     const view = render(list(partial, { isLoading: true }));
 
     expect(rowCount(view.container)).toBe(0);
+  });
+});
+
+describe("ConversationList search", () => {
+  it("offers followed people who have no conversation yet", () => {
+    const [existing] = conversations(1);
+    const fresh = getPublicKey(generateSecretKey());
+    spies.follows = [
+      { pubkey: existing.peers[0], metadata: { name: "hzrd-old" }, event: { tags: [] } },
+      { pubkey: fresh, metadata: { name: "hzrd149" }, event: { tags: [] } },
+    ];
+    const startDm = vi.fn();
+    const view = render(list([existing], { startDm }));
+
+    fireEvent.click(view.getByRole("button", { name: "Search conversations" }));
+    fireEvent.change(view.getByRole("textbox", { name: "Search conversations" }), {
+      target: { value: "hzrd" },
+    });
+
+    expect(view.getByText("People you follow")).toBeTruthy();
+    expect(view.queryByText("hzrd-old")).toBeNull();
+    fireEvent.click(view.getByText("hzrd149"));
+    expect(startDm).toHaveBeenCalledWith(fresh);
   });
 });
 

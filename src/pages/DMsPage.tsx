@@ -92,7 +92,7 @@ import { useDmTyping } from "@/hooks/useDmTyping";
 import { useIsTouch } from "@/hooks/useIsMobile";
 import { useDmCall } from "@/contexts/DmCallContext";
 import { useDmCallReach } from "@/hooks/useDmCallReach";
-import { useSearchProfiles, type SearchProfile } from "@/hooks/useSearchProfiles";
+import { useFollowSearch, useSearchProfiles, type SearchProfile } from "@/hooks/useSearchProfiles";
 import { dmReadKey, useReadState } from "@/hooks/useReadState";
 import { usePageCovered } from "@/lib/settingsOverlay";
 import { useNotifLevels, dmScopeKey, type NotifLevel } from "@/hooks/useNotifLevels";
@@ -1875,6 +1875,7 @@ export function ConversationList({
   onMarkAllRead,
   onCompose,
   openPeer,
+  startDm,
   closePeer,
   loadMore,
   hasMore,
@@ -1894,6 +1895,8 @@ export function ConversationList({
   onMarkAllRead: () => void;
   onCompose: () => void;
   openPeer: (conversation: string) => void;
+  /** Opens (or starts) a 1:1 with a person who may have no conversation yet. */
+  startDm: (pubkey: string) => void;
   closePeer: (conversation: string, latest: DmLatestMarker | undefined) => void;
   loadMore: () => Promise<number>;
   hasMore: boolean;
@@ -1961,6 +1964,14 @@ export function ConversationList({
     setSearchOpen(false);
     setSearch("");
   }, []);
+
+  // Followed people with no 1:1 in the list yet, so search doubles as a way to start one.
+  const followMatches = useFollowSearch(search, searchOpen && !requesting);
+  const followSuggestions = useMemo(() => {
+    if (followMatches.length === 0) return followMatches;
+    const listed = new Set([...rows, ...requestRows].map((r) => r.conversation));
+    return followMatches.filter((p) => p.pubkey !== user?.pubkey && !listed.has(p.pubkey));
+  }, [followMatches, rows, requestRows, user?.pubkey]);
 
   // Pinned rows get their own section; both stay newest-first.
   const { pinned: pinnedPeers, isPinned, togglePin } = usePinnedDms();
@@ -2145,7 +2156,7 @@ export function ConversationList({
               onKeyDown={(e) => {
                 if (e.key === "Escape") closeSearch();
               }}
-            placeholder="Search messages…"
+            placeholder="Search messages or people…"
             aria-label="Search conversations"
               className="h-8 flex-1 border-0 bg-transparent px-1 text-sm shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
             />
@@ -2230,6 +2241,22 @@ export function ConversationList({
               </>
             ) : (
               [...pinnedRows, ...otherRows].map((c, i) => renderRow(c, i))
+            )}
+            {followSuggestions.length > 0 && (
+              <>
+                <ConversationSectionHeader>People you follow</ConversationSectionHeader>
+                {followSuggestions.map((p) => (
+                  <RecipientSuggestion
+                    key={p.pubkey}
+                    pubkey={p.pubkey}
+                    metadata={p.metadata}
+                    imeta={parseProfileImeta(p.event.tags, p.metadata)}
+                    active={false}
+                    followed={false}
+                    onSelect={() => startDm(p.pubkey)}
+                  />
+                ))}
+              </>
             )}
             {/* Note to Self is always a row, so the hint sits under it. */}
             {onlyNoteToSelf && requestRows.length === 0 && search.trim().length === 0 && (
@@ -2593,6 +2620,8 @@ export function DMsPage() {
     [reopenDm, acceptConversation, openPeer],
   );
 
+  const startDm = useCallback((pubkey: string) => openNewRecipients([pubkey]), [openNewRecipients]);
+
   const closePeer = useCallback(
     (conversation: string, latest: DmLatestMarker | undefined) => {
       closeDm(conversation, latest);
@@ -2673,6 +2702,7 @@ export function DMsPage() {
             onMarkAllRead={markAllDmsRead}
             onCompose={startComposing}
             openPeer={openPeer}
+            startDm={startDm}
             closePeer={closePeer}
             loadMore={loadMore}
             hasMore={hasMore}
