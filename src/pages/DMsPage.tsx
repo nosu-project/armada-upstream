@@ -27,6 +27,7 @@ import { DisplayName } from "@/components/DisplayName";
 import { DmAvatar } from "@/components/DmAvatar";
 import { NoteToSelfAvatar, NoteToSelfIcon, NOTE_TO_SELF_NAME } from "@/components/NoteToSelfAvatar";
 import { ReportDialog } from "@/components/ReportDialog";
+import { SearchField } from "@/components/ui/search-field";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -1664,22 +1665,17 @@ function NewDMPane({
             ))}
           </div>
         )}
-        <div className="relative">
-          <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            id="dm-recipient"
-            autoFocus
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder="Search a name or paste an npub…"
-            autoComplete="off"
-            className="h-10 pl-8 pr-8 text-sm"
-          />
-          {isFetching && (
-            <Loader2 className="absolute right-2.5 top-1/2 size-4 -translate-y-1/2 animate-spin text-muted-foreground" />
-          )}
-        </div>
+        <SearchField
+          id="dm-recipient"
+          autoFocus
+          value={query}
+          onChange={setQuery}
+          onKeyDown={handleKeyDown}
+          placeholder="Search a name or paste an npub…"
+          autoComplete="off"
+          busy={isFetching}
+          className="h-10 touch:h-11"
+        />
       </div>
 
       <div className="flex-1 min-h-0 overflow-y-auto px-2 pb-safe space-y-0.5">
@@ -2155,15 +2151,15 @@ export function ConversationList({
               onKeyDown={(e) => {
                 if (e.key === "Escape") closeSearch();
               }}
-            placeholder="Search messages or people…"
-            aria-label="Search conversations"
-              className="h-8 flex-1 border-0 bg-transparent px-1 text-sm shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
+              placeholder="Search messages or people…"
+              aria-label="Search conversations"
+              className="h-8 touch:h-10 flex-1 border-0 bg-transparent px-1 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
             />
             <Button
               variant="ghost"
               size="icon"
               aria-label="Close search"
-              className="size-8 shrink-0 text-muted-foreground hover:text-foreground"
+              className="size-8 touch:size-10 shrink-0 text-muted-foreground"
               onClick={closeSearch}
             >
               <X className="size-4" />

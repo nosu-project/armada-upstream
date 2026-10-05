@@ -1,6 +1,6 @@
 import { useCallback, useRef, useEffect, useState } from 'react';
-import { Search, Star, X, ImageOff } from 'lucide-react';
-import { Input } from '@/components/ui/input';
+import { Star, ImageOff } from 'lucide-react';
+import { SearchField } from '@/components/ui/search-field';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useGifSearch, registerGifShare, type GifResult } from '@/hooks/useGifSearch';
@@ -228,29 +228,13 @@ export function GifPicker({ onSelect }: GifPickerProps) {
       {activeTab === 'search' && (
         <>
           <div className="px-3 pt-1 pb-2">
-            <div className="relative">
-              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-4 text-muted-foreground pointer-events-none" />
-              <Input
-                ref={inputRef}
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder={`Search ${providerName}`}
-                className="pl-8 pr-20 h-9 text-base md:text-sm bg-muted/50 border-0 rounded-lg"
-              />
-              {query ? (
-                <button
-                  type="button"
-                  onClick={clearQuery}
-                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
-                >
-                  <X className="size-3.5" />
-                </button>
-              ) : (
-                <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-3xs text-muted-foreground/50 pointer-events-none select-none">
-                  Powered by {providerName}
-                </span>
-              )}
-            </div>
+            <SearchField
+              ref={inputRef}
+              value={query}
+              onChange={(q) => (q ? setQuery(q) : clearQuery())}
+              placeholder={`Search ${providerName}`}
+              hint={`Powered by ${providerName}`}
+            />
           </div>
 
           <div className="px-3 pb-1.5">

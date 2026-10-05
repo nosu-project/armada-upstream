@@ -1,11 +1,11 @@
-import { Loader2, Search, UserRoundCheck } from "lucide-react";
+import { Loader2, UserRoundCheck } from "lucide-react";
 import { nip19 } from "nostr-tools";
 import { useState } from "react";
 
 import { BotPill } from "@/components/BotPill";
 import { EmojifiedText } from "@/components/chat/CustomEmoji";
+import { SearchField } from "@/components/ui/search-field";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { Input } from "@/components/ui/input";
 import { Popover, PopoverAnchor, PopoverContent } from "@/components/ui/popover";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useSearchProfiles, type SearchProfile } from "@/hooks/useSearchProfiles";
@@ -48,24 +48,19 @@ export function ProfileSearchSelect({
     // clicking back into the input doesn't wipe the search.
     <Popover open={trimmed.length >= 1} onOpenChange={(o) => { if (!o) setQuery(""); }}>
       <PopoverAnchor asChild>
-        <div className="relative">
-          <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder={placeholder}
-            aria-label="Search people"
-            autoComplete="off"
-            autoCapitalize="off"
-            autoCorrect="off"
-            spellCheck={false}
-            autoFocus={autoFocus}
-            className="pl-9 pr-9"
-          />
-          {isFetching && (
-            <Loader2 className="absolute right-3 top-1/2 size-4 -translate-y-1/2 animate-spin text-muted-foreground" />
-          )}
-        </div>
+        <SearchField
+          value={query}
+          onChange={setQuery}
+          placeholder={placeholder}
+          aria-label="Search people"
+          autoComplete="off"
+          autoCapitalize="off"
+          autoCorrect="off"
+          spellCheck={false}
+          autoFocus={autoFocus}
+          busy={isFetching}
+          className="h-10 touch:h-11 bg-background/40"
+        />
       </PopoverAnchor>
 
       <PopoverContent

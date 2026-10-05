@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
-import { Blocks, ImageOff, Loader2, Search, Users } from "lucide-react";
+import { Blocks, ImageOff, Loader2, Users } from "lucide-react";
 
-import { Input } from "@/components/ui/input";
+import { SearchField } from "@/components/ui/search-field";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useFollowList } from "@/hooks/useFollowList";
 import { useWebxdcApps, type WebxdcApp } from "@/hooks/useWebxdcApps";
@@ -58,15 +58,7 @@ export function WebxdcGamePicker({
   return (
     <div className="flex flex-col w-full h-[360px] max-h-[55dvh] bg-popover rounded-lg overflow-hidden">
       <div className="flex items-center gap-2 px-3 pt-2 pb-2">
-        <div className="relative flex-1">
-          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-4 text-muted-foreground pointer-events-none" />
-          <Input
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search games"
-            className="pl-8 h-9 text-base md:text-sm bg-muted/50 border-0 rounded-lg"
-          />
-        </div>
+        <SearchField value={query} onChange={setQuery} placeholder="Search games" className="flex-1" />
         <button
           type="button"
           onClick={() => setFollowsOnly((v) => !v)}

@@ -1,13 +1,13 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useQueries } from "@tanstack/react-query";
-import { Ban, Crown, KeyRound, Loader2, Search, Shield, ShieldAlert, ShieldOff, TriangleAlert, UserMinus, Users } from "lucide-react";
+import { Ban, Crown, KeyRound, Loader2, Shield, ShieldAlert, ShieldOff, TriangleAlert, UserMinus, Users } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { DisplayName } from "@/components/DisplayName";
+import { SearchField } from "@/components/ui/search-field";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Input } from "@/components/ui/input";
 import {
   Select,
   SelectContent,
@@ -322,15 +322,7 @@ export function MembersView({
       )}
 
       <div className="flex flex-wrap items-center gap-2">
-        <div className="relative min-w-40 flex-1">
-          <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search members"
-            className="pl-8"
-          />
-        </div>
+        <SearchField value={query} onChange={setQuery} placeholder="Search members" className="min-w-40 flex-1" />
         <Select value={roleFilter} onValueChange={setRoleFilter}>
           <SelectTrigger className="w-36 shrink-0">
             <SelectValue placeholder="Role" />

@@ -1,6 +1,6 @@
 import { useState, useMemo, useRef, useEffect } from 'react';
-import { Search, X, Sticker } from 'lucide-react';
-import { Input } from '@/components/ui/input';
+import { Sticker } from 'lucide-react';
+import { SearchField } from '@/components/ui/search-field';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { CustomEmojiImg } from '@/components/chat/CustomEmoji';
 import type { CustomEmoji } from '@/hooks/useCustomEmojis';
@@ -44,25 +44,7 @@ export function StickerPicker({ customEmojis, onSelect, height = 350, autoFocus 
   return (
     <div className="flex flex-col" style={{ height }}>
       <div className="px-3 pt-3 pb-2 shrink-0">
-        <div className="relative">
-          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-4 text-muted-foreground pointer-events-none" />
-          <Input
-            ref={inputRef}
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search stickers..."
-            className="pl-8 pr-8 h-9 text-base md:text-sm bg-muted/50 border-0 rounded-lg"
-          />
-          {query && (
-            <button
-              type="button"
-              onClick={() => setQuery('')}
-              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
-            >
-              <X className="size-3.5" />
-            </button>
-          )}
-        </div>
+        <SearchField ref={inputRef} value={query} onChange={setQuery} placeholder="Search stickers" />
       </div>
 
       <ScrollArea className="flex-1 min-h-0">
