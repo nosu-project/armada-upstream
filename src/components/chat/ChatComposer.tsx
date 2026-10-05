@@ -40,6 +40,7 @@ import { DisplayName } from "@/components/DisplayName";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { PillTabs, type PillTab } from "@/components/ui/pill-tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useComposerBoundsRef } from "@/contexts/ComposerBoundsContext";
 import { useAndroidBack } from "@/hooks/useAndroidBack";
@@ -360,6 +361,17 @@ interface ChatComposerProps {
   onCancel?: () => void;
 }
 
+type PickerTab = "emoji" | "gif" | "stickers" | "games";
+
+function GifGlyph({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" className={className}>
+      <rect x="1.5" y="2.5" width="17" height="15" rx="3" stroke="currentColor" strokeWidth="1.5" />
+      <text x="10" y="10.5" textAnchor="middle" dominantBaseline="central" fontSize="7" fontWeight="700" fontFamily="system-ui,sans-serif" fill="currentColor" letterSpacing="0.4">GIF</text>
+    </svg>
+  );
+}
+
 /**
  * Rich chat composer: mentions, shortcodes, pickers, uploads with NIP-92 imeta,
  * voice, NIP-88 polls, replies, NIP-18 quotes, drafts. With `sendOverride` it
@@ -462,7 +474,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
 
   const [pickerOpen, setPickerOpen] = useState(false);
   const { mounted: pickerMounted, visible: pickerVisible } = useMountedTransition(pickerOpen);
-  const [pickerTab, setPickerTab] = useState<"emoji" | "gif" | "stickers" | "games">("emoji");
+  const [pickerTab, setPickerTab] = useState<PickerTab>("emoji");
   const [plusOpen, setPlusOpen] = useState(false);
   const [removedEmbeds, setRemovedEmbeds] = useState<Set<string>>(new Set());
   const [uploadedFileGroups, setUploadedFileGroups] = useState<Map<string, string[][]>>(
@@ -573,18 +585,12 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
   // `height: auto` probe re-lays-out the whole pane, so skip it for an empty
   // field (cached per layout) and for append-only edits (compare `scrollHeight`).
   const measuredContentRef = useRef<string | null>(null);
-  // Touch: once a message wraps, the field takes the full width and the controls
-  // drop to a row beneath it, until it's cleared (latched, so it can't oscillate).
-  const [wrapped, setWrapped] = useState(false);
-  if (wrapped && !content) setWrapped(false);
-  const measuredWrappedRef = useRef(wrapped);
+  // Called when the field's width settles after the compact controls animate.
+  const remeasureRef = useRef<() => void>(() => {});
   useEffect(() => {
     const el = textareaRef.current;
     if (!el) return;
-    // The field's width changed with the layout: a stale height can't be grown from.
-    const relaid = measuredWrappedRef.current !== wrapped;
-    measuredWrappedRef.current = wrapped;
-    const previous = relaid ? null : measuredContentRef.current;
+    const previous = measuredContentRef.current;
     measuredContentRef.current = content;
     const bounds = () => ({
       max: layout === "document" ? Math.max(240, Math.round(window.innerHeight * 0.5)) : 160,
@@ -616,14 +622,12 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     } else {
       measure();
     }
-    if (isTouch && layout === "bar" && !wrapped && content) {
-      const style = getComputedStyle(el);
-      const text = el.scrollHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom);
-      if (text > parseFloat(style.lineHeight) * 1.5) setWrapped(true);
-    }
+    remeasureRef.current = () => {
+      if (el.value !== "") measure();
+    };
     window.addEventListener("resize", measure);
     return () => window.removeEventListener("resize", measure);
-  }, [content, layout, isTouch, wrapped]);
+  }, [content, layout]);
 
   // Deferred a frame: a context menu still trapping focus would pull it back.
   useEffect(() => {
@@ -1665,6 +1669,14 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
   const pollFilledCount = pollOptions.filter((o) => o.label.trim()).length;
   const isPollValid = content.trim().length > 0 && pollFilledCount >= 2;
   const hasContent = content.trim().length > 0 || attachments.length > 0;
+  // Touch bar while there's something to send: the GIF button folds into the picker's tabs.
+  const compact = isTouch && layout === "bar" && hasContent;
+  const pickerTabs: readonly PillTab<PickerTab>[] = [
+    { id: "emoji", label: "Emoji", icon: Smile },
+    ...(customEmojis.length > 0 ? [{ id: "stickers" as const, label: "Stickers", icon: Sticker }] : []),
+    ...(compact ? [{ id: "gif" as const, label: "GIF", icon: GifGlyph }] : []),
+  ];
+  const showPickerTabs = pickerTab !== "games" && (compact || (pickerTab !== "gif" && pickerTabs.length > 1));
 
   const handlePollSubmit = useCallback(async () => {
     const finalContent = canonicalizeLinks(content.trim());
@@ -1932,7 +1944,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     [conversationRelays, registerGame],
   );
 
-  const plusButtonClass = "p-2 shrink-0 rounded-full transition-colors flex items-center justify-center size-9 touch:size-11";
+  const plusButtonClass = "p-2 shrink-0 clip-corner-lg transition-colors flex items-center justify-center size-9 touch:size-11";
 
   const charCount = content.length;
   const placeholderText = mode === "poll" ? "Ask a question…" : (placeholder ?? "Message this channel…");
@@ -2054,7 +2066,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
             <div
               className={cn(
                 "clip-corner-lg bg-secondary/60 px-1.5 py-1.5",
-                isDocument || wrapped ? "flex flex-wrap items-center gap-0.5 touch:gap-1.5" : "flex items-end gap-0.5 touch:gap-1.5",
+                isDocument ? "flex flex-wrap items-center gap-0.5 touch:gap-1.5" : "flex items-end gap-0.5 touch:gap-1.5",
               )}
             >
               {/* Pointer: a double-click on "+" skips the menu and opens the file picker. */}
@@ -2069,7 +2081,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                       ? "text-primary bg-primary/10"
                       : "text-muted-foreground hover:text-foreground hover:bg-secondary")}
                   >
-                    <Plus className={cn("size-5 transition-transform", plusOpen && "rotate-45")} />
+                    <Plus absoluteStrokeWidth className={cn("size-5 touch:size-6 transition-transform", plusOpen && "rotate-45")} />
                   </button>
                   <AttachSheet
                     open={plusOpen}
@@ -2094,7 +2106,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                         ? "text-primary bg-primary/10"
                         : "text-muted-foreground hover:text-foreground hover:bg-secondary")}
                     >
-                      <Plus className={cn("size-5 transition-transform", plusOpen && "rotate-45")} />
+                      <Plus absoluteStrokeWidth className={cn("size-5 touch:size-6 transition-transform", plusOpen && "rotate-45")} />
                     </button>
                   </PopoverTrigger>
                   <PopoverContent
@@ -2137,7 +2149,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                 </Popover>
               )}
 
-              <div className={cn("relative flex-1 min-w-0", (isDocument || wrapped) && "order-first basis-full")}>
+              <div className={cn("relative flex-1 min-w-0", isDocument && "order-first basis-full")}>
                 {/* Overlay, not the `placeholder` attribute: a wrapped native placeholder
                     inflates scrollHeight and the empty composer to two lines. */}
                 {!content && (
@@ -2145,8 +2157,8 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                     aria-hidden
                     dir="auto"
                     className={cn(
-                      "pointer-events-none select-none absolute inset-x-0 top-0 truncate px-1.5 py-2 touch:py-3 text-muted-foreground",
-                      isDocument ? "text-chat leading-relaxed" : "leading-5 text-base md:text-sm",
+                      "pointer-events-none select-none absolute inset-x-0 top-0 truncate px-1.5 touch:pl-0.5 touch:pr-2 pt-[7px] pb-[9px] touch:pt-[11px] touch:pb-[13px] text-muted-foreground",
+                      isDocument ? "text-chat leading-relaxed" : "text-base md:text-sm leading-5",
                     )}
                   >
                     {placeholderText}
@@ -2175,10 +2187,10 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                   rows={isDocument ? 5 : 1}
                   maxLength={MAX_CHARS}
                   className={cn(
-                    "block w-full resize-none bg-transparent border-0 outline-none px-1.5 py-2 touch:py-3 disabled:opacity-50 overflow-y-auto align-middle",
+                    "block w-full resize-none bg-transparent border-0 outline-none px-1.5 touch:pl-0.5 touch:pr-2 pt-[7px] pb-[9px] touch:pt-[11px] touch:pb-[13px] disabled:opacity-50 overflow-y-auto align-middle",
                     isDocument
                       ? "text-chat leading-relaxed"
-                      : "leading-5 text-base md:text-sm max-h-40",
+                      : "text-base md:text-sm leading-5 max-h-40",
                   )}
                 />
                 {mentionsEnabled && (
@@ -2210,16 +2222,17 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                 />
               </div>
 
-              <div ref={pickerToggleGroupRef} className={cn("flex shrink-0 items-center gap-0.5 touch:gap-1", wrapped && "ml-auto")}>
+              <div ref={pickerToggleGroupRef} className="flex shrink-0 items-center gap-0.5 touch:gap-1">
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <button
                       type="button"
-                      onClick={() => togglePickerTab("emoji")}
+                      // Compact: the only picker toggle left, so it closes whatever tab is showing.
+                      onClick={() => (compact && pickerOpen ? setPickerOpen(false) : togglePickerTab("emoji"))}
                       aria-label="Emoji / Stickers"
                       className={cn(
-                        "p-2 shrink-0 rounded-full transition-colors flex items-center justify-center size-9 touch:size-11",
-                        pickerOpen && pickerTab !== "gif"
+                        "p-2 shrink-0 clip-corner-lg transition-colors flex items-center justify-center size-9 touch:size-11",
+                        pickerOpen && (compact || pickerTab !== "gif")
                           ? "text-primary bg-primary/10"
                           : "text-muted-foreground hover:text-foreground hover:bg-secondary",
                       )}
@@ -2230,27 +2243,37 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                   {(!pickerOpen || pickerTab === "gif") && <TooltipContent>Emoji</TooltipContent>}
                 </Tooltip>
 
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <button
-                      type="button"
-                      onClick={() => togglePickerTab("gif")}
-                      aria-label="GIFs"
-                      className={cn(
-                        "p-2 shrink-0 rounded-full transition-colors flex items-center justify-center size-9 touch:size-11",
-                        pickerOpen && pickerTab === "gif"
-                          ? "text-primary bg-primary/10"
-                          : "text-muted-foreground hover:text-foreground hover:bg-secondary",
-                      )}
-                    >
-                      <svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-                        <rect x="1.5" y="2.5" width="17" height="15" rx="3" stroke="currentColor" strokeWidth="1.5" />
-                        <text x="10" y="10.5" textAnchor="middle" dominantBaseline="central" fontSize="7" fontWeight="700" fontFamily="system-ui,sans-serif" fill="currentColor" letterSpacing="0.4">GIF</text>
-                      </svg>
-                    </button>
-                  </TooltipTrigger>
-                  {(!pickerOpen || pickerTab !== "gif") && <TooltipContent>GIFs</TooltipContent>}
-                </Tooltip>
+                {/* Compact (touch, typing): the GIF button folds into the emoji picker's tabs, as in Signal. */}
+                <div
+                  inert={compact}
+                  aria-hidden={compact || undefined}
+                  onTransitionEnd={(e) => {
+                    if (e.target === e.currentTarget && e.propertyName === "max-width") remeasureRef.current();
+                  }}
+                  className={cn(
+                    "flex shrink-0 overflow-hidden transition-[max-width,opacity,margin] duration-200 ease-out",
+                    compact ? "max-w-0 opacity-0 -ml-1" : "max-w-11 opacity-100",
+                  )}
+                >
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        type="button"
+                        onClick={() => togglePickerTab("gif")}
+                        aria-label="GIFs"
+                        className={cn(
+                          "p-2 shrink-0 clip-corner-lg transition-colors flex items-center justify-center size-9 touch:size-11",
+                          pickerOpen && pickerTab === "gif"
+                            ? "text-primary bg-primary/10"
+                            : "text-muted-foreground hover:text-foreground hover:bg-secondary",
+                        )}
+                      >
+                        <GifGlyph className="size-5" />
+                      </button>
+                    </TooltipTrigger>
+                    {(!pickerOpen || pickerTab !== "gif") && <TooltipContent>GIFs</TooltipContent>}
+                  </Tooltip>
+                </div>
               </div>
 
               {/* Mic when empty, send otherwise. Documents have no mic. */}
@@ -2286,7 +2309,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                       type="button"
                       onClick={handleStartRecording}
                       aria-label="Voice message"
-                      className="p-2 shrink-0 rounded-full text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors flex items-center justify-center size-9 touch:size-11"
+                      className="p-2 shrink-0 clip-corner-lg text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors flex items-center justify-center size-9 touch:size-11"
                     >
                       <Mic className="size-5" />
                     </button>
@@ -2439,35 +2462,21 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
           )}
         >
           <div className="overflow-hidden min-h-0">
-          {pickerTab !== "gif" && pickerTab !== "games" && customEmojis.length > 0 && (
-            <div className="flex gap-1 px-3 pt-2">
-              <button
-                type="button"
-                onClick={() => setPickerTab("emoji")}
-                className={cn(
-                  "flex items-center justify-center gap-1.5 px-4 py-1.5 touch:py-2.5 rounded-full text-sm font-medium transition-colors",
-                  pickerTab === "emoji"
-                    ? "bg-primary/15 text-primary"
-                    : "text-muted-foreground hover:text-foreground hover:bg-muted",
-                )}
-              >
-                <Smile className="size-3.5" />
-                Emoji
-              </button>
-              <button
-                type="button"
-                onClick={() => setPickerTab("stickers")}
-                className={cn(
-                  "flex items-center justify-center gap-1.5 px-4 py-1.5 touch:py-2.5 rounded-full text-sm font-medium transition-colors",
-                  pickerTab === "stickers"
-                    ? "bg-primary/15 text-primary"
-                    : "text-muted-foreground hover:text-foreground hover:bg-muted",
-                )}
-              >
-                <Sticker className="size-3.5" />
-                Stickers
-              </button>
-              <BrowseEmojiPacksButton className="ml-auto" onBrowse={() => setPickerOpen(false)} />
+          {showPickerTabs && (
+            // Held at the packs button's height, which the GIF tab doesn't show.
+            <div className="flex min-h-9 touch:min-h-12 items-center gap-2 px-3 pt-1">
+              <PillTabs<PickerTab>
+                tabs={pickerTabs}
+                value={pickerTab}
+                onChange={setPickerTab}
+                // Bare pills: the composer above is already the chrome surface.
+                className="w-auto bg-transparent p-0"
+                iconClassName="size-5"
+                labels="always"
+              />
+              {pickerTab !== "gif" && (
+                <BrowseEmojiPacksButton className="ml-auto" onBrowse={() => setPickerOpen(false)} />
+              )}
             </div>
           )}
 

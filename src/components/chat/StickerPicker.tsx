@@ -54,14 +54,14 @@ export function StickerPicker({ customEmojis, onSelect, height = 350, autoFocus 
             <p className="text-xs mt-1">Try a different search term</p>
           </div>
         ) : (
-          <div className="grid grid-cols-4 gap-1.5 p-2">
+          <div className="grid grid-cols-4 gap-1.5 px-3 pb-3">
             {filtered.map((emoji) => (
               <button
                 key={emoji.shortcode}
                 type="button"
                 title={emoji.shortcode}
                 onClick={() => onSelect(emoji)}
-                className="aspect-square rounded-lg overflow-hidden hover:bg-muted transition-colors p-1 group"
+                className="aspect-square clip-corner-lg overflow-hidden hover:bg-muted transition-colors p-1 group"
               >
                 <CustomEmojiImg
                   name={emoji.shortcode}

@@ -18,7 +18,7 @@ const THUMB_REF_WIDTH = 170;
 /** Height from the aspect ratio, clamped so extreme GIFs aren't ultrawide/slivers. */
 function thumbHeight(gif: GifResult): number {
   const rawRatio = gif.width && gif.height ? gif.width / gif.height : 1;
-  const aspectRatio = Math.min(Math.max(rawRatio, 0.6), 1.5);
+  const aspectRatio = Math.min(Math.max(rawRatio, 0.6), 1.2);
   return Math.round(THUMB_REF_WIDTH / aspectRatio);
 }
 
@@ -35,20 +35,18 @@ function GifThumbnail({ gif, onClick, isFavorite, onToggleFavorite }: { gif: Gif
       type="button"
       onClick={() => onClick(gif)}
       className={cn(
-        'relative w-full rounded-lg overflow-hidden cursor-pointer',
-        'transition-all duration-200 hover:ring-2 hover:ring-primary/60 hover:scale-[1.02]',
-        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary',
-        'group',
+        'group relative w-full overflow-hidden cursor-pointer clip-corner-lg bg-secondary/40',
+        'focus-visible:outline-none',
       )}
       style={{ height: displayHeight }}
       title={gif.title}
     >
       {!loaded && !error && (
-        <Skeleton className="absolute inset-0 rounded-lg" />
+        <Skeleton className="absolute inset-0 rounded-none" />
       )}
 
       {error && (
-        <div className="absolute inset-0 flex items-center justify-center bg-muted rounded-lg">
+        <div className="absolute inset-0 flex items-center justify-center bg-muted">
           <ImageOff className="size-5 text-muted-foreground/40" />
         </div>
       )}
@@ -65,7 +63,7 @@ function GifThumbnail({ gif, onClick, isFavorite, onToggleFavorite }: { gif: Gif
           className={cn(
             // `pointer-events-none` passes taps to the tile and keeps long-press off the
             // WebView's native media menu.
-            'pointer-events-none w-full h-full object-cover rounded-lg transition-opacity duration-200',
+            'pointer-events-none w-full h-full object-cover transition-opacity duration-200',
             loaded ? 'opacity-100' : 'opacity-0',
           )}
           onLoadedData={() => setLoaded(true)}
@@ -84,7 +82,7 @@ function GifThumbnail({ gif, onClick, isFavorite, onToggleFavorite }: { gif: Gif
           src={gif.url}
           alt={gif.title}
           className={cn(
-            'pointer-events-none w-full h-full object-cover rounded-lg transition-opacity duration-200',
+            'pointer-events-none w-full h-full object-cover transition-opacity duration-200',
             loaded ? 'opacity-100' : 'opacity-0',
           )}
           onLoad={() => setLoaded(true)}
@@ -105,7 +103,7 @@ function GifThumbnail({ gif, onClick, isFavorite, onToggleFavorite }: { gif: Gif
             role="button"
             tabIndex={0}
             className={cn(
-              'flex items-center justify-center size-7 touch:size-9 rounded-full backdrop-blur-sm transition-all cursor-pointer',
+              'flex items-center justify-center size-7 touch:size-9 clip-corner backdrop-blur-sm transition-colors cursor-pointer',
               isFavorite
                 ? 'bg-amber-500/90 text-white opacity-100'
                 : 'bg-black/40 text-white/80 opacity-0 group-hover:opacity-100 hover:bg-black/60',
@@ -123,6 +121,12 @@ function GifThumbnail({ gif, onClick, isFavorite, onToggleFavorite }: { gif: Gif
           </span>
         </div>
       )}
+
+      {/* Drawn inside: an outer ring would be cut off by the tile's clip-path. */}
+      <span
+        aria-hidden
+        className="pointer-events-none absolute inset-0 z-[1] clip-corner-lg-ring opacity-0 transition-opacity [--ring-edge:hsl(var(--primary)/0.8)] group-hover:opacity-100 group-focus-visible:opacity-100"
+      />
 
       <div className={cn(
         'absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/60 to-transparent',
@@ -153,7 +157,7 @@ function GifGrid({ results, columns: columnCount, onSelect, isFavorite, onToggle
   }
 
   return (
-    <div className="flex gap-2 px-2 pb-2">
+    <div className="flex gap-2 px-3 pb-3">
       {columns.map((col, colIdx) => (
         <div key={colIdx} className="flex-1 flex flex-col gap-2">
           {col.map((gif) => (
@@ -171,134 +175,108 @@ export function GifPicker({ onSelect }: GifPickerProps) {
   const isMobile = useIsMobile();
   const columnCount = isMobile ? 2 : 3;
   const { isFavorite, toggleFavorite, favoriteList, count: favoriteCount } = useFavoriteGifs();
-  const [activeTab, setActiveTab] = useState<'search' | 'favorites'>('search');
+  const [showFavorites, setShowFavorites] = useState(false);
 
   useEffect(() => {
     const timer = setTimeout(() => {
-      if (activeTab === 'search') inputRef.current?.focus();
+      if (!showFavorites) inputRef.current?.focus();
     }, 100);
     return () => clearTimeout(timer);
-  }, [activeTab]);
+  }, [showFavorites]);
 
   const handleSelect = useCallback((gif: GifResult) => {
     void registerGifShare(gif.id);
     onSelect(gif);
   }, [onSelect]);
 
-  const favorites = activeTab === 'favorites' ? favoriteList() : [];
+  const favorites = showFavorites ? favoriteList() : [];
 
   return (
-    <div className="flex flex-col w-full h-[360px] max-h-[55dvh] bg-popover rounded-lg overflow-hidden">
-      <div className="flex items-center gap-1 px-3 pt-2 pb-1">
+    <div className="flex flex-col w-full h-[min(360px,55dvh)] min-h-[220px] overflow-hidden">
+      <div className="flex items-center gap-2 px-3 pt-3 pb-2">
+        <SearchField
+          ref={inputRef}
+          value={query}
+          onChange={(q) => {
+            if (showFavorites) setShowFavorites(false);
+            if (q) setQuery(q);
+            else clearQuery();
+          }}
+          placeholder={`Search ${providerName}`}
+          hint={`Powered by ${providerName}`}
+          className="flex-1"
+        />
         <button
           type="button"
-          onClick={() => setActiveTab('search')}
+          onClick={() => setShowFavorites((v) => !v)}
+          aria-pressed={showFavorites}
+          aria-label="Favorites"
+          title="Favorites"
           className={cn(
-            'px-3 py-1 text-xs font-medium rounded-md transition-colors touch:px-4 touch:py-1.5',
-            activeTab === 'search'
+            'flex size-9 touch:size-11 shrink-0 items-center justify-center clip-corner-lg transition-colors',
+            showFavorites
               ? 'bg-primary text-primary-foreground'
-              : 'text-muted-foreground hover:text-foreground',
+              : 'bg-chrome text-muted-foreground hover:text-foreground',
           )}
         >
-          Search
-        </button>
-        <button
-          type="button"
-          onClick={() => setActiveTab('favorites')}
-          className={cn(
-            'flex items-center gap-1 px-3 py-1 text-xs font-medium rounded-md transition-colors touch:px-4 touch:py-1.5',
-            activeTab === 'favorites'
-              ? 'bg-primary text-primary-foreground'
-              : 'text-muted-foreground hover:text-foreground',
-          )}
-        >
-          <Star className={cn('size-3', activeTab === 'favorites' && 'fill-current')} />
-          Favorites
-          {favoriteCount > 0 && (
-            <span className={cn(
-              'text-3xs rounded-full px-1.5',
-              activeTab === 'favorites' ? 'bg-primary-foreground/20' : 'bg-muted',
-            )}>
-              {favoriteCount}
-            </span>
-          )}
+          <Star className={cn('size-4', showFavorites && 'fill-current')} />
         </button>
       </div>
 
-      {activeTab === 'search' && (
-        <>
-          <div className="px-3 pt-1 pb-2">
-            <SearchField
-              ref={inputRef}
-              value={query}
-              onChange={(q) => (q ? setQuery(q) : clearQuery())}
-              placeholder={`Search ${providerName}`}
-              hint={`Powered by ${providerName}`}
-            />
-          </div>
+      <div className="px-3 pb-1.5">
+        <span className="text-2xs font-medium text-muted-foreground uppercase tracking-wider">
+          {showFavorites
+            ? favoriteCount > 0 ? `${favoriteCount} favorite${favoriteCount === 1 ? '' : 's'}` : 'Favorites'
+            : isSearching ? 'Results' : 'Trending'}
+        </span>
+      </div>
 
-          <div className="px-3 pb-1.5">
-            <span className="text-2xs font-medium text-muted-foreground uppercase tracking-wider">
-              {isSearching ? 'Results' : 'Trending'}
-            </span>
-          </div>
-
-          <ScrollArea className="flex-1">
-            {isLoading ? (
-              <div className="px-2 pb-2">
-                <div className="flex gap-2">
-                  {Array.from({ length: columnCount }).map((_, col) => (
-                    <div key={col} className="flex-1 flex flex-col gap-2">
-                      {Array.from({ length: 4 }).map((_, i) => (
-                        <Skeleton
-                          key={i}
-                          className="w-full rounded-lg"
-                          style={{ height: 60 + Math.random() * 50 }}
-                        />
-                      ))}
-                    </div>
-                  ))}
-                </div>
+      {showFavorites ? (
+        <ScrollArea className="flex-1">
+          {favorites.length === 0 ? (
+            <div className="flex flex-col items-center justify-center h-48 text-muted-foreground">
+              <Star className="size-8 mb-2 opacity-40" />
+              <p className="text-sm">No favorite GIFs yet</p>
+              <p className="text-xs mt-1">Tap the star on any GIF to save it here</p>
+            </div>
+          ) : (
+            <GifGrid results={favorites} columns={columnCount} onSelect={handleSelect} isFavorite={isFavorite} onToggleFavorite={toggleFavorite} />
+          )}
+        </ScrollArea>
+      ) : (
+        <ScrollArea className="flex-1">
+          {isLoading ? (
+            <div className="px-3 pb-3">
+              <div className="flex gap-2">
+                {Array.from({ length: columnCount }).map((_, col) => (
+                  <div key={col} className="flex-1 flex flex-col gap-2">
+                    {Array.from({ length: 4 }).map((_, i) => (
+                      <Skeleton
+                        key={i}
+                        className="w-full rounded-[0.55rem] clip-corner-lg"
+                        style={{ height: 60 + Math.random() * 50 }}
+                      />
+                    ))}
+                  </div>
+                ))}
               </div>
-            ) : isError ? (
-              <div className="flex flex-col items-center justify-center h-48 text-muted-foreground">
-                <ImageOff className="size-8 mb-2 opacity-40" />
-                <p className="text-sm">Failed to load GIFs</p>
-                <p className="text-xs mt-1">Please try again</p>
-              </div>
-            ) : results.length === 0 ? (
-              <div className="flex flex-col items-center justify-center h-48 text-muted-foreground">
-                <p className="text-sm">No GIFs found</p>
-                <p className="text-xs mt-1">Try a different search term</p>
-              </div>
-            ) : (
-              <GifGrid results={results} columns={columnCount} onSelect={handleSelect} isFavorite={isFavorite} onToggleFavorite={toggleFavorite} />
-            )}
-          </ScrollArea>
-        </>
-      )}
-
-      {activeTab === 'favorites' && (
-        <>
-          <div className="px-3 pt-1 pb-1.5">
-            <span className="text-2xs font-medium text-muted-foreground uppercase tracking-wider">
-              {favoriteCount > 0 ? `${favoriteCount} favorite${favoriteCount === 1 ? '' : 's'}` : 'No favorites yet'}
-            </span>
-          </div>
-          <ScrollArea className="flex-1">
-            {favorites.length === 0 ? (
-              <div className="flex flex-col items-center justify-center h-48 text-muted-foreground">
-                <Star className="size-8 mb-2 opacity-40" />
-                <p className="text-sm">No favorite GIFs yet</p>
-                <p className="text-xs mt-1">Tap the star on any GIF to save it here</p>
-              </div>
-            ) : (
-              <GifGrid results={favorites} columns={columnCount} onSelect={handleSelect} isFavorite={isFavorite} onToggleFavorite={toggleFavorite} />
-            )}
-          </ScrollArea>
-        </>
+            </div>
+          ) : isError ? (
+            <div className="flex flex-col items-center justify-center h-48 text-muted-foreground">
+              <ImageOff className="size-8 mb-2 opacity-40" />
+              <p className="text-sm">Failed to load GIFs</p>
+              <p className="text-xs mt-1">Please try again</p>
+            </div>
+          ) : results.length === 0 ? (
+            <div className="flex flex-col items-center justify-center h-48 text-muted-foreground">
+              <p className="text-sm">No GIFs found</p>
+              <p className="text-xs mt-1">Try a different search term</p>
+            </div>
+          ) : (
+            <GifGrid results={results} columns={columnCount} onSelect={handleSelect} isFavorite={isFavorite} onToggleFavorite={toggleFavorite} />
+          )}
+        </ScrollArea>
       )}
     </div>
   );
 }
-
