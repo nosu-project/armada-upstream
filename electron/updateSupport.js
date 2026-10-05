@@ -34,8 +34,8 @@ function supportsSelfUpdate({
     // owned by apt and must never have files replaced behind its package
     // manager. A Flatpak is excluded for a different reason: its `/app` is a
     // read-only OSTree mount no process can rewrite in place, and
-    // electron-updater has no installer for the format at all. It reads the
-    // updates its web bundle instead (main.js, checkForWebBundleUpdate), so
+    // electron-updater has no installer for the format at all. It updates its
+    // web bundle instead (main.js, checkForWebBundleUpdate), so
     // this returning false is what routes it there rather than switching it
     // off.
     return Boolean(env.APPIMAGE) && !env.FLATPAK_ID;

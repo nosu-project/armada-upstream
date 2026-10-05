@@ -293,9 +293,9 @@ interface DecryptCachePeek {
 /**
  * Wrap a signer with slow-remote-signer UX (ported from ditto): a nudge toast
  * once it has answered nothing for 4s, a hard timeout, and one confirmation
- * when a shown nudge's stall ends in a signature. nip04/
- * nip44 pass through un-nudged (bulk decrypts are consent-gated by
- * bulkDecryptGate). `signPsbt` and AppSigner's `isDecryptCached` are forwarded.
+ * when a shown nudge's stall ends in a signature. nip04/nip44 pass through
+ * un-nudged (bulk decrypts are consent-gated by bulkDecryptGate). `signPsbt`
+ * and AppSigner's `isDecryptCached` are forwarded.
  *
  * @param isBunkerConnected - Checked at nudge time; false shows a relay-unreachable warning.
  * @param opts.remote - A NIP-46 signer: the nudge explains where to approve.

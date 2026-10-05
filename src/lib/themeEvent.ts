@@ -191,8 +191,8 @@ export function themeEventToConfig(event: NostrRumor): ThemeConfig | null {
 export function parseDittoTheme(event: NostrRumor): DittoTheme | null {
   if (event.kind !== THEME_DEFINITION_KIND && event.kind !== ACTIVE_THEME_KIND) return null;
 
-  // Colors only from hex-validated `c` tags; the legacy JSON-content format
-  // reached the injected <style> unchecked (Ditto dropped it too, bd1a3bdb).
+  // Colors only from hex-validated `c` tags: the legacy JSON-content format
+  // would reach the injected <style> unchecked (Ditto ignores it too).
   const colors = parseColorTags(event.tags);
   if (!colors) return null;
 

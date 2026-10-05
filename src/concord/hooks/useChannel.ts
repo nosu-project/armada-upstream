@@ -585,6 +585,13 @@ export function useChannelTimeline(
     recordSightings(community.idHex, channelIdHex, observed);
   }, [folded.messages, firstSeen, localReadDone, community?.idHex, channelIdHex, sightingsRev]);
 
+  // A focus target already in the window needs no lookup to paint, so opening a
+  // thread from a visible row doesn't drop the timeline back to its skeleton.
+  const focusMissing = useMemo(
+    () => focusIds.length > 0 && focusIds.some((id) => !raw.some((m) => m.rumorId === id)),
+    [focusIds, raw],
+  );
+
   return {
     folded,
     /** The RAW rows, pre-fold; a Pin needs the Edit rumor itself (CORD-04 §7). */
@@ -593,7 +600,7 @@ export function useChannelTimeline(
     // activity. Gated on `channel` since a disabled query stays `isPending` forever.
     isLoading:
       Boolean(channel) &&
-      (query.isPending || !moderation.ready || (focusIds.length > 0 && focusQuery.isPending)),
+      (query.isPending || !moderation.ready || (focusMissing && focusQuery.isPending)),
     loadOlder,
     hasMore,
     isLoadingOlder,

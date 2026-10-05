@@ -119,7 +119,7 @@ export function useNostrPublish(): UseMutationResult<NostrEvent, Error, EventTem
       onSigned?.(event);
 
       try {
-        // An auth-gating relay may need a NIP-42 sign here (a bunker round-trip, #51).
+        // An auth-gating relay may need a NIP-42 sign here (a bunker round-trip).
         const timeout = publishTimeoutMs(user.method);
         if (relay) {
           await nostr.relay(relay).event(event, { signal: AbortSignal.timeout(timeout) });

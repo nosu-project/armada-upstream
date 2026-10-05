@@ -25,7 +25,7 @@ export function RemoteLoginSuccessPage() {
     <main className="flex items-center justify-center min-h-[60vh]">
       <div className="text-center px-8 space-y-4 max-w-sm">
         <CheckCircle className="w-16 h-16 text-green-500 mx-auto" />
-        <h1 className="text-2xl font-bold">Login approved!</h1>
+        <h1 className="text-2xl font-bold">Login approved</h1>
         {isNative ? (
           <p className="text-muted-foreground">Taking you back to the app&hellip;</p>
         ) : (

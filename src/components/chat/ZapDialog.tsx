@@ -22,7 +22,7 @@ export function ZapDialog({ open, onOpenChange, target, sendZap, sendOnchainZap 
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         hideClose
-        className="sm:max-w-[425px] rounded-2xl p-0 gap-0 overflow-hidden max-h-[95vh]"
+        className="sm:max-w-[425px] border-0 rounded-[0.55rem] clip-corner-lg bg-chrome shadow-none p-0 gap-0 overflow-hidden max-h-[95vh]"
         data-testid="zap-modal"
       >
         {open && (

@@ -45,7 +45,7 @@ const NO_ROLES = emptyRoles();
  *
  * Read state is ONE last-seen `created_at` per community at `c2m:<communityIdHex>`
  * in the shared read-state map (synced via NIP-78), independent of channel read
- * state (issue #53).
+ * state.
  */
 export function useConcordMentions(community: Community | undefined, channels: Channel[]): {
   mentions: ChatMsg[];

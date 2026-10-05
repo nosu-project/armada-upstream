@@ -116,7 +116,7 @@ function ReactorRow({ pubkey }: { pubkey: string }) {
     <div className="flex items-center gap-2 px-2 py-1">
       <Avatar shape={getAvatarShape(metadata)} className="size-5 shrink-0">
         <AvatarImage src={metadata?.picture} imeta={author.data?.imeta?.picture} alt={displayName} />
-        <AvatarFallback className="bg-primary/20 text-primary text-[9px]">
+        <AvatarFallback className="bg-primary/20 text-primary text-monogram">
           {displayName[0]?.toUpperCase()}
         </AvatarFallback>
       </Avatar>

@@ -1,7 +1,7 @@
 /**
  * The noise field behind {@link SignalStatic}. Baked once into a sprite of
  * {@link FRAMES} frames played by a compositor `steps()` animation, so it keeps
- * moving while sync work blocks JS (a rAF loop froze).
+ * moving while sync work blocks JS (a rAF loop would freeze).
  */
 
 /** Intended playback rate; the sprite loop's duration is FRAMES / FPS. */

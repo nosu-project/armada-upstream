@@ -40,11 +40,11 @@ function PinnedRow({
         className="flex min-w-0 flex-1 flex-col items-start gap-0.5 text-left"
       >
         {event && (
-          <span className="text-[11px] font-semibold text-primary truncate max-w-full">
+          <span className="text-2xs font-semibold text-primary truncate max-w-full">
             <DisplayName pubkey={event.pubkey} name={displayName} />
           </span>
         )}
-        <span className="text-[12px] text-muted-foreground line-clamp-2 break-words">
+        <span className="text-xs text-muted-foreground line-clamp-2 break-words">
           {preview}
         </span>
       </button>
@@ -53,7 +53,7 @@ function PinnedRow({
           <Button
             variant="ghost"
             size="sm"
-            className="h-6 touch:h-9 shrink-0 px-2 touch:px-3 text-[11px] text-muted-foreground hover:text-primary"
+            className="h-6 touch:h-9 shrink-0 px-2 touch:px-3 text-2xs text-muted-foreground hover:text-primary"
             onClick={() => onJump(eventId)}
           >
             Jump
@@ -119,16 +119,16 @@ function PinnedAddrRow({
     <div className="group/pin flex items-start gap-2 min-w-0 rounded-md px-2 py-1.5 hover:bg-secondary/60">
       <div className="flex min-w-0 flex-1 flex-col items-start gap-0.5">
         <span className="flex max-w-full items-center gap-1.5">
-          <span className="shrink-0 text-[10px] font-semibold uppercase tracking-wide text-amber-500/90">
+          <span className="shrink-0 text-3xs font-semibold uppercase tracking-wide text-amber-500/90">
             {addrPinLabel(addr.kind)}
           </span>
           {event && (
-            <span className="text-[11px] font-semibold text-primary truncate">
+            <span className="text-2xs font-semibold text-primary truncate">
               <DisplayName pubkey={event.pubkey} name={scopedName} />
             </span>
           )}
         </span>
-        <span className="text-[12px] text-muted-foreground line-clamp-2 break-words">
+        <span className="text-xs text-muted-foreground line-clamp-2 break-words">
           {preview}
         </span>
       </div>
@@ -184,7 +184,7 @@ export function PinnedMessagesBar({
     >
       <div className="clip-corner-lg bg-chrome px-3 py-2.5">
         <div className="flex items-center justify-between gap-2 mb-1.5">
-          <span className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground/80">
+          <span className="flex items-center gap-1.5 text-2xs font-semibold uppercase tracking-wide text-muted-foreground/80">
             <Pin className="size-3 text-amber-500" />
             Pinned messages
           </span>

@@ -1,7 +1,8 @@
-import { CircleDot, Copy, ExternalLink, FolderGit2, GitMerge, GitPullRequest, LayoutGrid, List, MessageCircle, Search, Users, X } from "lucide-react";
+import { CircleDot, Copy, ExternalLink, FolderGit2, GitMerge, GitPullRequest, LayoutGrid, List, MessageCircle, Users, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { DisplayName } from "@/components/DisplayName";
+import { SearchField } from "@/components/ui/search-field";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -55,7 +56,7 @@ function PersonAvatar({ pubkey, size = "size-7" }: { pubkey: string; size?: stri
       <TooltipTrigger asChild>
         <Avatar className={cn(size, "border border-border/60")}>
           <AvatarImage src={picture} imeta={author.data?.imeta?.picture} alt={name} />
-          <AvatarFallback className="text-[10px]">{name.slice(0, 2).toUpperCase()}</AvatarFallback>
+          <AvatarFallback className="text-3xs">{name.slice(0, 2).toUpperCase()}</AvatarFallback>
         </Avatar>
       </TooltipTrigger>
       <TooltipContent>
@@ -77,7 +78,7 @@ function PeopleStack({ pubkeys }: { pubkeys: string[] }) {
         </span>
       ))}
       {remaining > 0 && (
-        <span className="relative z-0 flex h-6 min-w-6 items-center justify-center rounded-full bg-muted px-1 text-[10px] font-semibold text-muted-foreground ring-2 ring-card">
+        <span className="relative z-0 flex h-6 min-w-6 items-center justify-center rounded-full bg-muted px-1 text-3xs font-semibold text-muted-foreground ring-2 ring-card">
           +{remaining}
         </span>
       )}
@@ -140,7 +141,7 @@ function monthLabels(weeks: Date[][]) {
 function ContributionLegend() {
   return (
     <div className="flex items-center gap-1.5">
-      <span className="text-[10px] text-muted-foreground">Less</span>
+      <span className="text-3xs text-muted-foreground">Less</span>
       {LEVEL_CLASSES.map((levelClass, level) => (
         <Tooltip key={levelClass}>
           <TooltipTrigger asChild>
@@ -149,7 +150,7 @@ function ContributionLegend() {
           <TooltipContent>{LEVEL_LABELS[level]}</TooltipContent>
         </Tooltip>
       ))}
-      <span className="text-[10px] text-muted-foreground">More</span>
+      <span className="text-3xs text-muted-foreground">More</span>
     </div>
   );
 }
@@ -165,7 +166,7 @@ function ContributionGraph({ data }: { data: Record<string, number> }) {
       <div className="grid gap-1" style={{ gridTemplateColumns }}>
         {labels.map((label, index) => (
           <span
-            className="overflow-visible whitespace-nowrap text-[10px] font-medium text-muted-foreground"
+            className="overflow-visible whitespace-nowrap text-3xs font-medium text-muted-foreground"
             // biome-ignore lint/suspicious/noArrayIndexKey: fixed-size grid
             key={index}
           >
@@ -225,7 +226,7 @@ const STATUS_STYLES: Record<ProjectWorkItem["status"], string> = {
 
 function StatusChip({ status }: { status: ProjectWorkItem["status"] }) {
   return (
-    <span className={cn("shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium capitalize", STATUS_STYLES[status])}>
+    <span className={cn("shrink-0 rounded-full px-2 py-0.5 text-3xs font-medium capitalize", STATUS_STYLES[status])}>
       {status}
     </span>
   );
@@ -270,14 +271,14 @@ function WorkItemRow({ item, repoName, onOpen, onLabelClick }: { item: ProjectWo
                 key={label}
                 onClick={onLabelClick ? (e) => { e.stopPropagation(); onLabelClick(label); } : undefined}
                 className={cn(
-                  "rounded-full border border-border/60 px-1.5 py-px text-[10px]",
+                  "rounded-full border border-border/60 px-1.5 py-px text-3xs",
                   onLabelClick && "cursor-pointer transition-colors hover:border-primary/50 hover:text-foreground",
                 )}
               >
                 {label}
               </span>
             ))}
-            {labels.length > 3 && <span className="text-[10px]">+{labels.length - 3}</span>}
+            {labels.length > 3 && <span className="text-3xs">+{labels.length - 3}</span>}
           </div>
         </div>
       </div>
@@ -664,41 +665,6 @@ function FilterChip({ label, clearLabel, onClear }: { label: string; clearLabel:
   );
 }
 
-function SearchField({ value, onChange, inputRef }: {
-  value: string;
-  onChange: (value: string) => void;
-  inputRef: React.RefObject<HTMLInputElement | null>;
-}) {
-  return (
-    <div className="relative">
-      <Search aria-hidden className="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
-      <input
-        ref={inputRef}
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        onKeyDown={(event) => {
-          if (event.key !== "Escape" || !value) return;
-          event.preventDefault();
-          onChange("");
-        }}
-        placeholder="Search"
-        aria-label="Search"
-        className="h-8 w-36 clip-corner-lg bg-muted/40 pl-7 pr-6 text-xs text-foreground outline-none placeholder:text-muted-foreground focus:ring-1 focus:ring-ring"
-      />
-      {value && (
-        <button
-          type="button"
-          onClick={() => onChange("")}
-          aria-label="Clear search"
-          className="absolute right-1 top-1/2 -translate-y-1/2 rounded p-0.5 text-muted-foreground transition-colors hover:text-foreground"
-        >
-          <X className="size-3" />
-        </button>
-      )}
-    </div>
-  );
-}
-
 function EmptyState({ icon: Icon, title, hint }: { icon: typeof FolderGit2; title: string; hint: string }) {
   return (
     <div className="flex flex-col items-center justify-center gap-3 px-4 py-20 text-center">
@@ -844,7 +810,7 @@ export function ProjectsView({
             {(filter === "prs" || filter === "issues") && labelFilter && (
               <FilterChip label={labelFilter} clearLabel="Clear the label filter" onClear={() => setLabelFilter(null)} />
             )}
-            {filter !== "all" && <SearchField value={query} onChange={setQuery} inputRef={searchRef} />}
+            {filter !== "all" && <SearchField ref={searchRef} value={query} onChange={setQuery} placeholder="Search" className="h-8 w-44 touch:h-10" />}
             {(filter === "prs" || filter === "issues") && (
               <div className="flex items-center rounded-lg bg-muted/40 p-0.5">
                 {(["open", "closed", "all"] as const).map((value) => (

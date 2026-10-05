@@ -3,6 +3,7 @@ import { Track } from "livekit-client";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { CallStage } from "./CallStage";
+import { ScreenShareWatchContext } from "@/contexts/ScreenShareWatchContext";
 
 const runtime = vi.hoisted(() => ({
   platform: "web",
@@ -86,7 +87,7 @@ vi.mock("@/hooks/useCall", () => ({
   }),
 }));
 vi.mock("@/hooks/useVoiceActivity", () => ({
-  useVoiceActivity: () => ({ raisedHands: new Set(), reactions: [] }),
+  useVoiceActivity: () => ({ raisedHands: new Set(), streamingPubkeys: new Set(), reactions: [] }),
 }));
 vi.mock("@/hooks/useUserVolume", () => ({
   useUserVolume: () => [1, vi.fn()],
@@ -135,8 +136,15 @@ function standardScreenShare() {
   }];
 }
 
+// The viewer has opted into the remote stream.
 function renderStage() {
-  return render(<CallStage open callLabel="Test call" />);
+  return render(
+    <ScreenShareWatchContext.Provider
+      value={{ watching: new Set(["f".repeat(64)]), watch: vi.fn(), stopWatching: vi.fn() }}
+    >
+      <CallStage open callLabel="Test call" />
+    </ScreenShareWatchContext.Provider>,
+  );
 }
 
 async function openFullscreen() {

@@ -50,6 +50,12 @@ interface EmojiMartEmoji {
   src?: string;
 }
 
+/** A lucide icon (24-unit, stroke 2) as a CSS mask, for glyphs inside emoji-mart's shadow root. */
+function lucideMask(body: string): string {
+  const svg = `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'>${body}</svg>`;
+  return `url("data:image/svg+xml,${encodeURIComponent(svg)}")`;
+}
+
 /**
  * Manages the emoji-mart Picker web component imperatively: `@emoji-mart/react`
  * constructs it in an effect, which throws "Illegal constructor" on remount.
@@ -162,11 +168,23 @@ export function EmojiPicker({ onSelect, customEmojis, onBrowsePacks, packsLinkIn
           "#root { width: 100% !important; background-color: transparent !important; --sidebar-width: 0px !important; }",
           ".scroll { padding-right: var(--padding) !important; }",
           ".sticky { backdrop-filter: none !important; -webkit-backdrop-filter: none !important; background-color: transparent !important; }",
-          ".search input[type='search'] { background-color: hsl(var(--muted) / 0.5) !important; border: 0 !important; border-radius: 0.5rem !important; padding: 0.5rem 2rem 0.5rem 2.2rem !important; height: 36px !important; }",
-          ".search input[type='search']:focus { box-shadow: 0 0 0 1px hsl(var(--ring)) !important; background-color: hsl(var(--background)) !important; }",
+          // Mirrors SearchField: a `clip-corner-lg` chrome well with no focus ring.
+          ".search input[type='search'] { background-color: hsl(var(--chrome)) !important; border: 0 !important; border-radius: 0.55rem !important; clip-path: polygon(0.7rem 0, 100% 0, 100% calc(100% - 0.7rem), calc(100% - 0.7rem) 100%, 0 100%, 0 0.7rem) !important; padding: 0.5rem 46px 0.5rem 34px !important; height: 36px !important; }",
+          "@media (pointer: coarse) { .search input[type='search'] { height: 44px !important; } }",
+          // The sticker/GIF search wrapper's `pt-3 pb-2`; the spacer is emoji-mart's only gap above the field.
+          ".spacer { height: 12px !important; }",
+          ".flex-middle:has(> .search) { padding-bottom: 8px !important; }",
+          ".search input[type='search']:focus { box-shadow: none !important; background-color: hsl(var(--chrome)) !important; }",
           ".search input[type='search']::placeholder { color: hsl(var(--muted-foreground)) !important; opacity: 1 !important; }",
           ".search .icon { color: hsl(var(--muted-foreground)) !important; }",
-          "input { font-size: 16px !important; }",
+          // SearchField's lucide glyphs and offsets: 16px icons, loupe 8px in, X centered in a 28px button 8px in.
+          ".search .icon svg { display: none !important; }",
+          ".search .icon { width: 16px !important; height: 16px !important; background-color: currentColor !important; -webkit-mask: var(--icon) center / contain no-repeat !important; mask: var(--icon) center / contain no-repeat !important; }",
+          `.search .loupe { left: 8px !important; right: auto !important; --icon: ${lucideMask(`<path d='m21 21-4.34-4.34'/><circle cx='11' cy='11' r='8'/>`)}; }`,
+          `.search .delete { right: 14px !important; left: auto !important; --icon: ${lucideMask(`<path d='M18 6 6 18'/><path d='m6 6 12 12'/>`)}; }`,
+          // Matches Input's `text-base md:text-sm` and the app font; emoji-mart sets its own stack.
+          "input { font-size: 16px !important; font-family: 'Inter Variable', 'Inter', system-ui, sans-serif !important; }",
+          "@media (min-width: 768px) { input { font-size: 14px !important; } }",
           "#nav { flex-shrink: 0 !important; overflow: visible !important; }",
           "#nav svg, #nav img { overflow: visible !important; }",
           "#nav button { color: hsl(var(--muted-foreground)) !important; overflow: visible !important; }",

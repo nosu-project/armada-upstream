@@ -1,6 +1,6 @@
 import { AtSign, Ban, Bot, Copy, Crown, Flag, IdCard, MessageSquareText, MoreVertical, Music, Search, Shield, ShieldOff, Smile, UserCheck, UserCog, UserMinus, UserPlus, UserX, X } from "lucide-react";
 
-import { memo, useMemo, useState } from "react";
+import { memo, useMemo, useRef, useState } from "react";
 
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { BotPill } from "@/components/BotPill";
@@ -216,7 +216,7 @@ const MemberRow = memo(function MemberRow({
       {((canActOnUser && (onSetRole || onRemove || onKick || onBan || onUnban)) || showRolePicker) && (
         <>
           <Separator />
-          <Label className="px-2 pb-1.5 text-[11px] uppercase tracking-wide text-muted-foreground/80">
+          <Label className="px-2 pb-1.5 text-2xs uppercase tracking-wide text-muted-foreground/80">
             {/* Can stand alone on the viewer's own row (owner self-assigning a cosmetic role). */}
             {canActOnUser ? "Moderation" : "Roles"}
           </Label>
@@ -345,7 +345,7 @@ const MemberRow = memo(function MemberRow({
         <button type="button" className="relative shrink-0 rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-ring">
           <Avatar shape={getAvatarShape(metadata)} className="size-8 cursor-pointer transition-opacity hover:opacity-90">
             <AvatarImage src={metadata?.picture} imeta={author.data?.imeta?.picture} alt={displayName} />
-            <AvatarFallback className="bg-primary/20 text-primary text-[10px]">
+            <AvatarFallback className="bg-primary/20 text-primary text-3xs">
               {displayName[0]?.toUpperCase()}
             </AvatarFallback>
           </Avatar>
@@ -392,7 +392,7 @@ const MemberRow = memo(function MemberRow({
       {isOwner ? (
         <span
           title="Owner"
-          className="shrink-0 inline-flex items-center gap-1 rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-500"
+          className="shrink-0 inline-flex items-center gap-1 rounded-full bg-amber-500/15 px-1.5 py-0.5 text-3xs font-medium text-amber-500"
         >
           <Crown className="size-3" aria-hidden />
           Owner
@@ -400,7 +400,7 @@ const MemberRow = memo(function MemberRow({
       ) : isAdmin ? (
         <span
           title="Admin"
-          className="shrink-0 inline-flex items-center gap-1 rounded-full bg-primary/15 px-1.5 py-0.5 text-[10px] font-medium text-primary"
+          className="shrink-0 inline-flex items-center gap-1 rounded-full bg-primary/15 px-1.5 py-0.5 text-3xs font-medium text-primary"
         >
           <Shield className="size-3" aria-hidden />
           Admin
@@ -408,7 +408,7 @@ const MemberRow = memo(function MemberRow({
       ) : isModerator ? (
         <span
           title="Moderator"
-          className="shrink-0 inline-flex items-center gap-1 rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground"
+          className="shrink-0 inline-flex items-center gap-1 rounded-full bg-muted px-1.5 py-0.5 text-3xs font-medium text-muted-foreground"
         >
           <Shield className="size-3" aria-hidden />
           Mod
@@ -417,7 +417,7 @@ const MemberRow = memo(function MemberRow({
         <span
           title={customBadge.name}
           className={cn(
-            "shrink-0 inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium max-w-24",
+            "shrink-0 inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-3xs font-medium max-w-24",
             !customBadge.color && "bg-muted text-muted-foreground",
           )}
           style={customBadge.color ? { color: roleTint(customBadge.color), backgroundColor: `${roleTint(customBadge.color)}26` } : undefined}
@@ -427,7 +427,7 @@ const MemberRow = memo(function MemberRow({
       ) : roleSet.has(ROLE_BOT) ? (
         <span
           title="Agent"
-          className="shrink-0 inline-flex items-center gap-1 rounded-full bg-primary/15 px-1.5 py-0.5 text-[10px] font-medium text-primary"
+          className="shrink-0 inline-flex items-center gap-1 rounded-full bg-primary/15 px-1.5 py-0.5 text-3xs font-medium text-primary"
         >
           <Bot className="size-3" aria-hidden />
           Agent
@@ -435,7 +435,7 @@ const MemberRow = memo(function MemberRow({
       ) : roleSet.has(ROLE_GUEST) ? (
         <span
           title="Guest"
-          className="shrink-0 inline-flex items-center gap-1 rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground"
+          className="shrink-0 inline-flex items-center gap-1 rounded-full bg-muted px-1.5 py-0.5 text-3xs font-medium text-muted-foreground"
         >
           Guest
         </span>
@@ -558,6 +558,7 @@ export const MemberList = memo(function MemberList({
 }: MemberListProps) {
   const { mutedPubkeys } = useMutedPubkeys();
   const [query, setQuery] = useState("");
+  const scrollRef = useRef<HTMLDivElement>(null);
 
   const adminMap = new Map(admins.map((a) => [a.pubkey, a.roles] as const));
   // Stable arrays so memoized rows get stable `roles` identities.
@@ -680,7 +681,7 @@ export const MemberList = memo(function MemberList({
         </div>
       )}
 
-      <div className="flex-1 min-h-0 overflow-y-auto">
+      <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto">
       {noMatches && (
         <p className="px-2 py-3 text-xs text-muted-foreground">
           No members match “{query.trim()}”.
@@ -694,7 +695,7 @@ export const MemberList = memo(function MemberList({
             </h3>
           </div>
           {visibleAdmins.map((admin) => (
-            <DeferredRow key={admin.pubkey} active={virtualize} minHeight={ROW_MIN_H}>
+            <DeferredRow key={admin.pubkey} active={virtualize} minHeight={ROW_MIN_H} rootRef={scrollRef}>
             <MemberRow
               pubkey={admin.pubkey}
               roles={admin.roles}
@@ -735,7 +736,7 @@ export const MemberList = memo(function MemberList({
               </h3>
             </div>
             {section.members.map((pubkey) => (
-              <DeferredRow key={pubkey} active={virtualize} minHeight={ROW_MIN_H}>
+              <DeferredRow key={pubkey} active={virtualize} minHeight={ROW_MIN_H} rootRef={scrollRef}>
               <MemberRow
                 pubkey={pubkey}
                 roles={adminMap.get(pubkey)}
@@ -779,7 +780,7 @@ export const MemberList = memo(function MemberList({
         )
       ) : (
         regulars.map((pubkey) => (
-          <DeferredRow key={pubkey} active={virtualize} minHeight={ROW_MIN_H}>
+          <DeferredRow key={pubkey} active={virtualize} minHeight={ROW_MIN_H} rootRef={scrollRef}>
           <MemberRow
             pubkey={pubkey}
             roles={buzzRoles.get(pubkey)}

@@ -19,7 +19,7 @@ export function BrowseEmojiPacksButton({ onBrowse, className }: { onBrowse: () =
           variant="ghost"
           size="icon"
           aria-label="Browse emoji packs"
-          className={cn("size-8 touch:size-11 shrink-0 rounded-full text-muted-foreground", className)}
+          className={cn("size-8 touch:size-11 shrink-0 clip-corner-lg text-muted-foreground", className)}
           onClick={() => {
             onBrowse();
             navigate("/discover?tab=emojis");

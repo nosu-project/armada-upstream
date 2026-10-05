@@ -35,7 +35,7 @@ export function AccountStandingDialog({ open, onOpenChange }: AccountStandingDia
               aria-hidden
               className="pointer-events-none absolute inset-x-0 -inset-y-4 m-auto size-48 rounded-full bg-emerald-500/25 blur-3xl animate-[armada-epic-halo_0.9s_ease-in-out_infinite]"
             />
-            <p className="relative text-[11px] font-semibold uppercase tracking-[0.35em] text-muted-foreground">
+            <p className="relative text-2xs font-semibold uppercase tracking-[0.35em] text-muted-foreground">
               Your account is
             </p>
             <p className="relative text-[clamp(3rem,26cqw,5rem)] font-black leading-none tracking-tight text-emerald-400 animate-[armada-epic-pulse_0.9s_ease-in-out_infinite]">
@@ -139,7 +139,7 @@ function StandingMeter() {
         />
       </div>
 
-      <div className="-mr-9 mt-2.5 flex items-baseline justify-between pr-8 text-[10px] font-bold uppercase tracking-wider text-emerald-400/70 sm:-mr-11">
+      <div className="-mr-9 mt-2.5 flex items-baseline justify-between pr-8 text-3xs font-bold uppercase tracking-wider text-emerald-400/70 sm:-mr-11">
         <span>All good!</span>
         <span className="text-emerald-400">Off the charts</span>
       </div>

@@ -1191,7 +1191,7 @@ const CLIENT_METHODS = ['query', 'event', 'req', 'relay', 'group', 'close'] as c
 /**
  * Re-present a client as a plain object of receiver-bound functions. Consumers
  * use `nostr` structurally and may lift methods (`{ relay: nostr.relay }`),
- * which throws on a class instance (this bit `useCommunityList`). Applied once
+ * which throws on a class instance. Applied once
  * at the provider.
  */
 export function detachableClient<T extends object>(client: T): T {

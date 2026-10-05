@@ -1,13 +1,13 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useQueries } from "@tanstack/react-query";
-import { Ban, Crown, KeyRound, Loader2, Search, Shield, ShieldAlert, ShieldOff, TriangleAlert, UserMinus, Users } from "lucide-react";
+import { Ban, Crown, KeyRound, Loader2, Shield, ShieldAlert, ShieldOff, TriangleAlert, UserMinus, Users } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { DisplayName } from "@/components/DisplayName";
+import { SearchField } from "@/components/ui/search-field";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Input } from "@/components/ui/input";
 import {
   Select,
   SelectContent,
@@ -311,7 +311,7 @@ export function MembersView({
           type="button"
           onClick={() => setBehindOnly((v) => !v)}
           className={`flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm transition-colors ${
-            behindOnly ? "bg-amber-500/20 text-amber-700 dark:text-amber-300" : "bg-amber-500/10 text-amber-700 dark:text-amber-400"
+            behindOnly ? "bg-warning/20 text-warning" : "bg-warning/10 text-warning"
           }`}
         >
           <TriangleAlert className="size-4 shrink-0" />
@@ -322,15 +322,7 @@ export function MembersView({
       )}
 
       <div className="flex flex-wrap items-center gap-2">
-        <div className="relative min-w-40 flex-1">
-          <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search members"
-            className="pl-8"
-          />
-        </div>
+        <SearchField value={query} onChange={setQuery} placeholder="Search members" className="min-w-40 flex-1" />
         <Select value={roleFilter} onValueChange={setRoleFilter}>
           <SelectTrigger className="w-36 shrink-0">
             <SelectValue placeholder="Role" />
@@ -580,7 +572,7 @@ function MemberRow({
       )}
       <Avatar className="size-6 shrink-0">
         <AvatarImage src={author.data?.metadata?.picture} imeta={author.data?.imeta?.picture} alt={name} />
-        <AvatarFallback className="bg-primary/20 text-[10px] text-primary">
+        <AvatarFallback className="bg-primary/20 text-3xs text-primary">
           {name[0]?.toUpperCase() ?? "?"}
         </AvatarFallback>
       </Avatar>
@@ -593,7 +585,7 @@ function MemberRow({
       {suspicion && (
         <Tooltip>
           <TooltipTrigger asChild>
-            <span className="inline-flex min-w-0 shrink items-center gap-1 rounded-full bg-destructive/15 px-1.5 py-0.5 text-[10px] font-medium text-destructive">
+            <span className="inline-flex min-w-0 shrink items-center gap-1 rounded-full bg-destructive/15 px-1.5 py-0.5 text-3xs font-medium text-destructive">
               <ShieldAlert className="size-3 shrink-0" />
               <span className="truncate">Suspicious</span>
             </span>
@@ -605,7 +597,7 @@ function MemberRow({
         </Tooltip>
       )}
       {row.isOwner && (
-        <span className="inline-flex min-w-0 shrink items-center gap-1 rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-500">
+        <span className="inline-flex min-w-0 shrink items-center gap-1 rounded-full bg-amber-500/15 px-1.5 py-0.5 text-3xs font-medium text-amber-500">
           <Crown className="size-3 shrink-0" />
           <span className="truncate">Owner</span>
         </span>
@@ -614,7 +606,7 @@ function MemberRow({
         <Tooltip>
           <TooltipTrigger asChild>
             <span
-              className={`inline-flex min-w-0 shrink items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium ${
+              className={`inline-flex min-w-0 shrink items-center gap-1 rounded-full px-1.5 py-0.5 text-3xs font-medium ${
                 badge === "admin" ? "bg-primary/15 text-primary" : "bg-muted text-muted-foreground"
               }`}
             >
@@ -674,7 +666,7 @@ function MemberRow({
       {row.behind && (
         <Tooltip>
           <TooltipTrigger asChild>
-            <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-400">
+            <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-warning/15 px-1.5 py-0.5 text-3xs font-medium text-warning">
               <TriangleAlert className="size-3" />
               epoch {row.epoch?.toString()}
             </span>

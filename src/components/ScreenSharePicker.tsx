@@ -1,12 +1,7 @@
+import { MonitorUp } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-} from "@/components/ui/dialog";
+import { ChromeDialogContent, ChromeDialogHeader, Dialog } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -135,13 +130,18 @@ export function ScreenSharePicker() {
 
   return (
     <Dialog open={open} onOpenChange={(o) => !o && cancel()}>
-      <DialogContent className="max-w-2xl" portalContainer={portalContainer}>
-        <DialogHeader>
-          <DialogTitle>Share your screen</DialogTitle>
-          <DialogDescription>
-            Choose a screen or window and, on Linux, the audio to share.
-          </DialogDescription>
-        </DialogHeader>
+      <ChromeDialogContent
+        title="Share your screen"
+        className="sm:max-w-2xl"
+        contentClassName="grid gap-4"
+        portalContainer={portalContainer}
+      >
+        <ChromeDialogHeader
+          icon={MonitorUp}
+          title="share your screen"
+          description="Choose a screen or window and, on Linux, the audio to share."
+          className="mb-2"
+        />
         <div className="grid grid-cols-2 gap-3 max-h-[48vh] overflow-y-auto sm:grid-cols-3">
           {sources.map((s) => (
             <button
@@ -149,7 +149,7 @@ export function ScreenSharePicker() {
               type="button"
               disabled={choosing}
               onClick={() => void choose(s.id)}
-              className="group flex flex-col gap-2 rounded-lg border border-border p-2 text-left transition-colors hover:border-primary hover:bg-accent/50 disabled:pointer-events-none disabled:opacity-50"
+              className="group flex flex-col gap-2 clip-corner-lg bg-background/40 p-2 text-left transition-colors hover:bg-primary/15 disabled:pointer-events-none disabled:opacity-50"
             >
               {s.thumbnail ? (
                 <img
@@ -182,7 +182,7 @@ export function ScreenSharePicker() {
           )}
         </div>
         {audio && (
-          <div className="space-y-2 border-t border-border pt-4">
+          <div className="space-y-2 border-t border-chrome pt-4">
             <Label htmlFor="screen-share-audio">Share audio</Label>
             {audio.supported ? (
               <Select value={audioChoice} onValueChange={setAudioChoice} disabled={choosing}>
@@ -207,7 +207,7 @@ export function ScreenSharePicker() {
             {audioError && <p className="text-sm text-destructive">{audioError}</p>}
           </div>
         )}
-      </DialogContent>
+      </ChromeDialogContent>
     </Dialog>
   );
 }

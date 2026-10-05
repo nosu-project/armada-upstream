@@ -43,7 +43,7 @@ export function CreateCommunityCard({ className }: { className?: string }) {
           <p className="font-mono font-bold lowercase tracking-tight leading-tight">
             create your own
           </p>
-          <p className="text-[11px] text-muted-foreground">
+          <p className="text-2xs text-muted-foreground">
             An encrypted community that runs without a server.
           </p>
         </div>

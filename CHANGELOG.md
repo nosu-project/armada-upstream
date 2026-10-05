@@ -4,6 +4,32 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.64.3] - 2026-10-04
+
+Screen shares in calls are now opt-in: you choose which streams to watch, and
+streamers carry a LIVE badge. Voice-only group calls dock as large avatars like
+DM calls, one-on-one calls start with the microphone on, and menus, tooltips
+and toasts get the cut-corner look.
+
+### Added
+- Watch other people's screen shares only when you choose to, and stop watching from the stream tile; streamers show a LIVE badge in the call roster and on their tiles
+- The DM list search suggests people you follow but haven't messaged yet
+- An Android setting for whether back from the revealed list pane leaves the app or walks back through history
+
+### Changed
+- Voice-only group calls dock as large avatars sized to the room, keeping streamers, raised hands and recent speakers on screen ahead of join order
+- One-on-one calls join with the microphone on
+- Reactions in a call float over the call view
+- On a phone, only the bottom call bar hides while the call is docked
+- Menus, tooltips, dropdowns and notifications are drawn with cut corners
+- File attachment cards fill the width of the message, and copying event JSON happens inline with confirmation
+- The call keeps the screen awake only on touch devices
+
+### Fixed
+- An interrupted swipe (pane reveal or swipe-to-reply) is cancelled instead of taking effect
+- Member list rows load reliably while scrolling
+- Message action menus no longer start with a stray separator
+
 ## [0.64.2] - 2026-10-04
 
 The docked call now fits its content and carries its own controls, with a

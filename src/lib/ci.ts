@@ -118,7 +118,6 @@ export function parseCIJobResult(event: NostrRumor): CIJobResult | undefined {
 }
 
 /**
-/**
  * Parse a 9842 (always concluded) or 39842 into a run. A 39842 with an
  * unrecognized status is treated as in-progress: its existence is the signal.
  */

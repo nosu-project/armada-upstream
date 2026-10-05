@@ -126,7 +126,7 @@ function AuditRowItem({ row, community }: { row: AuditRow; community: Community 
     >
       <Avatar className="mt-0.5 size-6 shrink-0">
         <AvatarImage src={author.data?.metadata?.picture} imeta={author.data?.imeta?.picture} alt={actorName} />
-        <AvatarFallback className="bg-primary/20 text-[10px] text-primary">
+        <AvatarFallback className="bg-primary/20 text-3xs text-primary">
           {actorName[0]?.toUpperCase() ?? "?"}
         </AvatarFallback>
       </Avatar>
@@ -136,7 +136,7 @@ function AuditRowItem({ row, community }: { row: AuditRow; community: Community 
             <DisplayName pubkey={row.author} name={actorName} />
           </span>
           {isOwner && (
-            <Badge variant="secondary" className="px-1.5 py-0 text-[10px]">
+            <Badge variant="secondary" className="px-1.5 py-0 text-3xs">
               Owner
             </Badge>
           )}
@@ -149,7 +149,7 @@ function AuditRowItem({ row, community }: { row: AuditRow; community: Community 
             {d}
           </p>
         ))}
-        <p className="mt-0.5 text-[11px] text-muted-foreground/70">
+        <p className="mt-0.5 text-2xs text-muted-foreground/70">
           v{row.version.toString()}
           {!isOwner && ` · ${row.citedAuthority ? "cited authority" : "no authority cited"}`}
         </p>
@@ -199,7 +199,7 @@ function MemberName({ pubkey, community }: { pubkey: string; community: Communit
   return (
     <span className="inline-flex items-center gap-1 rounded bg-foreground/10 px-1.5 py-0.5 text-xs font-medium">
       <DisplayName pubkey={pubkey} name={name} />
-      {isOwner && <span className="text-[9px] uppercase text-muted-foreground">owner</span>}
+      {isOwner && <span className="text-3xs uppercase text-muted-foreground">owner</span>}
     </span>
   );
 }
@@ -230,7 +230,7 @@ function ValidityBadge({ validity }: { validity: Validity }) {
     <Tooltip>
       <TooltipTrigger asChild>
         <span
-          className={`inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium ${map.cls}`}
+          className={`inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-3xs font-medium ${map.cls}`}
         >
           {map.icon}
           {map.label}

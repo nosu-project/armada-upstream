@@ -1,6 +1,5 @@
 import {
   LiveKitRoom,
-  RoomAudioRenderer,
   useLocalParticipant,
   useParticipants,
   useRoomContext,
@@ -31,6 +30,7 @@ import "@livekit/components-styles";
 
 import { InCallView } from "@/components/chat/VoiceBar";
 import { CallStage } from "@/components/chat/CallStage";
+import { CallAudioRenderer, ScreenShareWatchProvider } from "@/components/chat/ScreenShareWatch";
 import { DisplayName } from "@/components/DisplayName";
 import { DesktopPushToTalk } from "@/components/DesktopPushToTalk";
 import { Button } from "@/components/ui/button";
@@ -94,6 +94,7 @@ import { keepCallAudioRunning } from "@/lib/voiceAudioContext";
 import { DetectedSpeakersContext, useDetectedSpeakers, useSpeakers } from "@/hooks/useSpeakers";
 import { useListShowing } from "@/contexts/PaneCoveredContext";
 import { ignorePrivateCandidatesFrom } from "@/lib/privateIceCandidates";
+import { getPushToTalkPreferences } from "@/lib/pushToTalk";
 import { isRecoverableDisconnect, rejoinRoom, trackMicIntent } from "@/lib/voiceRejoin";
 import { cn } from "@/lib/utils";
 import { bytesToBase64 } from "@/lib/fileBytes";
@@ -105,6 +106,7 @@ import {
 import {
   cancelDesktopHevcScreenShareFrames,
   desktopHevcScreenShareCapability,
+  isDesktop,
   startDesktopHevcScreenShare,
   stopDesktopHevcScreenShare,
   subscribeDesktopHevcScreenShareStatus,
@@ -113,8 +115,6 @@ import {
 } from "@/lib/desktop";
 import { SCREEN_SHARE_RESOLUTIONS, type ScreenShareQuality } from "@/lib/screenShareQuality";
 import { nip19 } from "nostr-tools";
-
-/** LiveKit half of the call stack, lazy-loaded on first join so the SDK (~0.5MB) never costs cold start. */
 
 /** Reports live speakers (as pubkeys) to call context. Unverified identities are skipped. */
 function SpeakingReporter() {
@@ -163,6 +163,28 @@ function MutedReporter() {
   }, [participants, resolveIdentity, setMutedPubkeys]);
 
   useEffect(() => () => setMutedPubkeys(new Set()), [setMutedPubkeys]);
+
+  return null;
+}
+
+/** Reports who is screen sharing (as pubkeys) to call context, for the LIVE badges. */
+function StreamingReporter() {
+  const { setStreamingPubkeys } = useCall();
+  const resolveIdentity = useVoiceIdentity();
+  const participants = useParticipants();
+
+  useEffect(() => {
+    const pubkeys = new Set<string>();
+    for (const p of participants) {
+      if (!p.identity || !p.getTrackPublication(Track.Source.ScreenShare)) continue;
+      // An H.265 companion resolves to its sharer's pubkey.
+      const { pubkey, verified } = resolveIdentity(p.identity);
+      if (verified) pubkeys.add(pubkey);
+    }
+    setStreamingPubkeys(pubkeys);
+  }, [participants, resolveIdentity, setStreamingPubkeys]);
+
+  useEffect(() => () => setStreamingPubkeys(new Set()), [setStreamingPubkeys]);
 
   return null;
 }
@@ -379,6 +401,34 @@ function AutoRejoin({
   return null;
 }
 
+/**
+ * Publishes the mic once, on the first connect. On Connected, not SignalConnected,
+ * so it lands after LiveKitRoom applies `audio={false}`; rejoins follow trackMicIntent.
+ */
+function UnmuteOnJoin() {
+  const room = useRoomContext();
+  useEffect(() => {
+    // Push to talk owns the mic and starts it muted.
+    if (isDesktop() && getPushToTalkPreferences().enabled) return;
+    let done = false;
+    const unmute = () => {
+      if (done) return;
+      done = true;
+      void (async () => {
+        if (!room.canPlaybackAudio) await room.startAudio().catch(() => {});
+        await room.localParticipant.setMicrophoneEnabled(true);
+      })().catch((err) => console.warn("voice: could not unmute on join", err));
+    };
+    if (room.state === ConnectionState.Connected) unmute();
+    else room.once(RoomEvent.Connected, unmute);
+    return () => {
+      done = true;
+      room.off(RoomEvent.Connected, unmute);
+    };
+  }, [room]);
+  return null;
+}
+
 function CallAudioKeeper() {
   const room = useRoomContext();
   useEffect(() => keepCallAudioRunning(room), [room]);
@@ -447,7 +497,7 @@ function ErrorBar({ placeBar, error, onLeave }: { placeBar: PlaceBar; error: unk
   );
 }
 
-/** `dockable`: a bar the docked strip/stage replaces while it is on screen. */
+/** `dockable`: a mobile bar the docked strip/stage replaces while it is on screen. */
 type PlaceBar = (mobile: React.ReactNode, desktop?: React.ReactNode, dockable?: boolean) => React.ReactNode;
 
 /** The call notification's picture as a small `data:` URL. Android only. */
@@ -525,11 +575,13 @@ function makePlaceBar(
   shellRef: React.RefObject<HTMLDivElement | null>,
   docked: boolean,
 ): PlaceBar {
-  return (mobile, desktop, dockable) => dockable && docked ? null : (
+  return (mobile, desktop, dockable) => (
     <>
-      <MobileCallBar shellRef={shellRef} exiting={exiting}>
-        {mobile}
-      </MobileCallBar>
+      {!(dockable && docked) && (
+        <MobileCallBar shellRef={shellRef} exiting={exiting}>
+          {mobile}
+        </MobileCallBar>
+      )}
       {slots.length === 0 && (
         // No call-bar slot on this route: float bottom-left so the call stays visible.
         // The entry delay hides the one-frame slot gap between slot-owning pages.
@@ -587,6 +639,7 @@ function VoiceRoomShell({
   stageOpen,
   label,
   scopeRelayUrl,
+  joinUnmuted = false,
 }: {
   serverUrl: string;
   token: string;
@@ -599,6 +652,8 @@ function VoiceRoomShell({
   stageOpen: boolean;
   label: React.ReactNode;
   scopeRelayUrl?: string;
+  /** 1:1 calls: a call answered is a call spoken in, so join with the mic live. */
+  joinUnmuted?: boolean;
 }) {
   const [rejoining, setRejoining] = useState(false);
   // Before connect: the mode has to be on before the playback streams open (callMicHold.ts).
@@ -634,7 +689,7 @@ function VoiceRoomShell({
       token={token}
       room={room}
       connect
-      // Join muted: the mic button publishes and handles the permission prompt explicitly.
+      // Join muted: the mic button (or UnmuteOnJoin) publishes after connect.
       audio={false}
       video={false}
       options={options}
@@ -647,12 +702,15 @@ function VoiceRoomShell({
         onRejoiningChange={setRejoining}
         onGiveUp={onDisconnected}
       />
-      <RoomAudioRenderer />
+      {joinUnmuted && <UnmuteOnJoin />}
+      <ScreenShareWatchProvider>
+      <CallAudioRenderer />
       <CallAudioKeeper />
       <CallSoundEffects />
       <MicNoiseProcessor />
       <DesktopPushToTalk />
       <MutedReporter />
+      <StreamingReporter />
       <CallNotificationMic />
       <RosterReporter />
       <PlaybackVolumeApplier />
@@ -667,6 +725,7 @@ function VoiceRoomShell({
         {placeBar(mobileBar, desktopBar, true)}
       </VoiceRejoiningContext.Provider>
       </DetectedSpeakersProvider>
+      </ScreenShareWatchProvider>
     </LiveKitRoom>
   );
 }
@@ -848,16 +907,16 @@ export function ConcordCallLabel({
   );
 }
 
-/**
- * Concord (CORD-07) voice room: token from a blind broker via channel-key
- * proof, per-sender E2EE, presence over the channel itself.
- */
 interface ActiveHevcCapture {
   stream: MediaStream;
   identity: string;
   audioTrack?: LocalTrack;
 }
 
+/**
+ * Concord (CORD-07) voice room: token from a blind broker via channel-key
+ * proof, per-sender E2EE, presence over the channel itself.
+ */
 function ConcordVoiceRoom({
   ctx,
   onLeave,
@@ -1663,6 +1722,7 @@ function DmVoiceRoom({
         placeStage={placeStage}
         stageOpen={stageOpen}
         label={label}
+        joinUnmuted
       />
     </VoiceIdentityContext.Provider>
   );

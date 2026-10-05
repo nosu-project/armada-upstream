@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef } from "react";
 
 /**
- * Deliberately under the platform long-press (~500ms on Android/iOS): tying lost the gesture
+ * Deliberately under the platform long-press (~500ms on Android/iOS): a tie loses the gesture
  * to the OS, which cancels our pointer stream.
  */
 export const LONG_PRESS_MS = 400;

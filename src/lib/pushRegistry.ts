@@ -77,16 +77,15 @@ export function saveRegisteredPushIds(ids: string[]): void {
   }
 }
 
-/**
- * A stable id for this browser/app install.
- *
- * Legacy nostr-push registration is replace-by-id, so two installs sharing an
- * origin need different ids. Local storage makes the
- * value stable across ordinary reloads; a storage reset intentionally creates
- * a new install identity. When storage is unavailable the session-only value
- * still avoids sharing another install's record.
- */
 let ephemeralInstallationId: string | undefined;
+
+/**
+ * A stable id for this browser/app install. Legacy nostr-push registration is
+ * replace-by-id, so two installs sharing an origin need different ids. Stable
+ * across reloads via local storage; a storage reset intentionally mints a new
+ * one, and without storage the session-only value still avoids sharing
+ * another install's record.
+ */
 export function pushInstallationId(): string {
   try {
     const existing = localStorage.getItem(PUSH_INSTALLATION_KEY);

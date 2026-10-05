@@ -72,12 +72,11 @@ export function ImageCropDialog({ open, imageSrc, aspect, title = 'Crop Image', 
 
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!v) onCancel(); }}>
-      <DialogContent className="sm:max-w-lg p-0 gap-0 overflow-hidden">
+      <DialogContent className="chrome-dialog sm:max-w-lg border-0 rounded-[0.55rem] clip-corner-lg bg-chrome shadow-none p-0 gap-0 overflow-hidden">
         <DialogHeader className="px-5 pt-5 pb-3">
-          <DialogTitle className="text-base">{title}</DialogTitle>
+          <DialogTitle className="chrome-dialog-title font-mono font-bold lowercase tracking-tight">{title}</DialogTitle>
         </DialogHeader>
 
-        {/* Cropper area */}
         <div className="relative bg-black" style={{ height: 320 }}>
           <Cropper
             image={imageSrc}
@@ -94,7 +93,6 @@ export function ImageCropDialog({ open, imageSrc, aspect, title = 'Crop Image', 
           />
         </div>
 
-        {/* Controls */}
         <div className="px-5 py-4 space-y-3 border-t">
           <div className="flex items-center gap-3">
             <ZoomOut className="size-4 text-muted-foreground shrink-0" />

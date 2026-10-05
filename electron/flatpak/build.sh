@@ -46,10 +46,9 @@ if [ -z "$appimage" ] || [ ! -f "$appimage" ]; then
 fi
 
 mkdir -p "$release_dir"
-# Always refresh the manifest's fixed source path. A previous optimization
-# skipped this copy whenever the caller itself passed release/Armada.AppImage;
-# local update cycles then silently repackaged the prior web bundle even after
-# electron-builder had produced a new versioned AppImage beside it.
+# Always refresh the manifest's fixed source path from a versioned AppImage:
+# building from the staged copy itself would silently repackage the prior web
+# bundle even after electron-builder produced a newer AppImage beside it.
 if [ "$(realpath -- "$appimage")" = "$(realpath -m -- "$staged_appimage")" ]; then
   echo "Refusing to build from the staging path itself: $staged_appimage" >&2
   echo "Pass the versioned electron-builder output (or no argument) so stale payloads cannot be repackaged." >&2

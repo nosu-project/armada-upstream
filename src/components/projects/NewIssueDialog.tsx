@@ -2,7 +2,7 @@ import { CircleDot, Loader2, Paperclip, Plus, X } from "lucide-react";
 import { useCallback, useMemo, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { ChromeDialogContent, ChromeDialogHeader, Dialog, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
@@ -81,21 +81,16 @@ export function NewIssueDialog({ repos, items, onCreate }: {
           New issue
         </Button>
       </DialogTrigger>
-      <DialogContent
-        className="sm:max-w-md"
+      <ChromeDialogContent
+        title="New issue"
         onEscapeKeyDown={(event) => {
           if (!addingLabel) return;
           event.preventDefault();
           cancelLabelDraft();
         }}
       >
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <CircleDot className="size-4 text-orange-500" />
-            New issue
-          </DialogTitle>
-        </DialogHeader>
-        <div className="space-y-3">
+        <ChromeDialogHeader icon={CircleDot} title="new issue" />
+        <div className="mt-6 space-y-3">
           {repos.length > 1 && (
             <Select value={selected} onValueChange={setRepoCoord}>
               <SelectTrigger aria-label="Repository">
@@ -134,7 +129,7 @@ export function NewIssueDialog({ repos, items, onCreate }: {
                     disabled={sending || (!active && labels.length >= MAX_GIT_LABELS)}
                     onClick={() => toggleLabel(label)}
                     className={cn(
-                      "rounded-full border px-2 py-0.5 text-[11px] transition-colors disabled:opacity-40",
+                      "rounded-full border px-2 py-0.5 text-2xs transition-colors disabled:opacity-40",
                       active
                         ? "border-primary/60 bg-primary/15 text-foreground"
                         : "border-border/60 text-muted-foreground hover:border-primary/40 hover:text-foreground",
@@ -151,7 +146,7 @@ export function NewIssueDialog({ repos, items, onCreate }: {
                   aria-pressed
                   disabled={sending}
                   onClick={() => toggleLabel(label)}
-                  className="flex items-center gap-1 rounded-full border border-primary/60 bg-primary/15 px-2 py-0.5 text-[11px] text-foreground"
+                  className="flex items-center gap-1 rounded-full border border-primary/60 bg-primary/15 px-2 py-0.5 text-2xs text-foreground"
                 >
                   {label}
                   <X className="size-2.5" />
@@ -182,7 +177,7 @@ export function NewIssueDialog({ repos, items, onCreate }: {
                     }
                   }}
                   onBlur={commitLabelDraft}
-                  className="min-w-0 rounded-full border border-primary/60 bg-transparent px-2 py-0.5 text-[11px] text-foreground outline-none placeholder:text-muted-foreground/60 focus-visible:ring-1 focus-visible:ring-ring"
+                  className="min-w-0 rounded-full border border-primary/60 bg-transparent px-2 py-0.5 text-2xs text-foreground outline-none placeholder:text-muted-foreground/60 focus-visible:ring-1 focus-visible:ring-ring"
                 />
               ) : labels.length < MAX_GIT_LABELS && (
                 <button
@@ -198,7 +193,7 @@ export function NewIssueDialog({ repos, items, onCreate }: {
             </div>
           </div>
           <div className="flex items-center justify-between gap-1.5">
-            <p className="min-w-0 truncate text-[10px] text-muted-foreground">Public: issues are visible outside this community.</p>
+            <p className="min-w-0 truncate text-3xs text-muted-foreground">Public: issues are visible outside this community.</p>
             <div className="flex shrink-0 items-center gap-1.5">
             <input
               ref={fileInput}
@@ -220,13 +215,13 @@ export function NewIssueDialog({ repos, items, onCreate }: {
             >
               {isUploading ? <Loader2 className="size-4 animate-spin" /> : <Paperclip className="size-4" />}
             </Button>
-            <Button size="sm" disabled={sending || isUploading || !subject.trim()} onClick={submit}>
+            <Button size="sm" className="clip-corner-lg" disabled={sending || isUploading || !subject.trim()} onClick={submit}>
               {sending ? <Loader2 className="size-4 animate-spin" /> : "Open issue"}
             </Button>
             </div>
           </div>
         </div>
-      </DialogContent>
+      </ChromeDialogContent>
     </Dialog>
   );
 }

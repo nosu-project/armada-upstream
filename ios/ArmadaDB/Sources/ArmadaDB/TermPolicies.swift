@@ -66,8 +66,7 @@ public enum TermPolicies {
 /// the two directions of one conversation agree: a message Alice sends to
 /// {me, Bob} arrives as `pubkey: Alice, p: [me, Bob]` and my reply leaves as
 /// `pubkey: me, p: [Alice, Bob]`, and both reduce to [Alice, Bob]. For a 1:1 it
-/// yields exactly `[peer]`, which is why the keys did not change when groups
-/// arrived.
+/// yields exactly `[peer]`.
 public enum Dm17Conversation {
 
     /// The `dm17:` tenant prefix.
@@ -180,11 +179,6 @@ public enum Dm17Conversation {
     ///
     /// Exactly one term per namespace, which `distinct:` requires: a rumor that
     /// was the newest of two groups could only ever be returned once.
-    ///
-    /// The notification extension writes through this while the app is closed, so
-    /// a message that arrives then is already in the conversation list's index
-    /// when the app opens — which is the whole reason a policy binds to the
-    /// tenant.
     public static func terms(of rumor: Rumor, tenantId: String) -> [String] {
         guard let selfPubkey = tenantSelf(tenantId),
               let peers = peers(of: rumor, self: selfPubkey)

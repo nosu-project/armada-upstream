@@ -1,19 +1,15 @@
 package buzz.armada.app.relayfleet;
 
 /**
- * A pure, transport-free decision layer for the background relay fleet —
- * extracted so competing reconnection strategies can be benchmarked in
- * isolation (see {@code RelayFleetSimulator} in the test source set) rather
- * than measured only on a phone's battery graph.
+ * A pure, transport-free decision layer for the background relay fleet, so
+ * competing reconnection strategies can be benchmarked in isolation (see
+ * {@code RelayFleetSimulator} in the test source set) rather than only on a
+ * phone's battery graph.
  *
- * <p>The live service ({@code NotificationRelayService}) entangles the
- * reconnect decision inside {@code RelayConnection}: {@code scheduleReconnect()}
- * reads the wall clock, mutates {@code backoffMs}, and calls
- * {@code handler.postDelayed(...)} against a real socket. That cannot be unit
- * tested, which is part of why the "never reaches a quiet state" battery
- * behavior was never caught. This interface is the seam: every decision is a
- * pure function of an injected {@code nowMs} and a per-relay opaque state
- * object, so a policy can be driven by a deterministic event trace with no
+ * <p>{@code NotificationRelayService.RelayConnection} is the adapter that
+ * executes these decisions against real sockets. Every decision is a pure
+ * function of an injected {@code nowMs} and a per-relay opaque state object,
+ * so a policy can be driven by a deterministic event trace with no
  * {@code Handler}, no {@code Looper}, and no network.
  *
  * <p>A candidate solution is just an implementation of this interface; the

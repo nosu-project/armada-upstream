@@ -21,7 +21,7 @@ interface ZapSuccessScreenProps {
   onClose: () => void;
 }
 
-/** Post-send celebration screen. Reduced motion collapses to a fade with no sparkles. */
+/** Post-send confirmation screen. */
 export function ZapSuccessScreen({
   recipientPubkey,
   recipientLabel,
@@ -44,72 +44,21 @@ export function ZapSuccessScreen({
     [amountSats, config.currencyDisplay, btcPrice],
   );
 
-  const sparkles = useMemo(
-    () =>
-      Array.from({ length: 8 }, (_, i) => {
-        const angle = (i / 8) * Math.PI * 2;
-        const radius = 58;
-        return {
-          id: i,
-          x: Math.cos(angle) * radius,
-          y: Math.sin(angle) * radius,
-          delay: 0.15 + (i % 4) * 0.05,
-          hue: i % 2 === 0 ? 'bg-amber-400' : 'bg-orange-500',
-        };
-      }),
-    [],
-  );
-
   return (
     <div
       role="status"
       aria-live="polite"
-      className="relative grid gap-5 px-6 py-8 w-full overflow-hidden text-center motion-safe:animate-success-fade-up"
+      className="grid gap-5 px-6 py-8 w-full text-center motion-safe:animate-success-fade-up"
     >
-      <div
-        aria-hidden
-        className="pointer-events-none absolute inset-0 -z-10 bg-[radial-gradient(circle_at_50%_35%,hsl(var(--primary)/0.18),transparent_65%)]"
-      />
-
-      <div className="relative mx-auto flex size-28 items-center justify-center">
-        <span
-          aria-hidden
-          className="absolute inset-0 rounded-full bg-gradient-to-br from-amber-400/40 to-orange-500/30 motion-safe:animate-success-halo"
-        />
-
-        <span
-          aria-hidden
-          className="absolute inset-0 rounded-full bg-gradient-to-br from-amber-400 to-orange-500 shadow-lg shadow-orange-500/30 motion-safe:animate-success-pop"
-        />
-
-        <Check
-          className="relative size-14 text-white drop-shadow-sm motion-safe:animate-success-pop"
-          strokeWidth={3}
-          aria-hidden
-        />
-
-        <div aria-hidden className="pointer-events-none absolute inset-0 motion-reduce:hidden">
-          {sparkles.map((s) => (
-            <span
-              key={s.id}
-              className={`absolute left-1/2 top-1/2 size-1.5 rounded-full ${s.hue} motion-safe:animate-success-spark`}
-              style={
-                {
-                  '--spark-x': `${s.x}px`,
-                  '--spark-y': `${s.y}px`,
-                  animationDelay: `${s.delay}s`,
-                } as React.CSSProperties
-              }
-            />
-          ))}
-        </div>
+      <div className="mx-auto flex size-16 items-center justify-center rounded-full bg-amber-500 motion-safe:animate-success-pop">
+        <Check className="size-8 text-white" strokeWidth={3} aria-hidden />
       </div>
 
       <div className="grid gap-1">
         <h2 className="text-lg font-semibold tracking-tight">
           {recipientLabel ? 'Donation sent' : 'Bitcoin sent'}
         </h2>
-        <div className="text-4xl font-bold tabular-nums bg-gradient-to-br from-amber-500 to-orange-600 bg-clip-text text-transparent">
+        <div className="text-4xl font-bold tabular-nums">
           {amountDisplay}
         </div>
       </div>
@@ -122,7 +71,7 @@ export function ZapSuccessScreen({
           </AvatarFallback>
         </Avatar>
         <div className="min-w-0 text-left">
-          <div className="text-[11px] text-muted-foreground leading-tight">To</div>
+          <div className="text-2xs text-muted-foreground leading-tight">To</div>
           <div className="text-sm font-medium truncate max-w-[220px]">
             {/* A campaign label isn't a Nostr profile, so no custom emoji. */}
             {recipientLabel ?? <DisplayName pubkey={recipientPubkey} name={fallbackName} />}

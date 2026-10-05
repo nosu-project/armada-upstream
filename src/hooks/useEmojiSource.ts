@@ -222,16 +222,16 @@ async function resolveEmojiSourceFromAuthor(
   return matchPackUrl(gathered, url);
 }
 
-/**
- * Which NIP-30 pack a custom emoji came from: own palette, then local index, then (with
- * `authorPubkey`) an author-scoped relay lookup. Mounted only in an open popover, so it's a
- * per-click cost.
- */
 export interface EmojiSourceResult {
   source: EmojiSource | undefined;
   isLoading: boolean;
 }
 
+/**
+ * Which NIP-30 pack a custom emoji came from: own palette, then local index, then (with
+ * `authorPubkey`) an author-scoped relay lookup. Mounted only in an open popover, so it's a
+ * per-click cost.
+ */
 export function useEmojiSource(
   url: string | undefined,
   authorPubkey?: string,

@@ -58,6 +58,8 @@ export interface ThemeTokens {
   destructiveForeground: string;
   success: string;
   successForeground: string;
+  warning: string;
+  warningForeground: string;
   border: string;
   input: string;
   ring: string;
@@ -93,9 +95,7 @@ export const builderStarterColors: CoreThemeColors = {
   primary: "235 80% 68%",
 };
 
-/** Metadata for a theme preset. */
 export interface ThemePreset {
-  /** Display label. */
   label: string;
   /** Emoji shown in compact theme pickers. */
   emoji: string;

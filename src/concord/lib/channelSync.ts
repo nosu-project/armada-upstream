@@ -142,7 +142,7 @@ export async function backfillStore(
               signal: AbortSignal.any([pageSignal, AbortSignal.timeout(8000)]),
             });
           // Only a relay that HAS events starts the race clock; an instant empty EOSE must
-          // not abort relays still mid-AUTH (issue #19).
+          // not abort relays still mid-AUTH.
           if (events.length > 0) armGrace();
           return { relay, events, ok: true };
         } catch {
@@ -266,7 +266,7 @@ export function setChannelSyncContext(channelIdHex: string, ctx: ChannelSyncCont
 /**
  * One catch-up round: the newest page first (painted immediately), then the
  * BRIDGE between the saved cursor's `newest` and that page (else an offline burst
- * leaves a permanent hole; issue #19), then bounded older paging from the saved `oldest`.
+ * leaves a permanent hole), then bounded older paging from the saved `oldest`.
  */
 async function syncChannelRound(ctx: ChannelSyncContext, signal: AbortSignal): Promise<void> {
   const { nostr, community, channel } = ctx;
@@ -323,8 +323,7 @@ async function syncChannelRound(ctx: ChannelSyncContext, signal: AbortSignal): P
     });
     if (signal.aborted) return;
 
-    // Pass 2 (the bridge): the region between the saved `newest` and pass 1's
-    // oldest (issue #19).
+    // Pass 2 (the bridge): the region between the saved `newest` and pass 1's oldest.
     let bridge: Awaited<ReturnType<typeof backfillStore>> = {
       events: [],
       count: 0,

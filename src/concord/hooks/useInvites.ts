@@ -551,7 +551,7 @@ export function useInviteActions(community: Community | undefined) {
       if (!user.signer.nip44) throw new Error("This signer can't mint invite links (NIP-44 unsupported).");
 
       // Warn (not refuse; LAN quickstarts are supported): Android/desktop run on a
-      // secure origin where ws:// is blocked as mixed content (#47).
+      // secure origin where ws:// is blocked as mixed content.
       const insecure = community.relays.filter((url) => !/^wss:\/\//i.test(url));
       if (insecure.length > 0) {
         const fatal = insecure.length === community.relays.length;
@@ -777,8 +777,8 @@ export function useInviteActions(community: Community | undefined) {
    *
    * VERSION-FENCED: an incremental fold may hold OLDER metadata than a coordinate
    * already vends, so each bundle records `meta_v` and a refresh skips links
-   * vending a newer one (this once downgraded live banners). Targets community
-   * relays ∪ the link's bootstrap relays. Best-effort per relay.
+   * vending a newer one. Targets community relays ∪ the link's bootstrap relays.
+   * Best-effort per relay.
    */
   const refreshMyLinks = async (): Promise<void> => {
     if (!community || myLinks.length === 0) return;

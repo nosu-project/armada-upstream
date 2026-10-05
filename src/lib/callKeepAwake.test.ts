@@ -8,6 +8,10 @@ function setVisibility(state: DocumentVisibilityState) {
   document.dispatchEvent(new Event("visibilitychange"));
 }
 
+function setCoarsePointer(coarse: boolean) {
+  vi.stubGlobal("matchMedia", (query: string) => ({ matches: coarse && query === "(pointer: coarse)" }));
+}
+
 function fakeSentinel() {
   const s = { released: false, release: vi.fn(async () => { s.released = true; }) };
   return s;
@@ -27,6 +31,7 @@ describe("keepCallAwake", () => {
       return s;
     });
     vi.stubGlobal("navigator", { wakeLock: { request } });
+    setCoarsePointer(true);
     setVisibility("visible");
 
     const stop = keepCallAwake();
@@ -43,6 +48,15 @@ describe("keepCallAwake", () => {
 
     stop();
     expect(sentinels[1].release).toHaveBeenCalled();
+  });
+
+  it("takes no wake lock on a desktop pointer", async () => {
+    const request = vi.fn(async () => fakeSentinel());
+    vi.stubGlobal("navigator", { wakeLock: { request } });
+    setCoarsePointer(false);
+    keepCallAwake()();
+    await Promise.resolve();
+    expect(request).not.toHaveBeenCalled();
   });
 
   it("sets a play-and-record audio session for the call and restores it after", () => {

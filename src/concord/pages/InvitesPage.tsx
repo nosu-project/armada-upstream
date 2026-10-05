@@ -132,7 +132,7 @@ function useInviteMembers(community: Community | undefined) {
 function RelayList({ relays }: { relays: string[] }) {
   return (
     <>
-      <p className="px-3.5 pb-1.5 pt-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+      <p className="px-3.5 pb-1.5 pt-3 text-2xs font-semibold uppercase tracking-wider text-muted-foreground">
         Hosted on
       </p>
       <div className="max-h-80 overflow-y-auto pb-2.5">
@@ -161,7 +161,6 @@ function StatPopover({
   icon: LucideIcon;
   label: string;
   hint?: string;
-  /** Panel width. */
   width: string;
   className?: string;
   children: React.ReactNode;
@@ -226,7 +225,7 @@ function FriendFace({ pubkey, className }: { pubkey: string; className?: string 
       className={cn("size-6 ring-2 ring-background", className)}
     >
       <AvatarImage src={metadata?.picture} imeta={author.data?.imeta?.picture} alt={name} />
-      <AvatarFallback className="bg-primary/20 text-[9px] font-semibold text-primary">
+      <AvatarFallback className="bg-primary/20 text-monogram font-semibold text-primary">
         {name[0]?.toUpperCase()}
       </AvatarFallback>
     </Avatar>
@@ -331,7 +330,7 @@ function InviteRow({
           </span>
         </p>
         {channels > 0 && (
-          <p className="mt-0.5 truncate text-[11px] leading-snug text-muted-foreground/70">
+          <p className="mt-0.5 truncate text-2xs leading-snug text-muted-foreground/70">
             {channels} channel{channels === 1 ? "" : "s"} included
           </p>
         )}
@@ -543,7 +542,7 @@ export function InviteDetail({
           {/* Sender — Direct Invite only. The npub is the key that signed the seal. */}
           {sender && (
             <div className="mt-4 clip-corner-lg bg-secondary/40 p-3.5">
-              <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+              <p className="text-2xs font-semibold uppercase tracking-wider text-muted-foreground">
                 {isCatchUp ? "Keys sent by" : "Invited by"}
               </p>
               <ProfilePreviewCard pubkey={sender}>
@@ -571,7 +570,7 @@ export function InviteDetail({
                     <p className="truncate font-medium leading-tight">
                       <DisplayName pubkey={sender} name={senderName} />
                     </p>
-                    <p className="truncate font-mono text-[11px] leading-snug text-muted-foreground">
+                    <p className="truncate font-mono text-2xs leading-snug text-muted-foreground">
                       {senderLabel(sender)}
                     </p>
                   </div>

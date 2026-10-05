@@ -108,7 +108,7 @@ export function ChannelSidebarView({
             <h2 className="min-w-0 font-semibold truncate leading-tight tracking-wide text-sm">{title}</h2>
           </div>
           {subtitle && (
-            <span className="block text-[11px] text-muted-foreground truncate leading-tight">{subtitle}</span>
+            <span className="block text-2xs text-muted-foreground truncate leading-tight">{subtitle}</span>
           )}
           {badge}
         </div>

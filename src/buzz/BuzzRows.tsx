@@ -38,7 +38,7 @@ function SystemLine({ icon, children, createdAt }: {
     <div className="flex items-center gap-2 px-4 py-1 text-xs text-muted-foreground">
       {icon ?? <span className="inline-block size-1.5 rounded-full bg-muted-foreground/40 shrink-0" />}
       <span className="min-w-0">{children}</span>
-      <span className="shrink-0 text-[10px] text-muted-foreground/60">{shortTimeAgo(createdAt)}</span>
+      <span className="shrink-0 text-3xs text-muted-foreground/60">{shortTimeAgo(createdAt)}</span>
     </div>
   );
 }
@@ -119,9 +119,9 @@ export function BuzzDiffRow({ event }: { event: NostrRumor }) {
           <GitBranch className="size-3.5 shrink-0" />
           <span className="font-medium text-foreground/80"><DisplayName pubkey={event.pubkey} name={name} /></span>
           {file && <code className="font-mono">{file}</code>}
-          {commit && <code className="font-mono text-[10px] opacity-70">{commit.slice(0, 8)}</code>}
+          {commit && <code className="font-mono text-3xs opacity-70">{commit.slice(0, 8)}</code>}
           {repo && <span className="truncate max-w-48 opacity-70">{repo}</span>}
-          <span className="ml-auto shrink-0 text-[10px] text-muted-foreground/60">{shortTimeAgo(event.created_at)}</span>
+          <span className="ml-auto shrink-0 text-3xs text-muted-foreground/60">{shortTimeAgo(event.created_at)}</span>
         </div>
         {description && (
           <div className="px-3 pt-2 text-sm whitespace-pre-wrap break-words">{description}</div>
@@ -211,7 +211,7 @@ export function BuzzWorkflowDefinitionRow({ event }: { event: NostrRumor }) {
           <Workflow className="size-4 shrink-0 text-primary/80" />
           <span className="font-medium truncate flex-1">{label}</span>
           <span className="text-xs text-muted-foreground shrink-0">by <DisplayName pubkey={event.pubkey} name={name} /></span>
-          <span className="text-[10px] text-muted-foreground/60 shrink-0">{shortTimeAgo(event.created_at)}</span>
+          <span className="text-3xs text-muted-foreground/60 shrink-0">{shortTimeAgo(event.created_at)}</span>
         </button>
         {expanded && (
           <pre className="m-0 px-3 py-2 overflow-x-auto text-xs leading-relaxed font-mono border-t border-border/60 whitespace-pre">
@@ -282,7 +282,7 @@ export function BuzzHuddleRow({ event, lifecycle }: {
           )}
           {ended && <div className="text-xs text-muted-foreground/70">Huddle ended</div>}
         </div>
-        <span className="shrink-0 text-[10px] text-muted-foreground/60">{shortTimeAgo(event.created_at)}</span>
+        <span className="shrink-0 text-3xs text-muted-foreground/60">{shortTimeAgo(event.created_at)}</span>
       </div>
     </div>
   );

@@ -169,9 +169,9 @@ export function ServerPage() {
                       )}
                     </CardHeader>
                     <CardContent className="pt-0 flex flex-wrap gap-1.5">
-                      {group.isPrivate && <Badge variant="outline" className="text-[10px]">Members-only</Badge>}
-                      {group.isClosed && !isBuzz && <Badge variant="outline" className="text-[10px]">Invite-only</Badge>}
-                      {group.hasLivekit && <Badge variant="outline" className="text-[10px]">Voice</Badge>}
+                      {group.isPrivate && <Badge variant="outline" className="text-3xs">Members-only</Badge>}
+                      {group.isClosed && !isBuzz && <Badge variant="outline" className="text-3xs">Invite-only</Badge>}
+                      {group.hasLivekit && <Badge variant="outline" className="text-3xs">Voice</Badge>}
                     </CardContent>
                   </Card>
                 ))}

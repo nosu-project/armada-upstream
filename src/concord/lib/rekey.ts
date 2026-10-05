@@ -406,7 +406,6 @@ export function lowerKeyWins(a: Uint8Array, b: Uint8Array): Uint8Array {
   return bytesToHex(a) <= bytesToHex(b) ? a : b;
 }
 
-/** Mint the fresh key for a rotation. */
 export function mintRotationKey(): Uint8Array {
   return random32();
 }

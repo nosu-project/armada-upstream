@@ -61,9 +61,17 @@ function holdCallAudioSession(): () => void {
   };
 }
 
+/**
+ * Touch devices only: on Linux desktops a screen wake lock becomes a session
+ * inhibit, which crashes budgie-session.
+ */
+function isTouchDevice(): boolean {
+  return typeof window !== "undefined" && !!window.matchMedia?.("(pointer: coarse)").matches;
+}
+
 /** Keep a call alive on mobile web: screen on, and audio that survives a lock (iOS). */
 export function keepCallAwake(): () => void {
-  const releaseWakeLock = holdScreenWakeLock();
+  const releaseWakeLock = isTouchDevice() ? holdScreenWakeLock() : () => {};
   const releaseSession = holdCallAudioSession();
   return () => {
     releaseWakeLock();

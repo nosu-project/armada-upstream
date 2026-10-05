@@ -36,7 +36,7 @@ export function reorderLogins(
 /**
  * Persist `logins` and hard-reload at `destination`. The reload is the only
  * complete teardown of the previous account's derived state (query cache,
- * memo maps, subscriptions) — in-place switching leaked it. The list is
+ * memo maps, subscriptions) — in-place switching leaks it. The list is
  * written and awaited here because `setLogin`'s effect-based write can lose
  * the race with `location.assign`.
  */

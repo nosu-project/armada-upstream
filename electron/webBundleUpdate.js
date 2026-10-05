@@ -159,13 +159,9 @@ async function updateWebBundle({ bundlesDir, bundle, activeId, shellVersion, fet
   }
   const archive = await fetchVerified({ ...bundle, sha256 }, fetchImpl);
   const id = extractBundle({ bundlesDir, archive });
-  // Refuse to activate a bundle OLDER than this shell's own shipped copy. The
-  // site can be behind the shell — a `flatpak update` lands the new shell
-  // before the web deploy publishes the matching bundle — and activating what
-  // the site serves then would downgrade the web layer under a newer shell.
-  // resolveDistRoot would decline to serve it anyway, so committing here only
-  // moves the pointer to a bundle nothing displays and offers a restart that
-  // changes nothing; drop it instead and wait for the site to catch up.
+  // The site can lag the shell (a `flatpak update` lands before the matching
+  // web deploy). resolveDistRoot would never serve an older bundle, so
+  // committing it would only offer a restart that changes nothing.
   const shellOrdinal = versionOrdinal(shellVersion);
   const downloadedOrdinal = versionOrdinal(bundleVersion(path.join(bundlesDir, id, "dist")));
   if (shellOrdinal !== null && downloadedOrdinal !== null && downloadedOrdinal < shellOrdinal) {

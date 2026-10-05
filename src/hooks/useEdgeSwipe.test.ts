@@ -126,6 +126,22 @@ describe("useEdgeSwipe", () => {
     expect(onCommit).toHaveBeenCalledOnce();
   });
 
+  it("never commits a pointercancel, however far or fast (system back gesture pilfer)", () => {
+    const onCommit = vi.fn();
+    // A right-edge back swipe over the revealed list is a leftward "close" drag.
+    const { result } = renderHook(() => useEdgeSwipe({ direction: "close", onCommit }));
+    const el = makeEl(400);
+
+    const h = result.current.handlers;
+    act(() => h.onPointerDown(mockPointerEvent({ x: 395, y: 0, timeStamp: 0, currentTarget: el })));
+    act(() => h.onPointerMove(mockPointerEvent({ x: 380, y: 0, timeStamp: 10, currentTarget: el })));
+    act(() => h.onPointerMove(mockPointerEvent({ x: 200, y: 0, timeStamp: 50, currentTarget: el })));
+    act(() => h.onPointerCancel(mockPointerEvent({ x: 200, y: 0, timeStamp: 50, currentTarget: el })));
+
+    expect(onCommit).not.toHaveBeenCalled();
+    expect(result.current.dragging).toBe(false);
+  });
+
   // ─── The primary fix: stale dragX race ──────────────────────────────────
   //
   // On a quick flick, `pointerup` can fire before React has flushed the

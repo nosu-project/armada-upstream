@@ -1,8 +1,8 @@
 /**
  * The ONLY table of {@link TermPolicy}s (engines never interpret tenant ids);
  * two spellings would silently file rows under terms nothing reads. Mirrored by
- * Electron main (`electronMain.ts`), Android `TermPolicy.kt` and iOS
- * `TermPolicy.swift`. Keep dependency-light: bundled into `electron/db.cjs`.
+ * Electron main (`electronMain.ts`), Android `TermPolicies.kt` and iOS
+ * `TermPolicies.swift`. Keep dependency-light: bundled into `electron/db.cjs`.
  */
 
 import { DM17_TENANT_PREFIX, dmTermPolicy } from "@/lib/nip17/conversation";

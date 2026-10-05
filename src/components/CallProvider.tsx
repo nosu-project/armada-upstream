@@ -77,6 +77,9 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
   // outside the LiveKit context (sidebar rosters).
   const [speakingPubkeys, setSpeakingState] = useState<ReadonlySet<string>>(NO_SPEAKERS);
   const [mutedPubkeys, setMutedState] = useState<ReadonlySet<string>>(NO_SPEAKERS);
+  const [streamingPubkeys, setStreamingState] = useState<ReadonlySet<string>>(NO_SPEAKERS);
+  // Streamers this client has opted into (ScreenShareWatchContext); per call.
+  const [watchedStreams, setWatchedStreams] = useState<ReadonlySet<string>>(NO_SPEAKERS);
   // Concord only; empty in NIP-29/DM calls.
   const [raisedHands, setRaisedHandsState] = useState<ReadonlySet<string>>(NO_SPEAKERS);
   // LiveKit truth, rather than laggy relay presence. Null while not connected.
@@ -186,8 +189,8 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
 
   // A call-lifetime host the stage portals into, *reparented* between the normal
   // slot, floating window, or detached. Reparenting keeps CallStage mounted so
-  // video subscriptions and stage state survive navigation (a remount paused
-  // remote video and dropped it on the E2EE Concord path).
+  // video subscriptions and stage state survive navigation (a remount pauses
+  // remote video and drops it on the E2EE Concord path).
   const stageHost = useMemo(() => {
     const el = document.createElement("div");
     el.style.display = "contents";
@@ -225,6 +228,28 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
 
   const setMutedPubkeys = useCallback((next: Set<string>) => {
     setMutedState((prev) => (sameSet(prev, next) ? prev : next));
+  }, []);
+
+  const setStreamingPubkeys = useCallback((next: Set<string>) => {
+    setStreamingState((prev) => (sameSet(prev, next) ? prev : next));
+  }, []);
+
+  useEffect(() => setWatchedStreams(NO_SPEAKERS), [activeCall]);
+
+  // Tuning in also brings the stage on screen, wherever it lives.
+  const watchStream = useCallback((owner: string) => {
+    setWatchedStreams((prev) => (prev.has(owner) ? prev : new Set(prev).add(owner)));
+    if (hasNormalSlot) setStageOpen(true);
+    else setFloatingHidden(false);
+  }, [hasNormalSlot]);
+
+  const stopWatchingStream = useCallback((owner: string) => {
+    setWatchedStreams((prev) => {
+      if (!prev.has(owner)) return prev;
+      const next = new Set(prev);
+      next.delete(owner);
+      return next;
+    });
   }, []);
 
   const setRaisedHands = useCallback((next: Set<string>) => {
@@ -277,6 +302,9 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
       registerCallSummary,
       setSpeakingPubkeys,
       setMutedPubkeys,
+      setStreamingPubkeys,
+      watchStream,
+      stopWatchingStream,
       setRaisedHands,
       setVoiceRoomPubkeys,
     }),
@@ -303,6 +331,9 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
       registerCallSummary,
       setSpeakingPubkeys,
       setMutedPubkeys,
+      setStreamingPubkeys,
+      watchStream,
+      stopWatchingStream,
       setRaisedHands,
       setVoiceRoomPubkeys,
     ],
@@ -310,8 +341,8 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
 
   // The per-frame half, reaching only live voice-activity renderers.
   const voiceActivityValue = useMemo(
-    () => ({ speakingPubkeys, mutedPubkeys, raisedHands, voiceRoomPubkeys }),
-    [speakingPubkeys, mutedPubkeys, raisedHands, voiceRoomPubkeys],
+    () => ({ speakingPubkeys, mutedPubkeys, streamingPubkeys, watchedStreams, raisedHands, voiceRoomPubkeys }),
+    [speakingPubkeys, mutedPubkeys, streamingPubkeys, watchedStreams, raisedHands, voiceRoomPubkeys],
   );
 
   return (

@@ -1,15 +1,8 @@
-import { Copy } from "lucide-react";
+import { Braces } from "lucide-react";
 import { useMemo } from "react";
 
-import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { writeClipboardText } from "@/lib/clipboard";
+import { JsonBlock } from "@/components/JsonBlock";
+import { ChromeDialogContent, ChromeDialogHeader, Dialog } from "@/components/ui/dialog";
 
 interface EventJsonDialogProps {
   open: boolean;
@@ -25,24 +18,10 @@ export function EventJsonDialog({ open, onOpenChange, source, description }: Eve
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl">
-        <DialogHeader>
-          <DialogTitle>Event JSON</DialogTitle>
-          <DialogDescription>{description}</DialogDescription>
-        </DialogHeader>
-        <pre className="max-h-[60vh] overflow-auto rounded-md bg-muted p-3 text-xs leading-relaxed">
-          {json}
-        </pre>
-        <div className="flex justify-end">
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={() => writeClipboardText(json).catch(() => undefined)}
-          >
-            <Copy className="mr-2 size-4" /> Copy JSON
-          </Button>
-        </div>
-      </DialogContent>
+      <ChromeDialogContent title="Event JSON" className="sm:max-w-2xl">
+        <ChromeDialogHeader icon={Braces} title="event json" description={description} />
+        <JsonBlock json={json} className="mt-5" />
+      </ChromeDialogContent>
     </Dialog>
   );
 }

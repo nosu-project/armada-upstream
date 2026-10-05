@@ -14,7 +14,7 @@ function TypingAvatar({ pubkey }: { pubkey: string }) {
   return (
     <Avatar shape={getAvatarShape(metadata)} className="size-5 ring-2 ring-background" title={name}>
       <AvatarImage src={metadata?.picture} imeta={author.data?.imeta?.picture} alt={name} />
-      <AvatarFallback className="bg-primary/25 text-primary text-[9px] font-semibold">
+      <AvatarFallback className="bg-primary/25 text-primary text-monogram font-semibold">
         {name?.trim()?.[0]?.toUpperCase() ?? "?"}
       </AvatarFallback>
     </Avatar>
@@ -38,7 +38,7 @@ export function TypingIndicator({ pubkeys: allPubkeys }: { pubkeys: string[] }) 
           <TypingAvatar key={pk} pubkey={pk} />
         ))}
         {overflow > 0 && (
-          <div className="flex size-5 shrink-0 items-center justify-center rounded-full bg-muted text-[9px] font-semibold text-muted-foreground ring-2 ring-background">
+          <div className="flex size-5 shrink-0 items-center justify-center rounded-full bg-muted text-monogram font-semibold text-muted-foreground ring-2 ring-background">
             +{overflow}
           </div>
         )}

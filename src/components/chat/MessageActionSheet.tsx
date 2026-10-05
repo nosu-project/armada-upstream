@@ -153,7 +153,7 @@ export function MessageActionSheet({
                   <button
                     type="button"
                     className={cn(
-                      "flex w-full items-center gap-3.5 rounded-xl px-3 py-3 text-left text-[15px] font-medium active:bg-secondary",
+                      "flex w-full items-center gap-3.5 rounded-xl px-3 py-3 text-left text-chat font-medium active:bg-secondary",
                       action.destructive ? "text-destructive" : "text-foreground",
                     )}
                     onClick={() => {

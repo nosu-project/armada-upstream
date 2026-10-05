@@ -93,8 +93,8 @@ function dmConversationIndexDepartedRepairPlan(
       const read = relayReads.get(relay);
       if (!read || read.unreadable.has(identifier)) return false;
       const remote = read.heads.get(identifier)?.shard;
-      // Absent from a truncated answer is not absent from the relay; treating it so caused
-      // endless republishing across installations.
+      // Absent from a truncated answer is not absent from the relay; treating it so republishes
+      // endlessly across installations.
       if (!remote) return !read.truncated;
       return serializeDmConversationIndexShard(remote) !== serialized;
     });

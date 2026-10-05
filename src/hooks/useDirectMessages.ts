@@ -48,7 +48,7 @@ export function dmTopUpSince(lastPullStartedAtSecs: number): number {
 
 /**
  * When each thread's pull last started, per query client and keyed by thread
- * (a per-mount ref re-pulled on every revisit). Aborted pulls clear their entry.
+ * (a per-mount ref would re-pull on every revisit). Aborted pulls clear their entry.
  */
 const threadPullAt = new WeakMap<object, Map<string, number>>();
 function threadPulls(client: object): Map<string, number> {
@@ -90,13 +90,12 @@ export function keepPreviousDmPreviews(
  */
 export type DirectionCursor = number | null | undefined;
 
-/** Per-relay sent/received cursors. */
 export interface RelayCursor {
   sent: DirectionCursor;
   received: DirectionCursor;
 }
 
-/** All relays' cursors, keyed by relay URL. */
+/** Keyed by relay URL. */
 export type RelayCursors = Record<string, RelayCursor>;
 
 /**
@@ -152,7 +151,7 @@ export interface DecryptedDM {
 /**
  * Whether an empty kind-4 thread is still waiting on its first relay pull. A
  * SYNC signal, not loading: NIP-17-only threads have no kind-4 rows, so folding
- * it into `isLoading` held skeletons over read rumors. See
+ * it into `isLoading` would hold skeletons over read rumors. See
  * `shouldShowDmTimelineLoading`.
  */
 export function isEmptyThreadAwaitingPull(
@@ -303,7 +302,6 @@ export async function buildThreadRows(
   return [...byId.values()].sort((a, b) => a.created_at - b.created_at);
 }
 
-/** The pool object from `useNostr` (relay/group accessors). */
 type NostrPool = ReturnType<typeof useNostr>["nostr"];
 
 /**
@@ -421,7 +419,7 @@ export function useDMConversations(options?: { decryptPreviews?: boolean }) {
   knownPeersRef.current = knownPeers;
 
   // `knownPeerKey` is NOT in the query key: it resolves async on cold load, and a
-  // key change dropped to a fresh cache entry (visible list collapse). Read from a
+  // key change would drop to a fresh cache entry (visible list collapse). Read from a
   // ref and re-run this entry's queryFn on change instead.
   const queryKey = ["dm", "conversations", user?.pubkey, relayKey];
 
@@ -978,7 +976,6 @@ export function useDirectMessages(peer: string | undefined) {
     }
   }, [self, peer, user?.signer.nip04, hasMore, queryClient, queryKey, nostr, relays]);
 
-  /** Update a single optimistic message's delivery status in the cache. */
   const setMessageStatus = useCallback(
     (id: string, status: DecryptedDM["status"]) => {
       queryClient.setQueryData<DecryptedDM[]>(queryKey, (old = []) =>

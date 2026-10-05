@@ -13,9 +13,8 @@ const path = require("node:path");
 const { spawn } = require("node:child_process");
 
 const HELPER_NAME = "armada-hevc-publisher";
-// Retained as a compatibility fallback for Flatpaks built before the publisher
-// moved into Electron's resources directory. New Linux packages use the same
-// process.resourcesPath location in AppImage, deb, and Flatpak.
+// Fallback for older Flatpaks that installed the publisher under /app/bin;
+// current Linux packages use process.resourcesPath.
 const HELPER_PATH = "/app/bin/armada-hevc-publisher";
 const FFMPEG_PATH = "/usr/bin/ffmpeg";
 const HOST_FFMPEG_PATHS = [
@@ -509,10 +508,9 @@ function createHevcScreenShareController({
 
   /**
    * `detail` reaches here parsed from the publisher's own stderr, so it must
-   * not be able to answer the questions this controller answers. Spreading it
-   * last let a subprocess relabel `state` — including past the rule that keeps
-   * an empty signaled track in "starting" until real HEVC bytes exist — and
-   * rename the session the renderer correlates against.
+   * not be able to relabel `state` (bypassing the rule that keeps an empty
+   * track in "starting" until real HEVC bytes exist) or rename the session the
+   * renderer correlates against.
    */
   function emit(state, detail, sessionId = session?.sessionId) {
     const { state: _state, sessionId: _sessionId, ...rest } =
@@ -676,8 +674,7 @@ function createHevcScreenShareController({
     // Every pipe this session holds needs an "error" listener before anything
     // is written to it. A stream error with no listener is an uncaught
     // exception, and in the main process that ends the app rather than the
-    // share — which is how a helper that dies before reading its config would
-    // otherwise be reported.
+    // share (e.g. a helper that dies before reading its config).
     ffmpeg.stdin.on("error", (error) => failed("FFmpeg", null, error.message));
     ffmpeg.stdout.on("error", (error) => failed("FFmpeg", null, error.message));
     helper.stdin.on("error", (error) => failed("Publisher", null, error.message));
@@ -802,9 +799,8 @@ function createHevcScreenShareController({
       try {
         // A false return still means Node accepted this frame; it asks us not
         // to write another until drain. Acknowledge it now and retain at most
-        // one subsequent renderer frame while the pipe clears. This bounded
-        // two-stage pipeline keeps VA-API fed without recreating the unbounded
-        // MessagePort backlog that caused the original zero-frame stall.
+        // one subsequent renderer frame while the pipe clears, so VA-API stays
+        // fed without an unbounded MessagePort backlog.
         active.inputBlocked = !ffmpeg.stdin.write(frame);
         acknowledge(sequence);
         if (active.inputBlocked) armDrainWatchdog();

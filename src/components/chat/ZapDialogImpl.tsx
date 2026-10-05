@@ -210,7 +210,7 @@ export default function ZapDialogImpl({ target, sendZap, sendOnchainZap, onDone 
         setSuccess({ kind: "lightning", amountSats });
       } else if (outcome === "unproven") {
         toast({
-          title: `Sent ${formatSatsAmount(amountSats)} ⚡`,
+          title: `Sent ${formatSatsAmount(amountSats)}`,
           description:
             "The payment went through, but the wallet hasn't provided the proof a private zap tally needs. We'll keep checking for a couple of minutes and count the zap if it turns up. Alby Hub, Coinos and lnbits provide it reliably.",
         });
@@ -579,7 +579,7 @@ function LightningInvoiceView({
         </Button>
       </div>
 
-      <p className="text-[11px] text-muted-foreground text-center">
+      <p className="text-2xs text-muted-foreground text-center">
         Scan the QR or copy the invoice to pay with any Lightning wallet.
       </p>
     </div>

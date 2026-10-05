@@ -92,7 +92,7 @@ function CardLabel({
   label: string;
 }) {
   return (
-    <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground min-w-0">
+    <p className="flex items-center gap-1.5 text-2xs font-semibold uppercase tracking-wide text-muted-foreground min-w-0">
       <Icon className="size-3.5 shrink-0" />
       <span className="truncate">{label}</span>
     </p>
@@ -112,7 +112,7 @@ function PlaceRow({
     <div className="flex items-center gap-2 min-w-0">
       <Avatar className="size-5 clip-corner shrink-0">
         {iconUrl && <AvatarImage src={iconUrl} alt="" className="object-cover" />}
-        <AvatarFallback className="clip-corner bg-primary/20 text-primary text-[10px]">
+        <AvatarFallback className="clip-corner bg-primary/20 text-primary text-3xs">
           {name.trim().charAt(0).toUpperCase() || "·"}
         </AvatarFallback>
       </Avatar>

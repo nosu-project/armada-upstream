@@ -2,6 +2,7 @@ import {
   ArrowLeft,
   Check,
   Folder,
+  GitBranch,
   Globe,
   GripVertical,
   Hash,
@@ -31,7 +32,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { DiscordBridgeSection } from "@/components/ImportFromDiscord";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { ChromeDialogContent, ChromeDialogHeader, Dialog } from "@/components/ui/dialog";
 import { OwnerAvatar, OwnerSlashRepo, RepositoryPicker, type PickedRepository } from "@/components/projects/RepositoryPicker";
 import { Input } from "@/components/ui/input";
 import { PillTabs, type PillTab } from "@/components/ui/pill-tabs";
@@ -621,30 +622,26 @@ function ConnectRepositoryDialog({ open, onOpenChange, channels, connectedCoordi
 
   return (
     <Dialog open={open} onOpenChange={(next) => !connecting && onOpenChange(next)}>
-      <DialogContent className="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-1.5">
-            {picked && (
-              <Button variant="ghost" size="icon" className="-ml-1.5 size-7" aria-label="Back" disabled={connecting} onClick={() => setPicked(null)}>
-                <ArrowLeft className="size-4" />
-              </Button>
-            )}
-            {picked ? "Choose a channel" : "Connect a repository"}
-          </DialogTitle>
-        </DialogHeader>
+      <ChromeDialogContent title={picked ? "Choose a channel" : "Connect a repository"} contentClassName="grid gap-4">
+        {picked && (
+          <Button variant="ghost" size="icon" className="absolute left-3 top-3 size-8 touch:size-11" aria-label="Back" disabled={connecting} onClick={() => setPicked(null)}>
+            <ArrowLeft className="size-4" />
+          </Button>
+        )}
+        <ChromeDialogHeader icon={GitBranch} title={picked ? "choose a channel" : "connect a repository"} className="mb-2" />
 
         {!picked ? (
           <RepositoryPicker connectedCoordinates={connectedCoordinates} onSelect={setPicked} />
         ) : (
           <div className="min-w-0 space-y-3">
-            <div className="flex min-w-0 items-center gap-2.5 clip-corner-lg border border-border/60 bg-card p-2.5">
+            <div className="flex min-w-0 items-center gap-2.5 clip-corner-lg bg-background/40 p-2.5">
               <OwnerAvatar pubkey={picked.owner} />
               <span className="min-w-0 flex-1">
                 <OwnerSlashRepo owner={picked.owner} name={picked.displayName} />
                 <span className="block truncate text-xs text-muted-foreground">Pick the channel its activity should appear in.</span>
               </span>
             </div>
-            <div className="max-h-56 space-y-0.5 overflow-y-auto rounded-lg bg-secondary/40 p-1">
+            <div className="max-h-56 space-y-0.5 overflow-y-auto clip-corner-lg bg-background/40 p-1">
               {channels.map((channel) => {
                 const pending = pendingChannelId === channel.idHex;
                 const taken = pending ? undefined : repositoryByChannel.get(channel.idHex);
@@ -680,7 +677,7 @@ function ConnectRepositoryDialog({ open, onOpenChange, channels, connectedCoordi
             {error && <p role="alert" className="text-xs text-destructive">{error}</p>}
           </div>
         )}
-      </DialogContent>
+      </ChromeDialogContent>
     </Dialog>
   );
 }
@@ -711,7 +708,7 @@ function ConnectedRepositoryRow({ channel, address, owner, relayHints, fallbackN
   return <div className="flex min-w-0 items-center gap-2 rounded-md px-2 py-1.5">
     <OwnerAvatar pubkey={owner} className="size-6" />
     <span className="min-w-0 flex-1"><OwnerSlashRepo owner={owner} name={name} /></span>
-    <span className="shrink-0 text-[11px] text-muted-foreground">#{channel.name}</span>
+    <span className="shrink-0 text-2xs text-muted-foreground">#{channel.name}</span>
     {canManage && <Button type="button" size="icon" variant="ghost" className="size-6 shrink-0 text-muted-foreground hover:text-destructive" aria-label={`Disconnect ${name}`} title={address} onClick={onDetach}><Trash2 className="size-3.5" /></Button>}
   </div>;
 }
@@ -824,14 +821,14 @@ function OwnerRow({ pubkey }: { pubkey: string }) {
     <div className="flex items-center gap-2.5 text-sm">
       <Avatar className="size-6 shrink-0">
         <AvatarImage src={author.data?.metadata?.picture} imeta={author.data?.imeta?.picture} alt={displayName} />
-        <AvatarFallback className="bg-primary/20 text-primary text-[10px]">
+        <AvatarFallback className="bg-primary/20 text-primary text-3xs">
           {displayName[0]?.toUpperCase()}
         </AvatarFallback>
       </Avatar>
       <span className="min-w-0 flex-1 truncate">
         <DisplayName pubkey={pubkey} name={displayName} />
       </span>
-      <span className="inline-flex items-center gap-1 rounded-full bg-primary/15 px-2 py-0.5 text-[11px] font-medium text-primary">
+      <span className="inline-flex items-center gap-1 rounded-full bg-primary/15 px-2 py-0.5 text-2xs font-medium text-primary">
         <Shield className="size-3" />
         Owner
       </span>
@@ -1126,7 +1123,7 @@ function ChannelsSection({
           <div
             data-ch-newzone
             className={cn(
-              "mt-2 flex items-center justify-center gap-1.5 clip-corner-lg border-2 border-dashed px-2 py-3 text-[11px] font-semibold uppercase tracking-wider transition-colors",
+              "mt-2 flex items-center justify-center gap-1.5 clip-corner-lg border-2 border-dashed px-2 py-3 text-2xs font-semibold uppercase tracking-wider transition-colors",
               channelDrag.target?.newCategory
                 ? "border-primary bg-primary/5 text-primary"
                 : "border-primary/50 text-muted-foreground/70",
@@ -1287,7 +1284,6 @@ function ChannelRow({
     if (trimmed && trimmed !== channel.name) {
       try {
         await onRename(trimmed);
-        toast({ title: "Channel renamed" });
       } catch (e) {
         toast({
           title: "Rename failed",
@@ -1808,7 +1804,7 @@ function VoiceServersSection({
 
       {!editing ? (
         brokers.length === 0 ? (
-          <p className="text-[11px] text-muted-foreground">
+          <p className="text-2xs text-muted-foreground">
             None set, so calls use each member's own voice server. Setting them here makes every
             call in this community use these, and only these.
           </p>
@@ -1872,12 +1868,12 @@ function VoiceServersSection({
               </Button>
             </form>
           ) : (
-            <p className="text-[11px] text-muted-foreground">
+            <p className="text-2xs text-muted-foreground">
               Up to {MAX_COMMUNITY_AV_BROKERS} voice servers; past that, clients trim the list.
             </p>
           )}
 
-          <p className="text-[11px] text-muted-foreground">
+          <p className="text-2xs text-muted-foreground">
             Calls use only these, spread across them by channel. Members' own voice servers are
             ignored here, so if none of these answer, calls can't start. Leave it empty to let
             every member use their own.
@@ -1889,7 +1885,7 @@ function VoiceServersSection({
             </Alert>
           )}
 
-          {warning && <p className="text-[11px] text-amber-500">{warning}</p>}
+          {warning && <p className="text-2xs text-warning">{warning}</p>}
 
           <div className="flex justify-end gap-1">
             <Button
@@ -2113,7 +2109,7 @@ function RelaysSection({
               </Button>
             </form>
           ) : (
-            <p className="text-[11px] text-muted-foreground">
+            <p className="text-2xs text-muted-foreground">
               Up to {MAX_COMMUNITY_RELAYS} relays; past that, clients trim the list.
             </p>
           )}
@@ -2125,7 +2121,7 @@ function RelaysSection({
           )}
 
           {busyLabel && (
-            <p className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+            <p className="flex items-center gap-1.5 text-2xs text-muted-foreground">
               <Loader2 className="size-3 animate-spin" /> {busyLabel}
             </p>
           )}

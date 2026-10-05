@@ -6,15 +6,13 @@
  *
  * CHAT (default): joins a Concord community from an invite link and posts a
  * continuous stream of gibberish spam ("test", "gggg", "nn"…) to its public
- * channels, each message collecting ❤️👍😂 from sibling keys. Strategy evolved
- * against src/concord/lib/floodCluster.ts through two rounds:
- *   - v1 content rules (density/echo/arrival-burst) were beaten by a warm
- *     48-key pool + a Jaccard-guarded unique-content engine.
- *   - v2 (commit 0cb74b2e) added a content-free COHORT rule — keys chained
- *     arrival-to-arrival (≤10 min) that drown the channel — which folds the
- *     v1 pool at 89-99%. Beaten here by introducing keys one per 11–14 min
- *     (no chain ever forms; the rule needs ≥3 chained keys), never repeating
- *     a gibberish shape within 10 min (density), and staying wordless (echo).
+ * channels, each message collecting ❤️👍😂 from sibling keys. It targets
+ * src/concord/lib/floodCluster.ts's rules:
+ *   - content (density/echo/arrival-burst): a warm 48-key pool + a
+ *     Jaccard-guarded unique-content engine.
+ *   - COHORT (keys chained arrival-to-arrival ≤10 min; needs ≥3 chained keys):
+ *     keys are introduced one per 11–14 min so no chain forms, no gibberish
+ *     shape repeats within 10 min (density), and messages stay wordless (echo).
  * Re-run the proof against the shipped rule: node scratch/verify-evasion.mjs
  *
  * INVITE (`--invite-spam <pubkey|npub>`): NIP-59 gift-wraps kind-3313 direct
@@ -36,6 +34,7 @@
  *
  * Options:
  *   --interval-ms <n>        Delay between messages/invites (default 3000)
+ *   --content <engine>       gibberish (default) or english
  *   --invite-spam <pubkey>   Send direct invites to this key instead of chat spam
  *   --resolve-only           Resolve the invite, print community + channels, exit
  *   --once                   Post a single message, verify it reads back, exit
@@ -505,6 +504,33 @@ async function resolveBundle(pool, invite) {
 
 /** Fold the control plane and return public, non-deleted channels. */
 async function discoverChannels(pool, bundle) {
+  const editions = await readControlEditions(pool, bundle);
+  const channels = [];
+  let privateSkipped = 0;
+  let deletedSkipped = 0;
+  // Own testing grounds sometimes have only PRIVATE channels; let a run target
+  // them explicitly. The stream key derives from community_root + channel id
+  // regardless of the private flag, so a post reads back the same way.
+  const includePrivate = process.env.INCLUDE_PRIVATE === "1";
+  for (const [eid, ed] of editions) {
+    if (ed.vsk !== "2") continue;
+    try {
+      const def = JSON.parse(ed.content);
+      if (def.deleted) { deletedSkipped += 1; continue; }
+      if (def.private && !includePrivate) { privateSkipped += 1; continue; }
+      channels.push({ id: eid, name: def.name ?? "channel", private: Boolean(def.private) });
+    } catch {
+      // skip
+    }
+  }
+  if (channels.length === 0) {
+    log(`discoverChannels: ${editions.size} edition(s), ${privateSkipped} private skipped, ${deletedSkipped} deleted (set INCLUDE_PRIVATE=1 to include private)`);
+  }
+  return channels;
+}
+
+/** The control plane's latest edition per `eid`: eid -> { ev, vsk, content }. */
+async function readControlEditions(pool, bundle) {
   // The control plane has split read/write keys. Post-split, the wrap AUTHOR is
   // the delivered `control_pk` (a control_root-derived signer a joiner can't
   // derive), while the wraps are still decrypted under the community_root read
@@ -541,28 +567,7 @@ async function discoverChannels(pool, bundle) {
       // not decryptable / malformed — skip
     }
   }
-  const channels = [];
-  let privateSkipped = 0;
-  let deletedSkipped = 0;
-  // Own testing grounds sometimes have only PRIVATE channels; let a run target
-  // them explicitly. The stream key derives from community_root + channel id
-  // regardless of the private flag, so a post reads back the same way.
-  const includePrivate = process.env.INCLUDE_PRIVATE === "1";
-  for (const [eid, ed] of editions) {
-    if (ed.vsk !== "2") continue;
-    try {
-      const def = JSON.parse(ed.content);
-      if (def.deleted) { deletedSkipped += 1; continue; }
-      if (def.private && !includePrivate) { privateSkipped += 1; continue; }
-      channels.push({ id: eid, name: def.name ?? "channel", private: Boolean(def.private) });
-    } catch {
-      // skip
-    }
-  }
-  if (channels.length === 0) {
-    log(`discoverChannels: ${editions.size} edition(s), ${privateSkipped} private skipped, ${deletedSkipped} deleted (set INCLUDE_PRIVATE=1 to include private)`);
-  }
-  return channels;
+  return editions;
 }
 
 // ---------------------------------------------------------------------------
@@ -716,7 +721,7 @@ export function generateMessage() {
 }
 
 // --- Gibberish engine ------------------------------------------------------
-// The current round's content: near-wordless noise in the spirit of "test",
+// The default content: near-wordless noise in the spirit of "test",
 // "teste", "nn", "gggg". Single-token shapes are echo-ineligible (<5 words),
 // and with no exact shape repeating within 10 minutes the density rule never
 // finds 8 copies in 5. Content rules simply have nothing to read.
@@ -759,7 +764,6 @@ function makeContent(opts) {
 }
 
 // --- Jaccard guard for the English engine, mirroring floodCluster.ts -------
-// (kept after the dispatcher textually; function declarations hoist)
 
 const URL_RUN = /https?:\/\/\S+/g;
 const TRAILING_NONCE = /([>!])\s*[a-z0-9]{4,9}$/;
@@ -872,14 +876,10 @@ function parseArgs(argv) {
         break;
       }
       case "--future-skew":
-        // Stamp posted chat messages this many SECONDS ahead of the real clock
-        // (a desynced sender / deliberate future-date). Exercises the receiver
-        // hold + the "TIME TRAVELER DETECTED" moderation flag.
         opts.futureSkewSecs = Number(args.shift());
         if (!Number.isFinite(opts.futureSkewSecs)) throw new Error("--future-skew must be a number of seconds");
         break;
       case "--channel":
-        // Target a specific channel by name (case-insensitive) for --once.
         opts.channel = args.shift();
         break;
       case "--invite-spam":
@@ -1271,7 +1271,7 @@ async function main() {
   }
   // --- 24/7 chat spam loop: slow pool + gibberish + self-reactions ---
   //
-  // Evasion of src/concord/lib/floodCluster.ts AS OF 0cb74b2e:
+  // Evasion of src/concord/lib/floodCluster.ts:
   //  * Rule 4 (cohort flood) is content-free: it folds crowds of keys chained
   //    arrival-to-arrival (≤10 min gaps) that drown the channel. So keys are
   //    introduced one per 11–14 min — never chained, every key a singleton
@@ -1380,6 +1380,22 @@ async function main() {
     await sleep(opts.intervalMs);
   }
 }
+
+// Shared with scripts/voicebots.mjs.
+export {
+  RelayPool,
+  buildInfo,
+  buildRumor,
+  channelGroupKey,
+  groupKey,
+  guestbookJoin,
+  hkdf32,
+  log,
+  parseInvite,
+  readControlEditions,
+  resolveBundle,
+  STOCK_RELAYS,
+};
 
 const isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
 if (isMain) {

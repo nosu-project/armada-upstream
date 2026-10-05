@@ -288,7 +288,7 @@ function ParticipantVolumeRow({ participant }: { participant: Participant }) {
       <div className="flex items-center gap-2 mb-1.5">
         <Avatar shape={getAvatarShape(metadata)} className="size-5 shrink-0">
           <AvatarImage src={metadata?.picture} imeta={author.data?.imeta?.picture} alt={name} />
-          <AvatarFallback className="bg-success/20 text-success text-[9px]">
+          <AvatarFallback className="bg-success/20 text-success text-monogram">
             {name[0]?.toUpperCase()}
           </AvatarFallback>
         </Avatar>
@@ -348,6 +348,7 @@ export function InCallView({ label, onLabelClick, stacked, compact }: InCallView
   // `stageVisible`, not `stageOpen`: away from the call's channel the visible
   // stage is the floating window, which `stageOpen` doesn't describe.
   const { stageVisible, toggleStage } = useCall();
+  const participantCount = useParticipants().length;
   const connectionState = useConnectionState();
   const rejoining = useContext(VoiceRejoiningContext);
 
@@ -358,8 +359,8 @@ export function InCallView({ label, onLabelClick, stacked, compact }: InCallView
   ) {
     return (
       <div className="flex items-center justify-center gap-2 px-3 py-2 min-h-12">
-        <Loader2 className="size-4 animate-spin text-amber-500" />
-        <span className="flex-1 min-w-0 truncate text-sm text-amber-500">Reconnecting…</span>
+        <Loader2 className="size-4 animate-spin text-warning" />
+        <span className="flex-1 min-w-0 truncate text-sm text-warning">Reconnecting…</span>
         <LeaveButton />
       </div>
     );
@@ -374,6 +375,7 @@ export function InCallView({ label, onLabelClick, stacked, compact }: InCallView
     );
   }
 
+  const stageLabel = stageVisible ? "Hide call stage" : "Show call stage";
   const labelClass = cn("flex-1 min-w-0 truncate font-semibold", compact ? "text-sm" : "text-xs");
   const headerEl = (
     <div className="flex items-center gap-1.5 min-w-0 px-1">
@@ -393,6 +395,20 @@ export function InCallView({ label, onLabelClick, stacked, compact }: InCallView
       ) : (
         <span className={cn(labelClass, "text-success")}>Voice connected</span>
       )}
+      {/* The w-60 channel column fits only five controls, so desktop toggles the stage here. */}
+      {!compact && (
+        <button
+          type="button"
+          onClick={toggleStage}
+          aria-label={stageLabel}
+          aria-pressed={stageVisible}
+          className="shrink-0 flex items-center gap-1.5 rounded-md bg-foreground/10 px-2 py-1 touch:px-3 touch:py-2 text-2xs font-medium text-foreground hover:bg-foreground/20"
+        >
+          <Video className="size-3.5" />
+          <span className="tabular-nums">{participantCount}</span>
+          <span>{stageVisible ? "Hide" : "Show"}</span>
+        </button>
+      )}
     </div>
   );
 
@@ -404,21 +420,23 @@ export function InCallView({ label, onLabelClick, stacked, compact }: InCallView
         <CameraButton />
         <ScreenShareButton />
         <DeviceMenu />
-        <button
-          type="button"
-          onClick={toggleStage}
-          aria-label={stageVisible ? "Hide call stage" : "Show call stage"}
-          aria-pressed={stageVisible}
-          title={stageVisible ? "Hide call stage" : "Show call stage"}
-          className={cn(
-            "shrink-0 inline-flex items-center justify-center rounded-md size-8 touch:size-11 transition-colors",
-            stageVisible
-              ? "bg-foreground/10 text-foreground hover:bg-foreground/20"
-              : "bg-foreground/5 text-muted-foreground hover:bg-foreground/10",
-          )}
-        >
-          <PictureInPicture2 className="size-4" />
-        </button>
+        {compact && (
+          <button
+            type="button"
+            onClick={toggleStage}
+            aria-label={stageLabel}
+            aria-pressed={stageVisible}
+            title={stageLabel}
+            className={cn(
+              "shrink-0 inline-flex items-center justify-center rounded-md size-8 touch:size-11 transition-colors",
+              stageVisible
+                ? "bg-foreground/10 text-foreground hover:bg-foreground/20"
+                : "bg-foreground/5 text-muted-foreground hover:bg-foreground/10",
+            )}
+          >
+            <PictureInPicture2 className="size-4" />
+          </button>
+        )}
         <div className="flex-1" />
         <LeaveButton />
       </div>

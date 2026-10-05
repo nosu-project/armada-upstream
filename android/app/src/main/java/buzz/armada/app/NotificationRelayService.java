@@ -122,18 +122,16 @@ public class NotificationRelayService extends Service {
 
     private static final String TAG = "ArmadaNotifSvc";
     static final String SVC_CHANNEL_ID = "armada_background_service";
-    // Bumped to _v2 so the stronger vibration + HIGH importance take effect on
-    // installs that already created the old channel (channel settings are
-    // immutable once created; only a new id picks up new settings). The old
-    // channel is deleted in createChannels().
+    // Channel settings are immutable once created, so new vibration/importance
+    // settings need a new id; the old channel is deleted in createChannels().
     static final String MSG_CHANNEL_ID = "armada_notifications_v2";
     private static final String MSG_CHANNEL_ID_LEGACY = "armada_notifications";
     // A firm, attention-grabbing buzz for messages: wait, buzz, gap, buzz again.
     private static final long[] MSG_VIBRATION_PATTERN = { 0L, 400L, 200L, 400L };
     private static final int FOREGROUND_ID = 1;
     // Room notification ids are hashed into [2, ROOM_ID_MODULUS+1]. The band
-    // just above it was the (now removed) per-community summary band; it's kept
-    // reserved so cancelStaleSummaries can clear leftovers from old builds.
+    // just above is reserved for the retired summary ids that
+    // cancelStaleSummaries clears.
     private static final int ROOM_ID_MODULUS = 2_000_000_000;
     /** Leave headroom below Android/OEM per-package notification limits. */
     private static final int MAX_ACTIVE_ROOM_NOTIFICATIONS = 40;
@@ -150,7 +148,7 @@ public class NotificationRelayService extends Service {
     // a group summary's custom title/large-icon and renders a collapsed stack
     // with the APP name + APP icon, repeating each child's conversation avatar
     // per line — so a summary can never carry the community's branding. And
-    // merging a community's channels into ONE notification (tried) makes a tap
+    // merging a community's channels into ONE notification makes a tap
     // or Mark read act on every channel at once. Standalone per-channel
     // conversations are the only shape with both the branding and per-channel
     // actions.
@@ -258,10 +256,8 @@ public class NotificationRelayService extends Service {
     private final CallReceiptGate callReceiptGate = new CallReceiptGate();
 
     // Backoff for relay-initiated CLOSED resubscribes (see subRetryBackoffMs).
-    // SOCKET reconnects are no longer timed here: they are decided by
-    // fleetPolicy, a pure and separately-benchmarked decision layer
-    // (relayfleet/), which is what lets the fleet reach a quiet state instead
-    // of retrying a dead relay every five minutes forever.
+    // SOCKET reconnects are timed by fleetPolicy (relayfleet/), which lets the
+    // fleet reach a quiet state instead of retrying a dead relay forever.
     private static final long INITIAL_BACKOFF_MS = 1_000;
     private static final long MAX_BACKOFF_MS = 5 * 60 * 1_000;
 
@@ -282,23 +278,15 @@ public class NotificationRelayService extends Service {
      *
      * Everything {@code handler} guards — {@link #connections}, the config
      * snapshot, {@link #roomNotifs}, the profile cache — is single-threaded on
-     * this looper, which is what lets it all be plain fields. That model is
-     * unchanged; what changed is which thread runs it.
+     * this looper, which is what lets it all be plain fields.
      *
      * The service shares a process with the Activity and the WebView (no
-     * {@code android:process} in the manifest), so a main-looper handler made
-     * every relay message UI-thread work: a Schnorr verify per event, the
-     * Concord symmetric opens, and — the expensive one — {@link ServiceStore}
-     * writes, which take the same {@code SqliteArmadaDb} lock the WebView's
-     * reads hold from Capacitor's background thread. A catch-up burst on
-     * resume therefore blocked frames behind database contention: skipped
-     * frames, then a SIGQUIT ANR trace, then the process going away.
+     * {@code android:process} in the manifest), so on the main looper every
+     * relay message — Schnorr verifies, Concord opens, {@link ServiceStore}
+     * writes contending for the {@code SqliteArmadaDb} lock the WebView's reads
+     * hold — would block frames, up to an ANR on a catch-up burst.
      *
-     * Callbacks already arrive from elsewhere ({@link NativeSigner} runs on its
-     * own executor, okhttp on its dispatcher) and hop back with
-     * {@code handler.post}, so nothing outside this file assumed the looper was
-     * the main one. The service lifecycle callbacks below are the exception —
-     * the framework delivers those on the main thread, so they post.
+     * The service lifecycle callbacks arrive on the main thread, so they post.
      */
     private final HandlerThread handlerThread = startHandlerThread();
     private final Handler handler = new Handler(handlerThread.getLooper());
@@ -624,10 +612,10 @@ public class NotificationRelayService extends Service {
     private static final String PROFILES_PREFS = "armada_notif_profiles";
     /**
      * Where each self-state relay's read had reached, kept across process
-     * restarts. Without it every new process re-read every document the account
-     * ever published there, and Ditto-family relays keep each edition: 377
-     * documents, 6.7 MB, on one restart. Keys are account-scoped; the file is
-     * cleared on disable/logout with the rest of the notification state.
+     * restarts. Without it every new process re-reads every document the
+     * account ever published there, and Ditto-family relays keep each edition.
+     * Keys are account-scoped; the file is cleared on disable/logout with the
+     * rest of the notification state.
      */
     static final String CURSOR_PREFS = "armada_notif_cursors";
     /** An older persisted cursor is dropped for a full read. */
@@ -982,10 +970,10 @@ public class NotificationRelayService extends Service {
      * when no HTTP response reached us (a genuine socket-level failure). A
      * relay whose proxy is up in front of a dead backend returns a persistent
      * 5xx; with only the throwable that is a bare {@code ProtocolException},
-     * indistinguishable from a transient blip, and gets retried forever (the
-     * b49c2110be73 battery drain). So an upgrade that came back with a status —
-     * any 4xx/5xx except the two that mean "retry later", {@code 408 Request
-     * Timeout} and {@code 429 Too Many Requests} — is CONNECT_REFUSED: the
+     * indistinguishable from a transient blip, and gets retried forever. So an
+     * upgrade that came back with a status — any 4xx/5xx except the two that
+     * mean "retry later", {@code 408 Request Timeout} and {@code 429 Too Many
+     * Requests} — is CONNECT_REFUSED: the
      * relay is not serving WebSocket here now. The circuit breaker's
      * three-consecutive-failure gate means a relay merely restarting (a brief
      * 503) still recovers before it is quarantined.
@@ -1625,10 +1613,9 @@ public class NotificationRelayService extends Service {
         // NIP-42 AUTH itself — see NativeSigner. Absent/undecryptable ⇒ null,
         // and DM wraps degrade to the generic notification.
         String sealedSigner = sp.getString("signerSealed", null);
-        // Rebuilt only when the sealed credential itself changed: every
-        // configure used to unseal it from the Keystore again and, for a
-        // NIP-46 login, tear down and redial the bunker's sockets.
-        // (…or the last attempt came up empty, e.g. the Keystore wasn't ready.)
+        // Rebuilt only when the sealed credential changed (or the last attempt
+        // came up empty, e.g. the Keystore wasn't ready): a rebuild re-unseals
+        // from the Keystore and, for NIP-46, redials the bunker's sockets.
         boolean signerChanged = accountChanged
                 || !java.util.Objects.equals(sealedSigner, loadedSealedSigner)
                 || (sealedSigner != null && nativeSigner == null);
@@ -1688,17 +1675,15 @@ public class NotificationRelayService extends Service {
         // re-sends the subscriptions whose filters changed (reconfigure); one
         // that is wanted but not connected is replaced by a fresh connection —
         // with fresh fleet-policy state, so a config change still re-arms
-        // anything the policy had quarantined. Tearing down every socket on
-        // every configure (the app sends several per launch as its planes come
-        // ready) cost a TLS handshake, a NIP-42 round of ~200 stream AUTHs and a
-        // full re-subscription per relay, each time.
+        // anything the policy had quarantined. The app sends several configures
+        // per launch, and a teardown costs a TLS handshake, a NIP-42 round and a
+        // full re-subscription per relay.
         Map<String, RelayConnection> keep = new HashMap<>();
         // Connections waiting out a retry delay. A fresh connection would dial
-        // at once, so a relay that is simply DOWN was redialed on every
-        // configure — measured at 25 failed TLS handshakes in two minutes
-        // against a 502ing relay while the app reconfigured. They keep their
-        // wait (and pick the new config up when it ends); a quarantined one is
-        // still rebuilt, which is how a config change re-arms it.
+        // at once, redialing a relay that is simply DOWN on every configure.
+        // They keep their wait (and pick the new config up when it ends); a
+        // quarantined one is still rebuilt, which is how a config change
+        // re-arms it.
         Map<String, RelayConnection> waiting = new HashMap<>();
         if (accountChanged || signerChanged) {
             if (ServiceProfiler.ON) ServiceProfiler.count(accountChanged ? "config.reload full (account)" : "config.reload full (signer)");
@@ -2156,17 +2141,13 @@ public class NotificationRelayService extends Service {
             if (!closed && ws != null) sendReqs(ws);
         };
         // Coalesces the REQ re-send that follows AUTH acks (#49): the user +
-        // every Concord stream key each get their own OK, so an auth round
-        // used to trigger one full sendReqs PER OK — dozens of duplicate REQ
-        // bursts per challenge. One re-send shortly after the burst settles
-        // covers them all.
+        // every Concord stream key each get their own OK, so one re-send after
+        // the burst settles instead of a full sendReqs PER OK.
         boolean authResendPending = false;
         // Set while an AUTH-driven re-send is building its REQs: only the subs
-        // the relay actually walled go out again. Re-sending EVERY standing sub
-        // after each accepted AUTH replaced subscriptions that were still
-        // streaming — the self-state read never reached EOSE (so its `since`
-        // cursor was never set) and restarted from scratch each time: ~65
-        // re-sends and 8 MB of the user's own documents a minute, measured.
+        // the relay actually walled go out again. Re-sending a sub that is
+        // still streaming restarts it, so e.g. the self-state read would never
+        // reach EOSE and set its `since` cursor.
         boolean walledOnly = false;
         // Each standing sub's filters as last sent (minus `since`, which moves
         // on its own), and — during reconfigure() — the subs this pass sent.
@@ -2513,11 +2494,9 @@ public class NotificationRelayService extends Service {
                 // which is the whole failure this subscription exists to fix.
                 // After a read completes (EOSE), every later one — reconnects,
                 // re-REQs and new processes (CURSOR_PREFS) — asks only from
-                // shortly before it (selfSinceByUrl). Unbounded every time
-                // was not "a handful of events": the installation-sharded topic
-                // documents accumulate per install, and a full replay per
-                // re-REQ measured ~110 documents a relay, each Schnorr-verified
-                // and written, on every AUTH round and reconnect.
+                // shortly before it (selfSinceByUrl): the installation-sharded
+                // topic documents accumulate per install, and each one replayed
+                // is a Schnorr verify and a write.
                 if (!selfFlood(relayUrl).paused(SystemClock.elapsedRealtime())) sendSelfReq(webSocket, false);
             } catch (JSONException e) {
                 Log.w(TAG, "Failed to build REQ", e);
@@ -2904,13 +2883,6 @@ public class NotificationRelayService extends Service {
     }
 
     /**
-     * The Concord STREAM auths, signed natively from the same group-key memo
-     * the quick reply signs wraps with — so an auth-gating relay's kind-1059
-     * subscription survives a reconnect with the WebView asleep, instead of
-     * waiting for it to wake and answer the bridge (which still signs too; a
-     * duplicate AUTH just re-authenticates).
-     */
-    /**
      * A standing sub re-delivering an event this process already handled is
      * dropped before its frame is parsed. Relays re-send the account's own
      * documents on every reconnect and re-publish, and a 38 KB community-list
@@ -2967,6 +2939,13 @@ public class NotificationRelayService extends Service {
         return bridged;
     }
 
+    /**
+     * The Concord STREAM auths, signed natively from the same group-key memo
+     * the quick reply signs wraps with — so an auth-gating relay's kind-1059
+     * subscription survives a reconnect with the WebView asleep, instead of
+     * waiting for it to wake and answer the bridge (which still signs too; a
+     * duplicate AUTH just re-authenticates).
+     */
     private void signStreamAuths(String relayUrl, String challenge, RelayConnection session) {
         Set<String> streamPks = relayToPks2.get(relayUrl);
         if (streamPks == null || streamPks.isEmpty()) return;
@@ -3050,7 +3029,7 @@ public class NotificationRelayService extends Service {
                 // Stream keys authenticate only where the Concord subscription was
                 // actually walled: most relays serve it unauthenticated and
                 // challenge for the DM or self-state subs, and answering every
-                // challenge with every stream key was hundreds of signatures per
+                // challenge with every stream key is hundreds of signatures per
                 // reconnect. The wall may arrive before or after the challenge.
                 if (needStreams) signStreamAuths(relayUrl, challenge, session);
                 return;
@@ -3329,9 +3308,8 @@ public class NotificationRelayService extends Service {
      * touching the network. On a genuine miss, issues a kind-0 REQ on EVERY
      * open relay (a user's kind-0 usually lives on their general / outbox
      * relays, not the NIP-29 group relay the message came from, so a
-     * single-relay lookup misses it — that was why many senders showed no name
-     * or avatar). Waits up to {@link #PROFILE_TIMEOUT_MS}, keeping the newest
-     * kind-0 seen across relays.
+     * single-relay lookup misses it). Waits up to {@link #PROFILE_TIMEOUT_MS},
+     * keeping the newest kind-0 seen across relays.
      */
     private void resolveAuthor(String pubkey, String relayUrl, ProfileCallback cb) {
         long now = System.currentTimeMillis();
@@ -3349,9 +3327,9 @@ public class NotificationRelayService extends Service {
             return;
         }
         // The shared database next: the WebView may already hold this author's
-        // kind-0 (its own fetches land in the same store — literally the same
-        // store now, not a mirror of it). Checked BEFORE the negative cache so a
-        // profile the webview fetched after our miss still resolves. A hit seeds
+        // kind-0 (its own fetches land in the same store). Checked BEFORE the
+        // negative cache so a profile the webview fetched after our miss still
+        // resolves. A hit seeds
         // the profile store, so subsequent lookups (and stale-while-revalidate
         // bookkeeping) work as usual.
         try {
@@ -3650,7 +3628,6 @@ public class NotificationRelayService extends Service {
         rememberBoundedId(notifiedIds, id, MAX_NOTIFIED_IDS);
     }
 
-    /** Pure bounded insertion-order set update for JVM regression coverage. */
     /**
      * A REQ's filters as a comparable string, with `since` left out — it moves
      * with every event received, and a changed cursor alone is no reason to
@@ -3680,9 +3657,8 @@ public class NotificationRelayService extends Service {
     /**
      * Whether a CLOSED / OK message is NIP-42's `auth-required:`. Relays put
      * the machine-readable prefix first, but some wrap it (strfry-family and
-     * damus send `ERROR: auth-required: …`); missing the wrapped form turned an
-     * auth wall into an "ordinary" close, retried on a backoff forever, each
-     * retry drawing the same challenge and a full round of signed AUTHs.
+     * damus send `ERROR: auth-required: …`); missing the wrapped form would
+     * retry an auth wall on a backoff forever, each retry a full AUTH round.
      */
     static boolean isAuthRequired(String reason) {
         if (reason == null) return false;
@@ -3720,6 +3696,7 @@ public class NotificationRelayService extends Service {
         return null;
     }
 
+    /** Pure bounded insertion-order set update for JVM regression coverage. */
     static void rememberBoundedId(
             LinkedHashSet<String> ids, String id, int maximum) {
         if (ids == null || id == null || id.isEmpty() || maximum <= 0) return;
@@ -3880,9 +3857,8 @@ public class NotificationRelayService extends Service {
 
     /**
      * A recovered Concord rumor and the kind of the seal it arrived in. The
-     * seal kind is provenance the opened-event store records alongside the
-     * rumor (the fold and the dissolution check branch on it per row), so it has
-     * to survive the open.
+     * seal form is not stored, so it has to survive the open for the store's
+     * encrypted-seal rule ({@code Concord.storable}) to check it at ingest.
      */
     private static final class ConcordOpen {
         final JSONObject rumor;
@@ -4644,8 +4620,8 @@ public class NotificationRelayService extends Service {
                 if (repository == null || !address.equals(repository.optString("address"))) continue;
                 JSONArray roots = repository.optJSONArray("ticketRoots"); if (roots == null) repository.put("ticketRoots", roots = new JSONArray());
                 boolean exists = false; for (int j = 0; j < roots.length(); j++) if (root.id.equals(roots.optJSONObject(j).optString("id"))) exists = true;
-                // Already persisted: bumping `rev` anyway reloaded the whole
-                // config (every relay reconfigured) for a root it already had.
+                // Already persisted: bumping `rev` would reload the whole
+                // config (every relay reconfigured) for nothing.
                 if (exists) return;
                 roots.put(new JSONObject().put("id", root.id).put("author", root.author).put("kind", root.kind));
                 if (ServiceProfiler.ON) ServiceProfiler.count("config.rev git root");
@@ -4684,7 +4660,7 @@ public class NotificationRelayService extends Service {
      * Self documents that wait out {@link SelfTopicWindow} so only the newest
      * version is verified and filed: the installation-sharded topic documents,
      * and the Concord community-list fragments (38 KB each), which a client
-     * stuck republishing sent at ~85 editions a minute.
+     * stuck republishing can send many times a minute.
      */
     static boolean coalescesSelfDoc(JSONObject event, int kind) {
         return kind == KIND_COMMUNITY_LIST_FRAG || isSelfTopicDoc(event, kind);
@@ -5449,10 +5425,8 @@ public class NotificationRelayService extends Service {
      * (a kind-9 for a group we haven't joined, a DM from a non-follow, a
      * Concord wrap for a channel/stream we hold no key for, a gift wrap not
      * addressed to us). {@code since} gating is handled separately
-     * (notifiedIds + the per-relay inclusive cursor); this is purely the
-     * kind/author/tag match. Any
-     * kind no filter requests (e.g. 5 deletes, 1068 polls) falls through to
-     * false and is dropped.
+     * (notifiedIds + the per-relay inclusive cursor). Any kind no filter
+     * requests (e.g. 5 deletes, 1068 polls) is dropped.
      */
     private boolean passesFilter(JSONObject event, int kind, String relayUrl) {
         switch (kind) {
@@ -5597,8 +5571,8 @@ public class NotificationRelayService extends Service {
      * @param senderPubkey  message author (for the MessagingStyle Person key)
      * @param senderName    author display name
      * @param senderPicture author avatar URL (resolved async; optional)
-      * @param text          the message line (already truncated/verb-substituted)
-      * @param timestampMs   message time in ms (for ordering in the expansion)
+     * @param text          the message line (already truncated/verb-substituted)
+     * @param timestampMs   message time in ms (for ordering in the expansion)
      * @param mention       true if this message @-mentioned the user (bypasses
      *                      the active-room suppression — a mention is a deliberate
      *                      ping even on the channel the user is currently viewing)
@@ -6550,8 +6524,7 @@ public class NotificationRelayService extends Service {
             // UNIONED with our own DM relays, exactly as `publishRumor` does.
             // Their 10050 is where a compliant client reads, but writing there
             // also requires us to reach it, and a peer who published none is
-            // still reachable on the relays we share — the common Armada case,
-            // which this used to refuse to send to at all.
+            // still reachable on the relays we share — the common Armada case.
             final Map<String, List<String>> targets = new LinkedHashMap<>();
             for (String r : recipients) {
                 List<String> published = inboxes.get(r);
@@ -7022,21 +6995,18 @@ public class NotificationRelayService extends Service {
      *
      * <p>These are NOT share targets. The category that would make them one is
      * deliberately absent (see ShareTargetPlugin.CATEGORY_SHARE_TARGET): this
-     * fires on an incoming message, so using it to nominate share suggestions
-     * ranked rooms by who messages the user rather than by who the user
-     * messages. They also carry a rank floor, so that when the shortcut list
-     * fills, the eviction takes one of these rather than a suggestion.
+     * fires on an incoming message, so it would rank suggestions by who
+     * messages the user rather than whom the user messages. They also carry a
+     * rank floor, so that when the shortcut list fills, the eviction takes one
+     * of these rather than a suggestion.
      */
     private void pushConversationShortcut(RoomNotif room, Person sender, Bitmap avatar) {
         try {
             String label = conversationTitle(room);
             // ShortcutManager rate-limits a BACKGROUNDED app to a handful of
-            // pushes per day (reset when it next comes to the foreground), and
-            // this ran once per notification — so a busy day spent the quota on
-            // repeat pushes of rooms that already had a shortcut, and later
-            // ones were dropped. Skip a push that would change nothing, and
-            // skip every push once the quota is gone, so what does get through
-            // is the set that changed rather than an arbitrary prefix of it.
+            // pushes per day (reset on foreground), and this runs per
+            // notification. Skip a push that would change nothing, and every
+            // push once the quota is gone, so the quota goes on real changes.
             String id = shortcutIdFor(room);
             String signature = label + "\u0000" + (avatar != null);
             if (signature.equals(pushedShortcuts.get(id))) return;
@@ -7203,8 +7173,8 @@ public class NotificationRelayService extends Service {
 
     /**
      * Decode image bytes downsampled to roughly {@link #AVATAR_PX}. A two-pass
-     * decode (bounds first) keeps a large source image from OOM-ing the decode —
-     * a silent OOM previously returned null and dropped the avatar.
+     * decode (bounds first) keeps a large source image from OOM-ing the decode,
+     * which fails silently and drops the avatar.
      */
     private static Bitmap decodeSampled(byte[] bytes) {
         if (bytes == null || bytes.length == 0) return null;
@@ -7715,25 +7685,16 @@ public class NotificationRelayService extends Service {
      * The `/dm/<key>` route for a conversation key — the mirror of the `dm`
      * case of the web client's `chatRoute` (`src/lib/routes.ts`).
      *
-     * Each participant is an NPUB, not the hex the conversation key is made
-     * of. A DM route has one spelling across the client, and the two are not
-     * interchangeable even though both resolve: a route string is an identity
-     * (the share stash is keyed by it, a Direct Share shortcut is published
-     * under it, the sent-rooms ledger records one), so a hex path from here
-     * would be a second name for a conversation the rest of the app calls
-     * something else. Mirrors `dmPathSegment` in the web client's `chatRoute`
-     * (`src/lib/routes.ts`) and `PushProcessor.dmPath` on iOS.
+     * Each participant is an NPUB, not hex: a route string is an identity (the
+     * share stash, Direct Share shortcuts and the sent-rooms ledger key by it),
+     * so a hex path would be a second name for the same conversation. Mirrors
+     * `dmPathSegment` in `src/lib/routes.ts` and `PushProcessor.dmPath` on iOS.
      *
-     * Each participant is encoded ON ITS OWN so the separator survives as a
-     * literal: `,` is a legal sub-delim in a path segment, and `/dm/<a>,<b>`
-     * reads as what it is rather than as `%2C`. Encoding matters because the
-     * key is derived from `p` tag values the sender chose — {@link
-     * #isDmConvKey} is what should keep a malformed one from reaching a route
-     * at all, and this is the second line: every other route builder here
-     * encodes its variable segment, and a base handed to {@link
-     * #appendFocusSegment} is not encoded by it. A participant that is not a
-     * pubkey is passed through as-is rather than dropped, so a malformed key
-     * still produces a parseable (if unresolvable) path.
+     * Each participant is encoded ON ITS OWN so the `,` separator survives as a
+     * literal. Encoding is the second line of defence behind {@link
+     * #isDmConvKey}, since the key derives from sender-chosen `p` values and
+     * {@link #appendFocusSegment} does not encode its base. A non-pubkey
+     * participant passes through as-is, so the path stays parseable.
      */
     private static String dmRoute(String convKey) {
         StringBuilder sb = new StringBuilder("/dm/");

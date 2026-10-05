@@ -58,11 +58,11 @@ function writeLinuxVideoEncoderMode(
  * Configure Chromium before its GPU process starts.
  *
  * Mesa's accelerated H.264 encoder can emit keyframes without the SPS/PPS data
- * required after LiveKit E2EE transforms the frame. The former packetization-
- * mode 0 workaround selected OpenH264, but mode 0 cannot fragment the single
- * large encrypted NAL and silently drops keyframes. Compatibility mode instead
- * selects software WebRTC encoders globally and keeps H.264 packetization mode
- * 1, which survives encrypted 1080p loopback end to end.
+ * required after LiveKit E2EE transforms the frame. Forcing packetization-mode
+ * 0 (OpenH264) is no fix: mode 0 cannot fragment the single large encrypted NAL
+ * and silently drops keyframes. Compatibility mode instead selects software
+ * WebRTC encoders globally and keeps H.264 packetization mode 1, which survives
+ * encrypted 1080p loopback end to end.
  *
  * Hardware mode remains opt-in for people who prefer an accelerated VP8/VP9
  * path. HEVC gates are enabled in either mode, but Chromium will only advertise

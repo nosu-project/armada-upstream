@@ -158,7 +158,7 @@ export function usePressDrag<T>({
     [containerRef, onTouchMove, onContainerPointerDown, stopFling],
   );
 
-  // Grabbing cursor only while picked up; a grab-on-hover hand confused people.
+  // Grabbing cursor only while picked up; a grab-on-hover hand confuses people.
   const dragging = source !== null;
   useEffect(() => {
     if (!dragging) return;

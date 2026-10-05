@@ -6,14 +6,12 @@ import buzz.armada.app.relayfleet.RelayFleetPolicy.FleetEdge;
 import buzz.armada.app.relayfleet.RelayFleetPolicy.RelayInfo;
 
 /**
- * The baseline: a faithful port of {@code NotificationRelayService}'s current
- * {@code RelayConnection.scheduleReconnect()} (and its immediate-reconnect on
- * connectivity return). It exists so the benchmark has a green record of what
- * the app does today — including the wart that it never terminates: every
- * failure mode converges to "retry, forever," capped at five minutes.
+ * The benchmark baseline: plain exponential backoff with an immediate
+ * reconnect on connectivity return. It never terminates — every failure mode
+ * converges to "retry, forever," capped at five minutes — which is what the
+ * other policies are measured against.
  *
- * <p>Mirrors the service constants exactly (lines 242-249): 1s initial, 5min
- * cap, and a backoff reset only after a connection survived
+ * <p>1s initial, 5min cap, and a backoff reset only after a connection survived
  * {@code STABLE_CONNECTION_MS}. Connects to the entire relay union
  * ({@code shouldConnect} is unconditionally true), so its cost scales with
  * relay count regardless of relay health.

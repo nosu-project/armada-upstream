@@ -187,6 +187,15 @@ export function useEdgeSwipe({
     [onCommit, reset],
   );
 
+  // A cancel means someone else took the touch — on Android, the system back gesture
+  // pilfers it from the WebView mid-swipe, then delivers back on its own. Never commit.
+  const abandon = useCallback(
+    (e: React.PointerEvent) => {
+      if (pointerId.current === e.pointerId) reset();
+    },
+    [reset],
+  );
+
   // Safety net for gestures with no terminating element event (handlers torn off, hook
   // disabled, or Android WebView dropping the stream on background). Window `pointerup` is a
   // no-op on the normal path since `finish` already nulled `pointerId`.
@@ -237,7 +246,7 @@ export function useEdgeSwipe({
       onPointerDown,
       onPointerMove,
       onPointerUp: finish,
-      onPointerCancel: finish,
+      onPointerCancel: abandon,
     },
   };
 }

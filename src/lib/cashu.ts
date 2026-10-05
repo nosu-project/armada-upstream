@@ -350,7 +350,6 @@ export async function checkCashuTokenState(
   return "pending";
 }
 
-/** Format a token amount for display. */
 export function formatCashuAmount(amount: number, unit: string): string {
   if (unit === "sat") return `${amount.toLocaleString()} sat`;
   if (unit === "msat") return `${amount.toLocaleString()} msat`;

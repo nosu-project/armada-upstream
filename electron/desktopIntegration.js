@@ -2,15 +2,11 @@
 
 // Desktop-entry integration for the Linux AppImage.
 //
-// An AppImage is one file the user runs from wherever they downloaded it, and
-// nothing installs a .desktop entry for it. That is invisible until you look
-// at the dock. A desktop environment names a running app after the .desktop
-// entry its window matches, and it matches by WM_CLASS -> StartupWMClass;
-// Electron derives WM_CLASS from `app.setDesktopName()` (main.js), so with no
-// entry installed there is nothing to match, and the shell falls back to the
-// raw class string — the dock tooltip reads "buzz.armada.app", and the icon
-// beside it is whatever the window itself carries rather than the launcher
-// art. The deb and the Flatpak both install an entry and so never show this.
+// Nothing installs a .desktop entry for an AppImage. A desktop environment
+// names a running app after the entry its window matches (WM_CLASS ->
+// StartupWMClass, with WM_CLASS from `app.setDesktopName()` in main.js), so
+// with none installed the dock shows the raw "buzz.armada.app" and the
+// window's own icon. The deb and the Flatpak install an entry of their own.
 //
 // So the AppImage installs its own, on launch, into XDG_DATA_HOME: the same
 // id, Name and StartupWMClass the packaged entries use, so the window matches,

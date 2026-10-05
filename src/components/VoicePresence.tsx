@@ -1,4 +1,4 @@
-import { Hand, Headphones, MicOff } from "lucide-react";
+import { Hand, Headphones, MicOff, ScreenShare } from "lucide-react";
 import type { CSSProperties } from "react";
 
 import { DisplayName } from "@/components/DisplayName";
@@ -6,6 +6,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { VoiceUserContextMenu, VoiceUserMenuButton } from "@/components/VoiceUserContextMenu";
 import { useAuthor } from "@/hooks/useAuthor";
+import { useCall } from "@/hooks/useCall";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { getAvatarShape, shapedAvatarSpeakingStyle } from "@/lib/avatarShape";
 import { getDisplayName } from "@/lib/getDisplayName";
@@ -21,7 +22,7 @@ function ParticipantAvatar({ pubkey, className }: { pubkey: string; className?: 
       className={cn("size-5 ring-2 ring-chrome", className)}
     >
       <AvatarImage src={metadata?.picture} imeta={author.data?.imeta?.picture} alt={name} />
-      <AvatarFallback className="bg-success/20 text-success text-[9px]">
+      <AvatarFallback className="bg-success/20 text-success text-monogram">
         {name[0]?.toUpperCase()}
       </AvatarFallback>
     </Avatar>
@@ -36,17 +37,62 @@ function ParticipantName({ pubkey }: { pubkey: string }) {
   );
 }
 
+/** The person is screen sharing; with `onWatch`, a button that tunes into the stream. */
+export function LiveBadge({ onWatch, className }: { onWatch?: () => void; className?: string }) {
+  const cls = cn(
+    "shrink-0 inline-flex items-center gap-1 rounded-sm bg-destructive px-1.5 h-4 text-3xs font-bold tracking-wide text-destructive-foreground",
+    className,
+  );
+  const content = (
+    <>
+      <ScreenShare className="size-3" aria-hidden />
+      LIVE
+    </>
+  );
+  if (!onWatch) {
+    return (
+      <span className={cls} aria-label="Streaming">
+        {content}
+      </span>
+    );
+  }
+  return (
+    <button
+      type="button"
+      // Rows and tiles have their own click/context-menu behaviour.
+      onClick={(e) => {
+        e.stopPropagation();
+        onWatch();
+      }}
+      aria-label="Watch stream"
+      title="Watch stream"
+      className={cn(cls, "cursor-pointer hover:bg-destructive/85 touch:h-6 touch:px-2")}
+    >
+      {content}
+    </button>
+  );
+}
+
+/** Only streaming rows reach for the call context. */
+function WatchableLiveBadge({ pubkey }: { pubkey: string }) {
+  const { watchStream } = useCall();
+  return <LiveBadge onWatch={() => watchStream(pubkey)} />;
+}
+
 /** Nested voice roster rows under a channel in the sidebar; `speaking` lights rows when in the call. */
 export function VoiceParticipantList({
   participants,
   speaking,
   muted,
+  streaming,
   raised,
   className,
 }: {
   participants: readonly string[];
   speaking?: ReadonlySet<string>;
   muted?: ReadonlySet<string>;
+  /** Pubkeys screen sharing (only known while in the call). */
+  streaming?: ReadonlySet<string>;
   /** Pubkeys with a raised hand (Armada client feature; Concord calls only). */
   raised?: ReadonlySet<string>;
   className?: string;
@@ -62,6 +108,7 @@ export function VoiceParticipantList({
           pubkey={pk}
           isSpeaking={speaking?.has(pk) ?? false}
           isMuted={muted?.has(pk) ?? false}
+          isStreaming={streaming?.has(pk) ?? false}
           isRaised={raised?.has(pk) ?? false}
         />
       ))}
@@ -74,11 +121,13 @@ function VoiceParticipantRow({
   pubkey,
   isSpeaking,
   isMuted,
+  isStreaming,
   isRaised,
 }: {
   pubkey: string;
   isSpeaking?: boolean;
   isMuted?: boolean;
+  isStreaming?: boolean;
   isRaised?: boolean;
 }) {
   const author = useAuthor(pubkey);
@@ -104,7 +153,7 @@ function VoiceParticipantRow({
         >
           <Avatar shape={getAvatarShape(metadata)} className="size-6">
             <AvatarImage src={metadata?.picture} imeta={author.data?.imeta?.picture} alt={name} />
-            <AvatarFallback className="bg-success/20 text-success text-[10px]">
+            <AvatarFallback className="bg-success/20 text-success text-3xs">
               {name[0]?.toUpperCase()}
             </AvatarFallback>
           </Avatar>
@@ -112,6 +161,7 @@ function VoiceParticipantRow({
         <span className={cn("truncate flex-1 min-w-0", isSpeaking && "text-success")}>
           <DisplayName pubkey={pubkey} name={name} />
         </span>
+        {isStreaming && (isSelf ? <LiveBadge /> : <WatchableLiveBadge pubkey={pubkey} />)}
         {isRaised && (
           <Hand
             className="size-3.5 shrink-0 text-amber-500"
@@ -163,7 +213,7 @@ export function VoicePresence({
               <ParticipantAvatar key={pk} pubkey={pk} />
             ))}
             {overflow > 0 && (
-              <span className="flex items-center justify-center size-5 rounded-full ring-2 ring-chrome bg-success/20 text-success text-[9px] font-semibold tabular-nums">
+              <span className="flex items-center justify-center size-5 rounded-full ring-2 ring-chrome bg-success/20 text-success text-monogram font-semibold tabular-nums">
                 +{overflow}
               </span>
             )}

@@ -445,6 +445,84 @@
       0 var(--cut)
     );
   }
+  /* The same chamfer at row scale: menu items, toast actions, small icons. */
+  .clip-corner {
+    --cut: 0.375rem;
+    border-radius: 0.3rem;
+    clip-path: polygon(
+      var(--cut) 0,
+      100% 0,
+      100% calc(100% - var(--cut)),
+      calc(100% - var(--cut)) 100%,
+      0 100%,
+      0 var(--cut)
+    );
+  }
+
+  /*
+   * A floating cut-corner vessel with a hairline (menus, tooltips, toasts). The edge is
+   * an inset shadow plus a diagonal stroke painted into each chamfer, all
+   * BACKGROUND layers, so it stays put when the element scrolls — a
+   * pseudo-element frame (clip-hairline-lg) would scroll away with a long
+   * menu's content. clip-path cuts any shadow of its own; lift it with
+   * `.vessel-lift` on a parent.
+   */
+  .vessel {
+    --cut: var(--vessel-cut, 0.6rem);
+    border-radius: 0.5rem;
+    clip-path: polygon(
+      var(--cut) 0,
+      100% 0,
+      100% calc(100% - var(--cut)),
+      calc(100% - var(--cut)) 100%,
+      0 100%,
+      0 var(--cut)
+    );
+    background:
+      linear-gradient(135deg, transparent calc(50% - 1px), var(--vessel-edge, hsl(var(--border) / 0.45)) calc(50% - 1px) calc(50% + 1px), transparent calc(50% + 1px)) top left / var(--cut) var(--cut) no-repeat,
+      linear-gradient(135deg, transparent calc(50% - 1px), var(--vessel-edge, hsl(var(--border) / 0.45)) calc(50% - 1px) calc(50% + 1px), transparent calc(50% + 1px)) bottom right / var(--cut) var(--cut) no-repeat,
+      var(--vessel-fill, hsl(var(--popover)));
+    box-shadow: inset 0 0 0 1px var(--vessel-edge, hsl(var(--border) / 0.45));
+  }
+  /* A 2px edge for a `clip-corner-lg` tile, diagonals included (an inset ring alone
+     stops at the chamfers). Lay it over the tile as an overlay. */
+  .clip-corner-lg-ring {
+    --cut: 0.7rem;
+    border-radius: 0.55rem;
+    background:
+      linear-gradient(135deg, transparent 50%, var(--ring-edge) 50% calc(50% + 2px), transparent calc(50% + 2px)) top left / var(--cut) var(--cut) no-repeat,
+      linear-gradient(135deg, transparent calc(50% - 2px), var(--ring-edge) calc(50% - 2px) 50%, transparent 50%) bottom right / var(--cut) var(--cut) no-repeat;
+    box-shadow: inset 0 0 0 2px var(--ring-edge);
+  }
+  .vessel-lift {
+    filter: drop-shadow(0 10px 22px rgb(0 0 0 / 0.32)) drop-shadow(0 2px 5px rgb(0 0 0 / 0.22));
+  }
+  /* Radix positions menus inside a wrapper it renders itself. */
+  [data-radix-popper-content-wrapper]:has(> .vessel) {
+    filter: drop-shadow(0 10px 22px rgb(0 0 0 / 0.32)) drop-shadow(0 2px 5px rgb(0 0 0 / 0.22));
+  }
+
+  /* Menu row: chamfered highlight plus the gutter tick, lit by Radix's
+     data-highlighted so keyboard focus shows it as well as hover. */
+  .menu-row::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 50%;
+    width: 2px;
+    height: 0;
+    border-radius: 2px;
+    transform: translateY(-50%);
+    background: hsl(var(--primary));
+    box-shadow: 0 0 8px hsl(var(--primary) / 0.7);
+    opacity: 0;
+    transition: height 120ms ease, opacity 120ms ease;
+  }
+  .menu-row[data-highlighted]::before,
+  .menu-row[data-state="open"]::before {
+    height: 55%;
+    opacity: 1;
+  }
 
   /*
    * A hairline frame for a cut-corner vessel. A plain `border` CANNOT be used

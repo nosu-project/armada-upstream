@@ -34,6 +34,7 @@ vi.mock("@capacitor/app", () => ({
 vi.mock("@/hooks/useIsMobile", () => ({ useIsTouch: () => true, useIsMobile: () => true }));
 
 import { SwipeReveal } from "@/components/layout/SwipeReveal";
+import { AppContext, defaultConfig } from "@/contexts/AppContext";
 import { useMobileMembersOverlay } from "@/hooks/useMobileMembersOverlay";
 
 /** Android system back (gesture or button), as Capacitor delivers it. */
@@ -169,6 +170,26 @@ describe("useMobileMembersOverlay", () => {
     await pressBack();
     expect(minimizeApp).toHaveBeenCalledTimes(1);
     expect(back).not.toHaveBeenCalled();
+    back.mockRestore();
+  });
+
+  it("back from the list walks history when androidBackLeavesApp is off", async () => {
+    window.history.pushState({}, "", "/c/earlier");
+    window.history.pushState({}, "", "/c/c1");
+    const back = vi.spyOn(window.history, "back").mockImplementation(() => undefined);
+    const config = { ...defaultConfig, androidBackLeavesApp: false };
+    render(
+      <AppContext.Provider value={{ config, updateConfig: () => undefined }}>
+        <Page communityId="c1" />
+      </AppContext.Provider>,
+    );
+
+    await pressBack();
+    expect(chat().dataset.listOpen).toBe("true");
+
+    await pressBack();
+    expect(back).toHaveBeenCalledTimes(1);
+    expect(minimizeApp).not.toHaveBeenCalled();
     back.mockRestore();
   });
 

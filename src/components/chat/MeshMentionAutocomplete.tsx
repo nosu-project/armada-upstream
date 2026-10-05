@@ -211,7 +211,7 @@ export function MeshMentionAutocomplete({
               <div className="font-semibold text-sm truncate" style={{ color: candidate.color }}>
                 {candidate.name}
               </div>
-              <div className="text-[11px] text-muted-foreground truncate font-mono">
+              <div className="text-2xs text-muted-foreground truncate font-mono">
                 #{candidate.suffix}
               </div>
             </div>

@@ -5,8 +5,7 @@
  * NIP-29 can't share `main`: a group is the PAIR (relay, id), and scoping by
  * signing key fails because some relays (zooid) share an identity, making
  * addressable 39000s from two servers overwrite each other. Only the serving
- * relay distinguishes them, so it's in the TENANT ID (replacing an old KV
- * provenance side-table).
+ * relay distinguishes them, so it's in the TENANT ID.
  *
  * Relay-scoped: anything with an `h` tag (derived, so future group kinds scope
  * automatically) and {@link RELAY_STATE_KINDS}. Everything else (profiles,

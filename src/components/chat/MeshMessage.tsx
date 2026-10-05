@@ -27,7 +27,7 @@ export function MeshMessage({ event, identity, peers, myPeerID, continuation, on
   const isSelf = !!myPeerID && event.pubkey === myPeerID;
 
   const body = isMeAction(event) ? (
-    <div className="text-[15px] italic text-muted-foreground">
+    <div className="text-chat italic text-muted-foreground">
       <span className="font-semibold not-italic" style={{ color: identity.color }}>
         {identity.name}
       </span>{" "}
@@ -39,7 +39,7 @@ export function MeshMessage({ event, identity, peers, myPeerID, continuation, on
       />
     </div>
   ) : (
-    <MeshContent content={event.content} peers={peers} myPeerID={myPeerID} className="text-[15px]" />
+    <MeshContent content={event.content} peers={peers} myPeerID={myPeerID} className="text-chat" />
   );
 
   return (

@@ -38,7 +38,7 @@ export class NodeSqlDriver implements ArmadaSqlDriver {
     try {
       this.db.exec(`PRAGMA busy_timeout = 5000`);
     } catch {
-      // older builds without the pragma just fail fast, as before
+      // older builds without the pragma just fail fast
     }
   }
 

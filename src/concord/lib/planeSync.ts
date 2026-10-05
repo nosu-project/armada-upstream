@@ -5,7 +5,7 @@
  * - AUTH-GATED: REQs wait until stream keys are NIP-42-registered and their
  *   AUTHs acked by the relay (capped, so a stuck key can't stall sync).
  * - BATCHED: same-relay scopes share one REQ, one filter per scope with its own
- *   cursor/limit (per-filter isolation avoids the issue-#19 since-skip).
+ *   cursor/limit (a shared `since` would skip what a lagging scope still owes).
  * - SINGLE-FLIGHT: overlapping sweeps of a scope join the in-flight fetch.
  *
  * COMPLETE mode (Control): never a persisted forward cursor — it outlives

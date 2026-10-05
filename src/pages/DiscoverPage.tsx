@@ -6,13 +6,11 @@ import {
   Loader2,
   Palette,
   Plus,
-  Search,
   SlidersHorizontal,
   Smile,
   UserRound,
   Users,
   UsersRound,
-  X,
 } from "lucide-react";
 import { lazy, Suspense, useCallback, useContext, useMemo, useState, type ReactNode } from "react";
 import { useSearchParams } from "react-router-dom";
@@ -27,7 +25,7 @@ import { DeferredRow } from "@/components/DeferredRow";
 import { EmojiPackCard } from "@/components/chat/EmojiPackCard";
 import { ServerRail } from "@/components/layout/ServerRail";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { SearchField } from "@/components/ui/search-field";
 import { PillTabs, type PillTab } from "@/components/ui/pill-tabs";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -146,30 +144,13 @@ export function DiscoverPage() {
             />
 
             <div className="flex min-w-0 flex-1 items-center gap-2">
-              <div className="flex h-12 sm:h-9 min-w-0 flex-1 items-center gap-1.5 px-2 sidebar:px-3 clip-corner-lg bg-chrome">
-                <Search className="size-4 shrink-0 text-muted-foreground" />
-                <Input
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Escape") setQuery("");
-                  }}
-                  placeholder={active.placeholder}
-                  aria-label={active.placeholder}
-                  className="h-full flex-1 border-0 bg-transparent px-1 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
-                />
-                {query && (
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    aria-label="Clear search"
-                    className="size-7 touch:size-9 shrink-0 text-muted-foreground"
-                    onClick={() => setQuery("")}
-                  >
-                    <X className="size-4" />
-                  </Button>
-                )}
-              </div>
+              {/* Matches the tab strip's height beside it. */}
+              <SearchField
+                value={query}
+                onChange={setQuery}
+                placeholder={active.placeholder}
+                className="flex-1 h-12 touch:h-12 sm:h-9 touch:sm:h-9 sidebar:px-3"
+              />
 
               {/* Phones have no header; the scope toggle and its hint fold into one button. */}
               <DiscoverScopeMenu

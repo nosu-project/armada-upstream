@@ -61,7 +61,7 @@ function ChannelLink({
 }) {
   const { user } = useCurrentUser();
   const { activeCall } = useCall();
-  const { speakingPubkeys, mutedPubkeys, voiceRoomPubkeys } = useVoiceActivity();
+  const { speakingPubkeys, mutedPubkeys, streamingPubkeys, voiceRoomPubkeys } = useVoiceActivity();
   const { markRead } = useReadState();
   const { channelLevel, setLevel } = useNotifLevels();
   const notificationLevel = channelLevel(group.relay, group.id);
@@ -121,7 +121,7 @@ function ChannelLink({
         {group.isPrivate && <Lock className="size-3 shrink-0 opacity-60" aria-label="Private" />}
         {hasMention ? (
           <span
-            className="shrink-0 flex items-center justify-center min-w-4 h-4 px-1 rounded-full bg-primary text-primary-foreground text-[10px] font-bold leading-none"
+            className="shrink-0 flex items-center justify-center min-w-4 h-4 px-1 rounded-full bg-primary text-primary-foreground text-3xs font-bold leading-none"
             aria-label="You were mentioned"
           >
             @
@@ -133,6 +133,7 @@ function ChannelLink({
           participants={roster!}
           speaking={inCall ? speakingPubkeys : undefined}
           muted={inCall ? mutedPubkeys : undefined}
+          streaming={inCall ? streamingPubkeys : undefined}
         />
       )}
         </div>
@@ -433,7 +434,7 @@ export function ChannelSidebar({ relayUrl, onNavigate, className }: ChannelSideb
                 <span className="truncate flex-1 min-w-0">Inbox</span>
                 {inboxUnread > 0 && (
                   <span
-                    className="shrink-0 flex items-center justify-center min-w-4 h-4 px-1 rounded-full bg-primary text-primary-foreground text-[10px] font-bold leading-none"
+                    className="shrink-0 flex items-center justify-center min-w-4 h-4 px-1 rounded-full bg-primary text-primary-foreground text-3xs font-bold leading-none"
                     aria-label={`${inboxUnread} unread mentions`}
                   >
                     {Math.min(inboxUnread, 99)}

@@ -126,7 +126,7 @@ function BuzzInviteCard({
       onClick={(e) => e.stopPropagation()}
     >
       <div className="px-3.5 py-3 space-y-2.5">
-        <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+        <p className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground">
           You've been invited to join a server
         </p>
 

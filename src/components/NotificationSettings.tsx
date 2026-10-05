@@ -112,9 +112,9 @@ function NativeNotificationHealthPanel({
   return (
     <div className="space-y-3">
       {(blocked || degraded || callsBlocked) && (
-        <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3">
+        <div className="rounded-lg border border-warning/40 bg-warning/10 p-3">
           <div className="flex items-start gap-2">
-            <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-500" />
+            <AlertTriangle className="mt-0.5 size-4 shrink-0 text-warning" />
             <div className="min-w-0 flex-1 space-y-2">
               <p className="text-xs">
                 {appBlocked
@@ -373,9 +373,9 @@ function BatteryOptimizationWarning() {
   if (!optimized) return null;
 
   return (
-    <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3">
+    <div className="rounded-lg border border-warning/40 bg-warning/10 p-3">
       <div className="flex items-start gap-2">
-        <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-500" />
+        <AlertTriangle className="mt-0.5 size-4 shrink-0 text-warning" />
         <div className="min-w-0 flex-1">
           <p className="text-xs">
             Battery optimization is enabled for Armada. Android may close the background
@@ -433,7 +433,7 @@ function WebPushSettings() {
     return (
       <div className="space-y-3">
         <div className="flex items-start gap-2 text-sm text-muted-foreground">
-          <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-500" />
+          <AlertTriangle className="mt-0.5 size-4 shrink-0 text-warning" />
           <p>{error}</p>
         </div>
         <Button size="sm" variant="outline" onClick={retry}>
@@ -643,7 +643,7 @@ function NotificationToggles(props: {
             <span className="block text-xs font-normal text-destructive">{blockedMessage}</span>
           )}
           {!blocked && hint && (
-            <span className="block text-xs font-normal text-amber-500">{hint}</span>
+            <span className="block text-xs font-normal text-warning">{hint}</span>
           )}
         </span>
         <Switch checked={enabled} disabled={busy || blocked} onCheckedChange={props.onToggle} />

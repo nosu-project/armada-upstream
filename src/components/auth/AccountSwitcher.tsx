@@ -96,7 +96,7 @@ export function AccountSwitcher({ onAddAccountClick }: AccountSwitcherProps) {
         <button
           onPointerDown={(e) => {
             // Radix opens on POINTERDOWN, so a swipe beginning here (SwipeReveal's
-            // underlay on mobile) opened the menu. Touch opens on the tap instead:
+            // underlay on mobile) would open the menu. Touch opens on the tap instead:
             // preventDefault makes Radix skip its handler, and a claimed drag fires no click.
             if (e.pointerType !== 'touch') return;
             touchPress.current = { x: e.clientX, y: e.clientY, wasOpen: isOpen };
@@ -140,7 +140,7 @@ export function AccountSwitcher({ onAddAccountClick }: AccountSwitcherProps) {
           <ChevronDown className='w-4 h-4 text-muted-foreground' />
         </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent className='w-60 p-2 clip-corner-lg border-none shadow-xl animate-scale-in'>
+      <DropdownMenuContent className='w-60 p-2 animate-scale-in'>
         <DropdownMenuItem
           onClick={() => settings.show('profile')}
           className={cn(

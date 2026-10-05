@@ -189,7 +189,7 @@ function TargetRow({ pubkey }: { pubkey: string }) {
     <li className="flex items-center gap-2">
       <Avatar className="size-5 shrink-0">
         <AvatarImage src={author.data?.metadata?.picture} imeta={author.data?.imeta?.picture} alt={name} />
-        <AvatarFallback className="bg-primary/20 text-[9px] text-primary">
+        <AvatarFallback className="bg-primary/20 text-monogram text-primary">
           {name[0]?.toUpperCase() ?? "?"}
         </AvatarFallback>
       </Avatar>

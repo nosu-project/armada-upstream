@@ -1,7 +1,7 @@
 /**
  * Named catch-up tasks for the in-chat status bar ("Syncing #general — 84
  * messages"). Only paths paging real history register — never the standing
- * live REQ, which made the indicator a false positive. The UI debounces.
+ * live REQ, which would make the indicator a false positive. The UI debounces.
  */
 
 export interface SyncTask {

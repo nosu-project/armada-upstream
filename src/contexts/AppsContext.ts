@@ -76,9 +76,7 @@ export interface AppsContextType {
   registerAppStageSlot: (el: HTMLElement) => () => void;
   /** Whether the app stage is expanded (vs minimized to a pill). */
   stageOpen: boolean;
-  /** Toggle the stage open/closed. */
   toggleStage: () => void;
-  /** Explicitly set the stage open state. */
   setStageOpen: (open: boolean) => void;
 }
 

@@ -34,7 +34,7 @@ function BotPillView({ metadata, className }: { metadata?: NostrMetadata; classN
     <span
       title="Bot account"
       className={cn(
-        'shrink-0 inline-flex items-center gap-1 rounded-full bg-sky-500/15 px-1.5 py-0.5 text-[10px] font-medium text-sky-500',
+        'shrink-0 inline-flex items-center gap-1 rounded-full bg-sky-500/15 px-1.5 py-0.5 text-3xs font-medium text-sky-500',
         className,
       )}
     >

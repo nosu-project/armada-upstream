@@ -31,17 +31,12 @@ export function ThreadPanelSlot({
     >
       <div
         className={cn(
-          "absolute inset-0 bg-background transition-opacity duration-200 ease-out thread:hidden",
-          open ? "opacity-100" : "opacity-0",
-        )}
-      />
-      <div
-        className={cn(
           "relative h-full flex w-full transition-transform duration-200 ease-out",
           open ? "translate-x-0" : "translate-x-full",
           expanded ? "thread:w-full" : "thread:w-[23rem]",
         )}
       >
+        <div aria-hidden className="absolute inset-0 -z-10 bg-background thread:hidden" />
         {children}
       </div>
     </div>

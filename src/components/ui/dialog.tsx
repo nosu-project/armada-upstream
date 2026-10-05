@@ -99,6 +99,44 @@ const ChromeDialogContent = React.forwardRef<
 ))
 ChromeDialogContent.displayName = "ChromeDialogContent"
 
+const CHROME_TONES = {
+  primary: "bg-primary/15 text-primary",
+  destructive: "bg-destructive/15 text-destructive",
+  warning: "bg-warning/15 text-warning",
+} as const
+
+/** The chrome dialog heading: icon tile, mono lowercase title, optional description. */
+const ChromeDialogHeader = ({
+  icon: Icon,
+  title,
+  description,
+  tone = "primary",
+  className,
+}: {
+  icon: React.ComponentType<{ className?: string }>
+  title: React.ReactNode
+  description?: React.ReactNode
+  tone?: keyof typeof CHROME_TONES
+  className?: string
+}) => (
+  <div className={cn("flex flex-col items-center gap-2 text-center", className)}>
+    <div className={cn("flex size-12 items-center justify-center clip-corner-lg", CHROME_TONES[tone])}>
+      <Icon className="size-6" />
+    </div>
+    <h2 className="chrome-dialog-title font-mono font-bold lowercase tracking-tight text-foreground">
+      {title}
+    </h2>
+    {description && <div className="text-sm text-muted-foreground">{description}</div>}
+  </div>
+)
+ChromeDialogHeader.displayName = "ChromeDialogHeader"
+
+/** Equal-width cut-corner actions under a chrome dialog body. */
+const ChromeDialogFooter = ({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) => (
+  <div className={cn("mt-6 flex items-center gap-2 [&>*]:flex-1 [&>*]:clip-corner-lg", className)} {...props} />
+)
+ChromeDialogFooter.displayName = "ChromeDialogFooter"
+
 const DialogHeader = ({
   className,
   ...props
@@ -162,6 +200,8 @@ export {
   DialogTrigger,
   DialogContent,
   ChromeDialogContent,
+  ChromeDialogHeader,
+  ChromeDialogFooter,
   DialogHeader,
   DialogFooter,
   DialogTitle,

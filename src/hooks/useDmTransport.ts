@@ -17,7 +17,7 @@ const EMPTY_TALLIES: ReactionTally[] = [];
 
 /**
  * The merged timeline's skeleton gate. Paint whatever is ready: OR-ing both planes'
- * `isLoading` let an empty kind-4 relay pull hide ready NIP-17 rows for up to 8s.
+ * `isLoading` would let an empty kind-4 relay pull hide ready NIP-17 rows for up to 8s.
  * The one extra hold is NIP-17's first local paint (`dm17FirstPaintReady`, one KV read),
  * so a two-plane thread doesn't flash its synchronously seeded kind-4 half alone.
  */

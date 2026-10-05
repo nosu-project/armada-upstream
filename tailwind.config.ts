@@ -36,6 +36,14 @@ export default {
 			spacing: {
 				'22': '5.5rem',
 			},
+			// Below `xs`, for dense chat chrome; `chat` is message body text and
+			// `monogram` is avatar initials only, never reading text.
+			fontSize: {
+				'chat': '15px',
+				'2xs': '11px',
+				'3xs': '10px',
+				'monogram': '9px',
+			},
 			fontFamily: {
 				sans: ['Inter Variable', 'Inter', 'system-ui', 'var(--emoji-fonts)', 'sans-serif'],
 				emoji: ['var(--emoji-fonts)', 'EmojiSymbols', 'sans-serif'],
@@ -61,6 +69,10 @@ export default {
 				success: {
 					DEFAULT: 'hsl(var(--success))',
 					foreground: 'hsl(var(--success-foreground))'
+				},
+				warning: {
+					DEFAULT: 'hsl(var(--warning))',
+					foreground: 'hsl(var(--warning-foreground))'
 				},
 				muted: {
 					DEFAULT: 'hsl(var(--muted))',
@@ -142,21 +154,10 @@ export default {
 				'60%': { transform: 'scale(1.15)', opacity: '1' },
 				'100%': { transform: 'scale(1)', opacity: '1' }
 			},
-			'success-halo': {
-				// Expanding ring behind the checkmark.
-				'0%': { transform: 'scale(0.6)', opacity: '0.7' },
-				'100%': { transform: 'scale(2.2)', opacity: '0' }
-			},
 			'success-fade-up': {
 				// Staggered fade-in from below for the body text + actions.
 				'0%': { transform: 'translateY(8px)', opacity: '0' },
 				'100%': { transform: 'translateY(0)', opacity: '1' }
-			},
-			'success-spark': {
-				// Individual sparkle: scale + drift outward then fade.
-				'0%': { transform: 'translate(0, 0) scale(0.4)', opacity: '0' },
-				'20%': { opacity: '1' },
-				'100%': { transform: 'translate(var(--spark-x, 0), var(--spark-y, 0)) scale(1)', opacity: '0' }
 			},
 			'typing-dot': {
 				// Signal-style typing pill: each dot swells + brightens in
@@ -190,9 +191,7 @@ export default {
 				'collapsible-up': 'collapsible-up 0.2s ease-out',
 				'equaliser-bar': 'equaliser-bar 0.9s ease-in-out infinite',
 				'success-pop': 'success-pop 0.55s cubic-bezier(0.34, 1.56, 0.64, 1) both',
-				'success-halo': 'success-halo 0.9s ease-out both',
 				'success-fade-up': 'success-fade-up 0.45s ease-out both',
-				'success-spark': 'success-spark 1.1s ease-out both',
 				'typing-dot': 'typing-dot 1.2s ease-in-out infinite',
 				'reaction-rise': 'reaction-rise 4s ease-out forwards'
 			}

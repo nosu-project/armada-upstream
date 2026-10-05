@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
 
+import { AppContext, defaultConfig } from "@/contexts/AppContext";
 import { PaneCoveredContext, setPaneCovered } from "@/contexts/PaneCoveredContext";
 import { leaveApp, useAndroidBack } from "@/hooks/useAndroidBack";
 import { useEdgeSwipe } from "@/hooks/useEdgeSwipe";
@@ -142,14 +143,17 @@ export function SwipeReveal({ underlay, children, open, onReveal, onClose }: Swi
   }, [deferCommit]);
 
   // Android back reveals the list when the chat is showing (the OS eats in-WebView
-  // edge swipes). The revealed list is a root screen, so back from it leaves the
-  // app rather than replaying every chat visited before.
+  // edge swipes). From the revealed list, back leaves the app by default (it is a
+  // root screen); `androidBackLeavesApp` off hands it to history instead.
+  const backLeavesApp =
+    useContext(AppContext)?.config.androidBackLeavesApp ?? defaultConfig.androidBackLeavesApp;
   useAndroidBack(() => {
     if (!effectiveOpen) {
       commitReveal();
-    } else {
-      leaveApp();
+      return true;
     }
+    if (!backLeavesApp) return false;
+    leaveApp();
     return true;
   }, swipeEnabled);
 
@@ -289,7 +293,7 @@ export function SwipeReveal({ underlay, children, open, onReveal, onClose }: Swi
   return (
     <>
       {/* Close handlers stay mounted regardless of `open` (the hook self-gates);
-          detaching mid-gesture removed the pointerup that ends the drag. */}
+          detaching mid-gesture would remove the pointerup that ends the drag. */}
       <div
         ref={underlayRef}
         {...closeSwipe.handlers}

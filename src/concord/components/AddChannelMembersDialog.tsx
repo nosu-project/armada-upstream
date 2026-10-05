@@ -1,19 +1,13 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useQueries } from "@tanstack/react-query";
-import { Check, Loader2, Lock, Search, UserPlus } from "lucide-react";
+import { Check, Loader2, Lock, UserPlus } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import { DisplayName } from "@/components/DisplayName";
+import { SearchField } from "@/components/ui/search-field";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
+import { ChromeDialogContent, ChromeDialogHeader, Dialog } from "@/components/ui/dialog";
 import {
   Select,
   SelectContent,
@@ -108,20 +102,18 @@ export function AddChannelMembersDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-1.5">
-            <Lock className="size-4 text-muted-foreground" aria-hidden /> Add members to #{channelName}
-          </DialogTitle>
-          <DialogDescription>
-            {roles.length === 1
-              ? <>Adding grants the <span className="text-foreground">{roles[0].name}</span> role and sends them the channel key.</>
-              : <>Adding grants the chosen role and sends them the channel key.</>}
-          </DialogDescription>
-        </DialogHeader>
+      <ChromeDialogContent title={`Add members to #${channelName}`} contentClassName="grid gap-4">
+        <ChromeDialogHeader
+          icon={Lock}
+          title={<>add members to <span className="normal-case">#{channelName}</span></>}
+          description={roles.length === 1
+            ? <>Adding grants the <span className="text-foreground">{roles[0].name}</span> role and sends them the channel key.</>
+            : <>Adding grants the chosen role and sends them the channel key.</>}
+          className="mb-2"
+        />
 
         {!holdsKey && (
-          <p className="rounded-md bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
+          <p className="clip-corner-lg bg-warning/10 px-3 py-2 text-xs text-warning">
             You don't hold this channel's key, so members you add get the role
             but a member who does hold it has to share it before they can read.
           </p>
@@ -146,16 +138,13 @@ export function AddChannelMembersDialog({
           </p>
         ) : (
           <>
-            <div className="relative">
-              <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder="Search members"
-                className="pl-8"
-                autoFocus
-              />
-            </div>
+            <SearchField
+              value={query}
+              onChange={setQuery}
+              placeholder="Search members"
+              className="bg-background/40"
+              autoFocus
+            />
 
             {matches.length === 0 ? (
               <p className="py-2 text-sm text-muted-foreground">No member matches.</p>
@@ -185,7 +174,7 @@ export function AddChannelMembersDialog({
             )}
           </>
         )}
-      </DialogContent>
+      </ChromeDialogContent>
     </Dialog>
   );
 }
@@ -202,7 +191,7 @@ function CandidateRow({ pubkey, added, busy, onAdd }: {
     <li className="flex items-center gap-2.5 rounded-md px-2 py-1.5 hover:bg-accent/50">
       <Avatar className="size-8 shrink-0">
         <AvatarImage src={author.data?.metadata?.picture} imeta={author.data?.imeta?.picture} alt={name} />
-        <AvatarFallback className="bg-primary/20 text-[10px] text-primary">
+        <AvatarFallback className="bg-primary/20 text-3xs text-primary">
           {name[0]?.toUpperCase() ?? "?"}
         </AvatarFallback>
       </Avatar>

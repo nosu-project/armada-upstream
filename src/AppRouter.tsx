@@ -176,8 +176,8 @@ function HomeRedirect() {
   }
 
   if (!firstRoute) {
-    // No community yet: mesh where available, else DMs. Don't force the landing —
-    // that re-onboarded community-less users on every relaunch.
+    // No community yet: mesh where available, else DMs. Don't force the landing,
+    // or community-less users are re-onboarded on every relaunch.
     if (mesh.available) {
       return <Navigate to="/mesh" replace />;
     }

@@ -197,10 +197,10 @@ import { shortTimeAgo } from "@/lib/formatTime";
 import { authorsByRecency, threadSummary } from "@/components/chat/transport";
 import type { ChatMsg, MessageCalendar, MessagePoll, MessageReactions, MessageZaps, OnchainZapAnnouncement, SendStatus, ZapPayment } from "@/components/chat/transport";
 
-/** Stable empty replies array so a thread-less row keeps a constant prop. */
 /** How long a channel must stay open before it becomes the remembered one. */
 const LAST_CHANNEL_SETTLE_MS = 1500;
 
+/** Stable empty replies array so a thread-less row keeps a constant prop. */
 const EMPTY_REPLIES: ChatMsg[] = [];
 
 /** Shared empty feed, so a chat-presented channel keeps a stable reference. */
@@ -353,7 +353,7 @@ const ConcordChatMessage = memo(function ConcordChatMessage({
   const heading = useMemo(
     () =>
       title ? (
-        <div className="mb-0.5 flex items-start gap-1.5 text-[15px] font-semibold leading-snug">
+        <div className="mb-0.5 flex items-start gap-1.5 text-chat font-semibold leading-snug">
           <MessageSquareText className="mt-1 size-3.5 shrink-0 text-muted-foreground" aria-hidden />
           <span className="min-w-0 break-words">{title}</span>
         </div>
@@ -473,7 +473,7 @@ export const ChannelRow = memo(function ChannelRow({
   // broker is NOT resolved per row (one query observer per channel on every page
   // switch); `handleJoinVoice` resolves it lazily.
   const fold = useVoicePresence(community, channel);
-  const { voiceRoomPubkeys } = useVoiceActivity();
+  const { voiceRoomPubkeys, streamingPubkeys } = useVoiceActivity();
   const { isConcordChannelMuted } = useMutes();
   const { concordChannelLevel, setLevel: setNotifLevel } = useNotifLevels();
   const notificationLevel = community
@@ -493,7 +493,6 @@ export const ChannelRow = memo(function ChannelRow({
 
   const hasUnread = Boolean(unread);
   const hasMention = Boolean(unread?.mention);
-  // A forum row offers no call UI.
   const callable = channel.view !== "forum";
   const occupied = callable && participants.length > 0;
   // A live call swaps the row's glyph for a speaker.
@@ -533,7 +532,7 @@ export const ChannelRow = memo(function ChannelRow({
               {inCall && <Headphones className={cn("size-3.5 shrink-0", !active && "text-success")} />}
               {hasMention ? (
                 <span
-                  className="shrink-0 flex items-center justify-center min-w-4 h-4 px-1 rounded-full bg-primary text-primary-foreground text-[10px] font-bold leading-none"
+                  className="shrink-0 flex items-center justify-center min-w-4 h-4 px-1 rounded-full bg-primary text-primary-foreground text-3xs font-bold leading-none"
                   aria-label="You were mentioned"
                 >
                   @
@@ -570,6 +569,7 @@ export const ChannelRow = memo(function ChannelRow({
               participants={participants}
               speaking={speaking}
               muted={mutedVoice}
+              streaming={inCall ? streamingPubkeys : undefined}
               raised={raisedVoice}
             />
           )}
@@ -928,7 +928,7 @@ function ThreadReplyAvatar({ pubkey }: { pubkey: string }) {
   return (
     <Avatar shape={getAvatarShape(metadata)} className="size-5 ring-2 ring-chrome" title={name}>
       <AvatarImage src={metadata?.picture} imeta={author.data?.imeta?.picture} alt={name} />
-      <AvatarFallback className="bg-primary/20 text-primary text-[9px] font-semibold uppercase">
+      <AvatarFallback className="bg-primary/20 text-primary text-monogram font-semibold uppercase">
         {name.slice(0, 1)}
       </AvatarFallback>
     </Avatar>
@@ -942,7 +942,7 @@ function TimerNotice({ author, seconds, self }: { author: string; seconds: numbe
   return (
     <div className="flex items-center justify-center gap-1.5 px-4 py-1.5 select-none" role="status">
       <Timer className="size-3.5 shrink-0 text-muted-foreground/70" aria-hidden />
-      <span className="text-[11px] text-muted-foreground/80 text-center">
+      <span className="text-2xs text-muted-foreground/80 text-center">
         {communityTimerNotice(seconds, author === self, name)}
       </span>
     </div>
@@ -967,7 +967,7 @@ export function ConcordPage() {
   const routePane = route?.pane;
   const { user } = useCurrentUser();
   // Stable across navigations: it's passed to every message row, and
-  // `useNavigate`'s per-location identity re-rendered them all on each switch.
+  // `useNavigate` changes identity per location.
   const navigateTo = useStableNavigate();
   const isTouchDevice = useIsTouch();
   // Covered by Settings: read stamps below wait until it closes.
@@ -1000,7 +1000,6 @@ export function ConcordPage() {
   // private channels.
   const showChannelSkeleton = useDelayedFlag(!community || !folded || channels.length === 0);
 
-  // Categories derive from visible channels only (see channelCategory.ts).
   /**
    * Optimistic arrangement from a drop the fold hasn't confirmed yet (one signed
    * edition per moved channel), re-sorted like `channelsView`. Dropped when the
@@ -1020,6 +1019,7 @@ export function ConcordPage() {
     }
   }, [channels, pendingArrangement]);
 
+  // Categories derive from visible channels only (see channelCategory.ts).
   const { uncategorized: uncategorizedChannels, categories: channelCategories } = useMemo(
     () => groupChannelsByCategory(arrangedChannels, (c) => c.category),
     [arrangedChannels],
@@ -1065,7 +1065,6 @@ export function ConcordPage() {
     [community?.idHex, updateConfig],
   );
 
-  // Per-channel unread badges from the local rumor cache.
   const gitAttachmentsByChannel = useMemo(() => new Map(channels.map((candidate) => [
     candidate.idHex,
     channelGitRepositoryAttachments(folded?.channels.get(candidate.idHex)?.metadata ?? { name: candidate.name, private: candidate.isPrivate }),
@@ -1075,7 +1074,8 @@ export function ConcordPage() {
     () => [...gitAttachmentsByChannel.values()].some((list) => list.some((attachment) => attachment.detachedAt === undefined)),
     [gitAttachmentsByChannel],
   );
-  // `active`: the open community is the one mount that resolves moderation over the network.
+  // Per-channel unread badges from the local rumor cache. `active`: the open
+  // community is the one mount that resolves moderation over the network.
   const { byChannel: unreadByChannel, markRead: markChannelRead } = useConcordUnread(community, channels, communityGitActivity.byChannel, true);
 
   // "Mark all as read" (stamps are monotonic, so read channels no-op).
@@ -1086,7 +1086,7 @@ export function ConcordPage() {
   }, [unreadByChannel, markChannelRead]);
 
   // "@ Mentions" from the local cache, with its OWN read state so opening the tab
-  // clears it (issue #53).
+  // clears it.
   const {
     mentions,
     isLoading: mentionsLoading,
@@ -1380,7 +1380,8 @@ export function ConcordPage() {
     isAuthorizedIn(folded.roster, user.pubkey, ownerHex, channel.idHex, Permissions.MANAGE_MESSAGES),
   );
   // Dissolved, `excluded` (rotated out) and `stranded` communities stay readable
-  // but write-dead; folded into `canWrite` to freeze every write path.
+  // but write-dead; folded into `canWrite` to freeze every write path. Dissolved
+  // offers a local "Remove": the owner can't edit members' self-encrypted lists.
   const { data: dissolved } = useDissolved(community);
   const canWrite = Boolean(user && channel && !dissolved && !excluded && !stranded);
 
@@ -1424,13 +1425,12 @@ export function ConcordPage() {
         try {
           if (pins.isPinned(event.id)) {
             await pins.unpin({ rumorId: event.id });
-            toast({ title: "Unpinned" });
             return;
           }
           const opened = openedById.get(event.id);
           if (!opened) throw new Error("That message isn't loaded anymore. Scroll to it and try again.");
           await pins.pin({ opened });
-          toast({ title: "Pinned", description: "Everyone in this channel can see it, now and after any key rotation." });
+          toast({ title: "Pinned" });
         } catch (e) {
           toast({ title: "Couldn't update pins", description: e instanceof Error ? e.message : undefined, variant: "destructive" });
         }
@@ -1446,7 +1446,7 @@ export function ConcordPage() {
   );
   const gitActivity = useChannelGitActivity(channel?.idHex, gitAttachments);
   const mixedEntries = useMemo(() => mergeChannelTimeline(baseTransport.messages, gitActivity.activities, timerEntries), [baseTransport.messages, gitActivity.activities, timerEntries]);
-  // Memoized: rebuilding per render allocated the full timeline.
+  // Memoized: rebuilding it allocates the full timeline.
   const dividerEntries = useMemo(
     () =>
       mixedEntries.map((entry) => ({
@@ -1605,11 +1605,6 @@ export function ConcordPage() {
     [setChannelCategory],
   );
 
-  /**
-   * Re-file every channel in a category (rename / ungroup). Sequential so a
-   * rate-limited relay doesn't drop some; each is its own entity, so partial
-   * failure is safe. Renaming onto an existing name merges.
-   */
   /** The column the drag pans by hand on touch (rows are `touch-action: none`). */
   const channelScrollRef = useRef<HTMLElement | null>(null);
 
@@ -1684,6 +1679,11 @@ export function ConcordPage() {
     ? (renderedChannels.find((c) => c.idHex === channelDrag.sourceIdHex) ?? null)
     : null;
 
+  /**
+   * Re-file every channel in a category (rename / ungroup). Sequential so a
+   * rate-limited relay doesn't drop some; each is its own entity, so partial
+   * failure is safe. Renaming onto an existing name merges.
+   */
   const refileCategory = useCallback(
     async (members: readonly Channel[], category: string | undefined) => {
       let moved = 0;
@@ -2390,11 +2390,6 @@ export function ConcordPage() {
   const publishTyping = useTypingPublisher(community, channel);
   const typingPubkeys = useTyping(community, channel);
 
-
-  // A dissolved community stays viewable read-only (`canWrite` false) with a
-  // "Remove" button: the owner can't edit members' self-encrypted lists, so
-  // removal is a local per-member action.
-
   if (!communityId) return <Navigate to="/" replace />;
   // Render NOTHING of the community to a non-member; placed before all of it.
   if (noAccess) return <CommunityNoAccess />;
@@ -2826,7 +2821,7 @@ export function ConcordPage() {
               <span className="truncate flex-1 min-w-0">Mentions</span>
               {view !== "mentions" && hasUnreadMention ? (
                 <span
-                  className="shrink-0 flex items-center justify-center min-w-4 h-4 px-1 rounded-full bg-primary text-primary-foreground text-[10px] font-bold leading-none"
+                  className="shrink-0 flex items-center justify-center min-w-4 h-4 px-1 rounded-full bg-primary text-primary-foreground text-3xs font-bold leading-none"
                   aria-label="You have unread mentions"
                 >
                   @
@@ -2932,7 +2927,7 @@ export function ConcordPage() {
             <div
               data-ch-newzone
               className={cn(
-                "mt-2 flex items-center justify-center gap-1.5 clip-corner-lg border-2 border-dashed px-2 py-3 text-[11px] font-semibold uppercase tracking-wider transition-colors",
+                "mt-2 flex items-center justify-center gap-1.5 clip-corner-lg border-2 border-dashed px-2 py-3 text-2xs font-semibold uppercase tracking-wider transition-colors",
                 channelDrag.target?.newCategory
                   ? "border-primary bg-primary/5 text-primary"
                   : "border-primary/50 text-muted-foreground/70",
@@ -3323,7 +3318,6 @@ export function ConcordPage() {
                       void (async () => {
                         try {
                           await pins.unpin({ rumorId });
-                          toast({ title: "Unpinned" });
                         } catch (e) {
                           toast({ title: "Couldn't unpin", description: e instanceof Error ? e.message : undefined, variant: "destructive" });
                         }
@@ -3638,17 +3632,12 @@ export function ConcordPage() {
             >
               <div
                 className={cn(
-                  "absolute inset-0 bg-background transition-opacity duration-200 ease-out sidebar:hidden",
-                  membersOpen ? "opacity-100" : "opacity-0",
-                )}
-              />
-              <div
-                className={cn(
                   "relative h-full flex w-full sidebar:w-[16.5rem] transition-transform duration-200 ease-out",
                   membersOpen ? "translate-x-0" : "translate-x-full",
                   membersVisible ? "sidebar:translate-x-0" : "sidebar:translate-x-full",
                 )}
               >
+                <div aria-hidden className="absolute inset-0 -z-10 bg-background sidebar:hidden" />
                 <MemberList
                   admins={panelAdmins}
                   members={panelMembers}

@@ -26,8 +26,8 @@ const WRAP_SINCE_SLACK_SECS = 3600;
 const DM_WRAP_REPLAY_LIMIT = 100;
 /**
  * Wrap replay cap once a relay has EOSEd this session. The wrap `since`
- * rewinds the whole backdate window every round, so each 90s rotation
- * replayed ~100 duplicate wraps; deeper gaps are the DM inbox poll's job.
+ * rewinds the whole backdate window every round, so each 90s rotation would
+ * replay ~100 duplicate wraps; deeper gaps are the DM inbox poll's job.
  */
 const DM_WRAP_REPLAY_LIMIT_STEADY = 10;
 /**
@@ -83,7 +83,6 @@ export function stampRoundSince(filters: NostrFilter[], since: number, now: numb
 export interface WireInputs {
   /** The logged-in user (DM filters are addressed to them). */
   pubkey?: string;
-  /**
   /** Joined NIP-29 groups (one REQ per host); `buzz` selects the wider Buzz kind set. */
   groups: Array<{ id: string; relay: string; buzz?: boolean }>;
   /** DM inbox relays (kind-4 reads; NIP-42-authed where the relay gates them). */
@@ -111,7 +110,7 @@ export interface WireInputs {
   }>;
   /**
    * Concord GUESTBOOK planes: a KICK rotates no key and publishes no control
-   * edition, so without this a kicked member kept access until the 60s poll.
+   * edition, so without this a kicked member keeps access until the 60s poll.
    */
   concordGuestbook?: Array<{
     relays: string[];
@@ -209,7 +208,7 @@ export function buildWireSpec(inputs: WireInputs): WireSpec {
   }
 
   // Concord chat: the standing sub carries only each channel's CURRENT epoch
-  // (retired epochs are sealed history; holding them open was a side-channel
+  // (retired epochs are sealed history; holding them open is a side-channel
   // for ejected keyholders). `concordByPk` keeps every held epoch so stragglers
   // still decode (the decoder enforces the cutoff).
   const concordByPk = new Map<string, Channel>();

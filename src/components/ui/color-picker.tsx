@@ -194,7 +194,7 @@ export function ColorPicker({ value, onChange, label, className, disabled }: Col
           {label && (
             <div className="flex flex-col items-center gap-0.5">
               <span className="text-xs font-medium text-foreground">{label}</span>
-              <span className="text-[10px] text-muted-foreground font-mono uppercase">{value}</span>
+              <span className="text-3xs text-muted-foreground font-mono uppercase">{value}</span>
             </div>
           )}
         </button>

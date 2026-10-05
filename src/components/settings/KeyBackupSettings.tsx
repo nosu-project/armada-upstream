@@ -50,7 +50,7 @@ function KeyStorageRow() {
       {encrypted ? (
         <Lock className="size-4 text-success" aria-label="Encrypted" />
       ) : (
-        <ShieldAlert className="size-4 text-amber-500" aria-label="Not encrypted" />
+        <ShieldAlert className="size-4 text-warning" aria-label="Not encrypted" />
       )}
     </SettingsRow>
   );
@@ -105,13 +105,13 @@ export function KeyBackupSettings({ nsec, pubkey }: KeyBackupSettingsProps) {
   return (
     <>
       <SettingsRow>
-        <div className="clip-corner-lg bg-amber-500/10 p-3">
+        <div className="clip-corner-lg bg-warning/10 p-3">
           <div className="flex items-center gap-2 mb-1">
-            <span className="text-xs font-semibold text-amber-600 dark:text-amber-300">
+            <span className="text-xs font-semibold text-warning">
               Keep this key secret
             </span>
           </div>
-          <p className="text-xs text-amber-700 dark:text-amber-300/90">
+          <p className="text-xs text-warning">
             Your secret key is the only way to access your account. There is no password reset.
             Anyone who sees it controls your identity. Store it somewhere safe, like a password
             manager.

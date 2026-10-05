@@ -15,7 +15,7 @@ interface SettingsSectionProps {
 export function SettingsSection({ title, icon: Icon, children, className }: SettingsSectionProps) {
   return (
     <section className={cn("space-y-1.5", className)}>
-      <h2 className="flex items-center gap-1.5 px-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+      <h2 className="flex items-center gap-1.5 px-1 text-2xs font-semibold uppercase tracking-wider text-muted-foreground">
         <Icon className="size-3.5 shrink-0" />
         {title}
       </h2>

@@ -4,7 +4,7 @@
  * reload-surviving evidence that a kind-10030 list EXISTS, checked by
  * `useEmojiPacks` before building one (AGENTS.md: never build on an empty read).
  *
- * Stays in localStorage (unlike the KV moves) because it seeds `initialData`
+ * Stays in localStorage (not KV) because it seeds `initialData`
  * synchronously; async would paint every custom emoji as `:shortcode:` on
  * reload. One bounded key per account.
  */

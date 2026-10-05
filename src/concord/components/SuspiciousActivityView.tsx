@@ -98,7 +98,7 @@ function TravelerRow({
             <span className="truncate font-semibold">
               <DisplayName pubkey={traveler.author} name={name} />
             </span>
-            <span className="rounded-full bg-primary/20 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-primary">
+            <span className="rounded-full bg-primary/20 px-2 py-0.5 text-3xs font-bold uppercase tracking-wide text-primary">
               {travelerRank(traveler.aheadMs)}
             </span>
           </div>

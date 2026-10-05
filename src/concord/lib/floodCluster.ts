@@ -396,6 +396,8 @@ const quarantineCache = new WeakMap<
   { self: string | undefined; staff: FloodOptions["staff"]; ids: Set<string> }
 >();
 
+const SPEECH_KINDS: ReadonlySet<number> = new Set([KIND_MESSAGE, KIND_POLL, KIND_COMMENT]);
+
 /**
  * Flood quarantine for one channel's cached batch, memoized on the batch's
  * IDENTITY (the shared scan replaces a channel's array only when it changes), so
@@ -404,8 +406,6 @@ const quarantineCache = new WeakMap<
  * stable reference. Side events are dropped first: a reaction must not date its
  * author as present or count toward a wave's share.
  */
-const SPEECH_KINDS: ReadonlySet<number> = new Set([KIND_MESSAGE, KIND_POLL, KIND_COMMENT]);
-
 export function quarantinedIn(
   rumors: readonly OpenedChat[],
   self?: string,
@@ -426,8 +426,8 @@ export const FLOOD_COHORT_WINDOW_MS = 600_000;
 /** Keys a wave needs to fold on BREADTH alone, at any pace. */
 export const FLOOD_COHORT_AUTHORS = 8;
 /**
- * …or this many at {@link FLOOD_COHORT_RATE_PER_MIN}. Breadth alone was too slow:
- * a live campaign introducing a key every 40s wasn't caught for 4.5 minutes.
+ * …or this many at {@link FLOOD_COHORT_RATE_PER_MIN}, since breadth alone catches
+ * a campaign introducing a key every 40s only after minutes.
  */
 export const FLOOD_COHORT_RATE_AUTHORS = 3;
 /** The pace that lets {@link FLOOD_COHORT_RATE_AUTHORS} stand in for breadth. */

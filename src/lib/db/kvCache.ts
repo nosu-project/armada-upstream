@@ -52,8 +52,7 @@ export class KvPrefixCache<T> {
 
   /**
    * Write `id`. The memory map updates synchronously so the next read sees it;
-   * the KV write is fire-and-forget, matching the `try {} catch {}` the
-   * localStorage writers already wrapped themselves in.
+   * the KV write is fire-and-forget.
    */
   set(id: string, value: T): void {
     this.entries.set(id, value);

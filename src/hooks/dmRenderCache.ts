@@ -11,12 +11,10 @@ const inflightById = new Map<string, Promise<string>>();
 /** A signer's decrypt function: `(counterparty, ciphertext) => plaintext`. */
 export type DecryptFn = (counterparty: string, ciphertext: string) => Promise<string>;
 
-/** Return the memoized plaintext for an event id, or `undefined` on a miss. */
 export function getRenderedPlaintext(id: string): string | undefined {
   return plaintextById.get(id);
 }
 
-/** Whether the plaintext for an event id is already memoized this session. */
 export function hasRenderedPlaintext(id: string): boolean {
   return plaintextById.has(id);
 }
