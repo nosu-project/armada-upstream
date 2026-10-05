@@ -84,7 +84,7 @@ export interface CallContextType {
   stageVisible: boolean;
   /**
    * Whether the stage is docked in the call's own chat. The docked strip/stage
-   * then carries the controls, so the call bar steps aside.
+   * then carries the controls, so the mobile call bar steps aside.
    */
   stageDocked: boolean;
   /** The call is sliding out after a leave (the room is still mounted). */

@@ -499,7 +499,7 @@ function ErrorBar({ placeBar, error, onLeave }: { placeBar: PlaceBar; error: unk
   );
 }
 
-/** `dockable`: a bar the docked strip/stage replaces while it is on screen. */
+/** `dockable`: a mobile bar the docked strip/stage replaces while it is on screen. */
 type PlaceBar = (mobile: React.ReactNode, desktop?: React.ReactNode, dockable?: boolean) => React.ReactNode;
 
 /** The call notification's picture as a small `data:` URL. Android only. */
@@ -577,11 +577,13 @@ function makePlaceBar(
   shellRef: React.RefObject<HTMLDivElement | null>,
   docked: boolean,
 ): PlaceBar {
-  return (mobile, desktop, dockable) => dockable && docked ? null : (
+  return (mobile, desktop, dockable) => (
     <>
-      <MobileCallBar shellRef={shellRef} exiting={exiting}>
-        {mobile}
-      </MobileCallBar>
+      {!(dockable && docked) && (
+        <MobileCallBar shellRef={shellRef} exiting={exiting}>
+          {mobile}
+        </MobileCallBar>
+      )}
       {slots.length === 0 && (
         // No call-bar slot on this route: float bottom-left so the call stays visible.
         // The entry delay hides the one-frame slot gap between slot-owning pages.
