@@ -678,6 +678,8 @@ export interface Dm17Thread {
   timerChanges: OpenedDm[];
   /** Disappearing-messages timer in seconds; 0/undefined = off. Either side may set it. */
   timer: number | undefined;
+  /** The timer for something sent now: waits for the stored one rather than taking undefined as off. */
+  resolveTimer: () => Promise<number>;
   /** Both sides' messages then carry `sent_at + seconds` as their NIP-40 expiration. */
   setTimer: (seconds: number) => void;
   isLoading: boolean;
@@ -1341,6 +1343,7 @@ export function useDm17Thread(
     reactionsByTarget,
     timerChanges,
     timer,
+    resolveTimer,
     setTimer,
     // Wait for a focused row's local lookup so the permalink hunter doesn't backfill first.
     isLoading: query.isLoading || (Boolean(focusedRumorId) && focusedQuery.isLoading),

@@ -18,6 +18,8 @@ import type { NostrSigner } from "@nostrify/nostrify";
 export interface UploadRequest {
   file: File;
   signal?: AbortSignal;
+  /** Unix seconds the blob may be deleted after; see `uploadToServers`. */
+  expiration?: number;
 }
 
 /**
@@ -33,7 +35,7 @@ export function useUploadFile() {
       if (!user) {
         throw new Error("Must be logged in to upload files");
       }
-      const { file, signal } = request instanceof File ? { file: request } as UploadRequest : request;
+      const { file, signal, expiration } = request instanceof File ? { file: request } as UploadRequest : request;
 
       // App defaults merged with the user's kind 10063 list (config.blossomServerMetadata),
       // the preferred server first.
@@ -45,7 +47,7 @@ export function useUploadFile() {
       );
       const preferred = normalizeBlossomServerUrl(config.preferredBlossomServer) ?? undefined;
 
-      return uploadToServers(file, servers, user.signer, { preferred, signal });
+      return uploadToServers(file, servers, user.signer, { preferred, signal, expiration });
     },
   });
 }
@@ -69,15 +71,17 @@ class BlossomRequestError extends Error {
  * reason other than a refusal — else the first other server's to succeed.
  * Every other server already holding the blob by then is listed as a NIP-94
  * `fallback`; any whose PUT fails is sent a `PUT /mirror` (BUD-04) instead.
+ * With `expiration`, each request asks the server to drop the blob after it
+ * (`X-Expiration`, blossom#115); servers that don't know the header ignore it.
  * Exported for testing.
  */
 export async function uploadToServers(
   file: File,
   servers: string[],
   signer: NostrSigner,
-  opts: { preferred?: string; signal?: AbortSignal } = {},
+  opts: { preferred?: string; signal?: AbortSignal; expiration?: number } = {},
 ): Promise<UploadTags> {
-  const { signal } = opts;
+  const { signal, expiration } = opts;
   const x = bytesToHex(new Uint8Array(await crypto.subtle.digest("SHA-256", await file.arrayBuffer())));
   // Scaled to the file size, so a flat timeout doesn't cap upload size by uplink speed.
   const timeoutMs = uploadTimeoutMs(file.size);
@@ -97,12 +101,13 @@ export async function uploadToServers(
 
   const put = async (server: string): Promise<UploadTags> => {
     const timeout = AbortSignal.timeout(timeoutMs);
-    const response = await globalThis.fetch(new URL("/upload", server), {
+    const headers: Record<string, string> = { authorization, "content-type": file.type, "x-sha-256": x };
+    const response = await fetchWithExpiration(new URL("/upload", server), {
       method: "PUT",
       body: file,
-      headers: { authorization, "content-type": file.type, "x-sha-256": x },
+      headers,
       signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
-    });
+    }, expiration);
     return finishTags(await parseDescriptor(response, x), file.name);
   };
 
@@ -158,7 +163,7 @@ export async function uploadToServers(
     attempts.get(server)!.catch((error: unknown) => {
       // A refusal (too large, wrong type, unauthorized) would refuse the mirror too.
       if (signal?.aborted || error instanceof BlossomRequestError && error.status < 500) return;
-      mirrorToServers(url, [server], signer).catch(() => {});
+      mirrorToServers(url, [server], signer, { expiration }).catch(() => {});
     });
   }
 
@@ -317,11 +322,29 @@ function appendExtensionIfMissing(urlString: string, ext: string): string {
   }
 }
 
-/** Each server gets its own `PUT /mirror`. Exported for testing. */
+/**
+ * `fetch` with `X-Expiration: <expiration>` added, when there is one. A server
+ * whose CORS policy names only the headers it knows fails the preflight
+ * outright — a TypeError, with no response — so that's retried without it.
+ */
+async function fetchWithExpiration(input: URL | RequestInfo, init: RequestInit, expiration: number | undefined): Promise<Response> {
+  if (expiration === undefined) return globalThis.fetch(input, init);
+  const headers = new Headers(init.headers);
+  headers.set("x-expiration", String(Math.floor(expiration)));
+  try {
+    return await globalThis.fetch(input, { ...init, headers });
+  } catch (error) {
+    if (!(error instanceof TypeError) || init.signal?.aborted) throw error;
+    return globalThis.fetch(input, init);
+  }
+}
+
+/** Each server gets its own `PUT /mirror`, carrying `expiration` as uploads do. Exported for testing. */
 export async function mirrorToServers(
   sourceUrl: string,
   servers: string[],
   signer: NostrSigner,
+  opts: { expiration?: number } = {},
 ): Promise<void> {
   await Promise.allSettled(
     servers.map((server) => {
@@ -331,13 +354,13 @@ export async function mirrorToServers(
         servers: [server],
         signer,
         fetch: (input, init) =>
-          globalThis.fetch(input, {
+          fetchWithExpiration(input, {
             ...init,
             signal: AbortSignal.any([
               init?.signal ?? AbortSignal.timeout(30_000),
               AbortSignal.timeout(30_000),
             ]),
-          }),
+          }, opts.expiration),
       });
       return uploader.mirror(sourceUrl);
     }),

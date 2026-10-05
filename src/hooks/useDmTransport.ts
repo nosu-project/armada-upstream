@@ -65,6 +65,8 @@ export function useDmTransport(
   syncing: boolean;
   /** Timer in seconds (0 = off); NIP-17 plane only. */
   disappearingTimer: number;
+  /** The timer for something sent now, waiting for it rather than assuming off. */
+  resolveDisappearingTimer: () => Promise<number>;
   setDisappearingTimer: (seconds: number) => void;
   encryptedIds: Set<string>;
   /** Ids of NIP-17 rumors (unsigned; the page passes the `rumor` menu prop). */
@@ -383,6 +385,7 @@ export function useDmTransport(
     entries,
     syncing,
     disappearingTimer: dm17.timer ?? 0,
+    resolveDisappearingTimer: dm17.resolveTimer,
     setDisappearingTimer: dm17.setTimer,
     encryptedIds,
     dm17Ids,

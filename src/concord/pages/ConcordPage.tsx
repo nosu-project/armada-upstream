@@ -157,7 +157,7 @@ import { RotateKeysDialog } from "@/concord/components/RotateKeysDialog";
 import type { BanPhase } from "@/concord/hooks/useModeration";
 import { hasForeignLiveLinks } from "@/concord/lib/control";
 import { replyTargetOf } from "@/concord/lib/chat";
-import { communityTimerNotice } from "@/concord/lib/disappearing";
+import { communityTimerNotice, messageExpirationOf } from "@/concord/lib/disappearing";
 import { sweepExpiredCommunityRumors } from "@/concord/lib/rumorStore";
 import { useDecryptedImage } from "@/concord/hooks/useDecryptedImage";
 import { useGuestbook } from "@/concord/hooks/useGuestbook";
@@ -985,6 +985,9 @@ export function ConcordPage() {
 
   const baseCommunity = useCommunity(communityId);
   const { data: folded } = useControlFold(baseCommunity);
+  // What `useSendMessage` stamps messages with, so their attachments can expire alongside.
+  const messageTimer = messageExpirationOf(folded?.metadata);
+  const resolveMessageTimer = useCallback(async () => messageTimer, [messageTimer]);
   const community = useMemo<Community | undefined>(() => {
     if (!baseCommunity) return undefined;
     if (!folded?.metadata) return baseCommunity;
@@ -3352,6 +3355,7 @@ export function ConcordPage() {
                       canMentionEveryone={transport.canMentionEveryone}
                       conversationRelays={community?.relays}
                       canSend={composerCanSend}
+                      disappearingTimer={resolveMessageTimer}
                       onSubmit={handleCreatePost}
                       onCancel={() => setNewPostOpen(false)}
                     />
@@ -3368,6 +3372,7 @@ export function ConcordPage() {
                       canWrite={canWrite}
                       mentionPubkeys={memberPubkeys}
                       conversationRelays={community?.relays}
+                      disappearingTimer={resolveMessageTimer}
                       autoFocus={threadAutoFocus}
                       onBack={closeThread}
                     />
@@ -3576,6 +3581,7 @@ export function ConcordPage() {
                           onCancelReply={() => setReplyTo(undefined)}
                           onTyping={publishTyping}
                           encryptAttachments
+                          disappearingTimer={resolveMessageTimer}
                           onEditLast={canWrite ? editLast : undefined}
                           // Focus on open/switch, except on touch (keyboard).
                           autoFocus={!isTouchDevice}
@@ -3620,6 +3626,7 @@ export function ConcordPage() {
                   botCommands
                   conversationRelays={community?.relays}
                   encryptAttachments
+                  disappearingTimer={resolveMessageTimer}
                   autoFocus={threadAutoFocus}
                   open={Boolean(threadRoot)}
                   onClose={closeThread}

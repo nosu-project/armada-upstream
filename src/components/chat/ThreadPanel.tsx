@@ -528,6 +528,8 @@ interface ThreadPanelProps {
    * must set it, or reply images reach Blossom in the clear.
    */
   encryptAttachments?: boolean;
+  /** See ChatComposer's. */
+  disappearingTimer?: () => Promise<number>;
   groupId: string;
   canWrite: boolean;
   /** Required for Concord (`relayUrl="dm"`); NIP-29 derives the roster itself. */
@@ -556,7 +558,7 @@ interface ThreadPanelProps {
  * Thread side panel: root, replies and a reply composer. Transport-driven
  * (`threadRepliesFor`/`sendThreadReply`); replies never appear in the main timeline.
  */
-export function ThreadPanel({ root, rootTitle, transport, relayUrl, groupId, canWrite, mentionPubkeys, botCommands, conversationRelays, encryptAttachments = false, autoFocus = false, open = true, permalink, onClose, onExpandChange, title, rootHeader, rootReadOnly = false, documentMarkdown = false, placeholder, readOnlyNotice }: ThreadPanelProps) {
+export function ThreadPanel({ root, rootTitle, transport, relayUrl, groupId, canWrite, mentionPubkeys, botCommands, conversationRelays, encryptAttachments = false, disappearingTimer, autoFocus = false, open = true, permalink, onClose, onExpandChange, title, rootHeader, rootReadOnly = false, documentMarkdown = false, placeholder, readOnlyNotice }: ThreadPanelProps) {
   const isPost = Boolean(rootTitle);
   const replyNoun = isPost ? "comment" : "reply";
   const replyNounPlural = isPost ? "comments" : "replies";
@@ -818,6 +820,7 @@ export function ThreadPanel({ root, rootTitle, transport, relayUrl, groupId, can
           botCommands={botCommands}
           conversationRelays={conversationRelays}
           encryptAttachments={encryptAttachments}
+          disappearingTimer={disappearingTimer}
           groupId={groupId}
           messages={[]}
           mentionPubkeys={mentionPubkeys}

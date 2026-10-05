@@ -605,7 +605,7 @@ const Conversation = memo(function Conversation({
       ? route.messageId
       : undefined;
   }, [location.pathname, conversation]);
-  const { transport, entries, syncing, disappearingTimer, setDisappearingTimer, encryptedIds, dm17Ids, dm17Enabled, legacyPinned, decryptVisible, decryptOne, decryptAll, decryptDeclined, hasEncrypted, send } =
+  const { transport, entries, syncing, disappearingTimer, resolveDisappearingTimer, setDisappearingTimer, encryptedIds, dm17Ids, dm17Enabled, legacyPinned, decryptVisible, decryptOne, decryptAll, decryptDeclined, hasEncrypted, send } =
     useDmTransport(conversation, peers, focusedRumorId);
   const { messages } = transport;
 
@@ -1302,6 +1302,7 @@ const Conversation = memo(function Conversation({
           onCancelReply={() => setReplyTo(undefined)}
           // Client-side AES-256-GCM attachments on NIP-17 only (kind 4 can't carry the key).
           encryptAttachments={dm17Enabled}
+          disappearingTimer={resolveDisappearingTimer}
           // Not on touch: the keyboard would spring up mid slide-in.
           autoFocus={!isTouch}
           onTyping={publishTyping}

@@ -80,6 +80,7 @@ import { extractWebxdcMeta } from "@/lib/webxdcMeta";
 import { contentTagsFor, forwardedAttachment, stripUrlsFromText } from "@/lib/forwardMessage";
 import { IMETA_MEDIA_URL_REGEX, mimeFromExt, modelFormat, modelMimeFromExt, type ModelFormat } from "@/lib/mediaUrls";
 import { MAX_ENCRYPTED_BYTES, deviceInputLimit, keepUserFields, mimeOfPicked } from "@/lib/attachmentLimits";
+import { attachmentExpiration } from "@/lib/blossom";
 import { describeRefusal, uploadFailureReason } from "@/lib/blossomPreflight";
 import { KIND_GROUP_CHAT, relayRejectionMessage } from "@/lib/nip29";
 import { resizeImage } from "@/lib/resizeImage";
@@ -319,6 +320,11 @@ interface ChatComposerProps {
    */
   encryptAttachments?: boolean;
   /**
+   * The conversation's disappearing-message timer in seconds (0 = off), read as an encrypted
+   * attachment uploads so its blob can be dropped after the message (`X-Expiration`).
+   */
+  disappearingTimer?: () => Promise<number>;
+  /**
    * Offer bot commands to a roster. An invocation carries a `["bot", <pubkey>]`
    * tag, so this must stay OFF where tags are plaintext (NIP-04 DMs) — it would
    * publish who commands which bot. For 1:1 bot DMs use {@link botDmPeer}.
@@ -365,7 +371,7 @@ interface ChatComposerProps {
  * voice, NIP-88 polls, replies, NIP-18 quotes, drafts. With `sendOverride` it
  * doubles as a generic composer (DMs, Concord).
  */
-export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelReply, sealed = false, onSent, shareLabel, shareIconUrl, sendOverride, canSend, mentionPubkeys, canMentionEveryone = false, placeholder, draftScope, shareRoute, onOptimisticInsert, onOptimisticSent, onOptimisticFailed, canModerate = false, autoFocus = false, onTyping, onSlashAction, encryptAttachments = false, botCommands = false, botDmPeer, recentAuthors, conversationRelays, pollsEnabled = true, onPollSubmit, messageKind = KIND_GROUP_CHAT, onEditLast, layout = "bar", documentEnterSends = false, submitLabel = "Post", onCancel }: ChatComposerProps) {
+export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelReply, sealed = false, onSent, shareLabel, shareIconUrl, sendOverride, canSend, mentionPubkeys, canMentionEveryone = false, placeholder, draftScope, shareRoute, onOptimisticInsert, onOptimisticSent, onOptimisticFailed, canModerate = false, autoFocus = false, onTyping, onSlashAction, encryptAttachments = false, disappearingTimer, botCommands = false, botDmPeer, recentAuthors, conversationRelays, pollsEnabled = true, onPollSubmit, messageKind = KIND_GROUP_CHAT, onEditLast, layout = "bar", documentEnterSends = false, submitLabel = "Post", onCancel }: ChatComposerProps) {
   const isDocument = layout === "document";
   const { user } = useCurrentUser();
   const composerBoundsRef = useComposerBoundsRef();
@@ -1092,17 +1098,19 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
         }
       }
 
+      const expiration = encryptAttachments && disappearingTimer ? attachmentExpiration(await disappearingTimer()) : undefined;
+
       // Poster first: small, and its failure mustn't cost the file.
       let posterUrl: string | undefined;
       if (posterFile) {
         try {
-          posterUrl = (await uploadFile({ file: posterFile, signal: abort.signal }))[0][1];
+          posterUrl = (await uploadFile({ file: posterFile, signal: abort.signal, expiration }))[0][1];
         } catch {
           posterUrl = undefined;
         }
       }
 
-      const tags = await uploadFile({ file: uploadableFile, signal: abort.signal });
+      const tags = await uploadFile({ file: uploadableFile, signal: abort.signal, expiration });
       const url = tags[0][1];
       // Under the inline-decrypt cap only: past it a render wouldn't download it either.
       if (plainFile.size <= MAX_DECRYPT_BYTES) primeAttachment(url, encryption, plainFile);
@@ -1187,7 +1195,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
       setPendingUploads((prev) => prev.filter((p) => p.id !== pendingId));
       if (previewUrl) URL.revokeObjectURL(previewUrl);
     }
-  }, [uploadFile, preflightUpload, toast, encryptAttachments, user?.pubkey]);
+  }, [uploadFile, preflightUpload, toast, encryptAttachments, disappearingTimer, user?.pubkey]);
 
   const handleFiles = useCallback((files: Iterable<File | DeferredFile>, options?: { spoiler?: boolean }) => {
     for (const file of files) void handleFileUpload(file, options);
@@ -1736,7 +1744,8 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
         encryption = { algorithm: "aes-gcm", key: enc.key, nonce: enc.nonce, ox: enc.originalHash };
       }
 
-      const uploadTags = await uploadFile(file);
+      const expiration = encryptAttachments && disappearingTimer ? attachmentExpiration(await disappearingTimer()) : undefined;
+      const uploadTags = await uploadFile({ file, expiration });
       const audioUrl = uploadTags[0][1];
       primeAttachment(audioUrl, encryption, plainFile);
 
@@ -1783,7 +1792,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     } finally {
       setIsPublishingVoice(false);
     }
-  }, [user, voiceRecorder, uploadFile, buildMessageTags, createEvent, relayUrl, sendOverride, canSend, encryptAttachments, onCancelReply, onSent, noteSent, toast, messageKind]);
+  }, [user, voiceRecorder, uploadFile, buildMessageTags, createEvent, relayUrl, sendOverride, canSend, encryptAttachments, disappearingTimer, onCancelReply, onSent, noteSent, toast, messageKind]);
 
   const handleStartRecording = useCallback(async () => {
     try {

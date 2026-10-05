@@ -110,6 +110,21 @@ describe("mirrorToServers", () => {
       "https://b.example/mirror",
     ]);
   });
+
+  it("asks for the blob to expire when given an expiration", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input) =>
+      new Response(JSON.stringify({ url: `${new URL(String(input)).origin}/${HASH}.png`, sha256: HASH, size: 3 })),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await mirrorToServers(SOURCE, ["https://a.example/"], signer, { expiration: 1_900_000_000 });
+    await mirrorToServers(SOURCE, ["https://a.example/"], signer);
+
+    const sent = fetchMock.mock.calls.map(([, init]) => new Headers(init?.headers).get("x-expiration"));
+    expect(sent).toEqual(["1900000000", null]);
+    // Nostrify's own headers survive.
+    expect(tokenOf(fetchMock.mock.calls[0][1]?.headers).kind).toBe(24242);
+  });
 });
 
 /**
@@ -215,5 +230,44 @@ describe("uploadToServers", () => {
       "Blossom request failed (413): refused by a.example",
       "Blossom request failed (415): refused by b.example",
     ]);
+  });
+
+  it("sends X-Expiration with every upload when given one, and not otherwise", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input) =>
+      new Response(JSON.stringify({ url: `${new URL(String(input)).origin}/${HASH}`, sha256: HASH, size: 5 })),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await uploadToServers(file(), ["https://a.example/", "https://b.example/"], signer, { expiration: 1_900_000_000.7 });
+    await uploadToServers(file(), ["https://a.example/"], signer);
+
+    const sent = fetchMock.mock.calls.map(([, init]) => new Headers(init?.headers).get("x-expiration"));
+    expect(sent).toEqual(["1900000000", "1900000000", null]);
+    expect(new Headers(fetchMock.mock.calls[0][1]?.headers).get("x-sha-256")).toBe(HASH);
+  });
+
+  it("retries without X-Expiration when a server's CORS refuses it", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      if (new Headers(init?.headers).has("x-expiration")) throw new TypeError("Failed to fetch");
+      return new Response(JSON.stringify({ url: `${new URL(String(input)).origin}/${HASH}`, sha256: HASH, size: 5 }));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const tags = await uploadToServers(file(), ["https://a.example/"], signer, { expiration: 1_900_000_000 });
+    expect(tags[0]).toEqual(["url", `https://a.example/${HASH}.txt`]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("passes the expiration on to a mirror", async () => {
+    const calls = stubServers({ "https://flaky.example": [{ error: true }, { error: true }] });
+    const fetchMock = vi.mocked(globalThis.fetch);
+    await uploadToServers(file(), ["https://a.example/", "https://flaky.example/"], signer, {
+      preferred: "https://a.example/",
+      expiration: 1_900_000_000,
+    });
+    await flush();
+    expect(calls).toContain("https://flaky.example/mirror");
+    const mirror = fetchMock.mock.calls.find(([input]) => String(input).endsWith("/mirror"));
+    expect(new Headers(mirror?.[1]?.headers).get("x-expiration")).toBe("1900000000");
   });
 });
