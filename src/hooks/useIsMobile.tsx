@@ -27,7 +27,7 @@ export function useIsMobile(): boolean {
  */
 const TOUCH_QUERY = "(pointer: coarse)";
 
-// One shared query list + listener (per-row matchMedia showed up in profiles). Keyed on
+// One shared query list + listener (per-row matchMedia shows up in profiles). Keyed on
 // `window.matchMedia` so a test stub is asked afresh.
 let touchQuery: { from: typeof window.matchMedia; mql: MediaQueryList } | undefined;
 const touchMql = () => {

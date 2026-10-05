@@ -69,7 +69,7 @@ export function nativeNotificationIntent(): boolean {
 }
 
 // Shared `enabled` state: the hook mounts more than once (headless + Settings), and
-// per-instance state double-prompted for permission.
+// per-instance state would double-prompt for permission.
 
 // `unknown` is load-bearing: treating the async permission check as `false` would erase the
 // only config the headless service can restart from.

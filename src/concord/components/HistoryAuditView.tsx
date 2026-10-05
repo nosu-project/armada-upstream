@@ -144,7 +144,7 @@ export function HistoryAuditView({ community, onClose }: HistoryAuditViewProps) 
             </div>
 
             {relayFailure && (
-              <p className="text-center text-xs text-amber-500">
+              <p className="text-center text-xs text-warning">
                 Some relays didn&apos;t respond, so this copy may be missing recent history.
               </p>
             )}
@@ -219,7 +219,7 @@ export function HistoryAuditView({ community, onClose }: HistoryAuditViewProps) 
                     ))}
                   </div>
                   {noneSelected && (
-                    <p className="mt-1.5 text-center text-xs text-amber-500">
+                    <p className="mt-1.5 text-center text-xs text-warning">
                       Select at least one channel to export.
                     </p>
                   )}

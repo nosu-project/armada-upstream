@@ -65,8 +65,8 @@ const SELF_SYNC_FLUSH_MS = 60;
 
 /**
  * A query invalidated by a self-sync edition refetches at most this often. Each
- * community-list edition re-read every fragment from every self-state relay, so
- * another client republishing it once a second drove a full list sync a second.
+ * community-list edition re-reads every fragment from every self-state relay, so
+ * another client republishing it once a second would drive a full sync a second.
  */
 const SELF_SYNC_KEY_MIN_GAP_MS = 15_000;
 
@@ -188,7 +188,7 @@ function NostrSyncInner() {
 
   // A. Standing self-state subscription. Echoes suppressed by created_at;
   // invalidations coalesced. The first REQ per relay in a process is a full
-  // read (a fixed lookback missed changes made while away); a rebuild resumes
+  // read (a fixed lookback would miss changes made while away); a rebuild resumes
   // from that relay's last complete read, which is ~1 MB less per resume on an
   // account with a large read-state and many DM-index shards.
   useEffect(() => {

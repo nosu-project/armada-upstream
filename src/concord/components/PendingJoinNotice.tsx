@@ -23,7 +23,7 @@ export function PendingJoinNotice({ state, onRetry }: { state: PendingJoinState 
   if (!state || state === "sending" || (state === "signing" && !slow)) return null;
   const signing = state === "signing";
   return (
-    <div className="flex items-center gap-2 px-3 py-2 text-xs border-t border-amber-500/20 bg-amber-500/10 text-amber-600 dark:text-amber-400">
+    <div className="flex items-center gap-2 px-3 py-2 text-xs border-t border-warning/20 bg-warning/10 text-warning">
       {signing ? <Loader2 className="size-4 shrink-0 animate-spin" /> : <UserX className="size-4 shrink-0" />}
       <span className="flex-1 min-w-0">
         {signing

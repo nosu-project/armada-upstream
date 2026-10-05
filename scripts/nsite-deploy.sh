@@ -12,15 +12,12 @@
 #   NSITE_LOG_DIR           where the nsyte logs go, default $RUNNER_TEMP or /tmp
 #
 # Every workflow step that publishes an nsite goes through here rather than
-# calling `nsyte deploy` itself, because nsyte's upload model is exactly wrong
-# for a mirror outage: it runs one queue per server, gives each file on each
-# server three 10 s attempts plus retries, and publishes the site manifest only
-# once EVERY queue has drained. A server that is down — or, worse, up at the
-# proxy and 5xx-ing behind it — therefore does not cost the deploy that
-# server; it costs hundreds of files × ~90 s on that one queue, the step's
-# deadline kills nsyte before the manifest is signed, and the two healthy
-# servers' finished uploads are unreferenced blobs. The wrapper's job is to
-# keep the run inside its deadline with the servers that are actually working:
+# calling `nsyte deploy` itself: nsyte runs one upload queue per server (~90 s
+# of retries per file) and signs the manifest only once EVERY queue drains, so
+# one server that is down — or up at the proxy and 5xx-ing behind it — runs the
+# step past its deadline, no manifest is published, and the healthy servers'
+# uploads sit unreferenced. The wrapper keeps the run inside its deadline with
+# the servers that are actually working:
 #
 #   failover   Hosts are probed (scripts/live-hosts.sh, a Blossom-level HEAD,
 #              5xx counts as down) and only the live ones are handed to nsyte.
@@ -161,9 +158,8 @@ for attempt in $(seq 1 "$attempts"); do
 
   # A scan that found ZERO files is never legitimate here — every site this
   # repo publishes has hundreds — so it means nsyte was pointed at the wrong
-  # directory and published nothing while exiting 0 (which is exactly how
-  # v0.59.6 published no armada-fp site). Not retried: it is a configuration
-  # error, not a network one.
+  # directory and published nothing while exiting 0. Not retried: it is a
+  # configuration error, not a network one.
   if grep -qE "0 files included|No files to upload after ignore rules" "$log"; then
     echo "nsite-deploy: nsyte scanned 0 files from $dir; refusing a no-op deploy." >&2
     exit 1

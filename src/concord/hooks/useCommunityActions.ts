@@ -107,7 +107,7 @@ export async function assertNotDissolved(
   if (grave !== undefined) throw new DissolvedCommunityError();
 }
 
-/** Thrown when none of a community's relays is usable on this platform (#47). */
+/** Thrown when none of a community's relays is usable on this platform. */
 export class UnusableRelaysError extends Error {
   constructor(message: string) {
     super(message);
@@ -393,7 +393,7 @@ export function inviteRefOf(invite: ParsedInviteLink): string {
 
 /**
  * Home relays for a NEW community: the configured community relays, else the
- * CORD stock set. Portable-filtered (#47), deduped, capped. App and DM relays
+ * CORD stock set. Portable-filtered, deduped, capped. App and DM relays
  * are deliberately not included.
  */
 export function defaultCreateRelays(communityRelays: string[]): string[] {
@@ -442,7 +442,7 @@ export function useCommunityActions() {
       const trimmed = name.trim();
       if (!trimmed) throw new Error("Name your community first.");
 
-      // Prefer wss://: a ws:// relay sealed into the bundle is unreachable from secure origins (#47).
+      // Prefer wss://: a ws:// relay sealed into the bundle is unreachable from secure origins.
       const relays = chosen && chosen.length > 0
         ? preferPortableRelays(chosen)
         : defaultCreateRelays(config.communityRelays);
@@ -555,7 +555,7 @@ export function useCommunityActions() {
   const preview = useMutation<InvitePreview, Error, { invite: ParsedInviteLink }>({
     mutationFn: async ({ invite }) => {
       const bundle = await resolveBundle(nostr, invite, bootstrapRelays);
-      // Fail loudly if no relay is reachable here (#47), e.g. ws:// under mixed-content blocking.
+      // Fail loudly if no relay is reachable here, e.g. ws:// under mixed-content blocking.
       const unusable = unusableRelaysReason(bundle.relays);
       if (unusable) throw new Error(unusable);
       await assertNotDissolved(nostr, bundle);

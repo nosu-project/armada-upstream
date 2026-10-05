@@ -4,11 +4,10 @@ import type { ConcordLevelPolicy } from "@/hooks/useNotifLevels";
 import type { MediaPolicyConfig } from "@/lib/mediaPolicy";
 import type { NostrEvent } from "@nostrify/nostrify";
 
-/**
- * Bridge to the Android background notification service
- * (ArmadaNotificationPlugin.java): a persistent relay REQ that posts native
- * notifications without FCM. No-ops on iOS/web.
- */
+// Bridge to the Android background notification service
+// (ArmadaNotificationPlugin.java): a persistent relay REQ that posts native
+// notifications without FCM. No-ops on iOS/web.
+
 /**
  * A community icon for the Android group summary: a public URL, or an encrypted
  * blob the service fetches and AES-256-GCM decrypts (`key`/`nonce` hex, `hash`

@@ -15,7 +15,7 @@ export function manualChunks(id: string): string | undefined {
       return "vendor-highlight";
     }
     // Lazy (WalletDialog → @/lib/bitcoin). Unnamed on purpose: rolldown pulls a
-    // named chunk's dependencies in, which moved @scure/base out of vendor-nostr.
+    // named chunk's dependencies in, which would move @scure/base out of vendor-nostr.
     if (id.includes("node_modules/@scure/btc-signer")) {
       return undefined;
     }

@@ -150,8 +150,7 @@ for (const arch of arches) {
   // These Linux-cross-built archives are only ad-hoc signed in CI. They are
   // intentionally not an electron-updater target: safely replacing a macOS
   // app requires a consistently Developer ID-signed update. Native mac builds
-  // made with electron-builder do not contain this marker and may use the
-  // signed latest-mac.yml feed.
+  // made with electron-builder do not contain this marker and may self-update.
   fs.writeFileSync(
     path.join(macApp, "Contents", "Resources", "armada-no-self-update"),
     "Cross-built ad-hoc archive; updates are installed manually.\n",

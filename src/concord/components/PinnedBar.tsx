@@ -52,7 +52,7 @@ function PinRow({
         className={cn("flex min-w-0 w-full flex-col items-start gap-0.5 text-left", !jumpable && "cursor-default")}
       >
         <span className="flex items-center gap-1.5 max-w-full">
-          <span className="text-[11px] font-semibold text-primary truncate">
+          <span className="text-2xs font-semibold text-primary truncate">
             <DisplayName pubkey={pin.author} name={name} />
           </span>
           <Tooltip>
@@ -64,13 +64,13 @@ function PinRow({
               history and no old keys.
             </TooltipContent>
           </Tooltip>
-          <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground">
+          <span className="shrink-0 text-3xs tabular-nums text-muted-foreground">
             {shortTimeAgo(pin.createdAt)}
           </span>
           {pin.edited && (
             <Tooltip>
               <TooltipTrigger asChild>
-                <span className="shrink-0 text-[10px] text-muted-foreground">(edited)</span>
+                <span className="shrink-0 text-3xs text-muted-foreground">(edited)</span>
               </TooltipTrigger>
               <TooltipContent className="max-w-56 text-xs">
                 {pin.staleEdit
@@ -81,7 +81,7 @@ function PinRow({
           )}
         </span>
         {previewText(pin.content) && (
-          <span className="text-[12px] text-muted-foreground line-clamp-2 break-words">
+          <span className="text-xs text-muted-foreground line-clamp-2 break-words">
             {previewText(pin.content)}
           </span>
         )}
@@ -172,7 +172,7 @@ export function PinnedBar({
     >
       <div className="clip-corner-lg bg-chrome px-3 py-2.5">
         <div className="flex items-center justify-between gap-2 mb-1.5">
-          <span className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground/80">
+          <span className="flex items-center gap-1.5 text-2xs font-semibold uppercase tracking-wide text-muted-foreground/80">
             <Pin className="size-3 text-amber-500" />
             Pinned messages
             {pins.length > 0 && <span className="tabular-nums text-muted-foreground/60">{pins.length}</span>}
@@ -193,7 +193,7 @@ export function PinnedBar({
             type="button"
             disabled={isRefreshingEdits}
             onClick={onRefreshEdits}
-            className="mb-1.5 flex w-full items-center gap-2 rounded-md bg-foreground/5 px-2 py-1.5 text-left text-[11px] text-muted-foreground disabled:opacity-60"
+            className="mb-1.5 flex w-full items-center gap-2 rounded-md bg-foreground/5 px-2 py-1.5 text-left text-2xs text-muted-foreground disabled:opacity-60"
           >
             <Loader2 className={cn("size-3 shrink-0", isRefreshingEdits && "animate-spin")} />
             {isRefreshingEdits
@@ -203,7 +203,7 @@ export function PinnedBar({
           </button>
         )}
         {dark && pins.length === 0 ? (
-          <p className="flex items-center gap-2 px-2 py-3 text-[12px] text-muted-foreground">
+          <p className="flex items-center gap-2 px-2 py-3 text-xs text-muted-foreground">
             <Lock className="size-3.5 shrink-0" />
             This channel has pins from before you joined. They were sealed with keys you don't hold.
             An admin can republish them to bring them back.

@@ -227,7 +227,7 @@ export function ProfileStepBody({ expectedPubkey, onFinish }: ProfileStepBodyPro
                       chosen && "ring-2 ring-primary ring-offset-2 ring-offset-background",
                     )}
                   >
-                    {/* Eager: lazy images below the fold in this scroll container never loaded. */}
+                    {/* Eager: lazy images below the fold in this scroll container never load. */}
                     <img
                       src={avatar.url}
                       alt=""

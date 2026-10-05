@@ -185,8 +185,8 @@ export function AsciiSea({
     // mask (~2.5× cost). Only while animating, to save memory.
     for (const layer of [swellLayer, crestLayer]) layer.style.willChange = "transform";
 
-    // Timer at the paint cadence, not a free-running rAF loop, which woke the
-    // renderer 60×/s. Each tick still paints in a rAF.
+    // Timer at the paint cadence, not a free-running rAF loop, which would wake
+    // the renderer 60×/s. Each tick still paints in a rAF.
     const frame = 1000 / FPS;
     const start = performance.now();
     let lastTick = start;

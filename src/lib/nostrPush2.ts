@@ -1,24 +1,21 @@
 /**
  * nostr-push2 client (kind 25742 + NIP-44; see nostr-push2's NIP.md).
  *
- * The gateway that stands in for `window.napp.push` in a plain browser: it
- * takes the same `NappSubscription[]` (`nappPush.ts`), watches its own relays,
- * and Web Pushes the worker the same `napp.push.payload` a Tenna host would
- * deliver. From the worker's side the two cannot be told apart.
+ * Stands in for `window.napp.push` in a plain browser: takes the same
+ * `NappSubscription[]` (`nappPush.ts`), watches its own relays, and Web Pushes
+ * the worker the same `napp.push.payload` a Tenna host would deliver.
  *
- * Two differences from the retired nostr-push client (`nostrPush.ts`, which the
- * iOS APNs path still uses) matter here:
+ * Unlike the legacy nostr-push client (`nostrPush.ts`, iOS APNs only):
  *
- *   - The client is an EPHEMERAL key minted once per install, never the
- *     person's own. Requests need no signer prompt and no NIP-44 from the
- *     login, so bunker and extension logins get push like nsec ones do, and
- *     the gateway learns nothing about whose device it is.
- *   - The install brings its own VAPID key and hands the private half over in
- *     `create`; the gateway holds none. So the key is generated here, once, and
- *     the browser subscription is made against it.
+ *   - The client is an EPHEMERAL per-install key, never the person's own, so
+ *     requests need no signer prompt or login NIP-44 (bunker and extension
+ *     logins get push too) and the gateway learns nothing about whose device
+ *     it is.
+ *   - The install generates its own VAPID key once and hands the private half
+ *     over in `create`; the browser subscription is made against it.
  *
- * The list is replaced whole by `set`. Keeping a partial snapshot from pruning
- * is the caller's job (`carryForwardWatches`).
+ * `set` replaces the list whole; keeping a partial snapshot from pruning is the
+ * caller's job (`carryForwardWatches`).
  */
 
 import { NSecSigner } from "@nostrify/nostrify";

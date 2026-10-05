@@ -135,8 +135,8 @@ class NativeRumorStore implements NRumorStore {
   private pending: PendingWrite[] = [];
   /**
    * A drain is in flight. Only ONE ever is: writes arriving meanwhile join
-   * {@link pending} for its next lap. Per-write crossings each took the single
-   * plugin thread and native lock, starving reads during ingest storms.
+   * {@link pending} for its next lap. Per-write crossings would each take the
+   * single plugin thread and native lock, starving reads during ingest storms.
    */
   private draining = false;
   /**
@@ -308,7 +308,7 @@ function parseStored(value: string): unknown {
 
 /**
  * KV carried as JSON text, coalesced into ONE ordered `kvOps` crossing per
- * burst: per-op calls each paid a plugin-thread hop and native lock turn, and
+ * burst: per-op calls would each pay a plugin-thread hop and native lock turn, and
  * Capacitor doesn't guarantee call order across its thread pool.
  */
 class NativeKV implements ArmadaKV {

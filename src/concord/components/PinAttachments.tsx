@@ -126,7 +126,7 @@ export function PinAttachments({
         );
       })}
       {hidden > 0 && (
-        <span className="text-[11px] text-muted-foreground">+{hidden} more</span>
+        <span className="text-2xs text-muted-foreground">+{hidden} more</span>
       )}
     </div>
   );

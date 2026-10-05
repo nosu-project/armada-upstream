@@ -83,7 +83,6 @@ export function EmojiPackCard({ event, expanded = false, className }: EmojiPackC
     try {
       await addPack({ pubkey: event.pubkey, identifier });
       setOverride("added");
-      toast({ title: "Emoji pack added", description: name });
     } catch (e) {
       toast({
         title: "Couldn't add pack",
@@ -140,7 +139,7 @@ export function EmojiPackCard({ event, expanded = false, className }: EmojiPackC
           )}
           <span
             className={cn(
-              "text-[10px] px-1.5 py-px rounded-full shrink-0",
+              "text-3xs px-1.5 py-px rounded-full shrink-0",
               isAdded ? "bg-success/15 text-success" : "bg-secondary text-muted-foreground",
             )}
           >
@@ -160,7 +159,7 @@ export function EmojiPackCard({ event, expanded = false, className }: EmojiPackC
           >
             <Avatar shape={getAvatarShape(metadata)} className="size-4 shrink-0">
               <AvatarImage src={metadata?.picture} imeta={author.data?.imeta?.picture} alt={displayName} />
-              <AvatarFallback className="bg-primary/20 text-primary text-[8px]">
+              <AvatarFallback className="bg-primary/20 text-primary text-monogram">
                 {displayName[0]?.toUpperCase()}
               </AvatarFallback>
             </Avatar>

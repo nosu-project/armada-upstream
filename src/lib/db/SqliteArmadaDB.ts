@@ -320,7 +320,7 @@ export class SqliteArmadaDB implements ArmadaDB {
       return;
     }
 
-        // Settled after commit, so resolving means durable.
+    // Settled after commit, so resolving means durable.
     for (const write of writes) write.resolve();
   }
 
@@ -359,7 +359,7 @@ export class SqliteArmadaDB implements ArmadaDB {
 
       if (existing) {
         const stored = { id: String(existing.id), created_at: Number(existing.created_at) };
-        // NIP-01: stored version wins ties; only strictly newer replaces.
+        // NIP-01: only a strictly newer version (ties to the smaller id) replaces.
         if (!isNewer(rumor, stored)) return;
         await this.deleteRumors(ord, [Number(existing.seq)]);
       }

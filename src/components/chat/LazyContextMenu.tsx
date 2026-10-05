@@ -14,8 +14,8 @@ export interface LazyContextMenu {
 
 /**
  * Right-click menu whose Radix root is built on first right-click, as a SIBLING
- * of the row anchored at the pointer. A per-row ContextMenu mounted a Popper per
- * row plus a second render pass.
+ * of the row anchored at the pointer: a per-row ContextMenu would mount a Popper
+ * per row plus a second render pass.
  */
 export function useLazyContextMenu(onOpenChange?: (open: boolean) => void): LazyContextMenu {
   const [point, setPoint] = useState<{ x: number; y: number } | null>(null);

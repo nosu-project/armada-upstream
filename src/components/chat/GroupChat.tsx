@@ -554,7 +554,7 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
               </div>
             ) : (
               <>
-                <p className="px-2 pb-1 text-[11px] uppercase tracking-wide text-muted-foreground/80">
+                <p className="px-2 pb-1 text-2xs uppercase tracking-wide text-muted-foreground/80">
                   {searchResults.length} result{searchResults.length === 1 ? "" : "s"}
                 </p>
                 {[...searchResults]
@@ -590,7 +590,6 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
               <div className="flex flex-col items-center justify-center py-16 text-center">
                 <Hash className="size-10 text-muted-foreground/40 mb-3" />
                 <p className="text-sm text-muted-foreground">No messages yet</p>
-                <p className="text-xs text-muted-foreground/60 mt-1">Be the first to say something!</p>
               </div>
             }
             renderMessage={(msg, continuation) => (

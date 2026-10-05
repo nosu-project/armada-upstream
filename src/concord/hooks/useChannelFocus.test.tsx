@@ -29,6 +29,8 @@ const h = vi.hoisted(() => ({
   releaseWindow: () => {},
   window: [] as unknown[],
   focus: [] as unknown[],
+  /** Overrides the by-ids read, e.g. to hold it pending. */
+  focusRead: undefined as (() => Promise<unknown[]>) | undefined,
   fold: { roster: { roles: [], grants: [] }, ownerHex: "", banned: new Set<string>(), heads: new Map(), signals: new Map() },
 }));
 
@@ -72,7 +74,7 @@ vi.mock("@/concord/lib/rumorStore", () => ({
     new Promise((resolve) => {
       h.releaseWindow = () => resolve(h.window);
     }),
-  queryChannelRumorsByIds: async () => h.focus,
+  queryChannelRumorsByIds: async () => (h.focusRead ? h.focusRead() : h.focus),
   readStreamCursor: async () => undefined,
   sweepExpiredCommunityRumors: async () => undefined,
   updateStreamCursor: async () => undefined,
@@ -163,5 +165,27 @@ describe("useChannelTimeline focus hydration", () => {
     // is the channel cache's job.
     rerender({ messageId: undefined });
     expect(result.current.raw.map((m) => m.rumorId)).toContain(target.rumorId);
+  });
+
+  it("keeps the timeline up while focusing a row the window already holds", async () => {
+    const root = chat("21", 5_000_000);
+    h.focus = [];
+    h.focusRead = undefined;
+    h.window = [root, chat("22", 6_000_000)];
+
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { result, rerender } = renderHook(
+      ({ threadRoot }: { threadRoot?: string }) =>
+        useChannelTimeline(community, channel, CHANNEL_ID, { threadRoot }),
+      { initialProps: { threadRoot: undefined as string | undefined }, wrapper: wrapperFor(client) },
+    );
+    h.releaseWindow();
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    h.focusRead = () => new Promise(() => {});
+    rerender({ threadRoot: root.rumorId });
+    expect(result.current.isLoading).toBe(false);
+    expect(result.current.raw).toHaveLength(2);
+    h.focusRead = undefined;
   });
 });

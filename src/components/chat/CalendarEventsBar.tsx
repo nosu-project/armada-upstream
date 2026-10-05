@@ -29,17 +29,17 @@ function EventRow({
         onClick={() => onOpen(event)}
         className="flex min-w-0 flex-1 flex-col items-start gap-0.5 text-left"
       >
-        <span className={cn("text-[12px] font-semibold text-foreground truncate max-w-full", past && "text-muted-foreground")}>
+        <span className={cn("text-xs font-semibold text-foreground truncate max-w-full", past && "text-muted-foreground")}>
           {event.title}
         </span>
-        <span className="text-[11px] text-muted-foreground truncate max-w-full">
+        <span className="text-2xs text-muted-foreground truncate max-w-full">
           {formatCalendarEventWhen(event)}
         </span>
       </button>
       <Button
         variant="ghost"
         size="sm"
-        className="h-6 touch:h-9 shrink-0 px-2 touch:px-3 text-[11px] text-muted-foreground hover:text-primary"
+        className="h-6 touch:h-9 shrink-0 px-2 touch:px-3 text-2xs text-muted-foreground hover:text-primary"
         onClick={() => onOpen(event)}
       >
         RSVP
@@ -104,7 +104,7 @@ export function CalendarEventsBar({
       >
         <div className="clip-corner-lg bg-chrome px-3 py-2.5">
           <div className="flex items-center justify-between gap-2 mb-1.5">
-            <span className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground/80">
+            <span className="flex items-center gap-1.5 text-2xs font-semibold uppercase tracking-wide text-muted-foreground/80">
               <CalendarClock className="size-3 text-amber-500" />
               Events
             </span>
@@ -113,7 +113,7 @@ export function CalendarEventsBar({
                 <Button
                   variant="ghost"
                   size="sm"
-                  className="h-6 touch:h-9 gap-1 px-2 touch:px-3 text-[11px] text-muted-foreground hover:text-primary"
+                  className="h-6 touch:h-9 gap-1 px-2 touch:px-3 text-2xs text-muted-foreground hover:text-primary"
                   onClick={onCreate}
                 >
                   <Plus className="size-3.5" />
@@ -133,7 +133,7 @@ export function CalendarEventsBar({
           </div>
           <div className="max-h-60 overflow-y-auto space-y-0.5 pr-0.5">
             {ordered.length === 0 ? (
-              <p className="px-2 py-3 text-center text-[12px] text-muted-foreground">
+              <p className="px-2 py-3 text-center text-xs text-muted-foreground">
                 No events scheduled{canModerate ? ". Create one above." : "."}
               </p>
             ) : (

@@ -116,8 +116,6 @@ import {
 import { SCREEN_SHARE_RESOLUTIONS, type ScreenShareQuality } from "@/lib/screenShareQuality";
 import { nip19 } from "nostr-tools";
 
-/** LiveKit half of the call stack, lazy-loaded on first join so the SDK (~0.5MB) never costs cold start. */
-
 /** Reports live speakers (as pubkeys) to call context. Unverified identities are skipped. */
 function SpeakingReporter() {
   const { setSpeakingPubkeys } = useCall();
@@ -909,16 +907,16 @@ export function ConcordCallLabel({
   );
 }
 
-/**
- * Concord (CORD-07) voice room: token from a blind broker via channel-key
- * proof, per-sender E2EE, presence over the channel itself.
- */
 interface ActiveHevcCapture {
   stream: MediaStream;
   identity: string;
   audioTrack?: LocalTrack;
 }
 
+/**
+ * Concord (CORD-07) voice room: token from a blind broker via channel-key
+ * proof, per-sender E2EE, presence over the channel itself.
+ */
 function ConcordVoiceRoom({
   ctx,
   onLeave,

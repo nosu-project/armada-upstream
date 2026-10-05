@@ -484,6 +484,16 @@
       var(--vessel-fill, hsl(var(--popover)));
     box-shadow: inset 0 0 0 1px var(--vessel-edge, hsl(var(--border) / 0.45));
   }
+  /* A 2px edge for a `clip-corner-lg` tile, diagonals included (an inset ring alone
+     stops at the chamfers). Lay it over the tile as an overlay. */
+  .clip-corner-lg-ring {
+    --cut: 0.7rem;
+    border-radius: 0.55rem;
+    background:
+      linear-gradient(135deg, transparent 50%, var(--ring-edge) 50% calc(50% + 2px), transparent calc(50% + 2px)) top left / var(--cut) var(--cut) no-repeat,
+      linear-gradient(135deg, transparent calc(50% - 2px), var(--ring-edge) calc(50% - 2px) 50%, transparent 50%) bottom right / var(--cut) var(--cut) no-repeat;
+    box-shadow: inset 0 0 0 2px var(--ring-edge);
+  }
   .vessel-lift {
     filter: drop-shadow(0 10px 22px rgb(0 0 0 / 0.32)) drop-shadow(0 2px 5px rgb(0 0 0 / 0.22));
   }

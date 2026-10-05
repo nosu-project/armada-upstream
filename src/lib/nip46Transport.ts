@@ -1,7 +1,7 @@
 /**
- * Dedicated NIP-46 transport: one plain WebSocket per bunker relay. The app's
- * relay pool wedged on Android (REQs never EOSE'd, EVENTs never acked), while
- * plain sockets worked. Behaviors: reconnect with capped backoff; on (re)open
+ * Dedicated NIP-46 transport: one plain WebSocket per bunker relay, because
+ * the app's relay pool wedges on Android (REQs never EOSE, EVENTs never acked)
+ * where plain sockets don't. Behaviors: reconnect with capped backoff; on (re)open
  * re-send REQs then flush queued EVENTs; force-recycle after a long background
  * stint (Android leaves sockets half-open). Implements the `req`/`event`
  * surface NConnectSigner consumes.

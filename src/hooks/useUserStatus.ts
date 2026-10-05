@@ -75,8 +75,8 @@ function statusEvent(data: UserStatusResult): NostrRumor | undefined {
 /**
  * Read a user's NIP-38 status (kind 30315). This query shape is batched by
  * `NostrBatcher` into a single REQ across authors. Never re-polled within a
- * session: publishes write straight into the cache, and polling misses made idle
- * channels generate constant traffic.
+ * session: publishes write straight into the cache, and polling misses would make
+ * idle channels generate constant traffic.
  */
 export function useUserStatus(
   pubkey: string | undefined,

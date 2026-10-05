@@ -83,8 +83,7 @@ struct PushProcessor {
     /// no key, a bunker that did not answer, a wrap for somebody else, an
     /// expired message, a scope that is not ours. They are indistinguishable
     /// from outside and they are all invisible: the user sees the gateway's
-    /// static text either way. Naming which one ran is the difference between
-    /// diagnosing this in a minute and guessing at it for an hour.
+    /// static text either way, so the trace names which one ran.
     ///
     /// A STATUS only — never content, pubkeys or event ids. Defaults to a
     /// no-op, so the Linux suite and any other caller pay nothing for it.
@@ -442,18 +441,12 @@ struct PushProcessor {
 
         // This event arrives in the CLEAR, so unlike the NIP-17 and Concord
         // paths there is no decryption that already proves who wrote it: the
-        // signature is the only thing that does. Without this check the
-        // `pubkey` field is simply a string the sender chose — and it is used
-        // below to look up the VIEWER'S OWN stored kind-0, so an attacker names
-        // a real contact and the victim's database supplies that contact's real
-        // display name and real avatar for a Communication Notification. That is
-        // the lock-screen treatment reserved for trusted people, on a message
-        // they never sent.
-        //
-        // A well-behaved relay verifies signatures, so reaching this needs a
-        // malicious gateway or a hostile relay — which is exactly the party the
-        // rest of this pipeline is built not to trust. Failing here degrades to
-        // the gateway's static text, the same fallback as an unopenable event.
+        // signature is the only thing that does. Unchecked, `pubkey` is a
+        // string the sender chose, and it is used below to look up the
+        // viewer's own stored kind-0 — so a forger would get a real contact's
+        // name and avatar on a Communication Notification. A hostile gateway
+        // or relay is exactly the party this pipeline does not trust; failing
+        // here degrades to the gateway's static text.
         guard let eventId = event.id, eventId == event.computedId else {
             trace("grp-bad-id")
             return nil

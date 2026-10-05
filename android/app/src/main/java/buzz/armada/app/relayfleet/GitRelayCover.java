@@ -11,12 +11,10 @@ import java.util.TreeSet;
  * Which relays the background fleet opens for Git repository notifications.
  *
  * <p>A repository announcement lists every relay its maintainer publishes to,
- * often eight, and watching each repository on all of them made Git the
- * largest source of background sockets: on a measured device, ten of the
- * fleet's 22 relays were held only for Git, several of them aliases that
- * redirect to a relay the fleet already held, or relays that refuse the
- * connection. A repository's activity is published to all of its relays, so
- * a few carry it as well as all of them.
+ * often eight, so watching each repository on all of them would make Git the
+ * largest source of background sockets (many of them aliases of relays already
+ * held, or relays that refuse the connection). A repository's activity is
+ * published to all of its relays, so a few carry it as well as all of them.
  *
  * <p>Relays the fleet already holds for another plane cost nothing and always
  * count. Beyond those, each repository is covered by at least

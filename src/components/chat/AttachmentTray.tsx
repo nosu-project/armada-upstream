@@ -2,7 +2,7 @@ import { Blocks, EyeOff, Eye, FileIcon, Loader2, Music, Paperclip, Pencil, Play,
 import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { ChromeDialogContent, ChromeDialogFooter, ChromeDialogHeader, Dialog } from "@/components/ui/dialog";
 import { FallbackImage } from "@/components/ui/FallbackImage";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
@@ -139,11 +139,11 @@ function AttachmentCard({
         <CardPreview item={item} />
         {item.spoiler && (
           <span className="absolute inset-0 flex items-center justify-center bg-black/30 backdrop-blur-xl">
-            <span className="rounded-full bg-black/70 px-2 py-0.5 text-[10px] font-bold tracking-wide text-white">SPOILER</span>
+            <span className="rounded-full bg-black/70 px-2 py-0.5 text-3xs font-bold tracking-wide text-white">SPOILER</span>
           </span>
         )}
         {item.alt && (
-          <span className="absolute left-1 top-1 rounded bg-black/70 px-1 text-[9px] font-bold text-white">ALT</span>
+          <span className="absolute left-1 top-1 rounded bg-black/70 px-1 text-3xs font-bold text-white">ALT</span>
         )}
         {isTouch && (
           <span aria-hidden className="absolute bottom-1 left-1 flex size-6 items-center justify-center rounded-full bg-black/60 text-white">
@@ -221,7 +221,7 @@ function PendingCard({ item, onCancel }: { item: TrayPending; onCancel: (id: str
             {percent !== undefined ? (
               <>
                 <ProgressRing fraction={percent / 100} />
-                <span className="text-[10px] font-semibold tabular-nums text-white">{percent}%</span>
+                <span className="text-3xs font-semibold tabular-nums text-white">{percent}%</span>
               </>
             ) : (
               <Loader2 className="size-6 animate-spin text-white" />
@@ -343,7 +343,7 @@ function CardPreview({ item }: { item: TrayAttachment }) {
   return (
     <span className="flex size-full flex-col items-center justify-center gap-1.5 px-1.5 text-muted-foreground">
       <FileIcon className="size-7 shrink-0" />
-      <span className="line-clamp-2 break-all text-center text-[10px] font-medium leading-tight">{item.label}</span>
+      <span className="line-clamp-2 break-all text-center text-3xs font-medium leading-tight">{item.label}</span>
     </span>
   );
 }
@@ -361,8 +361,8 @@ function AudioCardPreview({ item }: { item: TrayAttachment }) {
         </span>
       )}
       <span className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent px-1.5 pb-1 pt-4 text-left text-white">
-        <span className="block truncate text-[10px] font-semibold leading-tight">{meta?.title ?? item.label}</span>
-        {meta?.artist && <span className="block truncate text-[9px] leading-tight opacity-80">{meta.artist}</span>}
+        <span className="block truncate text-3xs font-semibold leading-tight">{meta?.title ?? item.label}</span>
+        {meta?.artist && <span className="block truncate text-3xs leading-tight opacity-80">{meta.artist}</span>}
       </span>
     </span>
   );
@@ -427,13 +427,14 @@ function AttachmentEditDialog({
 
   return (
     <Dialog open={!!item} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle className="truncate pr-6">{item?.label ?? "Attachment"}</DialogTitle>
-          <DialogDescription>Describe it for people who can't see it, or hide it behind a spoiler.</DialogDescription>
-        </DialogHeader>
+      <ChromeDialogContent title={item?.label ?? "Attachment"}>
+        <ChromeDialogHeader
+          icon={Paperclip}
+          title={<span className="block max-w-full truncate px-6 normal-case">{item?.label ?? "attachment"}</span>}
+          description="Describe it for people who can't see it, or hide it behind a spoiler."
+        />
         {item && (
-          <div className="space-y-4">
+          <div className="mt-6 space-y-4">
             {previewable && (
               <button
                 type="button"
@@ -441,7 +442,7 @@ function AttachmentEditDialog({
                   onClose();
                   onPreview(item.url);
                 }}
-                className="relative mx-auto block aspect-square w-40 cursor-zoom-in overflow-hidden rounded-lg bg-secondary/50"
+                className="relative mx-auto block aspect-square w-40 cursor-zoom-in overflow-hidden clip-corner-lg bg-background/40"
                 aria-label={`Preview ${item.label}`}
               >
                 <CardPreview item={item} />
@@ -469,7 +470,7 @@ function AttachmentEditDialog({
             )}
           </div>
         )}
-        <DialogFooter className="flex-row gap-2 sm:justify-between">
+        <ChromeDialogFooter>
           <Button
             type="button"
             variant="ghost"
@@ -484,7 +485,6 @@ function AttachmentEditDialog({
           </Button>
           <Button
             type="button"
-            className="ml-auto sm:ml-0"
             onClick={() => {
               if (item) onSave(item.url, { alt: alt.trim(), spoiler });
               onClose();
@@ -492,8 +492,8 @@ function AttachmentEditDialog({
           >
             Save
           </Button>
-        </DialogFooter>
-      </DialogContent>
+        </ChromeDialogFooter>
+      </ChromeDialogContent>
     </Dialog>
   );
 }

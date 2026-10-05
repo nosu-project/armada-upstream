@@ -302,7 +302,7 @@ function MentionItem({
           </div>
           <BotPill metadata={metadata} />
         </div>
-        <div className="text-xs text-muted-foreground truncate font-mono text-[11px]">
+        <div className="text-xs text-muted-foreground truncate font-mono text-2xs">
           {identifier}
         </div>
       </div>

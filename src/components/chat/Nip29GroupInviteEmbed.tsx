@@ -70,7 +70,7 @@ export function Nip29GroupInviteEmbed({ group, className }: Nip29GroupInviteEmbe
       onClick={(e) => e.stopPropagation()}
     >
       <div className="px-3.5 py-3 space-y-2.5">
-        <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+        <p className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground">
           {group.inviteCode ? "You've been invited to join a channel" : "Channel"}
         </p>
 

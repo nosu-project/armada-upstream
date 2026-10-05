@@ -38,7 +38,7 @@ interface Candidate {
 
 /**
  * Android Direct Share suggestions, ranked by newest OUTGOING message across DMs, Concord and
- * NIP-29. The single writer of the set (the notification service no longer publishes these).
+ * NIP-29. The single writer of the set; the notification service must not publish these.
  * Sources: `Dm17Conversation.mineAt` and the local `shareTargets` ledger (newer wins). Avatars are
  * fetched natively (`ShareTargetPlugin.fetchIcon`) to avoid CORS.
  */

@@ -264,28 +264,28 @@ function ChangelogEntryCard({ entry }: { entry: ChangelogEntry }) {
 /** Banner shown at the top of the changelog for untagged (pre-release) builds. */
 function PreReleaseBanner({ latestVersion }: { latestVersion: string }) {
   return (
-    <div className="rounded-2xl border border-dashed border-amber-500/50 bg-amber-50/50 dark:bg-amber-950/20 px-4 py-3 space-y-1.5">
+    <div className="rounded-2xl border border-dashed border-warning/50 bg-warning/5 px-4 py-3 space-y-1.5">
       <div className="flex items-center gap-2">
-        <FlaskConical className="size-4 text-amber-600 dark:text-amber-400 shrink-0" />
-        <span className="text-sm font-medium text-amber-800 dark:text-amber-300">Pre-release build</span>
+        <FlaskConical className="size-4 text-warning shrink-0" />
+        <span className="text-sm font-medium text-warning">Pre-release build</span>
         {commitSha && buildDate && (
           <a
             href={`${GITLAB_REPO}/-/commit/${commitSha}`}
             target="_blank"
             rel="noopener noreferrer"
-            className="ml-auto text-[11px] text-amber-600/70 dark:text-amber-400/70 hover:text-amber-800 dark:hover:text-amber-300 transition-colors"
+            className="ml-auto text-2xs text-warning/70 hover:text-warning transition-colors"
           >
             {formatDate(buildDate.split("T")[0])}
           </a>
         )}
       </div>
-      <p className="text-xs text-amber-700/80 dark:text-amber-400/70">
+      <p className="text-xs text-warning/80">
         This build contains changes not yet included in a release.{" "}
         <a
           href={`${GITLAB_REPO}/-/compare/v${latestVersion}...${commitSha || "main"}`}
           target="_blank"
           rel="noopener noreferrer"
-          className="underline underline-offset-2 hover:text-amber-900 dark:hover:text-amber-200 transition-colors"
+          className="underline underline-offset-2 hover:text-warning transition-colors"
         >
           View unreleased changes
         </a>

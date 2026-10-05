@@ -124,7 +124,7 @@ console.log("electron/:");
 icon(join(ROOT, "electron/build/icon.png"), 1024, { frac: 0.72 });
 // The cut-corner launcher tile Linux uses for the packaged icon, the window
 // icon and the AppImage's hicolor icons. Composed from the mark like the rest
-// so it can't drift behind a mark change (which is exactly what it did once).
+// so it can't drift behind a mark change.
 vesselTile(join(ROOT, "electron/build/linux-icon.png"), 512);
 
 console.log("Done.");

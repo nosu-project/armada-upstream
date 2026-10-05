@@ -144,12 +144,8 @@ function overlayHsl(baseHsl: string, overlayHslStr: string, alpha: number): stri
 }
 
 /**
- * Derive all Tailwind theme tokens from 3 core colors. The Tailwind
- * "accent" token mirrors "primary"; "success" stays a fixed green.
- *
- * @param background - Background HSL string
- * @param text       - Text/foreground HSL string
- * @param primary    - Primary accent HSL string (also used as Tailwind accent)
+ * Derive all Tailwind theme tokens from 3 core HSL strings. The Tailwind
+ * "accent" token mirrors "primary"; "success" and "warning" stay a fixed green and amber.
  */
 export function deriveTokensFromCore(
   background: string,
@@ -182,12 +178,16 @@ export function deriveTokensFromCore(
   const success = dark ? "142 60% 35%" : "142 72% 29%";
   const successFg = "138 60% 94%";
 
+  // Dark amber on light themes so warning text keeps its contrast on white.
+  const warning = dark ? "43 96% 56%" : "32 95% 36%";
+  const warningFg = dark ? "26 83% 14%" : "48 100% 96%";
+
   // Phosphor-cyan counter-accent, fixed so it stays cold against warm primaries.
   const accent2 = dark ? "180 90% 55%" : "190 85% 40%";
 
   // Chrome planes (top bar, rails, sidebars). Dark: composite black/30, /40 and
-  // white/10 over the background (pixel-identical to the original look).
-  // Light: a black overlay looks muddy, so darken with a boosted theme hue.
+  // white/10 over the background. Light: a black overlay looks muddy, so darken
+  // with a boosted theme hue.
   let chrome: string;
   let chromeDeep: string;
   let chromeDivider: string;
@@ -223,6 +223,8 @@ export function deriveTokensFromCore(
     destructiveForeground: destructiveFg,
     success,
     successForeground: successFg,
+    warning,
+    warningForeground: warningFg,
     border,
     input,
     ring: primary,

@@ -37,8 +37,8 @@ function RelayIdentity({ url }: { url: string }) {
         <div className="text-xs text-muted-foreground font-mono truncate leading-tight">{host}</div>
       </div>
       <div className="flex items-center gap-1 ml-auto shrink-0">
-        {nips.includes(50) && <Badge variant="outline" className="text-[10px] px-1.5">NIP-50</Badge>}
-        {nips.includes(42) && <Badge variant="outline" className="text-[10px] px-1.5">NIP-42</Badge>}
+        {nips.includes(50) && <Badge variant="outline" className="text-3xs px-1.5">NIP-50</Badge>}
+        {nips.includes(42) && <Badge variant="outline" className="text-3xs px-1.5">NIP-42</Badge>}
       </div>
     </div>
   );

@@ -4,14 +4,7 @@ import { useEffect, useState } from "react";
 import { DisplayName } from "@/components/DisplayName";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { ChromeDialogContent, ChromeDialogFooter, ChromeDialogHeader, Dialog } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -122,13 +115,10 @@ export function ReportDialog({ open, onOpenChange, target, destination }: Report
 
   return (
     <Dialog open={open} onOpenChange={(next) => !busy && onOpenChange(next)}>
-      <DialogContent className="sm:max-w-sm">
-        <DialogHeader>
-          <DialogTitle>{title}</DialogTitle>
-          <DialogDescription>{reportAudience(destination)}</DialogDescription>
-        </DialogHeader>
+      <ChromeDialogContent title={typeof title === "string" ? title : `Report ${name}`} className="sm:max-w-sm">
+        <ChromeDialogHeader icon={Flag} tone="destructive" title={title} description={reportAudience(destination)} />
 
-        <div className="space-y-3">
+        <div className="mt-6 space-y-3">
           <Select value={reason} onValueChange={(v) => setReason(v as ReportReason)}>
             <SelectTrigger aria-label="Reason">
               <SelectValue placeholder="Choose a reason" />
@@ -161,18 +151,18 @@ export function ReportDialog({ open, onOpenChange, target, destination }: Report
           )}
         </div>
 
-        {error && <p className="text-sm text-destructive">{error}</p>}
+        {error && <p className="mt-4 text-sm text-destructive">{error}</p>}
 
-        <DialogFooter>
-          <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
+        <ChromeDialogFooter>
+          <Button type="button" variant="ghost" onClick={() => onOpenChange(false)} disabled={busy}>
             Cancel
           </Button>
           <Button type="button" variant="destructive" onClick={submit} disabled={busy || !reason}>
             {busy ? <Loader2 className="size-4 animate-spin" /> : <Flag className="size-4" />}
             {busy ? "Sending" : "Report"}
           </Button>
-        </DialogFooter>
-      </DialogContent>
+        </ChromeDialogFooter>
+      </ChromeDialogContent>
     </Dialog>
   );
 }

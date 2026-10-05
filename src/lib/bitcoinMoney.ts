@@ -59,7 +59,7 @@ export function isLargeAmount(sats: number, btcPrice: number | undefined): boole
   return usd >= LARGE_AMOUNT_USD_THRESHOLD;
 }
 
-/** Convert satoshis to USD given a BTC price. */
+/** Satoshis as a formatted USD string (`$12.34`). */
 export function satsToUSD(sats: number, btcPrice: number): string {
   const btc = sats / 100_000_000;
   return (btc * btcPrice).toLocaleString('en-US', {
@@ -70,7 +70,6 @@ export function satsToUSD(sats: number, btcPrice: number): string {
   });
 }
 
-/** Convert a USD amount to satoshis at the given BTC price. */
 export function usdToSats(usd: number, btcPrice: number): number {
   return Math.round((usd / btcPrice) * 100_000_000);
 }

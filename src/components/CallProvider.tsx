@@ -189,8 +189,8 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
 
   // A call-lifetime host the stage portals into, *reparented* between the normal
   // slot, floating window, or detached. Reparenting keeps CallStage mounted so
-  // video subscriptions and stage state survive navigation (a remount paused
-  // remote video and dropped it on the E2EE Concord path).
+  // video subscriptions and stage state survive navigation (a remount pauses
+  // remote video and drops it on the E2EE Concord path).
   const stageHost = useMemo(() => {
     const el = document.createElement("div");
     el.style.display = "contents";

@@ -329,7 +329,7 @@ function AppsPage({ apps, gamePicker, onOpenChange, scrollable }: {
                 onOpenChange(false);
                 app.onSelect();
               }}
-              className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-[15px] font-medium active:bg-secondary disabled:opacity-40"
+              className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-chat font-medium active:bg-secondary disabled:opacity-40"
             >
               <span className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-secondary">
                 <app.icon className="size-5" />
@@ -546,7 +546,7 @@ function RecentMediaGrid({ expanded, selected, onToggle, onPreview, onResetSelec
         <span className="flex size-12 items-center justify-center rounded-full bg-secondary">
           <ImageIcon className="size-6 text-muted-foreground" />
         </span>
-        <p className="text-[15px] font-semibold">Share photos and videos</p>
+        <p className="text-chat font-semibold">Share photos and videos</p>
         <p className="text-sm leading-snug text-muted-foreground">
           {access === "denied"
             ? "Photo access is turned off for Armada. Turn it on in settings to see your recent photos here."
@@ -680,7 +680,7 @@ const GalleryTile = memo(function GalleryTile({ item, order, onToggle, onPreview
         />
       )}
       {item.video && (
-        <span className="absolute bottom-1 left-1 flex items-center gap-0.5 rounded bg-black/60 px-1 py-px text-[10px] font-medium tabular-nums text-white">
+        <span className="absolute bottom-1 left-1 flex items-center gap-0.5 rounded bg-black/60 px-1 py-px text-3xs font-medium tabular-nums text-white">
           <Play className="size-2.5" fill="currentColor" />
           {item.duration > 0 ? formatTime(item.duration / 1000) : ""}
         </span>

@@ -96,7 +96,7 @@ function ImportFromDiscordSection({ onOpen }: { onOpen: () => void }) {
     <div className="w-full max-w-sm space-y-2">
       <div className="flex items-center gap-3">
         <span className="h-px flex-1 bg-border" />
-        <span className="text-[0.7rem] uppercase tracking-wider text-muted-foreground">or</span>
+        <span className="text-2xs uppercase tracking-wider text-muted-foreground">or</span>
         <span className="h-px flex-1 bg-border" />
       </div>
       <ImportFromDiscordButton onOpen={onOpen} />
@@ -517,7 +517,7 @@ function TargetPreview({ target }: { target: Target }) {
     <div className="mt-3 flex items-start gap-3 rounded-lg bg-secondary/50 p-3 text-left">
       <Icon className={cn("mt-0.5 size-5 shrink-0", isConcord ? "text-success" : "text-muted-foreground")} />
       <div className="min-w-0">
-        <div className="text-[0.7rem] uppercase tracking-wider text-muted-foreground">
+        <div className="text-2xs uppercase tracking-wider text-muted-foreground">
           {isConcord ? "You're joining" : target.kind === "nip29-group" ? "You're opening the channel" : target.kind === "buzz" ? "You're joining the workspace" : "You're adding the server"}
         </div>
         <div className="truncate font-medium">{title || "Untitled"}</div>

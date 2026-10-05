@@ -60,7 +60,6 @@ const AUTHORS_PER_FILTER = 200;
 const MAX_GROUPS = 600;
 const PUBLISH_CONCURRENCY = 10;
 
-/**
 /** Every stream address whose history a new relay needs, derived from held keys alone. */
 export function mirrorGroups(community: Community): StreamKeyView[] {
   const groups: StreamKeyView[] = [

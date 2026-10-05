@@ -1,6 +1,6 @@
 import { useState, useMemo, useRef, useEffect } from 'react';
-import { Search, X, Sticker } from 'lucide-react';
-import { Input } from '@/components/ui/input';
+import { Sticker } from 'lucide-react';
+import { SearchField } from '@/components/ui/search-field';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { CustomEmojiImg } from '@/components/chat/CustomEmoji';
 import type { CustomEmoji } from '@/hooks/useCustomEmojis';
@@ -43,30 +43,10 @@ export function StickerPicker({ customEmojis, onSelect, height = 350, autoFocus 
 
   return (
     <div className="flex flex-col" style={{ height }}>
-      {/* Search input */}
       <div className="px-3 pt-3 pb-2 shrink-0">
-        <div className="relative">
-          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-4 text-muted-foreground pointer-events-none" />
-          <Input
-            ref={inputRef}
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search stickers..."
-            className="pl-8 pr-8 h-9 text-base md:text-sm bg-muted/50 border-0 rounded-lg"
-          />
-          {query && (
-            <button
-              type="button"
-              onClick={() => setQuery('')}
-              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
-            >
-              <X className="size-3.5" />
-            </button>
-          )}
-        </div>
+        <SearchField ref={inputRef} value={query} onChange={setQuery} placeholder="Search stickers" />
       </div>
 
-      {/* Results */}
       <ScrollArea className="flex-1 min-h-0">
         {filtered.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
@@ -74,14 +54,14 @@ export function StickerPicker({ customEmojis, onSelect, height = 350, autoFocus 
             <p className="text-xs mt-1">Try a different search term</p>
           </div>
         ) : (
-          <div className="grid grid-cols-4 gap-1.5 p-2">
+          <div className="grid grid-cols-4 gap-1.5 px-3 pb-3">
             {filtered.map((emoji) => (
               <button
                 key={emoji.shortcode}
                 type="button"
                 title={emoji.shortcode}
                 onClick={() => onSelect(emoji)}
-                className="aspect-square rounded-lg overflow-hidden hover:bg-muted transition-colors p-1 group"
+                className="aspect-square clip-corner-lg overflow-hidden hover:bg-muted transition-colors p-1 group"
               >
                 <CustomEmojiImg
                   name={emoji.shortcode}

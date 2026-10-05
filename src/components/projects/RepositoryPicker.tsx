@@ -43,7 +43,7 @@ export function OwnerAvatar({ pubkey, className }: { pubkey: string; className?:
   return (
     <Avatar className={cn("size-8 shrink-0 border border-border/60", className)}>
       <AvatarImage src={author.data?.metadata?.picture} imeta={author.data?.imeta?.picture} alt={name} />
-      <AvatarFallback className="text-[10px] font-semibold">{name.slice(0, 2).toUpperCase()}</AvatarFallback>
+      <AvatarFallback className="text-3xs font-semibold">{name.slice(0, 2).toUpperCase()}</AvatarFallback>
     </Avatar>
   );
 }
@@ -191,7 +191,7 @@ export function RepositoryPicker({ connectedCoordinates, onSelect, autoFocus = t
           </p>
         ) : results.length > 0 ? (
           <>
-            {!query.trim() && <p className="px-2.5 pt-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Recently announced</p>}
+            {!query.trim() && <p className="px-2.5 pt-1.5 text-3xs font-semibold uppercase tracking-wider text-muted-foreground">Recently announced</p>}
             {results.map((repository) => (
               <RepositoryRow
                 key={repository.address.coordinate}

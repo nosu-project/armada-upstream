@@ -8,7 +8,7 @@ const INDICATOR = "shadow-[inset_3px_0_0_0_hsl(var(--primary))]";
 
 /**
  * The row's own vertical scroller. Avoids `scrollIntoView`, which scrolls EVERY
- * ancestor on both axes: on mobile it scrolled the `overflow: hidden` shell
+ * ancestor on both axes: on mobile it scrolls the `overflow: hidden` shell
  * sideways past SwipeReveal's parked pane, freezing touch input until restart.
  */
 function ownScroller(row: HTMLElement): HTMLElement | null {

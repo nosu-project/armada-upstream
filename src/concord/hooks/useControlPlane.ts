@@ -119,8 +119,8 @@ export function useControlEvents(community: Community | undefined, active = true
   const queryKey = ["concord", "control", cidHex, epochSig] as const;
 
   // Seed from the opened-event cache and re-seed on the `c2ctl:<id>` bus (the only
-  // wake-up for an inactive rail button). Refcounted to ONE runner per key: ~20
-  // copies of this hook mount per open community, and each used to re-read the plane.
+  // wake-up for an inactive rail button). Refcounted to ONE runner per key, since
+  // ~20 copies of this hook mount per open community.
   useEffect(() => {
     if (!community) return;
     return acquireControlSeed(queryClient, community, epochSig, queryKey);

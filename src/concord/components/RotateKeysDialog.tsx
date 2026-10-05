@@ -2,14 +2,7 @@ import { KeyRound, Loader2 } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { ChromeDialogContent, ChromeDialogFooter, ChromeDialogHeader, Dialog } from "@/components/ui/dialog";
 
 interface RotateKeysDialogProps {
   open: boolean;
@@ -73,16 +66,15 @@ export function RotateKeysDialog({
 
   return (
     <Dialog open={open} onOpenChange={(next) => !next && close()}>
-      <DialogContent className="sm:max-w-sm">
-        <DialogHeader>
-          <DialogTitle>Rotate this community's keys?</DialogTitle>
-          <DialogDescription>
-            Every message from here on is encrypted to new keys. The old keys still read the history
-            they already unlocked, but they read nothing new.
-          </DialogDescription>
-        </DialogHeader>
+      <ChromeDialogContent title="Rotate this community's keys?" className="sm:max-w-sm">
+        <ChromeDialogHeader
+          icon={KeyRound}
+          tone="warning"
+          title="rotate keys?"
+          description="New messages are encrypted to new keys. Old keys still read the history they already unlocked, and nothing after."
+        />
 
-        <ul className="space-y-1 text-sm text-muted-foreground">
+        <ul className="mt-5 space-y-1 text-sm text-muted-foreground">
           <li>
             {memberCount === 1 ? "1 member keeps" : `${memberCount} members keep`} access. Nobody is
             removed.
@@ -102,30 +94,30 @@ export function RotateKeysDialog({
         </ul>
 
         {strandsForeignLinks && (
-          <p className="text-sm text-destructive">
+          <p className="mt-3 text-sm text-destructive">
             Invite links created by other members will hand out dead keys until those members next
             open the app. Only their creator can refresh them.
           </p>
         )}
 
-        {error && <p className="text-sm text-destructive">{error}</p>}
+        {error && <p className="mt-3 text-sm text-destructive">{error}</p>}
         {stuck && busy && (
-          <p className="text-sm text-muted-foreground">
+          <p className="mt-3 text-sm text-muted-foreground">
             This is taking longer than expected. Your signer may be slow or offline. You can close
             this and try again. A rotation that already landed is picked up automatically.
           </p>
         )}
 
-        <DialogFooter>
-          <Button type="button" variant="outline" onClick={close} disabled={busy && !stuck}>
+        <ChromeDialogFooter>
+          <Button type="button" variant="ghost" onClick={close} disabled={busy && !stuck}>
             {busy && stuck ? "Close" : "Cancel"}
           </Button>
           <Button type="button" variant="destructive" onClick={run} disabled={busy}>
             {busy ? <Loader2 className="size-4 animate-spin" /> : <KeyRound className="size-4" />}
             {busy ? "Rotating" : "Rotate keys"}
           </Button>
-        </DialogFooter>
-      </DialogContent>
+        </ChromeDialogFooter>
+      </ChromeDialogContent>
     </Dialog>
   );
 }

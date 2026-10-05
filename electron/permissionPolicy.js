@@ -14,9 +14,9 @@ const APP_PERMISSIONS = new Set([
 
 // What a cross-origin subframe the app embeds (YouTube, Streamable, Spotify, a
 // Mini App) may use. Electron reports such a request under the IFRAME's
-// origin, so an origin check alone denied the YouTube player its fullscreen
-// and copy-link buttons. Chromium has already applied the iframe's `allow`
-// attribute before the handler runs, so which frames get fullscreen is the
+// origin, so an origin check alone would deny the YouTube player its
+// fullscreen and copy-link buttons. Chromium has already applied the iframe's
+// `allow` attribute before the handler runs, so which frames get fullscreen is the
 // app's markup's call; this list only bounds what the markup can hand out —
 // never a microphone, camera or screen to a foreign origin.
 const DELEGATED_PERMISSIONS = new Set(["fullscreen"]);

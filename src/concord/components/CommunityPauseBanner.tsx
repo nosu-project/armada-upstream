@@ -17,7 +17,7 @@ export function CommunityPauseBanner({
 }) {
   const until = pause.until ? new Date(pause.until * 1000) : undefined;
   return (
-    <div className="flex items-center gap-2 px-3 py-2 text-xs border-t border-amber-500/20 bg-amber-500/10 text-amber-600 dark:text-amber-400">
+    <div className="flex items-center gap-2 px-3 py-2 text-xs border-t border-warning/20 bg-warning/10 text-warning">
       <Pause className="size-4 shrink-0" />
       <span className="flex-1 min-w-0">
         This community is paused. New messages are on hold

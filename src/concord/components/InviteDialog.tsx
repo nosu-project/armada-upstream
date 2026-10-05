@@ -361,7 +361,7 @@ function InviteBody({ community, canCreateLink }: { community: Community | undef
           <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Your live links</div>
           {myLinks.map((e) => (
             <div key={e.token} className="flex items-center gap-2">
-              <Input readOnly value={e.url} className="min-w-0 font-mono text-[0.65rem]" onFocus={(ev) => ev.currentTarget.select()} />
+              <Input readOnly value={e.url} className="min-w-0 font-mono text-3xs" onFocus={(ev) => ev.currentTarget.select()} />
               <Button type="button" size="icon" variant="outline" className="shrink-0" aria-label="Copy link" onClick={() => handleCopy(e.url)}>
                 {copied === e.url ? <Check className="size-3.5 text-success" /> : <Copy className="size-3.5" />}
               </Button>

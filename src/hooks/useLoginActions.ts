@@ -43,7 +43,7 @@ function usableRendezvousRelay(url: string): boolean {
 }
 
 /**
- * Merge the bunker's own `get_relays` list (NIP-46) into the frozen pairing set (#48): old
+ * Merge the bunker's own `get_relays` list (NIP-46) into the frozen pairing set: old
  * bunker:// URIs often carry stale relays. Best-effort; pairing relays stay FIRST.
  */
 async function adoptBunkerRelays(signer: Nip46Signer, pairingRelays: string[]): Promise<string[]> {
@@ -92,7 +92,7 @@ export function useLoginActions() {
       const login = NLogin.fromNsec(nsec);
       await addAndActivate(login);
     },
-    // Pairing uses a throwaway Nip46Transport, never the relay pool (which wedged NIP-46 on
+    // Pairing uses a throwaway Nip46Transport, never the relay pool (which wedges NIP-46 on
     // Android; see nip46Transport.ts). The bunker's relays are then adopted (adoptBunkerRelays).
     async bunker(uri: string): Promise<void> {
       const { pubkey: bunkerPubkey, secret, relays } = new BunkerURI(uri);
@@ -190,7 +190,7 @@ export function useLoginActions() {
       }
     },
     // NIP-46 rendezvous relays: the app relays (the user's NIP-29 servers need a login to read).
-    // Frozen into the pairing (#48), so unreachable relays are filtered (see usableRendezvousRelay).
+    // Frozen into the pairing, so unreachable relays are filtered (see usableRendezvousRelay).
     getRelayUrls(): string[] {
       const appRelays = config.appRelays
         .map(normalizeRelayUrl)

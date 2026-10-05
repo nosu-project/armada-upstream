@@ -59,7 +59,7 @@ function BotIdentity({ pubkey, avatarOnly }: { pubkey: string; avatarOnly?: bool
     <>
       <Avatar className="size-4 shrink-0">
         <AvatarImage src={image} imeta={author.data?.imeta?.picture} alt="" />
-        <AvatarFallback className="text-[8px]">{name.slice(0, 2).toUpperCase()}</AvatarFallback>
+        <AvatarFallback className="text-monogram">{name.slice(0, 2).toUpperCase()}</AvatarFallback>
       </Avatar>
       {!avatarOnly && (
         <span className="truncate">
@@ -269,7 +269,7 @@ export function SlashCommandAutocomplete({
           <div key={section.key}>
             {(section.bot || section.label) && (
               // Sticky per section so the current bot's header stays pinned. Opaque.
-              <div className="sticky top-0 z-10 flex items-center gap-1.5 bg-popover px-3 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+              <div className="sticky top-0 z-10 flex items-center gap-1.5 bg-popover px-3 pt-2 pb-1 text-3xs font-semibold uppercase tracking-wide text-muted-foreground">
                 {section.bot ? <BotIdentity pubkey={section.bot} /> : section.label}
               </div>
             )}

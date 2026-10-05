@@ -19,7 +19,7 @@ import { useAuthor } from "./useAuthor.ts";
 
 /**
  * ONE NUser (and signer) per (nostr instance, login id), app-wide. Per-call-site
- * construction gave NIP-46 logins N signers with duplicate bunker subscriptions
+ * construction would give NIP-46 logins N signers with duplicate bunker subscriptions
  * and caches. Weakly keyed by the nostr instance so a provider remount invalidates it.
  */
 const userCache = new WeakMap<object, Map<string, NUser>>();
@@ -69,7 +69,7 @@ export function useCurrentUser() {
           const clientSigner = new NSecSigner(clientSk.data);
           const bunkerRelays = login.data.relays;
 
-          // NIP-46 uses a DEDICATED plain-WebSocket transport (the pool wedged on
+          // NIP-46 uses a DEDICATED plain-WebSocket transport (the pool wedges on
           // Android; see nip46Transport.ts) and one persistent response subscription
           // (nip46Signer.ts).
           const transport = getNip46Transport(login.data.bunkerPubkey, bunkerRelays);

@@ -133,10 +133,10 @@ export function EmojiPackSettings() {
 function GroupLabel({ title, count }: { title: string; count: number }) {
   return (
     <div className="flex items-center gap-2 px-4 pt-3 pb-1.5">
-      <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+      <span className="text-2xs font-semibold uppercase tracking-wider text-muted-foreground">
         {title}
       </span>
-      <span className="text-[11px] tabular-nums text-muted-foreground/70">{count}</span>
+      <span className="text-2xs tabular-nums text-muted-foreground/70">{count}</span>
     </div>
   );
 }

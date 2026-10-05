@@ -216,7 +216,7 @@ const MemberRow = memo(function MemberRow({
       {((canActOnUser && (onSetRole || onRemove || onKick || onBan || onUnban)) || showRolePicker) && (
         <>
           <Separator />
-          <Label className="px-2 pb-1.5 text-[11px] uppercase tracking-wide text-muted-foreground/80">
+          <Label className="px-2 pb-1.5 text-2xs uppercase tracking-wide text-muted-foreground/80">
             {/* Can stand alone on the viewer's own row (owner self-assigning a cosmetic role). */}
             {canActOnUser ? "Moderation" : "Roles"}
           </Label>
@@ -345,7 +345,7 @@ const MemberRow = memo(function MemberRow({
         <button type="button" className="relative shrink-0 rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-ring">
           <Avatar shape={getAvatarShape(metadata)} className="size-8 cursor-pointer transition-opacity hover:opacity-90">
             <AvatarImage src={metadata?.picture} imeta={author.data?.imeta?.picture} alt={displayName} />
-            <AvatarFallback className="bg-primary/20 text-primary text-[10px]">
+            <AvatarFallback className="bg-primary/20 text-primary text-3xs">
               {displayName[0]?.toUpperCase()}
             </AvatarFallback>
           </Avatar>
@@ -392,7 +392,7 @@ const MemberRow = memo(function MemberRow({
       {isOwner ? (
         <span
           title="Owner"
-          className="shrink-0 inline-flex items-center gap-1 rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-500"
+          className="shrink-0 inline-flex items-center gap-1 rounded-full bg-amber-500/15 px-1.5 py-0.5 text-3xs font-medium text-amber-500"
         >
           <Crown className="size-3" aria-hidden />
           Owner
@@ -400,7 +400,7 @@ const MemberRow = memo(function MemberRow({
       ) : isAdmin ? (
         <span
           title="Admin"
-          className="shrink-0 inline-flex items-center gap-1 rounded-full bg-primary/15 px-1.5 py-0.5 text-[10px] font-medium text-primary"
+          className="shrink-0 inline-flex items-center gap-1 rounded-full bg-primary/15 px-1.5 py-0.5 text-3xs font-medium text-primary"
         >
           <Shield className="size-3" aria-hidden />
           Admin
@@ -408,7 +408,7 @@ const MemberRow = memo(function MemberRow({
       ) : isModerator ? (
         <span
           title="Moderator"
-          className="shrink-0 inline-flex items-center gap-1 rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground"
+          className="shrink-0 inline-flex items-center gap-1 rounded-full bg-muted px-1.5 py-0.5 text-3xs font-medium text-muted-foreground"
         >
           <Shield className="size-3" aria-hidden />
           Mod
@@ -417,7 +417,7 @@ const MemberRow = memo(function MemberRow({
         <span
           title={customBadge.name}
           className={cn(
-            "shrink-0 inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium max-w-24",
+            "shrink-0 inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-3xs font-medium max-w-24",
             !customBadge.color && "bg-muted text-muted-foreground",
           )}
           style={customBadge.color ? { color: roleTint(customBadge.color), backgroundColor: `${roleTint(customBadge.color)}26` } : undefined}
@@ -427,7 +427,7 @@ const MemberRow = memo(function MemberRow({
       ) : roleSet.has(ROLE_BOT) ? (
         <span
           title="Agent"
-          className="shrink-0 inline-flex items-center gap-1 rounded-full bg-primary/15 px-1.5 py-0.5 text-[10px] font-medium text-primary"
+          className="shrink-0 inline-flex items-center gap-1 rounded-full bg-primary/15 px-1.5 py-0.5 text-3xs font-medium text-primary"
         >
           <Bot className="size-3" aria-hidden />
           Agent
@@ -435,7 +435,7 @@ const MemberRow = memo(function MemberRow({
       ) : roleSet.has(ROLE_GUEST) ? (
         <span
           title="Guest"
-          className="shrink-0 inline-flex items-center gap-1 rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground"
+          className="shrink-0 inline-flex items-center gap-1 rounded-full bg-muted px-1.5 py-0.5 text-3xs font-medium text-muted-foreground"
         >
           Guest
         </span>

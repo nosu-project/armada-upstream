@@ -140,7 +140,7 @@ export function useRekeyWatch(community: Community | undefined): { stranded: boo
     enabled: Boolean(community),
     staleTime: 30_000,
     // Rekeys are rare and this runs only for the open community; per-relay cursors
-    // mean a longer gap only delays adoption (issue #19 family).
+    // mean a longer gap only delays adoption.
     refetchInterval: 2 * 60_000,
     refetchIntervalInBackground: false,
     queryFn: async ({ signal }) => {
@@ -152,7 +152,7 @@ export function useRekeyWatch(community: Community | undefined): { stranded: boo
       };
 
       // PER-RELAY `since` cursors, so a fast relay can't advance past a chunk a
-      // lagging one still owes; a skipped chunk would block adoption forever (issue #19).
+      // lagging one still owes; a skipped chunk would block adoption forever.
       const results = await Promise.all(
         community!.relays.map(async (url) => {
           const scope = `rekey:${community!.idHex}:${nextEpoch}|${url}`;
@@ -455,7 +455,7 @@ export function useChannelRekeyWatch(community: Community | undefined) {
         limit: 50,
       };
 
-      // PER-RELAY `since` cursors, as in the base watcher (issue #19 family).
+      // PER-RELAY `since` cursors, as in the base watcher.
       const results = await Promise.all(
         community!.relays.map(async (url) => {
           const scope = `chrekey:${community!.idHex}:${watchKey}|${url}`;

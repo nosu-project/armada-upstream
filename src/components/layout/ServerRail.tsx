@@ -1,4 +1,4 @@
-import { Bell, Bluetooth, CheckCheck, Compass, FolderOpen, Headphones, Lock, LogOut, MailPlus, MessageSquare, PanelLeftDashed, Plus, Settings, Trash2 } from "lucide-react";
+import { Bell, Bluetooth, CheckCheck, Compass, Folder, FolderOpen, Headphones, Lock, LogOut, MailPlus, MessageSquare, PanelLeftDashed, Plus, Settings, Trash2 } from "lucide-react";
 import { nip19 } from "nostr-tools";
 import { memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -17,14 +17,7 @@ import {
   ContextMenuItem,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { ChromeDialogContent, ChromeDialogFooter, ChromeDialogHeader, Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { MAX_RAIL_RECENT_DMS } from "@/contexts/AppContext";
@@ -165,7 +158,7 @@ function ServerMiniIcon({ url }: { url: string }) {
       {icon ? (
         <img src={icon} alt="" draggable={false} className="size-full object-cover" />
       ) : (
-        <span className="text-[9px] font-semibold leading-none text-secondary-foreground">{initial}</span>
+        <span className="text-monogram font-semibold leading-none text-secondary-foreground">{initial}</span>
       )}
       <MiniUnreadDot mention={anyMention} unread={anyUnread} />
     </span>
@@ -186,7 +179,7 @@ function Concord2MiniIcon({ communityId, name }: { communityId: string; name: st
       {iconUrl ? (
         <img src={iconUrl} alt="" draggable={false} className="size-full object-cover" />
       ) : (
-        <span className="text-[9px] font-semibold leading-none">{initial}</span>
+        <span className="text-monogram font-semibold leading-none">{initial}</span>
       )}
       <MiniUnreadDot
         mention={Object.values(byChannel).some((u) => u.mention)}
@@ -210,7 +203,7 @@ function DmMiniIcon({ pubkey }: { pubkey: string }) {
       ) : (
         <Avatar shape={getAvatarShape(metadata)} className="size-full">
           <AvatarImage src={metadata?.picture} imeta={author.data?.imeta?.picture} alt="" draggable={false} />
-          <AvatarFallback className="bg-primary/20 text-[9px] font-semibold leading-none text-primary">
+          <AvatarFallback className="bg-primary/20 text-monogram font-semibold leading-none text-primary">
             {name.trim().charAt(0).toUpperCase() || "?"}
           </AvatarFallback>
         </Avatar>
@@ -527,7 +520,7 @@ const ServerButton = memo(function ServerButton({
         )}
         {!isActive && anyMention ? (
           <span
-            className="absolute -top-1 -right-1 z-10 flex min-w-4 h-4 px-1 items-center justify-center rounded-full bg-primary text-primary-foreground text-[10px] font-bold leading-none ring-2 ring-background"
+            className="absolute -top-1 -right-1 z-10 flex min-w-4 h-4 px-1 items-center justify-center rounded-full bg-primary text-primary-foreground text-3xs font-bold leading-none ring-2 ring-background"
             aria-label="You were mentioned"
           >
             @
@@ -545,7 +538,7 @@ const ServerButton = memo(function ServerButton({
   const triggerClass = "group relative flex items-center justify-center shrink-0 touch-none";
 
   const dragClass = cn(
-    // No grab cursor on hover: it suggested HTML5 dragging and confused people.
+    // No grab cursor on hover: it suggests HTML5 dragging.
     dragging && "cursor-grabbing",
     // Lock touch-action mid-reorder so the browser can't steal the gesture as a pan.
     reordering && "touch-none",
@@ -760,7 +753,7 @@ const Concord2Button = memo(function Concord2Button({
                   ) : null}
                   {!isActive && anyMention ? (
                     <span
-                      className="absolute -top-1 -right-1 z-10 flex min-w-4 h-4 px-1 items-center justify-center rounded-full bg-primary text-primary-foreground text-[10px] font-bold leading-none ring-2 ring-background"
+                      className="absolute -top-1 -right-1 z-10 flex min-w-4 h-4 px-1 items-center justify-center rounded-full bg-primary text-primary-foreground text-3xs font-bold leading-none ring-2 ring-background"
                       aria-label="You were mentioned"
                     >
                       @
@@ -912,7 +905,7 @@ const DmButton = memo(function DmButton({
                       )}
                       {!isActive && displayedUnreadCount > 0 ? (
                         <span
-                          className="absolute -top-1 -right-1 z-10 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-bold leading-none text-primary-foreground ring-2 ring-background"
+                          className="absolute -top-1 -right-1 z-10 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-3xs font-bold leading-none text-primary-foreground ring-2 ring-background"
                           aria-label={`${displayedUnreadCount} unread ${displayedUnreadCount === 1 ? "message" : "messages"}`}
                         >
                           {displayedUnreadCount > 99 ? "99+" : displayedUnreadCount}
@@ -1012,7 +1005,7 @@ const RecentDmButton = memo(function RecentDmButton({
                       )}
                       {!isActive && item.unreadCount > 0 && (
                         <span
-                          className="absolute -top-1 -right-1 z-10 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-bold leading-none text-primary-foreground ring-2 ring-background"
+                          className="absolute -top-1 -right-1 z-10 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-3xs font-bold leading-none text-primary-foreground ring-2 ring-background"
                           aria-label={`${item.unreadCount} unread ${item.unreadCount === 1 ? "message" : "messages"}`}
                         >
                           {item.unreadCount > 99 ? "99+" : item.unreadCount}
@@ -1148,7 +1141,7 @@ function RailFolder({
                   </span>
                   {anyMention ? (
                     <span
-                      className="absolute -top-1 -right-1 z-10 flex min-w-4 h-4 px-1 items-center justify-center rounded-full bg-primary text-primary-foreground text-[10px] font-bold leading-none ring-2 ring-background"
+                      className="absolute -top-1 -right-1 z-10 flex min-w-4 h-4 px-1 items-center justify-center rounded-full bg-primary text-primary-foreground text-3xs font-bold leading-none ring-2 ring-background"
                       aria-label="You were mentioned"
                     >
                       @
@@ -1222,8 +1215,8 @@ function useSideBySideLayout(): boolean {
 
 // Drill-down rail persistence: rendered ONCE by MainLayout's shell rail into
 // this detached container, and each page's `<ServerRail />` slot ADOPTS the
-// DOM node on mount. Rebuilding the rail on every section switch made the
-// first tap after a switch feel dead; moving a DOM node is invisible to React.
+// DOM node on mount. Rebuilding the rail on every section switch would make
+// the first tap after a switch feel dead; moving a DOM node is invisible to React.
 let railPortalNode: HTMLDivElement | null = null;
 function getRailPortalNode(): HTMLDivElement {
   if (!railPortalNode) {
@@ -1894,7 +1887,7 @@ function ServerRailInner({
                   </span>
                   {inviteUnread > 0 && (
                     <span
-                      className="absolute -top-1 -right-1 z-10 flex min-w-4 h-4 px-1 items-center justify-center rounded-full bg-primary text-primary-foreground text-[10px] font-bold leading-none ring-2 ring-background group-aria-[current=page]:hidden"
+                      className="absolute -top-1 -right-1 z-10 flex min-w-4 h-4 px-1 items-center justify-center rounded-full bg-primary text-primary-foreground text-3xs font-bold leading-none ring-2 ring-background group-aria-[current=page]:hidden"
                       aria-label={`${inviteUnread} new invite${inviteUnread === 1 ? "" : "s"}`}
                     >
                       {inviteUnread}
@@ -2049,30 +2042,32 @@ function ServerRailInner({
       <AddDialog open={addOpen} onOpenChange={setAddOpen} />
 
       <Dialog open={renameId !== null} onOpenChange={(open) => !open && setRenameId(null)}>
-        <DialogContent className="sm:max-w-sm">
-          <DialogHeader>
-            <DialogTitle>Rename folder</DialogTitle>
-            <DialogDescription>Name this group of communities.</DialogDescription>
-          </DialogHeader>
+        <ChromeDialogContent title="Rename folder" className="sm:max-w-sm">
+          <ChromeDialogHeader icon={Folder} title="rename folder" description="Name this group of communities." />
           <form
             onSubmit={(e) => {
               e.preventDefault();
               submitRename();
             }}
-            className="space-y-4"
+            className="mt-6"
           >
             <Input
               value={renameValue}
               onChange={(e) => setRenameValue(e.target.value)}
               placeholder="Folder name"
+              aria-label="Folder name"
               autoFocus
               maxLength={64}
+              className="bg-background/40 border-transparent"
             />
-            <DialogFooter>
+            <ChromeDialogFooter>
+              <Button type="button" variant="ghost" onClick={() => setRenameId(null)}>
+                Cancel
+              </Button>
               <Button type="submit">Save</Button>
-            </DialogFooter>
+            </ChromeDialogFooter>
           </form>
-        </DialogContent>
+        </ChromeDialogContent>
       </Dialog>
 
       {dragSource && (draggedItem || draggedFolder) && (

@@ -37,7 +37,7 @@ export function SuspiciousActivityBanner({
       <Shield className="size-4 shrink-0" />
       <span className="truncate flex-1 min-w-0">Suspicious Activity</span>
       {count > 1 ? (
-        <span className="shrink-0 flex items-center justify-center min-w-4 h-4 px-1 rounded-full bg-destructive text-destructive-foreground text-[10px] font-bold leading-none">
+        <span className="shrink-0 flex items-center justify-center min-w-4 h-4 px-1 rounded-full bg-destructive text-destructive-foreground text-3xs font-bold leading-none">
           {count}
         </span>
       ) : null}

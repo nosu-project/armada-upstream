@@ -165,13 +165,9 @@ public class ArmadaNotificationPlugin extends Plugin {
      * The call parameters of the ring currently in the tray, for the Answer
      * action to hand to the WebView — the ONE way those parameters travel.
      *
-     * They used to ride the Answer action's deep-link URL. That made the URL
-     * itself the authorization to join a call: `?call=&csecret=&cbroker=` in a
-     * link anyone could send answered a call the client had never been offered,
-     * over a broker the sender chose, because the only test on the far side was
-     * that the secret derived the room — which the sender minted. A URL is a
-     * hint that a call was answered; it cannot be the proof, because every
-     * surface the router is reachable on can produce one.
+     * Not the Answer action's deep-link URL: anyone can send a URL, so call
+     * parameters in one would answer a call the client was never offered, over
+     * a broker the sender chose. A URL is a hint, never the proof.
      *
      * So the parameters go through a channel only this app can write: the
      * service records them here when it posts a ring it has ALREADY vetted
@@ -235,12 +231,10 @@ public class ArmadaNotificationPlugin extends Plugin {
 
     /**
      * Rolling per-room cache of raw outer events, keyed by room
-     * ("h:<groupId>" / "c2:<channelId>" / "dm"), newest last.
-     * Unlike {@link #eventBuffer} (a one-shot drain of what arrived while the
-     * WebView was down, shared across ALL rooms), this survives drains and
-     * retains the last screenful per room for the service's lifetime — so
-     * opening a room from a notification can paint natively-received history
-     * even when the global buffer overflowed or was already drained. LRU-bounded.
+     * ("h:<groupId>" / "c2:<channelId>" / "dm"), newest last. Unlike the
+     * drain queue it survives drains and retains the last screenful per room
+     * for the service's lifetime, so opening a room from a notification can
+     * paint natively-received history. LRU-bounded.
      */
     private static final int ROOM_CACHE_MAX_ROOMS = 24;
     private static final int ROOM_CACHE_MAX_EVENTS = 30;
@@ -270,8 +264,8 @@ public class ArmadaNotificationPlugin extends Plugin {
      * Hand a raw outer event (the wire JSON the service received) to the WebView.
      * Emits live when the bridge is up; durability is the shared database (the
      * service already wrote the event before calling this — see
-     * NotificationRelayService.handleEvent), which the WebView drains by cursor
-     * on open/resume. Also recorded in the per-room rolling cache regardless of
+     * NotificationRelayService.handleEvent) plus the handoff queue the WebView
+     * drains on open/resume. Also recorded in the per-room rolling cache regardless of
      * bridge state. Same event for NIP-29 (kind 9/1068/…), DMs (kind 4,
      * ciphertext) and Concord (wrapped kind 1059) — the
      * WebView routes it through wire ingest and its read path decodes it.
@@ -788,10 +782,9 @@ public class ArmadaNotificationPlugin extends Plugin {
                 String signerRaw = call.getObject("signer").toString();
                 signerDigest = sha256Hex(signerRaw);
                 // The SAME credential as last time keeps its sealed copy. Sealing
-                // uses a fresh IV, so re-sealing an unchanged signer produced a
-                // new ciphertext every configure — which the service could only
-                // read as "the signer changed", rebuilding it (and redialing a
-                // NIP-46 bunker) and reconnecting every relay each time.
+                // uses a fresh IV, so re-sealing an unchanged signer would read
+                // to the service as "the signer changed", rebuilding it (and
+                // redialing a NIP-46 bunker) and reconnecting every relay.
                 String previousSealed = prefs.getString("signerSealed", null);
                 if (previousSealed != null && signerDigest.equals(prefs.getString("signerDigest", null))) {
                     signerSealed = previousSealed;

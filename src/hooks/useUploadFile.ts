@@ -349,7 +349,7 @@ export async function mirrorToServers(
   await Promise.allSettled(
     servers.map((server) => {
       // Nostrify's BUD-04/BUD-11 auth carries the required verb, hash and URL; hand-built
-      // `t=mirror` events got 403s from conforming servers.
+      // `t=mirror` events are refused (403) by conforming servers.
       const uploader = new BlossomUploader({
         servers: [server],
         signer,

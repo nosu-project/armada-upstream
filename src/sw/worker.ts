@@ -5,15 +5,10 @@
  * Push-only: receive push notifications — Web Push from the nostr-push2
  * gateway, or Tenna's `window.napp.push` delivery when Armada is an nsite
  * there — and route notificationclick to the correct conversation. It
- * deliberately does NOT cache or intercept fetches.
- *
- * An earlier version of this worker also did app-shell caching (precached
- * index.html and served /assets/* cache-first). That made every release boot
- * into the error screen: a stale cached shell referencing old chunk hashes
- * survived even the client's one-time chunk-error recovery reload, on both the
- * hosted web app and inside the Capacitor WebView. HTTP caching of the build
- * (immutable hashed /assets/*, revalidated index.html — armada-stack's) covers
- * fast loads without a second, self-managed cache layer that can go stale.
+ * deliberately does NOT cache or intercept fetches: a cached app shell
+ * references old chunk hashes and outlives the chunk-error recovery reload,
+ * booting a release into the error screen. HTTP caching of the build
+ * (immutable hashed /assets/*, revalidated index.html) covers fast loads.
  *
  * This module is the worker's event handling; `sw.ts` is the entry that
  * installs it with the real runtime (`pushRuntime.ts`), and the build bundles
@@ -251,9 +246,8 @@ async function seenBefore(data: WorkerPushData): Promise<SeenDetails | undefined
 
 /**
  * Commit an event only AFTER presentation or an exact page acknowledgement.
- * A worker killed between the old pre-show write and showNotification made the
- * event disappear forever on replay; the ledger must describe success, not an
- * attempt.
+ * The ledger must describe success, not an attempt: a worker killed between a
+ * pre-show write and showNotification would lose the event on replay.
  */
 async function markSeen(
   data: WorkerPushData,
@@ -743,8 +737,8 @@ async function handlePush(
   await Promise.all([incrementAppBadge(), markSeen(data)]);
 
   // Best-effort enrichment is an UPDATE, never a second alert: keep the exact
-  // static tag and force silent/non-renotify. This matters most for oversized
-  // encrypted wraps, where the old room-tag replacement produced two banners.
+  // static tag and force silent/non-renotify, or an oversized encrypted wrap
+  // shows two banners.
   if (!data.event_id) return;
   const relays = Array.isArray(data.relays)
     ? data.relays.filter((relay): relay is string => typeof relay === "string")
@@ -1101,8 +1095,7 @@ export function installServiceWorker(runtime: PushRuntime): void {
     const base: NotificationBase = {
       icon: payload?.icon || "/favicon.png",
       // Single-colour on transparency: the platform keeps only this image's
-      // alpha channel, so the full-colour favicon that used to sit here
-      // rendered as a solid blob in the status bar.
+      // alpha channel, so a full-colour icon renders as a solid blob.
       badge: payload?.badge || "/badge-96.png",
       renotify: true,
     };

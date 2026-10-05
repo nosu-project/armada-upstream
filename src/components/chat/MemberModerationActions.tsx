@@ -33,7 +33,7 @@ export function MemberModerationActions({
 
   return (
     <div className={cn("border-t border-border/60 pt-3", className)}>
-      <div className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground/80">
+      <div className="mb-1.5 text-2xs font-medium uppercase tracking-wide text-muted-foreground/80">
         {actions.length > 0 ? "Moderation" : "Roles"}
       </div>
       <div className="flex flex-wrap items-center gap-2">

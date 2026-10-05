@@ -34,7 +34,6 @@ export interface UseVoiceRecorderReturn {
   cancelRecording: () => void;
 }
 
-/** Determine the best supported audio MIME type for recording. */
 function getRecordingMimeType(): string {
   if (typeof MediaRecorder === 'undefined') return 'audio/webm';
   // Prefer mp4/aac per NIP-A0 recommendation
@@ -49,7 +48,7 @@ function getRecordingMimeType(): string {
   for (const mime of preferred) {
     if (MediaRecorder.isTypeSupported(mime)) return mime;
   }
-  return 'audio/webm'; // fallback
+  return 'audio/webm';
 }
 
 /** Record voice messages, capturing amplitude samples for NIP-A0 waveform data. */

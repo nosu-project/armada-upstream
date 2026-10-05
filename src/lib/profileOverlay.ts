@@ -5,7 +5,7 @@ import { resolvePubkey } from "@/lib/resolvePubkey";
 import type { Location } from "react-router-dom";
 
 /**
- * The profile route replaces the chat route, so closing it remounted the whole
+ * The profile route replaces the chat route, so closing it would remount the whole
  * page (expensive for Concord). A profile opened FROM somewhere carries
  * `backgroundLocation` (React Router's routed-modal idiom), so the page stays
  * mounted underneath. An optimization only: a cold `/<npub>` has no background.

@@ -100,7 +100,7 @@ export function decode<T>(json: string): T | undefined {
 /**
  * Last serialized value per key this session. Identical writes are skipped:
  * folds are recomputed far more often than they change, and redundant writes
- * flooded the Android bridge and woke every listener.
+ * would flood the Android bridge and wake every listener.
  */
 const knownEncoding = new Map<string, string>();
 
@@ -126,7 +126,7 @@ const sharedDecoded = new Map<string, { json: string; value: unknown }>();
 /**
  * {@link readFolded}, but one shared decoded object per key per session. Only
  * for values every reader treats as immutable (the control folds): they're read
- * constantly and each read was a large bridge crossing plus decode on Android.
+ * constantly and each read is a large bridge crossing plus decode on Android.
  */
 export async function readFoldedShared<T>(key: string): Promise<T | undefined> {
   const hit = sharedDecoded.get(key);

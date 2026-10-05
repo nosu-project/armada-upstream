@@ -28,7 +28,7 @@ export function MediaSpoilerCover({ onReveal, compact = false }: { onReveal: () 
       <span
         className={cn(
           "flex items-center gap-1.5 rounded-full bg-black/70 font-bold tracking-wide text-white",
-          compact ? "px-2 py-0.5 text-[10px]" : "px-3 py-1 text-xs",
+          compact ? "px-2 py-0.5 text-3xs" : "px-3 py-1 text-xs",
         )}
       >
         {!compact && <EyeOff className="size-3.5" />}

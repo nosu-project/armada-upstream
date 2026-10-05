@@ -22,6 +22,8 @@
  *   concord-idle    #general open, nobody touching anything
  *   concord-scroll  paging #general's history back
  *   concord-switch  hopping between the community's channels, heap per round
+ *   concord-type    composing in #general: per-keystroke cost to the next frame
+ *   concord-type-touch  the same, phone-sized with touch emulation
  *   discover     /discover idle — the one scenario with real relay traffic
  *   live-switch  switching in and out of a REAL community, joined from an
  *                invite given as `--invite <url>` (or ARMADA_PERF_INVITE);
@@ -42,8 +44,9 @@
  * Offline except `discover`: the seeds go straight into the app's own
  * ArmadaDB through the production writers (`e2e/screenshotSeed.ts`,
  * `e2e/concordSeed.ts`), and the throwaway account has no relays. The seeded
- * community names `wss://relay.invalid`, which the harness answers itself. Nothing is ever published — the account is
- * minted here and never signs anything a relay keeps.
+ * community names `wss://relay.invalid`, which the harness answers itself.
+ * Nothing is ever published — the account is minted here and never signs
+ * anything a relay keeps.
  *
  * Numbers are "CPU" in the sense Chromium's TaskDuration means it: main-thread
  * busy time over wall time. Headless, single-process (`--single-process`: see

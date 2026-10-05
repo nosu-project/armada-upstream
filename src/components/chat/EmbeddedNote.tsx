@@ -231,7 +231,7 @@ function GenericEventCard({ event, sourceUrl, className }: { event: NostrRumor; 
             <button type="button" className="shrink-0" onClick={(e) => e.stopPropagation()}>
               <Avatar shape={getAvatarShape(metadata)} className="size-5">
                 <AvatarImage src={metadata?.picture} imeta={author.data?.imeta?.picture} alt={displayName} />
-                <AvatarFallback className="bg-primary/20 text-primary text-[10px]">
+                <AvatarFallback className="bg-primary/20 text-primary text-3xs">
                   {displayName[0]?.toUpperCase()}
                 </AvatarFallback>
               </Avatar>
@@ -251,7 +251,7 @@ function GenericEventCard({ event, sourceUrl, className }: { event: NostrRumor; 
           </ProfilePreviewCard>
 
           {label && (
-            <span className="text-[10px] px-1.5 py-px rounded-full bg-secondary text-muted-foreground shrink-0">
+            <span className="text-3xs px-1.5 py-px rounded-full bg-secondary text-muted-foreground shrink-0">
               {label}
             </span>
           )}
@@ -557,7 +557,7 @@ function DeckCardRow({ card, onClick }: { card: DeckCard; onClick?: () => void }
         {card.foil && <Sparkles className="size-3 text-primary shrink-0" />}
       </div>
       {card.setId && (
-        <span className="text-[10px] text-muted-foreground uppercase tracking-wider shrink-0 ml-2">{card.setId}</span>
+        <span className="text-3xs text-muted-foreground uppercase tracking-wider shrink-0 ml-2">{card.setId}</span>
       )}
     </div>
   );
@@ -573,7 +573,7 @@ function DeckCardTile({ card, onClick }: { card: DeckCard; onClick?: () => void 
         className="relative aspect-[5/7] rounded-lg bg-secondary/60 border border-border flex items-center justify-center p-1 cursor-pointer"
         onClick={onClick}
       >
-        <span className="text-[9px] text-center text-muted-foreground leading-tight line-clamp-3">{card.name}</span>
+        <span className="text-3xs text-center text-muted-foreground leading-tight line-clamp-3">{card.name}</span>
         {card.quantity > 1 && <DeckQuantityBadge quantity={card.quantity} />}
       </div>
     );
@@ -597,7 +597,7 @@ function DeckCardTile({ card, onClick }: { card: DeckCard; onClick?: () => void 
 
 function DeckQuantityBadge({ quantity }: { quantity: number }) {
   return (
-    <span className="absolute top-1 right-1 bg-black/70 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full leading-none backdrop-blur-sm">
+    <span className="absolute top-1 right-1 bg-black/70 text-white text-3xs font-bold px-1.5 py-0.5 rounded-full leading-none backdrop-blur-sm">
       x{quantity}
     </span>
   );
@@ -638,7 +638,7 @@ function EmbeddedMagicDeckCard({ event }: { event: NostrRumor }) {
 
   const badge = (key: string, tagName: string, variant: "secondary" | "outline", label: string, icon?: ReactNode) => (
     <a key={key} href={dittoHashtagUrl(tagName)} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>
-      <Badge variant={variant} className="text-[11px] gap-1 font-medium hover:bg-secondary/80 transition-colors">
+      <Badge variant={variant} className="text-2xs gap-1 font-medium hover:bg-secondary/80 transition-colors">
         {icon}
         {label}
       </Badge>
@@ -662,7 +662,7 @@ function EmbeddedMagicDeckCard({ event }: { event: NostrRumor }) {
       {title && (
         <div className="flex items-start gap-2">
           <CardsIcon className="size-4 text-primary mt-0.5 shrink-0" />
-          <span className="text-[15px] font-semibold leading-snug">{title}</span>
+          <span className="text-chat font-semibold leading-snug">{title}</span>
         </div>
       )}
 
@@ -687,24 +687,24 @@ function EmbeddedMagicDeckCard({ event }: { event: NostrRumor }) {
         {archetypeTags.map((t) => badge(`a-${t}`, t, "outline", DECK_ARCHETYPE_LABELS[t] ?? t))}
         {otherTags.map((t) => badge(`o-${t}`, t, "outline", t))}
         {totalCards > 0 && (
-          <Badge variant="secondary" className="text-[11px] gap-1 font-medium">
+          <Badge variant="secondary" className="text-2xs gap-1 font-medium">
             <CardsIcon className="size-3" />
             {totalCards} cards
           </Badge>
         )}
         {totalSideboard > 0 && (
-          <Badge variant="secondary" className="text-[11px] gap-1 font-medium">{totalSideboard} sideboard</Badge>
+          <Badge variant="secondary" className="text-2xs gap-1 font-medium">{totalSideboard} sideboard</Badge>
         )}
       </div>
 
       {mainDeck.length > 0 && (
         <div className="rounded-xl border border-border overflow-hidden" onClick={(e) => e.stopPropagation()}>
           <div className="flex items-center justify-between px-3 py-1.5 bg-secondary/30 border-b border-border/50">
-            <span className="text-[11px] font-medium text-muted-foreground">{visualView ? "Visual spoiler" : "Decklist"}</span>
+            <span className="text-2xs font-medium text-muted-foreground">{visualView ? "Visual spoiler" : "Decklist"}</span>
             <button
               type="button"
               onClick={() => setVisualView((v) => !v)}
-              className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground transition-colors touch:py-1"
+              className="flex items-center gap-1 text-2xs text-muted-foreground hover:text-foreground transition-colors touch:py-1"
             >
               {visualView ? <List className="size-3.5" /> : <Palette className="size-3.5" />}
               {visualView ? "List" : "Visual"}
@@ -721,7 +721,7 @@ function EmbeddedMagicDeckCard({ event }: { event: NostrRumor }) {
               {sideboard.length > 0 && (
                 <>
                   <div className="px-1 py-2 mt-1">
-                    <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Sideboard</span>
+                    <span className="text-2xs font-semibold uppercase tracking-wider text-muted-foreground">Sideboard</span>
                   </div>
                   <div className="grid grid-cols-4 gap-1.5">
                     {sideboard.map((card, i) => (
@@ -739,7 +739,7 @@ function EmbeddedMagicDeckCard({ event }: { event: NostrRumor }) {
               {sideboard.length > 0 && (
                 <>
                   <div className="px-3 py-1.5 bg-secondary/40 border-y border-border/50">
-                    <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Sideboard</span>
+                    <span className="text-2xs font-semibold uppercase tracking-wider text-muted-foreground">Sideboard</span>
                   </div>
                   {sideboard.map((card, i) => (
                     <DeckCardRow key={`s-${card.name}-${i}`} card={card} onClick={() => setLightboxIndex(mainDeck.length + i)} />
@@ -827,18 +827,18 @@ function EmbeddedTreasureCard({ event }: { event: NostrRumor }) {
       {name && (
         <div className="flex items-start gap-2">
           <ChestIcon className="size-4 text-primary mt-0.5 shrink-0" />
-          <span className="text-[15px] font-semibold leading-snug">{name}</span>
+          <span className="text-chat font-semibold leading-snug">{name}</span>
         </div>
       )}
 
       <div className="flex flex-wrap gap-1.5">
-        <Badge variant="secondary" className="text-[11px] gap-1 font-medium">{TREASURE_TYPE_LABELS[cacheType] ?? cacheType}</Badge>
-        <Badge variant="secondary" className="text-[11px] gap-1 font-medium">
+        <Badge variant="secondary" className="text-2xs gap-1 font-medium">{TREASURE_TYPE_LABELS[cacheType] ?? cacheType}</Badge>
+        <Badge variant="secondary" className="text-2xs gap-1 font-medium">
           <Package className="size-3" />
           {TREASURE_SIZE_LABELS[size] ?? size}
         </Badge>
         {geohash && (
-          <Badge variant="secondary" className="text-[11px] gap-1 font-medium">
+          <Badge variant="secondary" className="text-2xs gap-1 font-medium">
             <MapPin className="size-3" />
             {geohash}
           </Badge>

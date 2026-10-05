@@ -30,7 +30,6 @@ export function EmojiSourceFooter({ url, authorPubkey }: { url: string; authorPu
     try {
       await addPack({ pubkey: source.pubkey, identifier: source.identifier });
       setJustAdded(true);
-      toast({ title: "Emoji pack added", description: source.name });
     } catch (e) {
       toast({
         title: "Couldn't add pack",
@@ -46,7 +45,7 @@ export function EmojiSourceFooter({ url, authorPubkey }: { url: string; authorPu
     return (
       <div className="flex items-center gap-2 border-t border-border/60 px-3 py-2">
         <div className="min-w-0 flex-1 space-y-1">
-          <div className="text-[10px] uppercase tracking-wide text-muted-foreground">From</div>
+          <div className="text-3xs uppercase tracking-wide text-muted-foreground">From</div>
           <Skeleton className="h-3 w-24" />
         </div>
         <Skeleton className="h-7 w-14 shrink-0 rounded-lg touch:h-9" />
@@ -58,11 +57,11 @@ export function EmojiSourceFooter({ url, authorPubkey }: { url: string; authorPu
   return (
     <div className="flex items-center gap-2 border-t border-border/60 px-3 py-2">
       <div className="min-w-0 flex-1">
-        <div className="text-[10px] uppercase tracking-wide text-muted-foreground">From</div>
+        <div className="text-3xs uppercase tracking-wide text-muted-foreground">From</div>
         <div className="truncate text-xs font-medium">{source.name}</div>
       </div>
       {isAdded ? (
-        <span className="flex shrink-0 items-center gap-1 text-[11px] text-muted-foreground">
+        <span className="flex shrink-0 items-center gap-1 text-2xs text-muted-foreground">
           <Check className="size-3" /> Added
         </span>
       ) : (

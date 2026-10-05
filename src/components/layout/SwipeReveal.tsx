@@ -293,7 +293,7 @@ export function SwipeReveal({ underlay, children, open, onReveal, onClose }: Swi
   return (
     <>
       {/* Close handlers stay mounted regardless of `open` (the hook self-gates);
-          detaching mid-gesture removed the pointerup that ends the drag. */}
+          detaching mid-gesture would remove the pointerup that ends the drag. */}
       <div
         ref={underlayRef}
         {...closeSwipe.handlers}

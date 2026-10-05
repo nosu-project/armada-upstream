@@ -203,7 +203,7 @@ function portalSettingsHint(desktop, portalVersion) {
  * A v1 portal shows its trusted chooser only for an action it has no binding
  * for, and those bindings are keyed by (app id, shortcut id) and deliberately
  * outlive the session — persistence across restarts is the point of the API.
- * So the ID has to keep advancing: alternating between two of them made every
+ * So the ID has to keep advancing: alternating between two would make every
  * second "change shortcut" reuse an ID the portal already knew, which returns
  * the old assignment with no dialog shown at all.
  */

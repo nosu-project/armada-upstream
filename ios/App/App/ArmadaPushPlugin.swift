@@ -9,17 +9,13 @@ import UserNotifications
 /// iOS is the one platform where Armada cannot listen for its own events in the
 /// background: there is no equivalent of the Android foreground service, and
 /// WKWebView has no Web Push. So the app takes a device token from Apple and
-/// hands it to the same content-blind nostr-push gateway the web client uses,
-/// as a `type: "apns"` subscription. Every filter, preference and per-channel
-/// level above that is shared TypeScript; this file knows nothing about them.
+/// hands it to the content-blind nostr-push gateway as a `type: "apns"`
+/// subscription. Every filter, preference and per-channel level above that is
+/// shared TypeScript; this file knows nothing about them.
 ///
-/// Deliberately nothing but the token, the permission, and the tap. What it
-/// does NOT do is render: the gateway sends fixed text and there is no
-/// Notification Service Extension here yet, so the payload's `aps.alert` is
-/// what the lock screen shows. Adding one is what would let a notification name
-/// the sender or quote the message, and it means porting the decrypt/store
-/// pipeline to Swift against the App Group's ArmadaDB — which is why the
-/// database is in the App Group already.
+/// Deliberately nothing but the token, the permission, the extension's config
+/// and the tap. It does NOT render: the Notification Service Extension
+/// (`ArmadaNotify`) opens and rewrites each push.
 @objc(ArmadaPushPlugin)
 public class ArmadaPushPlugin: CAPPlugin, CAPBridgedPlugin {
 

@@ -5,19 +5,18 @@ package buzz.armada.app.relayfleet;
  * client floods them.
  *
  * <p>Every new edition of a self document is a full download, 38 KB for a
- * Concord community-list fragment. A client stuck republishing one (measured:
- * 2,762 editions in under two hours, up to 85 a minute) costs every other
- * device that bandwidth no matter how cheaply each copy is then handled. So a
- * relay that delivers more than {@link #LIMIT} new editions inside
+ * Concord community-list fragment. A client stuck republishing one costs every
+ * other device that bandwidth no matter how cheaply each copy is then handled.
+ * So a relay that delivers more than {@link #LIMIT} new editions inside
  * {@link #WINDOW_MS}, or more than {@link #BYTE_LIMIT} bytes of them inside
  * {@link #BYTE_WINDOW_MS}, has its subscription closed, and re-opened after a
  * cooldown that doubles while the flood persists. The byte budget is what
- * bounds a slow flood of a large document: one 76 KB read-state edition a
- * minute never reaches the count limit and still cost 4.5 MB an hour per
- * relay. Any client holding the key can write these, so the budget assumes
- * nothing about their behaviour. Resuming asks from the pause
- * with a small per-filter limit, newest first, so what changed while paused is
- * caught up in one bounded read rather than every edition in between.
+ * bounds a slow flood of a large document, which never reaches the count limit
+ * (one 76 KB edition a minute is 4.5 MB an hour per relay). Any client holding
+ * the key can write these, so the budget assumes nothing about their
+ * behaviour. Resuming asks from the pause with a small per-filter limit, newest
+ * first, so what changed while paused is caught up in one bounded read rather
+ * than every edition in between.
  *
  * <p>One instance per relay; clock-injected. Synchronized: the service checks
  * {@link #paused} from the socket thread that sends REQs on open.

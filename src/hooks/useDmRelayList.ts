@@ -52,8 +52,8 @@ export interface DmRelayListQuery {
 type DmRelayQueryClient = Parameters<typeof queryExplicitRelays>[0];
 
 /**
- * Per-round budget: the rounds are sequential, and a shared deadline let a slow app relay
- * starve the round that looks beyond the app relays.
+ * Per-round budget: the rounds are sequential, and a shared deadline would let a slow app
+ * relay starve the round that looks beyond the app relays.
  */
 const DISCOVERY_ROUND_MS = 6000;
 

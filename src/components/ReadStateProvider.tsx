@@ -48,7 +48,7 @@ const SYNC_DEBOUNCE_MS = 4000;
  * NIP-78 documents for cross-device sync. `${APP_ID}/read-state` holds the
  * whole map, which is unbounded (never pruned); `${APP_ID}/read-state-recent`
  * holds only the entries newer than it. A read publishes the small one, so an
- * open channel stamping every incoming message no longer makes every other
+ * open channel stamping every incoming message doesn't make every other
  * device download the whole map per message; the base is rewritten only when
  * the delta passes `READ_STATE_ROLLOVER_BYTES` (lib/readStateSync.ts).
  */

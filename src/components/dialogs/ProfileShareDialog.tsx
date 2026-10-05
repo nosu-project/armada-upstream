@@ -40,7 +40,7 @@ export function ProfileShareDialog({ open, onOpenChange }: ProfileShareDialogPro
     // Read at open time so a theme switch is reflected.
     const { dark, light } = getThemedQRColors();
     // SVG, not canvas: fingerprint blockers (Brave, Tor, resistFingerprinting)
-    // poison canvas readback and blanked the QR. Loaded via data URL, so it's script-sandboxed.
+    // poison canvas readback and would blank the QR. Loaded via data URL, so it's script-sandboxed.
     QRCode.toString(url, {
       type: "svg",
       width: 400,
@@ -130,7 +130,7 @@ export function ProfileShareDialog({ open, onOpenChange }: ProfileShareDialogPro
               <div className="flex gap-2">
                 <Button className="flex-1 clip-corner-lg" onClick={copy}>
                   {copied
-                    ? <><Check className="size-4 mr-2" /> Copied!</>
+                    ? <><Check className="size-4 mr-2" /> Copied</>
                     : <><Copy className="size-4 mr-2" /> Copy link</>}
                 </Button>
                 {showShare && (

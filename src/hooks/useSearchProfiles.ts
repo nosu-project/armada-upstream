@@ -260,8 +260,8 @@ export function useMemberProfiles(pubkeys: string[], query: string) {
     const lowerQuery = query.trim().toLowerCase();
 
     const profiles: SearchProfile[] = pubkeys.filter((pk) => !mutedPubkeys.has(pk)).map((pubkey) => {
-      // `getQueryData` hashes once; `getQueryCache().find` stringifies every key (was the hottest
-      // app frame in a profile).
+      // `getQueryData` hashes once; `getQueryCache().find` stringifies every key, which is
+      // too hot for a per-keystroke scan.
       const data = queryClient.getQueryData(["author", pubkey]) as
         | { event?: NostrRumor; metadata?: NostrMetadata }
         | undefined;

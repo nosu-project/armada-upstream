@@ -145,7 +145,7 @@ export function WalletSettings() {
               <span className="flex items-center gap-2">
                 {connection.alias}
                 {isActive && (
-                  <span className="text-[10px] font-semibold uppercase tracking-wide text-primary">
+                  <span className="text-3xs font-semibold uppercase tracking-wide text-primary">
                     active
                   </span>
                 )}
@@ -223,7 +223,7 @@ export function WalletSettings() {
 
       <SettingsRow
         label="Default payment method"
-        description="Which method the zap dialog opens on first, whenever the recipient accepts it. Otherwise it falls back to a method that works."
+        description="The method the zap dialog opens with."
       >
         <Select
           value={config.defaultZapMethod}
@@ -257,7 +257,7 @@ export function WalletSettings() {
           <div className="space-y-1">
             {esploraUrls.map((url, i) => (
               <div key={url} className="flex items-center gap-1.5">
-                <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground w-16 shrink-0">
+                <span className="text-3xs font-semibold uppercase tracking-wide text-muted-foreground w-16 shrink-0">
                   {i === 0 ? "Primary" : `Fallback ${i}`}
                 </span>
                 <span className="text-xs font-mono truncate flex-1">{url}</span>

@@ -62,7 +62,7 @@ export function SignalStatic({
   return (
     <div
       aria-hidden="true"
-      // Flat-ish curve: a steep multiplier made the field vanish mid-sync.
+      // Flat-ish curve: a steep multiplier makes the field vanish mid-sync.
       style={{ opacity: level > 0 ? 0.15 + 0.35 * level : 0 }}
       className="pointer-events-none absolute inset-0 overflow-hidden transition-opacity duration-700"
     >

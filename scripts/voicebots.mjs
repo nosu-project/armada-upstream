@@ -256,8 +256,6 @@ function startAssetServer() {
   return new Promise((resolve) => server.listen(0, "127.0.0.1", () => resolve(server)));
 }
 
-// ---------------------------------------------------------------------------
-
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
 

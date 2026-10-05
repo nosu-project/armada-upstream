@@ -38,7 +38,7 @@ function AttendeeAvatar({ pubkey }: { pubkey: string }) {
   return (
     <Avatar className="size-6 ring-2 ring-background">
       <AvatarImage src={author.data?.metadata?.picture} imeta={author.data?.imeta?.picture} alt={name} />
-      <AvatarFallback className="bg-primary/20 text-primary text-[9px]">
+      <AvatarFallback className="bg-primary/20 text-primary text-monogram">
         {name.slice(0, 2).toUpperCase()}
       </AvatarFallback>
     </Avatar>
@@ -194,7 +194,7 @@ export function CalendarEventMessageCard({
           {event.kind === KIND_CALENDAR_TIME ? <Clock className="size-5" /> : <CalendarDays className="size-5" />}
         </div>
         <div className="min-w-0 flex-1">
-          <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+          <div className="text-2xs font-medium uppercase tracking-wide text-muted-foreground">
             {past ? "Past event" : "Event"}
           </div>
           <h3 className="font-semibold leading-tight break-words">{event.title}</h3>

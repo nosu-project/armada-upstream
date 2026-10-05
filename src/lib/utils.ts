@@ -1,5 +1,10 @@
 import { clsx, type ClassValue } from "clsx"
-import { twMerge } from "tailwind-merge"
+import { extendTailwindMerge } from "tailwind-merge"
+
+// Named font sizes from tailwind.config.ts; without this `text-chat` merges as a color.
+const twMerge = extendTailwindMerge({
+  extend: { classGroups: { "font-size": [{ text: ["2xs", "3xs", "chat", "monogram"] }] } },
+})
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))

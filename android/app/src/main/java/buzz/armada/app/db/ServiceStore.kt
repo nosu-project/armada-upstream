@@ -9,12 +9,9 @@ import org.json.JSONObject
 /**
  * What the background relay service writes, and where.
  *
- * The service used to keep its own database (`armada-events.db`) with its own
- * flat schema, and the only way anything reached the app was a cursor drain the
- * WebView replayed into a second store. Now there is one store: the service
- * writes an event into the same tenant the WebView would have written it to, so
- * a message received while the app was dead is simply THERE on open — no replay,
- * no second copy, no format to keep in step.
+ * There is one store: the service writes an event into the same tenant the
+ * WebView would have written it to, so a message received while the app was
+ * dead is simply THERE on open — no replay, no second copy.
  *
  * "The same tenant" is why [RelayScope] exists here as well as in the WebView:
  * NIP-29 data is stored per relay, and a rule only one of the two writers applies
@@ -258,10 +255,9 @@ object ServiceStore {
      *
      * Read through the `conv:` term, which is the same one filter the WebView
      * uses and the reason `limit: 1` is exactly right: a participant SET cannot
-     * be expressed as an author/`#p` filter — the two-filter thread shape this
-     * replaced over-selected in both directions, so in a group the newest row
-     * it returned could belong to a neighbouring conversation and a reply would
-     * disappear (or fail to) on someone else's setting.
+     * be expressed as an author/`#p` filter, which over-selects in both
+     * directions, so in a group the newest row could belong to a neighbouring
+     * conversation's timer.
      *
      * A malformed or absent `timer` tag on that newest notice reads as "off",
      * matching `queryDm17Timer` rather than skipping past it — the two writers

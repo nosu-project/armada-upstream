@@ -187,7 +187,6 @@ function signBip375PsbtV2Locally(
   }
   tx.finalize();
 
-  // Back to a finalized PSBT v2 with witnesses and any BIP-375 globals.
   return finalizedTxToPsbtV2(tx, psbt.inputs, resolvedOutputs, spGlobals);
 }
 

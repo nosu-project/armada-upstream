@@ -108,7 +108,6 @@ function withFocus(
   return path;
 }
 
-/** Build the path for a chat location. */
 export function chatRoute(route: ChatRoute): string {
   switch (route.kind) {
     case "nip29": {

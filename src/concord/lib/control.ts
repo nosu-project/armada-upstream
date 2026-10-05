@@ -304,7 +304,6 @@ export interface EntityHead {
   hash: Uint8Array;
 }
 
-/** One channel's folded definition. */
 export interface FoldedChannel {
   channelIdHex: string;
   name: string;
@@ -371,9 +370,8 @@ export interface FoldedControl {
 
 /**
  * Whether a snapshot decoded off disk still has the shape this build reads.
- * `readFolded` casts unchecked, and older snapshots have crashed readers before.
- * Rejecting costs one re-fold and the next write replaces it. Extend this when the
- * persisted shape gains a field readers rely on.
+ * `readFolded` casts unchecked, so a stale shape must miss rather than crash a
+ * reader; that costs one re-fold. Extend this when readers rely on a new field.
  */
 export function isCurrentFoldedControl(value: unknown): value is FoldedControl {
   const fold = value as FoldedControl | undefined;

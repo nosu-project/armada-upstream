@@ -77,7 +77,7 @@ export const DateSeparator = memo(function DateSeparator({ ts }: { ts: number })
   return (
     <div className="flex items-center gap-3 px-2 pt-3 pb-1 select-none" aria-hidden>
       <div className="h-px flex-1 bg-border/60" />
-      <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground/80">
+      <span className="text-2xs font-medium uppercase tracking-wide text-muted-foreground/80">
         {formatDayLabel(ts)}
       </span>
       <div className="h-px flex-1 bg-border/60" />
@@ -89,7 +89,7 @@ function NewMessagesDivider() {
   return (
     <div className="flex items-center px-2 py-1 select-none" role="separator" aria-label="New messages">
       <div className="h-px flex-1 bg-destructive/70" />
-      <span className="pl-1.5 text-[10px] font-semibold uppercase tracking-wider text-destructive">
+      <span className="pl-1.5 text-3xs font-semibold uppercase tracking-wider text-destructive">
         New
       </span>
     </div>
@@ -107,15 +107,15 @@ function KeyRotationDivider() {
       role="separator"
       aria-label="Key rotated. Earlier messages use a previous key"
     >
-      <div className="h-px flex-1 bg-amber-500/50" />
+      <div className="h-px flex-1 bg-warning/50" />
       <span
-        className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-amber-600 dark:text-amber-500"
+        className="flex items-center gap-1.5 text-3xs font-semibold uppercase tracking-wider text-warning"
         title="The community's encryption key was rotated here. Messages above were sealed under a previous key."
       >
         <KeyRound className="size-3" aria-hidden />
         Key rotated
       </span>
-      <div className="h-px flex-1 bg-amber-500/50" />
+      <div className="h-px flex-1 bg-warning/50" />
     </div>
   );
 }
@@ -153,7 +153,7 @@ function FloodNotice({
         type="button"
         onClick={onToggle}
         aria-expanded={expanded}
-        className="flex items-center gap-1.5 rounded px-1.5 py-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground transition-colors hover:text-foreground touch:py-1.5 touch:text-xs"
+        className="flex items-center gap-1.5 rounded px-1.5 py-1 text-3xs font-medium uppercase tracking-wider text-muted-foreground transition-colors hover:text-foreground touch:py-1.5 touch:text-xs"
         title={
           expanded
             ? "Fold these back up"
@@ -744,12 +744,9 @@ export function MessageTimeline({
     [],
   );
 
-  /**
-   * Extend while the slice doesn't fill the scroller (e.g. a folded flood), since
-   * there's no scroll gesture to trigger it. One step per commit.
-   */
-  // Measured in the next frame: reading `scrollHeight` in the effect forced an
-  // extra layout.
+  // Extend while the slice doesn't fill the scroller (e.g. a folded flood), since
+  // there's no scroll gesture to trigger it. One step per commit. Measured in the
+  // next frame: reading `scrollHeight` in the effect would force an extra layout.
   useEffect(() => {
     if (!listVisible || paused) return;
     const frame = requestAnimationFrame(() => {

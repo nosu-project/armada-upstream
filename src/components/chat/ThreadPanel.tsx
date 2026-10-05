@@ -281,9 +281,9 @@ export function ThreadMessage({
           }
         }}
         rows={1}
-        className="block w-full resize-none rounded-md bg-background border border-input px-2 py-1.5 text-[15px] max-h-40 overflow-y-auto focus:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+        className="block w-full resize-none rounded-md bg-background border border-input px-2 py-1.5 text-chat max-h-40 overflow-y-auto focus:outline-none focus-visible:ring-1 focus-visible:ring-ring"
       />
-      <div className="flex items-center gap-2 touch:gap-4 mt-1 text-[11px] text-muted-foreground">
+      <div className="flex items-center gap-2 touch:gap-4 mt-1 text-2xs text-muted-foreground">
         <button
           type="button"
           className="font-semibold text-primary hover:underline touch:py-2"
@@ -298,7 +298,7 @@ export function ThreadMessage({
       </div>
     </div>
   ) : (
-    <ChatContent event={event} className={isPost ? "text-[15px] leading-relaxed" : "text-[15px]"} everyoneMention={everyoneMention} documentMarkdown={documentMarkdown} disableNoteEmbeds={documentMarkdown} />
+    <ChatContent event={event} className={isPost ? "text-chat leading-relaxed" : "text-chat"} everyoneMention={everyoneMention} documentMarkdown={documentMarkdown} disableNoteEmbeds={documentMarkdown} />
   );
   const reactionRow = ((zaps && zaps.tally.count > 0) || (reactions && reactions.tallies.length > 0)) ? (
     <ReactionBar
@@ -361,7 +361,7 @@ export function ThreadMessage({
             </ProfilePreviewCard>
             <div className="min-w-0 flex flex-col justify-center">
               <ProfilePreviewCard pubkey={event.pubkey}>
-                <button type="button" className="text-[15px] font-semibold text-primary truncate text-left hover:underline focus:outline-none">
+                <button type="button" className="text-chat font-semibold text-primary truncate text-left hover:underline focus:outline-none">
                   <DisplayName pubkey={event.pubkey} name={displayName} />
                 </button>
               </ProfilePreviewCard>
@@ -377,7 +377,7 @@ export function ThreadMessage({
       ) : (
       <>
       {continuation ? (
-        <span className="shrink-0 w-9 self-stretch flex items-start justify-end pr-0.5 pt-0.5 text-[10px] leading-none text-muted-foreground/60 opacity-0 group-hover/threadmsg:opacity-100 transition-opacity tabular-nums select-none">
+        <span className="shrink-0 w-9 self-stretch flex items-start justify-end pr-0.5 pt-0.5 text-3xs leading-none text-muted-foreground/60 opacity-0 group-hover/threadmsg:opacity-100 transition-opacity tabular-nums select-none">
           {shortClockTime(event.created_at)}
         </span>
       ) : (
@@ -396,7 +396,7 @@ export function ThreadMessage({
         {!continuation && (
           <div className="flex items-baseline gap-2">
             <ProfilePreviewCard pubkey={event.pubkey}>
-              <button type="button" className="text-[15px] font-semibold text-primary truncate hover:underline focus:outline-none">
+              <button type="button" className="text-chat font-semibold text-primary truncate hover:underline focus:outline-none">
                 <DisplayName pubkey={event.pubkey} name={displayName} />
               </button>
             </ProfilePreviewCard>
@@ -406,7 +406,7 @@ export function ThreadMessage({
                 {shortTimeAgo(event.created_at)}
               </span>
             ) : (
-              <span className="text-[11px] text-muted-foreground/70 shrink-0" title={when.toLocaleString()}>
+              <span className="text-2xs text-muted-foreground/70 shrink-0" title={when.toLocaleString()}>
                 {when.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}
               </span>
             )}
@@ -735,7 +735,7 @@ export function ThreadPanel({ root, rootTitle, transport, relayUrl, groupId, can
       <div className="flex items-center gap-2 px-3 py-1 mt-1">
         <div className="h-px flex-1 bg-border/60" />
         {!isLoading && (
-          <span className="text-[11px] text-muted-foreground/60 shrink-0">
+          <span className="text-2xs text-muted-foreground/60 shrink-0">
             {replies.length === 0
               ? `No ${replyNounPlural} yet`
               : `${replies.length} ${replies.length === 1 ? replyNoun : replyNounPlural}`}

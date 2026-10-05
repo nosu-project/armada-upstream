@@ -91,8 +91,7 @@ internal object Dm17 {
      * makes the two directions agree: a message Alice sends to {me, Bob} arrives
      * as `pubkey: Alice, p: [me, Bob]` and my reply leaves as
      * `pubkey: me, p: [Alice, Bob]`, and both reduce to [Alice, Bob]. For a 1:1
-     * it yields exactly `[peer]`, which is why the keys did not change when
-     * groups arrived.
+     * it yields exactly `[peer]`.
      */
     fun peersOf(rumor: Rumor, self: String): List<String>? {
         val recipients = LinkedHashSet<String>()
@@ -136,9 +135,7 @@ internal object Dm17 {
      *
      * For a 1:1 (and Note to Self) this is exactly the other party's pubkey, so
      * a `dm:<convKey>` room key, its read marker and its deep link are all
-     * byte-identical to the single-peer spelling this replaced. That is what
-     * lets the notification path become conversation-keyed without re-filing a
-     * single existing 1:1 thread.
+     * byte-identical to a single-peer key, so no existing 1:1 thread re-files.
      *
      * Unlike [convTerm] this joins with [PEER_SEP], because a key is read back
      * apart again ([convPeers]) while a term is only ever compared whole.

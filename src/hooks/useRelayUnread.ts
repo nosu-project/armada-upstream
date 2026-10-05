@@ -69,7 +69,7 @@ export function useRelayUnread(
     },
     enabled: Boolean(relayUrl && groupIds.length > 0 && user),
     // No polling or focus refetch: the wire bus is the complete live path, and per-server polls
-    // on the rail caused a freeze on refocus (cf. useCommunityRumors).
+    // on the rail freeze the app on refocus (cf. useCommunityRumors).
     staleTime: Infinity,
   });
 

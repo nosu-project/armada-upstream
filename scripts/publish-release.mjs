@@ -105,13 +105,10 @@ function configuredServers() {
  * `src/lib/releases.ts` — a relay that is written but not read publishes into
  * the void, and one that is read but not written is a page with no downloads.
  *
- * `wss://relay.ngit.dev`, the repo's own relay, is deliberately absent. It
- * restricts writes to events that reference an accepted repository, and a
- * release names its repo through the derivable `D` tag rather than an `a` tag
- * (docs/releases.md), so it answered every release event with
- * `restricted: Event event must reference an accepted repository or accepted
- * event`. Adding the `a` tag back to satisfy one relay would reintroduce the
- * ambiguity `D` exists to remove; the release simply lives elsewhere.
+ * `wss://relay.ngit.dev`, the repo's own relay, is deliberately absent: it only
+ * accepts events that reference an accepted repository, and a release names its
+ * repo through the derivable `D` tag rather than an `a` tag (docs/releases.md).
+ * Adding `a` back for one relay would reintroduce the ambiguity `D` removes.
  */
 const DEFAULT_RELAYS = [
   'wss://relay.ditto.pub',
@@ -278,11 +275,10 @@ async function uploadOnce(server, path, hash, mime, sign) {
 /**
  * Upload with retries.
  *
- * These are ~100 MB bodies over a connection held open for minutes, and a
- * single dropped one used to end the release: the whole event is refused if any
- * artifact cannot be stored, so one transient `fetch failed` two thirds of the
- * way through a set cost a version its downloads. Between attempts the blob is
- * re-checked, because the coordinator uploads its own copy of the same bytes
+ * These are ~100 MB bodies over a connection held open for minutes, and the
+ * whole event is refused if any artifact cannot be stored, so one transient
+ * `fetch failed` must not cost a version its downloads. Between attempts the
+ * blob is re-checked, because the coordinator uploads its own copy of the same bytes
  * around the same time and a hit there is as good as our own success.
  */
 async function uploadBlob(server, path, hash, mime, sign) {
@@ -493,10 +489,9 @@ async function connectSigner() {
  * `pool.publish` returns a promise per relay that settles on that relay's OK,
  * and nothing else ever settles it — a relay which accepts the socket, takes
  * the EVENT and then stays silent leaves it pending forever, so awaiting them
- * all has no upper bound. That is how a release whose event had already been
- * accepted by three relays sat for forty minutes until the CI coordinator's
- * run-level timeout, which then discarded every job's result. Missing one
- * relay's OK costs a copy of the event; waiting for it costs the whole run.
+ * all has no upper bound — and hitting CI's run-level timeout discards every
+ * job's result. Missing one relay's OK costs a copy of the event; waiting for
+ * it costs the whole run.
  */
 function withDeadline(promise, ms, label) {
   let timer;

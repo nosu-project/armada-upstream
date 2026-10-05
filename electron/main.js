@@ -6,10 +6,9 @@
 //
 //   • The app is not tied to any one deployment/domain. The web build is
 //     compiled with EMPTY platform relays, so nothing is baked in — the user
-//     adds whatever servers they want. Clients are rogue.
+//     adds whatever servers they want.
 //   • A custom *secure* scheme is still a secure context, so the service worker
-//     and Web Push (PushManager) work, and per-relay push subscriptions (whose
-//     endpoints are the relays' own HTTPS origins) keep working.
+//     and Web Push (PushManager) work.
 //
 // It also adds desktop-native behavior the web build can't: a system tray
 // (close-to-tray, Show/Quit, unread badge, launch-minimized) and screen-share
@@ -26,8 +25,7 @@
 // (which holds the nsec) falls back to being written in plaintext.
 //
 // So restore the well-known per-user socket when, and only when, the variable
-// is missing AND that socket actually exists. If there is genuinely no session
-// bus, nothing changes — the connection fails exactly as it did before.
+// is missing AND that socket actually exists.
 if (process.platform === "linux") {
   const current = process.env.DBUS_SESSION_BUS_ADDRESS;
   if (!current || current === "disabled:") {
@@ -277,15 +275,11 @@ async function openExternalUrl(url) {
 }
 
 // The renderer's App Links host (PUBLIC_WEB_ORIGIN's hostname), registered
-// over IPC once the web bundle boots. The main process has no other way to know
-// it — the build compiles with empty platform relays and no baked-in origin —
-// so until the renderer reports it, an https link to our own host is treated
-// like any other external URL. A "Copy message link" click reaching the
-// navigation handlers is then recognized as ours and routed inward instead of
-// out to the system browser (there is no OS-level https handoff into a desktop
-// app short of being the default browser).
-// It routes navigations and nothing else; the web-bundle updater resolves its
-// source from the signed site manifest instead.
+// over IPC once the web bundle boots; the build has no baked-in origin, so
+// until then a link to our own host is treated as external. Once known, such
+// links are routed inward (there is no OS-level https handoff into a desktop
+// app short of being the default browser). It routes navigations and nothing
+// else; the web-bundle updater resolves its source from the signed manifest.
 let deepLinkHost = null;
 
 /**
@@ -428,8 +422,7 @@ function contentTypeFor(filePath) {
 // Read a bundled file and return an HTTP Response. We read through Node's `fs`
 // (NOT net.fetch of a file:// URL) because the web build is packaged inside
 // `app.asar`: `fs` is asar-aware, while Chromium's file:// network stack is
-// not — handing it `…/app.asar/dist/index.html` 404s (notably on Windows),
-// which left the window blank on first open and broke boot/sync.
+// not — handing it `…/app.asar/dist/index.html` 404s (notably on Windows).
 function serveFile(filePath) {
   try {
     const body = fs.readFileSync(filePath);
@@ -750,7 +743,6 @@ async function createTray({ statusNotifier = false } = {}) {
   }
   tray.setToolTip("Armada");
   tray.setContextMenu(buildTrayContextMenu());
-  // Left-click toggles the window (common desktop-chat behavior).
   tray.on("click", toggleWindowFromTray);
   return true;
 }
@@ -857,9 +849,8 @@ function hideWindowToTray() {
 //
 // The feed is the kind-30622 release event — the same one /downloads reads —
 // resolved by ./nostrUpdateProvider.js (electron-updater path) and directly by
-// ./updateFeed.cjs (Flatpak path). No latest*.yml is generated or deployed any
-// more. The `publish` block in electron-builder.yml still exists, but not as a
-// feed: it is the only thing that makes electron-builder package an
+// ./updateFeed.cjs (Flatpak path). The `publish` block in electron-builder.yml
+// is not a feed: it is the only thing that makes electron-builder package an
 // app-update.yml, which electron-updater reads on every DOWNLOAD for its cache
 // directory name. Its url is never fetched — setFeedURL below replaces the
 // provider outright. See electron/README.md.
@@ -1090,7 +1081,6 @@ function installElectronUpdater() {
 function setUnreadBadge(count) {
   const n = Math.max(0, Number(count) || 0);
 
-  // Cross-platform-ish: dock badge on macOS, Unity count on supported Linux.
   if (typeof app.setBadgeCount === "function") {
     app.setBadgeCount(n);
   }
@@ -1099,7 +1089,6 @@ function setUnreadBadge(count) {
     tray.setToolTip(n > 0 ? `Armada (${n} unread)` : "Armada");
   }
 
-  // Windows taskbar overlay icon (a simple dot) when there are unread items.
   if (mainWindow && process.platform === "win32") {
     if (n > 0) {
       const dot = nativeImage.createFromDataURL(UNREAD_OVERLAY_DATA_URL);
@@ -1110,7 +1099,7 @@ function setUnreadBadge(count) {
   }
 }
 
-// A tiny red dot PNG (16x16) for the Windows taskbar overlay.
+// A tiny red dot (16x16 SVG) for the Windows taskbar overlay.
 const UNREAD_OVERLAY_DATA_URL =
   "data:image/svg+xml;base64," +
   Buffer.from(
@@ -1436,17 +1425,14 @@ function installHevcScreenShareIpc() {
 // voice), notifications, fullscreen, clipboard and pointer lock are allowed
 // for our own app:// origin only, embeds it frames get fullscreen, and only the
 // allowlisted provider players get clipboard write (permissionPolicy.js);
-// everything else is denied. On macOS the OS
-// additionally gates mic/camera behind TCC — the Info.plist usage strings for
-// that live in electron-builder.yml (extendInfo).
+// everything else is denied. On macOS the OS additionally gates mic/camera
+// behind TCC — the Info.plist usage strings live in electron-builder.yml
+// (extendInfo).
 //
-// Windows has its own OS-level gate: Settings → Privacy → Microphone →
-// "Let desktop apps access your microphone". When that's off, Chromium's
-// getUserMedia rejects with NotAllowedError no matter what our handlers say,
-// so the app looks "denied by default". We can't flip that toggle for the
-// user, but we expose the OS access status (via getMediaAccessStatus) and a
-// deep-link to the relevant Settings page (armada:mic-access-status /
-// armada:open-mic-settings IPC below) so the renderer can guide them.
+// Windows has its own OS-level gate ("Let desktop apps access your
+// microphone"); when it is off getUserMedia rejects whatever our handlers say.
+// We can't flip it, so armada:mic-access-status / armada:open-mic-settings
+// below let the renderer detect it and guide the user there.
 
 // Our own origin: app://armada (isArmadaAppUrl, which compares scheme+host
 // rather than `URL.origin` — "null" for a custom scheme — and rejects
@@ -1479,10 +1465,6 @@ function isAppOrigin(url) {
  * the app embeds foreign origins by design (YouTube, Spotify, the WebXDC
  * sandbox), and which ones is CSP `frame-src`'s job — a native origin check
  * there would refuse the embeds instead of hardening them.
- *
- * isAppOrigin compares scheme+host rather than `URL.origin`, which reports
- * "null" for a custom scheme and so would classify the app's OWN pages as
- * external — see appOrigin.js.
  */
 function installNavigationHandlers() {
   app.on("web-contents-created", (_event, contents) => {
@@ -1941,7 +1923,7 @@ if (!gotLock) {
     event.preventDefault();
     // Re-quitting from will-quit's own preventDefault continuation is a no-op:
     // Electron guards against re-entrant quit while the will-quit emission is
-    // still on the stack. closeDb resolves on a microtask (better-sqlite3's
+    // still on the stack. closeDb resolves on a microtask (node:sqlite's
     // close() is synchronous), so calling app.quit() directly lands inside that
     // same emission and the app hangs instead of exiting. setImmediate defers
     // the second quit to a fresh macrotask, past the guard.

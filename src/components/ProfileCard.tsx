@@ -256,9 +256,9 @@ export function ProfileCard({
               </DropdownMenu>
 
               <Dialog open={emojiPickerOpen} onOpenChange={setEmojiPickerOpen}>
-                <DialogContent className="w-fit max-w-[calc(100vw-2rem)] p-0 gap-0 overflow-hidden">
+                <DialogContent className="w-fit max-w-[calc(100vw-2rem)] border-0 rounded-[0.55rem] clip-corner-lg bg-popover shadow-none p-0 gap-0 overflow-hidden">
                   <DialogHeader className="px-4 pt-4 pb-2">
-                    <DialogTitle className="text-base">Set avatar shape</DialogTitle>
+                    <DialogTitle className="chrome-dialog-title font-mono font-bold lowercase tracking-tight">Set avatar shape</DialogTitle>
                     <DialogDescription>Pick an emoji to mask your avatar</DialogDescription>
                   </DialogHeader>
                   <Suspense fallback={<div className="h-[360px] w-[352px] max-w-[calc(100vw-2rem)]" />}>
