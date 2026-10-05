@@ -793,6 +793,24 @@ export function MessageTimeline({
     if (movingUp) maybeExtend();
   }, [captureReadingAnchor, maybeExtend]);
 
+  // Let rows that have been laid out once be skipped offscreen (`.timeline-row`).
+  // Two frames: the size `contain-intrinsic-size: auto` remembers is recorded
+  // after the layout that follows the commit. Not React-managed, so it persists.
+  useEffect(() => {
+    let second = 0;
+    const first = requestAnimationFrame(() => {
+      second = requestAnimationFrame(() => {
+        for (const row of contentRef.current?.querySelectorAll(":scope > .timeline-row:not([data-settled])") ?? []) {
+          row.setAttribute("data-settled", "");
+        }
+      });
+    });
+    return () => {
+      cancelAnimationFrame(first);
+      cancelAnimationFrame(second);
+    };
+  }, [items, expandedFloods]);
+
   // Rows land above a bottom-pinned reader, so nothing moves.
   useEffect(() => {
     if (rampStep >= OPENING_RAMP.length - 1 || timelineEntries.length === 0) return;
@@ -876,7 +894,7 @@ export function MessageTimeline({
                 <div
                   key={item.key}
                   data-scroll-anchor={item.key}
-                  className="relative hover:z-10 focus-within:z-10"
+                  className="timeline-row relative hover:z-10 focus-within:z-10"
                 >
                   {item.type === "date" ? (
                     <DateSeparator ts={item.ts} />
@@ -926,7 +944,7 @@ export function MessageTimeline({
                   distanceRef.current = 0;
                   pinToBottomNow();
                 }}
-                className="pointer-events-auto inline-flex items-center gap-2 rounded-full border border-border/60 bg-secondary/90 backdrop-blur px-5 py-2.5 text-sm font-medium text-foreground shadow-lg hover:bg-secondary transition-colors"
+                className="pointer-events-auto inline-flex items-center gap-2 clip-corner-lg bg-secondary/90 backdrop-blur px-5 py-2.5 text-sm font-medium text-foreground shadow-lg hover:bg-secondary transition-colors"
                 aria-label="Jump to the latest messages"
               >
                 <ChevronDown className="size-4" />

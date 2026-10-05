@@ -114,7 +114,7 @@ export function BuzzDiffRow({ event }: { event: NostrRumor }) {
 
   return (
     <div className="px-4 py-1.5">
-      <div className="clip-corner-lg border border-border/60 bg-secondary/40 overflow-hidden">
+      <div className="clip-hairline-lg [--fill:var(--secondary)/0.4] [--fill-hover:var(--secondary)/0.4] p-px overflow-hidden">
         <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 px-3 py-2 text-xs text-muted-foreground border-b border-border/60">
           <GitBranch className="size-3.5 shrink-0" />
           <span className="font-medium text-foreground/80"><DisplayName pubkey={event.pubkey} name={name} /></span>
@@ -201,7 +201,7 @@ export function BuzzWorkflowDefinitionRow({ event }: { event: NostrRumor }) {
   }, [event.content, event.tags]);
   return (
     <div className="px-4 py-1.5">
-      <div className="clip-corner-lg border border-border/60 bg-secondary/40 overflow-hidden">
+      <div className="clip-hairline-lg [--fill:var(--secondary)/0.4] [--fill-hover:var(--secondary)/0.4] p-px overflow-hidden">
         <button
           type="button"
           className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-foreground/5 transition-colors"
@@ -268,7 +268,7 @@ export function BuzzHuddleRow({ event, lifecycle }: {
 
   return (
     <div className="px-4 py-1.5">
-      <div className="clip-corner-lg border border-border/60 bg-secondary/40 px-3 py-2.5 flex items-center gap-3">
+      <div className="clip-hairline-lg [--fill:var(--secondary)/0.4] [--fill-hover:var(--secondary)/0.4] px-3 py-2.5 flex items-center gap-3">
         <AudioLines className={cn("size-5 shrink-0", ended ? "text-muted-foreground" : "text-success")} />
         <div className="min-w-0 flex-1">
           <div className="text-sm">

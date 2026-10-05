@@ -21,6 +21,7 @@ import { useWireScopes } from "@/wire/useWireScopes";
 
 import type { NostrEvent } from "@nostrify/nostrify";
 import type { NostrRumor } from "@/lib/nostrRumor";
+import { shareById } from "@/lib/shareRows";
 
 const KIND_DELETE = 5;
 
@@ -154,6 +155,8 @@ export function useGroupMessages(
     // Pure store read: no retry ladder holding the skeleton.
     ...STORE_READ,
     queryKey: messagesKey(relayUrl, groupId),
+    // Keyed: older pages shift every index (see shareRows).
+    structuralSharing: shareById,
     queryFn: async ({ signal }) => {
       const store = await eventStore;
 

@@ -183,7 +183,7 @@ export function CalendarEventMessageCard({
 }: CalendarEventMessageCardProps) {
   const past = !isUpcoming(event);
   return (
-    <div className="max-w-md rounded-xl border border-border bg-secondary/20 px-3 py-2.5 my-1.5 space-y-2.5">
+    <div className="max-w-md clip-hairline-lg [--edge:var(--border)/0.5] [--fill:var(--secondary)/0.2] [--fill-hover:var(--secondary)/0.2] px-3 py-2.5 my-1.5 space-y-2.5">
       <div className="flex items-start gap-3">
         <div
           className={cn(
@@ -276,7 +276,7 @@ export function EventDetailDialog({ calendar, event, open, onOpenChange }: Event
                   href={dittoHashtagUrl(t)}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="rounded-full bg-secondary px-2 py-0.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                  className="clip-corner bg-secondary px-2 py-0.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
                 >
                   #{t}
                 </a>

@@ -97,8 +97,8 @@ export function CalendarEventsBar({
     <>
       <div
         className={cn(
-          "shrink-0 mx-2 overflow-hidden transition-all duration-300 ease-in-out",
-          expanded ? "mt-2 max-h-80 opacity-100" : "mt-0 max-h-0 opacity-0",
+          "shrink-0 mx-gutter overflow-hidden transition-all duration-300 ease-in-out",
+          expanded ? "mt-stack max-h-80 opacity-100" : "mt-0 max-h-0 opacity-0",
         )}
         aria-hidden={!expanded}
       >

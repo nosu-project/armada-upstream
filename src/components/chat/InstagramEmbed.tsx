@@ -45,7 +45,7 @@ export function InstagramEmbed({ shortcode, className }: InstagramEmbedProps) {
 
   return (
     <div
-      className={cn("max-w-md overflow-hidden rounded-xl border border-border", className)}
+      className={cn("max-w-md overflow-hidden clip-corner-lg", className)}
       onClick={(e) => e.stopPropagation()}
     >
       <iframe

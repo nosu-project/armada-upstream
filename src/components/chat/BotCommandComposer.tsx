@@ -312,7 +312,7 @@ export function BotCommandComposer({
           type="button"
           variant="ghost"
           size="icon"
-          className="ml-auto size-5 shrink-0"
+          className="ml-auto size-5 touch:size-11 shrink-0 clip-corner-lg"
           aria-label="Cancel command"
           onClick={onCancel}
         >
@@ -408,32 +408,35 @@ export function BotCommandComposer({
             )}
 
             {menuFor === i && menuOptions.length > 0 && (
-              <div className="absolute bottom-full left-0 z-[320] mb-1 max-h-48 min-w-[9rem] overflow-y-auto rounded-lg border border-border bg-popover py-1 shadow-lg">
-                {menuOptions.map((option, oi) => (
-                  <button
-                    key={option.value || "(skip)"}
-                    type="button"
-                    className={cn(
-                      "flex w-full items-center gap-1.5 px-2 py-1 text-left text-sm",
-                      oi === menuIndex ? "bg-accent text-accent-foreground" : "hover:bg-secondary/60",
-                      option.value === "" && "text-muted-foreground italic",
-                    )}
-                    onPointerDown={(e) => {
-                      e.preventDefault();
-                      pickOption(i, option);
-                    }}
-                  >
-                    {arg.type === "user" && (
-                      <Avatar className="size-4 shrink-0">
-                        <AvatarImage src={option.picture} imeta={option.pictureImeta} alt="" />
-                        <AvatarFallback className="text-monogram">
-                          {option.label.slice(0, 2).toUpperCase()}
-                        </AvatarFallback>
-                      </Avatar>
-                    )}
-                    <span className="truncate">{option.label}</span>
-                  </button>
-                ))}
+              <div className="vessel-lift absolute bottom-full left-0 z-[320] mb-1">
+                <div className="vessel max-h-48 min-w-[9rem] overflow-y-auto scroll-py-1.5 p-1.5">
+                  {menuOptions.map((option, oi) => (
+                    <button
+                      key={option.value || "(skip)"}
+                      type="button"
+                      data-highlighted={oi === menuIndex || undefined}
+                      className={cn(
+                        "relative flex w-full items-center gap-1.5 menu-row clip-corner px-2 py-1.5 text-left text-sm",
+                        oi === menuIndex ? "bg-foreground/[0.08]" : "hover:bg-foreground/[0.05]",
+                        option.value === "" && "text-muted-foreground italic",
+                      )}
+                      onPointerDown={(e) => {
+                        e.preventDefault();
+                        pickOption(i, option);
+                      }}
+                    >
+                      {arg.type === "user" && (
+                        <Avatar className="size-4 shrink-0">
+                          <AvatarImage src={option.picture} imeta={option.pictureImeta} alt="" />
+                          <AvatarFallback className="text-monogram">
+                            {option.label.slice(0, 2).toUpperCase()}
+                          </AvatarFallback>
+                        </Avatar>
+                      )}
+                      <span className="truncate">{option.label}</span>
+                    </button>
+                  ))}
+                </div>
               </div>
             )}
             </label>
@@ -444,7 +447,7 @@ export function BotCommandComposer({
           type="button"
           onClick={submit}
           aria-label="Send command"
-          className="p-2 shrink-0 clip-corner-lg bg-primary text-primary-foreground hover:opacity-90 transition-opacity flex items-center justify-center size-9"
+          className="p-2 shrink-0 clip-corner-lg bg-primary text-primary-foreground hover:opacity-90 transition-opacity flex items-center justify-center size-9 touch:size-11"
         >
           <ArrowUpRight className="size-5" strokeWidth={2.5} />
         </button>

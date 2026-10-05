@@ -51,7 +51,7 @@ const DrawerContent = React.forwardRef<
       className={cn(
         // No border (it'd draw a hairline at screen edges). Non-interactive on close,
         // with `!`, for the same reason as the overlay.
-        "fixed inset-x-0 bottom-0 z-50 mt-24 flex h-auto flex-col rounded-t-2xl bg-background shadow-[0_-8px_30px_rgba(0,0,0,0.25)] data-[state=closed]:!pointer-events-none",
+        "fixed inset-x-0 bottom-0 z-50 mt-24 flex h-auto flex-col bg-background shadow-[0_-8px_30px_rgba(0,0,0,0.25)] data-[state=closed]:!pointer-events-none",
         className
       )}
       onClick={(e) => {
@@ -60,7 +60,7 @@ const DrawerContent = React.forwardRef<
       }}
       {...props}
     >
-      <div className="mx-auto mt-3 h-1 w-9 shrink-0 rounded-full bg-muted-foreground/30" />
+      <div className="mx-auto mt-2.5 mb-2 h-1 w-9 shrink-0 rounded-full bg-muted-foreground/30" />
       {children}
     </DrawerPrimitive.Content>
   </DrawerPortal>

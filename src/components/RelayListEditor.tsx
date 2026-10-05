@@ -87,7 +87,7 @@ export function RelayListEditor({
   return (
     <div className="space-y-1.5">
       {pinned.map((url) => (
-        <div key={url} className="flex items-center gap-2 rounded-md bg-background/40 px-3 py-2.5">
+        <div key={url} className="flex items-center gap-2 clip-corner bg-background/40 px-3 py-2.5">
           <div className="flex-1 min-w-0">
             <RelayIdentity url={url} />
           </div>
@@ -96,7 +96,7 @@ export function RelayListEditor({
       ))}
 
       {relays.map((url) => (
-        <div key={url} className="flex items-center gap-2 rounded-md bg-background/40 px-3 py-2.5">
+        <div key={url} className="flex items-center gap-2 clip-corner bg-background/40 px-3 py-2.5">
           <div className="flex-1 min-w-0">
             <RelayIdentity url={url} />
           </div>
@@ -105,7 +105,7 @@ export function RelayListEditor({
               variant="ghost"
               size="icon"
               aria-label={`Remove ${url}`}
-              className="size-7 text-muted-foreground hover:text-destructive shrink-0"
+              className="size-7 touch:size-11 text-muted-foreground hover:text-destructive shrink-0"
               onClick={() => onChange?.(relays.filter((u) => u !== url))}
             >
               <X className="size-4" />

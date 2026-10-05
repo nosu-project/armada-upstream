@@ -25,6 +25,7 @@ import { markOwnWebPushEvent } from "@/lib/webPushState";
 
 import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
 import type { NostrRumor } from "@/lib/nostrRumor";
+import { shareById } from "@/lib/shareRows";
 
 /** NIP-04 encrypted direct message kind. */
 export const KIND_DM = 4;
@@ -449,6 +450,8 @@ export function useDMConversations(options?: { decryptPreviews?: boolean }) {
 
   const query = useQuery<NostrRumor[]>({
     queryKey,
+    // Keyed: older pages shift every index (see shareRows).
+    structuralSharing: shareById,
     enabled: !!user?.pubkey && !knownPeersLoading,
     queryFn: async ({ signal }) => {
       const pubkey = user!.pubkey;
@@ -788,6 +791,8 @@ export function useDirectMessages(peer: string | undefined) {
 
   const query = useQuery<DecryptedDM[]>({
     queryKey,
+    // Keyed: older pages shift every index (see shareRows).
+    structuralSharing: shareById,
     // Resolves on the store read, so use the store-read policy (no retry ladder; see storeQuery).
     ...STORE_READ,
     enabled: !!self && !!peer && !!user?.signer.nip04,

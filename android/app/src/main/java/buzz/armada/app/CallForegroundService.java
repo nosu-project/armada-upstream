@@ -13,6 +13,7 @@ import android.content.pm.ServiceInfo;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.net.Uri;
+import android.net.wifi.WifiManager;
 import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
@@ -105,6 +106,8 @@ public class CallForegroundService extends Service {
 
     @Nullable
     private PowerManager.WakeLock wakeLock;
+    @Nullable
+    private WifiManager.WifiLock wifiLock;
 
     private final Runnable micPoll = new Runnable() {
         @Override
@@ -129,6 +132,7 @@ public class CallForegroundService extends Service {
         live = this;
         enterForeground();
         acquireWakeLock();
+        acquireWifiLock();
     }
 
     @Override
@@ -262,6 +266,32 @@ public class CallForegroundService extends Service {
         }
     }
 
+    /** Keeps Wi-Fi out of power save while the screen is off. */
+    @SuppressWarnings("deprecation")
+    private void acquireWifiLock() {
+        try {
+            WifiManager wm = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+            if (wm == null) return;
+            WifiManager.WifiLock lock = wm.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "armada:call");
+            lock.setReferenceCounted(false);
+            lock.acquire();
+            wifiLock = lock;
+        } catch (Exception e) {
+            Log.w(TAG, "Could not acquire the call Wi-Fi lock", e);
+        }
+    }
+
+    private void releaseWifiLock() {
+        WifiManager.WifiLock lock = wifiLock;
+        wifiLock = null;
+        if (lock == null) return;
+        try {
+            if (lock.isHeld()) lock.release();
+        } catch (Exception e) {
+            Log.w(TAG, "Could not release the call Wi-Fi lock", e);
+        }
+    }
+
     private Notification buildNotification(boolean micForeground) {
         NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && nm != null) {
@@ -372,6 +402,7 @@ public class CallForegroundService extends Service {
         handler.removeCallbacks(micPoll);
         micPollScheduled = false;
         releaseWakeLock();
+        releaseWifiLock();
         super.onDestroy();
     }
 

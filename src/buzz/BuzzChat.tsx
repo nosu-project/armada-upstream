@@ -261,7 +261,7 @@ function BuzzForumPost({ event, transport, votes, onVote, isAgent }: BuzzForumPo
 
   return (
     <div className="px-2 py-1">
-      <div className="flex overflow-hidden clip-corner-lg border border-border bg-card transition-colors hover:border-muted-foreground/30">
+      <div className="flex overflow-hidden p-px clip-hairline-lg [--fill:var(--card)] [--fill-hover:var(--card)] [--edge:var(--border)/0.5] transition-colors hover:[--edge:var(--muted-foreground)/0.3]">
         <div className="flex shrink-0 flex-col items-center gap-0.5 bg-secondary/40 px-1 py-2">
           <button
             type="button"
@@ -332,7 +332,7 @@ function BuzzForumPost({ event, transport, votes, onVote, isAgent }: BuzzForumPo
                     <Copy className="mr-2 size-4" /> Copy text
                   </DropdownMenuItem>
                   <DropdownMenuItem onSelect={copyId}>
-                    <Link2 className="mr-2 size-4" /> Copy post ID
+                    <Link2 className="size-4" /> Copy post ID
                   </DropdownMenuItem>
                   {canDelete && (
                     <>
@@ -894,7 +894,7 @@ export function BuzzChat({
         <div
           className={cn(
             "relative h-full flex w-full transition-transform duration-200 ease-out",
-            threadRoot ? "translate-x-0" : "translate-x-full",
+            threadRoot ? "transform-none" : "translate-x-full",
             threadExpanded ? "thread:w-full" : "thread:w-[23rem]",
           )}
         >

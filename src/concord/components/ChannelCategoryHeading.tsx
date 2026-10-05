@@ -63,13 +63,13 @@ export function ChannelCategoryHeading({
       <ContextMenuContent className="w-52">
         {onRename && (
           <ContextMenuItem onSelect={onRename}>
-            <Pencil className="mr-2 size-4" />
+            <Pencil className="size-4" />
             Rename category
           </ContextMenuItem>
         )}
         {onUngroup && (
           <ContextMenuItem onSelect={onUngroup}>
-            <FolderMinus className="mr-2 size-4" />
+            <FolderMinus className="size-4" />
             Ungroup channels
           </ContextMenuItem>
         )}

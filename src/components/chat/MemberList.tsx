@@ -1,4 +1,4 @@
-import { AtSign, Ban, Bot, Copy, Crown, Flag, IdCard, MessageSquareText, MoreVertical, Music, Search, Shield, ShieldOff, Smile, UserCheck, UserCog, UserMinus, UserPlus, UserX, X } from "lucide-react";
+import { AtSign, Bot, Copy, Crown, IdCard, MessageSquareText, MoreVertical, Music, Shield, Smile, UserCog, UserPlus, X } from "lucide-react";
 
 import { memo, useMemo, useRef, useState } from "react";
 
@@ -6,7 +6,6 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { BotPill } from "@/components/BotPill";
 import { DeferredRow } from "@/components/DeferredRow";
 import { ProfilePreviewCard } from "@/components/chat/ProfilePreviewCard";
-import { ReportDialog } from "@/components/ReportDialog";
 import { StatusDialog } from "@/components/dialogs/StatusDialog";
 import { Button } from "@/components/ui/button";
 import {
@@ -14,7 +13,6 @@ import {
   ContextMenuCheckboxItem,
   ContextMenuContent,
   ContextMenuItem,
-  ContextMenuLabel,
   ContextMenuSeparator,
   ContextMenuSub,
   ContextMenuSubContent,
@@ -26,7 +24,6 @@ import {
   DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuSub,
   DropdownMenuSubContent,
@@ -34,19 +31,19 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { EmojifiedText } from "@/components/chat/CustomEmoji";
+import { UserModerationMenuSection } from "@/components/chat/ModerationMenuSection";
 import { RolePickerItems, type RolePickerOption } from "@/components/chat/RolePickerItems";
+import { useUserModeration } from "@/hooks/useUserModeration";
 import { DisplayName } from "@/components/DisplayName";
-import { Input } from "@/components/ui/input";
+import { SearchField } from "@/components/ui/search-field";
 import { useAuthor } from "@/hooks/useAuthor";
-import { useChatScope } from "@/hooks/useChatScope";
-import { useMutedPubkeys, useMuteToggle } from "@/hooks/useMuteList";
+import { useMutedPubkeys } from "@/hooks/useMuteList";
 import { useMemberSearch } from "@/hooks/useMemberSearch";
 import { useScopedIdentity } from "@/hooks/useScopedDisplayName";
 import { isStatusExpired, useUserStatus } from "@/hooks/useUserStatus";
 import { requestMention } from "@/hooks/useMentionBus";
 import { toast } from "@/hooks/useToast";
 import { getAvatarShape } from "@/lib/avatarShape";
-import { reportDestination } from "@/lib/report";
 import { tryNpubEncode } from "@/lib/safeNip19";
 import { cn } from "@/lib/utils";
 import { writeClipboardText } from "@/lib/clipboard";
@@ -65,7 +62,6 @@ const ROLE_GUEST = "guest";
 interface MenuParts {
   Item: ComponentType<{ className?: string; onSelect?: (e: Event) => void; children?: ReactNode }>;
   Separator: ComponentType<{ className?: string }>;
-  Label: ComponentType<{ className?: string; children?: ReactNode }>;
   Sub: ComponentType<{ children?: ReactNode }>;
   SubTrigger: ComponentType<{ className?: string; children?: ReactNode }>;
   SubContent: ComponentType<{ className?: string; children?: ReactNode }>;
@@ -96,29 +92,11 @@ interface MemberRowProps {
   roles?: string[];
   /** Live presence dot (Buzz relays). Undefined = unknown (no dot). */
   presence?: "online" | "away";
-  canModerate: boolean;
-  viewerIsAdmin: boolean;
   currentUserPubkey?: string;
-  onRemove?: (pubkey: string) => void;
-  onSetRole?: (pubkey: string, roles: string[]) => void;
-  /** Concord: cooperative kick (honest clients drop them; they can rejoin). */
-  onKick?: (pubkey: string) => void;
-  /** Concord: ban + read-cut (rotate keys to lock them out). */
-  onBan?: (pubkey: string) => void;
-  /** A ban without a read-cut is just "Ban". */
-  banLabel?: (pubkey: string) => string;
-  onUnban?: (pubkey: string) => void;
-  isBanned?: boolean;
   /** Per-server nickname/label editor (viewer's own row only). */
   onEditProfile?: () => void;
   /** Buzz relays: kind 41010. */
   onMessage?: (pubkey: string) => void;
-  roleCatalog?: RolePickerOption[];
-  customRoleIds?: string[];
-  /** Viewer outranks this member (may edit their roles). */
-  canEditRoles?: boolean;
-  onToggleRole?: (pubkey: string, roleId: string, on: boolean) => void;
-  isRoleToggling?: (pubkey: string, roleId: string) => boolean;
   /** Custom-role chip for members without a tier badge. */
   customBadge?: { name: string; color: number };
 }
@@ -127,23 +105,9 @@ const MemberRow = memo(function MemberRow({
   pubkey,
   roles,
   presence,
-  canModerate,
-  viewerIsAdmin,
   currentUserPubkey,
-  onRemove,
-  onSetRole,
-  onKick,
-  onBan,
-  banLabel,
-  onUnban,
-  isBanned,
   onEditProfile,
   onMessage,
-  roleCatalog,
-  customRoleIds,
-  canEditRoles,
-  onToggleRole,
-  isRoleToggling,
   customBadge,
 }: MemberRowProps) {
   const author = useAuthor(pubkey);
@@ -154,10 +118,7 @@ const MemberRow = memo(function MemberRow({
   // NIP-40 expiration passed: the track ended.
   const musicStatus = isStatusExpired(rawMusicStatus) ? undefined : rawMusicStatus;
   const [statusOpen, setStatusOpen] = useState(false);
-  const [reportOpen, setReportOpen] = useState(false);
-  // A legacy Concord epoch (no staff-only address) offers no report.
-  const chatScope = useChatScope();
-  const reportTo = reportDestination(chatScope);
+  const moderation = useUserModeration(pubkey);
 
   const roleSet = new Set((roles ?? []).map((r) => r.toLowerCase()));
   const isOwner = roleSet.has(ROLE_OWNER);
@@ -165,11 +126,6 @@ const MemberRow = memo(function MemberRow({
   const isAdmin = isOwner || roleSet.has(ROLE_ADMIN);
   const isModerator = roleSet.has(ROLE_MODERATOR);
   const isSelf = currentUserPubkey === pubkey;
-  // The owner is never a valid target (mirrors canActOnMember in the roster engine).
-  const canActOnUser = canModerate && !isSelf && !isOwner;
-  const canReport = Boolean(reportTo && currentUserPubkey && !isSelf);
-  // Writes to the user's own list, so available everywhere.
-  const mute = useMuteToggle(pubkey);
 
   const copyNpub = () => {
     const npub = tryNpubEncode(pubkey);
@@ -180,158 +136,66 @@ const MemberRow = memo(function MemberRow({
     );
   };
 
-  const showRolePicker = Boolean(onToggleRole && canEditRoles && roleCatalog && roleCatalog.length > 0);
+  const { rolePicker } = moderation;
 
-  const renderMenuItems = ({ Item, Separator, Label, Sub, SubTrigger, SubContent, CheckboxItem }: MenuParts) => (
+  const renderMenuItems = ({ Item, Separator, Sub, SubTrigger, SubContent, CheckboxItem }: MenuParts) => (
     <>
-      <Item className="gap-3 px-3 py-2.5" onSelect={() => requestMention(pubkey)}>
+      <Item onSelect={() => requestMention(pubkey)}>
         <AtSign className="size-4" />
         Mention
       </Item>
       {onMessage && !isSelf && (
-        <Item className="gap-3 px-3 py-2.5" onSelect={() => onMessage(pubkey)}>
+        <Item onSelect={() => onMessage(pubkey)}>
           <MessageSquareText className="size-4" />
           Message
         </Item>
       )}
-      <Item className="gap-3 px-3 py-2.5" onSelect={copyNpub}>
+      <Item onSelect={copyNpub}>
         <Copy className="size-4" />
         Copy npub
       </Item>
 
       {isSelf && (
-        <Item className="gap-3 px-3 py-2.5" onSelect={() => setStatusOpen(true)}>
+        <Item onSelect={() => setStatusOpen(true)}>
           <Smile className="size-4" />
           Set status
         </Item>
       )}
 
       {isSelf && onEditProfile && (
-        <Item className="gap-3 px-3 py-2.5" onSelect={onEditProfile}>
+        <Item onSelect={onEditProfile}>
           <IdCard className="size-4" />
           Server identity
         </Item>
       )}
 
-      {((canActOnUser && (onSetRole || onRemove || onKick || onBan || onUnban)) || showRolePicker) && (
+      {rolePicker && (
         <>
           <Separator />
-          <Label className="px-2 pb-1.5 text-2xs uppercase tracking-wide text-muted-foreground/80">
-            {/* Can stand alone on the viewer's own row (owner self-assigning a cosmetic role). */}
-            {canActOnUser ? "Moderation" : "Roles"}
-          </Label>
-
-          {showRolePicker && (
-            <Sub>
-              <SubTrigger className="gap-3 px-3 py-2.5">
-                <UserCog className="size-4" />
-                Roles
-              </SubTrigger>
-              <SubContent className="w-56 max-h-72 overflow-y-auto p-1.5">
-                <RolePickerItems
-                  CheckboxItem={CheckboxItem}
-                  pubkey={pubkey}
-                  catalog={roleCatalog!}
-                  heldRoleIds={customRoleIds}
-                  isToggling={isRoleToggling}
-                  onToggle={onToggleRole!}
-                />
-              </SubContent>
-            </Sub>
-          )}
-
-          {canActOnUser && onSetRole && viewerIsAdmin && !isAdmin && (
-            <Item
-              className="gap-3 px-3 py-2.5"
-              onSelect={() => onSetRole(pubkey, [ROLE_ADMIN])}
-            >
-              <Crown className="size-4" />
-              Make admin
-            </Item>
-          )}
-          {canActOnUser && onSetRole && !isModerator && !isAdmin && (
-            <Item
-              className="gap-3 px-3 py-2.5"
-              onSelect={() => onSetRole(pubkey, [ROLE_MODERATOR])}
-            >
-              <Shield className="size-4" />
-              Make moderator
-            </Item>
-          )}
-          {canActOnUser && onSetRole && isAdmin && (
-            <Item
-              className="gap-3 px-3 py-2.5"
-              onSelect={() => onSetRole(pubkey, [ROLE_MODERATOR])}
-            >
-              <Shield className="size-4" />
-              Demote to moderator
-            </Item>
-          )}
-          {canActOnUser && onSetRole && (isAdmin || isModerator) && (
-            <Item
-              className="gap-3 px-3 py-2.5"
-              onSelect={() => onSetRole(pubkey, [])}
-            >
-              <ShieldOff className="size-4" />
-              Remove role
-            </Item>
-          )}
-
-          {canActOnUser && onRemove && (
-            <Item
-              className="gap-3 px-3 py-2.5 text-destructive focus:text-destructive"
-              onSelect={() => onRemove(pubkey)}
-            >
-              <UserMinus className="size-4" />
-              Remove from channel
-            </Item>
-          )}
-
-          {canActOnUser && onKick && (
-            <Item className="gap-3 px-3 py-2.5" onSelect={() => onKick(pubkey)}>
-              <UserMinus className="size-4" />
-              Kick (can rejoin)
-            </Item>
-          )}
-          {canActOnUser && onBan && !isBanned && (
-            <Item
-              className="gap-3 px-3 py-2.5 text-destructive focus:text-destructive"
-              onSelect={() => onBan(pubkey)}
-            >
-              <Ban className="size-4" />
-              {banLabel?.(pubkey) ?? "Ban & lock out"}
-            </Item>
-          )}
-          {canActOnUser && onUnban && isBanned && (
-            <Item className="gap-3 px-3 py-2.5" onSelect={() => onUnban(pubkey)}>
-              <ShieldOff className="size-4" />
-              Unban
-            </Item>
-          )}
+          <Sub>
+            <SubTrigger>
+              <UserCog className="size-4" />
+              Roles
+            </SubTrigger>
+            <SubContent className="w-56 max-h-72 overflow-y-auto">
+              <RolePickerItems
+                CheckboxItem={CheckboxItem}
+                pubkey={pubkey}
+                catalog={rolePicker.catalog}
+                heldRoleIds={rolePicker.heldRoleIds}
+                isToggling={rolePicker.isToggling}
+                onToggle={rolePicker.onToggle}
+              />
+            </SubContent>
+          </Sub>
         </>
       )}
 
-      {(mute.canMute || canReport) && <Separator />}
-      {mute.canMute && (
-        <Item
-          className={cn(
-            "gap-3 px-3 py-2.5",
-            !mute.muted && "text-destructive focus:text-destructive",
-          )}
-          onSelect={() => void mute.toggle()}
-        >
-          {mute.muted ? <UserCheck className="size-4" /> : <UserX className="size-4" />}
-          {mute.label}
-        </Item>
-      )}
-      {canReport && (
-        <Item
-          className="gap-3 px-3 py-2.5 text-destructive focus:text-destructive"
-          onSelect={() => setReportOpen(true)}
-        >
-          <Flag className="size-4" />
-          Report
-        </Item>
+      {moderation.actions.length > 0 && (
+        <>
+          {!rolePicker && <Separator />}
+          <UserModerationMenuSection parts={{ Item, Sub, SubTrigger, SubContent }} actions={moderation.actions} />
+        </>
       )}
     </>
   );
@@ -354,7 +218,7 @@ const MemberRow = memo(function MemberRow({
               aria-label={presence === "online" ? "Online" : "Away"}
               className={cn(
                 "absolute -bottom-0.5 -right-0.5 size-2.5 rounded-full ring-2 ring-[hsl(var(--chrome))]",
-                presence === "online" ? "bg-success" : "bg-amber-500",
+                presence === "online" ? "bg-success" : "bg-warning",
               )}
             />
           )}
@@ -452,11 +316,10 @@ const MemberRow = memo(function MemberRow({
             <MoreVertical className="size-3.5" />
           </Button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="w-64 p-2">
+        <DropdownMenuContent align="end" className="w-56">
           {renderMenuItems({
             Item: DropdownMenuItem,
             Separator: DropdownMenuSeparator,
-            Label: DropdownMenuLabel,
             Sub: DropdownMenuSub,
             SubTrigger: DropdownMenuSubTrigger,
             SubContent: DropdownMenuSubContent,
@@ -466,11 +329,10 @@ const MemberRow = memo(function MemberRow({
       </DropdownMenu>
     </div>
     </ContextMenuTrigger>
-    <ContextMenuContent className="w-64 p-2">
+    <ContextMenuContent className="w-56">
       {renderMenuItems({
         Item: ContextMenuItem,
         Separator: ContextMenuSeparator,
-        Label: ContextMenuLabel,
         Sub: ContextMenuSub,
         SubTrigger: ContextMenuSubTrigger,
         SubContent: ContextMenuSubContent,
@@ -479,14 +341,7 @@ const MemberRow = memo(function MemberRow({
     </ContextMenuContent>
     </ContextMenu>
     {isSelf && <StatusDialog open={statusOpen} onOpenChange={setStatusOpen} />}
-    {reportOpen && reportTo && (
-      <ReportDialog
-        open={reportOpen}
-        onOpenChange={setReportOpen}
-        destination={reportTo}
-        target={{ pubkey }}
-      />
-    )}
+    {moderation.dialogs}
     </>
   );
 });
@@ -494,17 +349,7 @@ const MemberRow = memo(function MemberRow({
 interface MemberListProps {
   admins: Nip29Admin[];
   members: string[];
-  canModerate: boolean;
-  viewerIsAdmin?: boolean;
   currentUserPubkey?: string;
-  onRemove?: (pubkey: string) => void;
-  onSetRole?: (pubkey: string, roles: string[]) => void;
-  /** Concord moderation (additive; NIP-29 leaves these unset). */
-  onKick?: (pubkey: string) => void;
-  onBan?: (pubkey: string) => void;
-  banLabel?: (pubkey: string) => string;
-  onUnban?: (pubkey: string) => void;
-  bannedPubkeys?: Set<string>;
   /** Per-member role labels (Buzz: member/guest/bot). */
   memberRoles?: Record<string, string>;
   /** Live presence (Buzz: ephemeral kind-20001 heartbeats). */
@@ -515,9 +360,6 @@ interface MemberListProps {
   onMessage?: (pubkey: string) => void;
   roleCatalog?: RolePickerOption[];
   memberRoleIds?: Record<string, string[]>;
-  canEditMemberRoles?: (pubkey: string) => boolean;
-  onToggleRole?: (pubkey: string, roleId: string, on: boolean) => void;
-  isRoleToggling?: (pubkey: string, roleId: string) => boolean;
   /** Hoisted role sections above Admins; their members appear only there. */
   roleSections?: Array<{ id: string; name: string; color: number; members: string[] }>;
   /** Concord: add-members for the active private channel; set only when the viewer may grant access. */
@@ -532,16 +374,7 @@ interface MemberListProps {
 export const MemberList = memo(function MemberList({
   admins,
   members,
-  canModerate,
-  viewerIsAdmin = false,
   currentUserPubkey,
-  onRemove,
-  onSetRole,
-  onKick,
-  onBan,
-  banLabel,
-  onUnban,
-  bannedPubkeys,
   memberRoles,
   presence,
   onClose,
@@ -549,9 +382,6 @@ export const MemberList = memo(function MemberList({
   onMessage,
   roleCatalog,
   memberRoleIds,
-  canEditMemberRoles,
-  onToggleRole,
-  isRoleToggling,
   roleSections,
   onAddMembers,
   className,
@@ -616,7 +446,6 @@ export const MemberList = memo(function MemberList({
     regulars.length === 0 &&
     visibleSections.every((section) => section.members.length === 0);
 
-  const firstSection = visibleSections.find((s) => !searching || s.members.length > 0);
   // A list short enough to read at a glance needs no search; kept while a query is live.
   const showSearch = roster.length >= SEARCH_MIN_MEMBERS || query !== "";
 
@@ -624,7 +453,7 @@ export const MemberList = memo(function MemberList({
     <aside
       className={cn(
         "flex flex-col flex-1 min-w-0 overflow-hidden",
-        "m-2 sidebar:my-3 sidebar:mr-2 sidebar:ml-0 p-1.5 clip-corner-lg bg-chrome",
+        "mt-stack mb-2 sidebar:mb-3 mx-gutter sidebar:ml-0 p-1.5 clip-corner-lg bg-chrome",
         className,
       )}
     >
@@ -650,34 +479,15 @@ export const MemberList = memo(function MemberList({
       )}
 
       {showSearch && (
-        <div className="flex shrink-0 items-center gap-1.5 px-2 pb-1.5 pt-1">
-          <Search className="size-4 shrink-0 text-muted-foreground" aria-hidden />
-          <Input
+        <div className="shrink-0 pb-1.5">
+          <SearchField
             // Not type="search": WebKit/Blink add their own cancel button.
             type="text"
             value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Escape" && query) {
-                event.stopPropagation();
-                setQuery("");
-              }
-            }}
+            onChange={setQuery}
             placeholder="Search members"
-            aria-label="Search members"
-            className="h-8 flex-1 border-0 bg-transparent px-1 text-sm shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
+            className="text-sm"
           />
-          {query && (
-            <Button
-              variant="ghost"
-              size="icon"
-              aria-label="Clear search"
-              className="size-8 touch:size-10 shrink-0 text-muted-foreground hover:text-foreground"
-              onClick={() => setQuery("")}
-            >
-              <X className="size-4" />
-            </Button>
-          )}
         </div>
       )}
 
@@ -687,9 +497,11 @@ export const MemberList = memo(function MemberList({
           No members match “{query.trim()}”.
         </p>
       )}
+      {/* Every section opens with the same 40px heading band: under the search, the
+          first member row lands on the 168px line (banner bottom, first community). */}
       {visibleAdmins.length > 0 && (
         <>
-          <div className="flex items-center gap-1 px-2 py-1">
+          <div className="flex h-10 items-center gap-1 px-3">
             <h3 className="flex-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
               Admins · {visibleAdmins.length}
             </h3>
@@ -700,23 +512,9 @@ export const MemberList = memo(function MemberList({
               pubkey={admin.pubkey}
               roles={admin.roles}
               presence={presence?.[admin.pubkey]}
-              canModerate={canModerate}
-              viewerIsAdmin={viewerIsAdmin}
               currentUserPubkey={currentUserPubkey}
-              onRemove={onRemove}
-              onSetRole={onSetRole}
-              onKick={onKick}
-              onBan={onBan}
-              banLabel={banLabel}
-              onUnban={onUnban}
-              isBanned={bannedPubkeys?.has(admin.pubkey)}
               onEditProfile={onEditProfile}
               onMessage={onMessage}
-              roleCatalog={roleCatalog}
-              customRoleIds={memberRoleIds?.[admin.pubkey]}
-              canEditRoles={canEditMemberRoles?.(admin.pubkey)}
-              onToggleRole={onToggleRole}
-              isRoleToggling={isRoleToggling}
               customBadge={customBadgeOf(admin.pubkey)}
             />
             </DeferredRow>
@@ -727,7 +525,7 @@ export const MemberList = memo(function MemberList({
       {visibleSections.map((section) =>
         !searching || section.members.length > 0 ? (
           <div key={section.id}>
-            <div className="flex items-center gap-1 px-2 py-1">
+            <div className="flex h-10 items-center gap-1 px-3">
               <h3
                 className="flex-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground"
                 style={section.color ? { color: roleTint(section.color) } : undefined}
@@ -741,23 +539,9 @@ export const MemberList = memo(function MemberList({
                 pubkey={pubkey}
                 roles={adminMap.get(pubkey)}
                 presence={presence?.[pubkey]}
-                canModerate={canModerate}
-                viewerIsAdmin={viewerIsAdmin}
                 currentUserPubkey={currentUserPubkey}
-                onRemove={onRemove}
-                onSetRole={onSetRole}
-                onKick={onKick}
-                onBan={onBan}
-                banLabel={banLabel}
-                onUnban={onUnban}
-                isBanned={bannedPubkeys?.has(pubkey)}
                 onEditProfile={onEditProfile}
                 onMessage={onMessage}
-                roleCatalog={roleCatalog}
-                customRoleIds={memberRoleIds?.[pubkey]}
-                canEditRoles={canEditMemberRoles?.(pubkey)}
-                onToggleRole={onToggleRole}
-                isRoleToggling={isRoleToggling}
               />
               </DeferredRow>
             ))}
@@ -766,7 +550,7 @@ export const MemberList = memo(function MemberList({
       )}
 
       {(!searching || regulars.length > 0) && (
-        <div className={cn("flex items-center gap-1 px-2 py-1", (visibleAdmins.length > 0 || firstSection) && "mt-2")}>
+        <div className="flex h-10 items-center gap-1 px-3">
           <h3 className="flex-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
             Members · {regulars.length}
           </h3>
@@ -785,23 +569,9 @@ export const MemberList = memo(function MemberList({
             pubkey={pubkey}
             roles={buzzRoles.get(pubkey)}
             presence={presence?.[pubkey]}
-            canModerate={canModerate}
-            viewerIsAdmin={viewerIsAdmin}
             currentUserPubkey={currentUserPubkey}
-            onRemove={onRemove}
-            onSetRole={onSetRole}
-            onKick={onKick}
-            onBan={onBan}
-            banLabel={banLabel}
-            onUnban={onUnban}
-            isBanned={bannedPubkeys?.has(pubkey)}
             onEditProfile={onEditProfile}
             onMessage={onMessage}
-            roleCatalog={roleCatalog}
-            customRoleIds={memberRoleIds?.[pubkey]}
-            canEditRoles={canEditMemberRoles?.(pubkey)}
-            onToggleRole={onToggleRole}
-            isRoleToggling={isRoleToggling}
             customBadge={customBadgeOf(pubkey)}
           />
           </DeferredRow>

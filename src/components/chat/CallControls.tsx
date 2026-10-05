@@ -1,4 +1,4 @@
-import { DisconnectButton, useLocalParticipant } from "@livekit/components-react";
+import { useLocalParticipant } from "@livekit/components-react";
 import {
   Hand,
   Info,
@@ -455,9 +455,9 @@ export function ScreenShareButton({
 export function LeaveButton({ className }: { className?: string }) {
   const { leaveCall } = useCall();
   return (
-    <DisconnectButton
-      // Leave chirp inside the gesture, before disconnect tears down audio. Both
-      // handlers are idempotent.
+    <button
+      type="button"
+      // Chirp inside the gesture; the room disconnects on unmount, after the DM hang-up is sent.
       onClick={() => {
         playLeaveSound();
         leaveCall();
@@ -467,7 +467,7 @@ export function LeaveButton({ className }: { className?: string }) {
       className={cn(CTRL, "bg-destructive text-destructive-foreground hover:bg-destructive/90", className)}
     >
       <PhoneOff className="size-4" />
-    </DisconnectButton>
+    </button>
   );
 }
 
@@ -486,7 +486,7 @@ export function RaiseHandButton({ className }: { className?: string }) {
       className={cn(
         CTRL,
         myHandRaised
-          ? "bg-amber-500/25 text-amber-500 hover:bg-amber-500/35"
+          ? "bg-warning/25 text-warning hover:bg-warning/35"
           : "bg-foreground/10 text-foreground hover:bg-foreground/20",
         className,
       )}

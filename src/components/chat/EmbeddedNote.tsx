@@ -219,8 +219,7 @@ function GenericEventCard({ event, sourceUrl, className }: { event: NostrRumor; 
   return (
     <div
       className={cn(
-        "group block max-w-md w-full rounded-2xl border border-border overflow-hidden",
-        "transition-colors hover:bg-secondary/40 my-1.5",
+        "group block max-w-md w-full clip-hairline-lg [--edge:var(--border)/0.5] [--fill:var(--background)/0.4] [--fill-hover:var(--secondary)/0.4] overflow-hidden my-1.5",
         className,
       )}
       onClick={(e) => e.stopPropagation()}
@@ -570,7 +569,7 @@ function DeckCardTile({ card, onClick }: { card: DeckCard; onClick?: () => void 
   if (failed) {
     return (
       <div
-        className="relative aspect-[5/7] rounded-lg bg-secondary/60 border border-border flex items-center justify-center p-1 cursor-pointer"
+        className="aspect-[5/7] clip-hairline-lg [--edge:var(--border)/0.5] [--fill:var(--secondary)/0.6] [--fill-hover:var(--secondary)/0.6] flex items-center justify-center p-1 cursor-pointer"
         onClick={onClick}
       >
         <span className="text-3xs text-center text-muted-foreground leading-tight line-clamp-3">{card.name}</span>
@@ -580,7 +579,7 @@ function DeckCardTile({ card, onClick }: { card: DeckCard; onClick?: () => void 
   }
 
   return (
-    <div className="relative aspect-[5/7] rounded-lg overflow-hidden group cursor-pointer" onClick={onClick}>
+    <div className="relative aspect-[5/7] clip-corner-lg overflow-hidden group cursor-pointer" onClick={onClick}>
       <img
         src={scryfallImageUrl(ref, "normal")}
         alt={card.name}
@@ -698,7 +697,7 @@ function EmbeddedMagicDeckCard({ event }: { event: NostrRumor }) {
       </div>
 
       {mainDeck.length > 0 && (
-        <div className="rounded-xl border border-border overflow-hidden" onClick={(e) => e.stopPropagation()}>
+        <div className="clip-hairline-lg [--edge:var(--border)/0.5] [--fill:var(--background)/0.4] [--fill-hover:var(--background)/0.4] overflow-hidden" onClick={(e) => e.stopPropagation()}>
           <div className="flex items-center justify-between px-3 py-1.5 bg-secondary/30 border-b border-border/50">
             <span className="text-2xs font-medium text-muted-foreground">{visualView ? "Visual spoiler" : "Decklist"}</span>
             <button
@@ -1049,7 +1048,7 @@ function DittoLink({ href, label = "View on Ditto", iconOnly = false }: { href: 
         title={label}
         aria-label={label}
         className={cn(
-          "shrink-0 grid place-items-center size-6 touch:size-8 rounded-md",
+          "shrink-0 grid place-items-center size-6 touch:size-8 clip-corner-lg",
           "text-muted-foreground hover:text-primary hover:bg-secondary transition-colors",
         )}
       >
@@ -1096,7 +1095,7 @@ function CopyIdButton({ uri, className }: { uri: string; className?: string }) {
       title="Copy event ID"
       aria-label="Copy event ID"
       className={cn(
-        "shrink-0 grid place-items-center size-6 touch:size-8 -mr-1 -mb-0.5 rounded-md",
+        "shrink-0 grid place-items-center size-6 touch:size-8 -mr-1 -mb-0.5 clip-corner-lg",
         "text-muted-foreground hover:text-primary hover:bg-secondary transition-colors",
         className,
       )}
@@ -1110,7 +1109,7 @@ function CopyIdButton({ uri, className }: { uri: string; className?: string }) {
 
 function EmbeddedNoteSkeleton({ className }: { className?: string }) {
   return (
-    <div className={cn("max-w-md rounded-2xl border border-border overflow-hidden my-1.5", className)}>
+    <div className={cn("max-w-md clip-hairline-lg [--edge:var(--border)/0.5] [--fill:var(--background)/0.4] [--fill-hover:var(--background)/0.4] overflow-hidden my-1.5", className)}>
       <div className="px-3 py-2.5 space-y-2">
         <div className="flex items-center gap-2">
           <Skeleton className="size-5 rounded-full shrink-0" />
@@ -1138,7 +1137,7 @@ function EmbeddedNoteTombstone({ label, nip19Id, retrying, onRetry, className }:
   return (
     <div
       className={cn(
-        "max-w-md w-full rounded-2xl border border-dashed border-border px-3 py-2 my-1.5 space-y-1 text-muted-foreground",
+        "max-w-md w-full clip-corner-lg bg-secondary/20 px-3 py-2 my-1.5 space-y-1 text-muted-foreground",
         className,
       )}
       onClick={(e) => e.stopPropagation()}
@@ -1160,7 +1159,7 @@ function EmbeddedNoteTombstone({ label, nip19Id, retrying, onRetry, className }:
             title="Retry"
             aria-label="Retry"
             className={cn(
-              "shrink-0 grid place-items-center size-6 touch:size-8 rounded-md",
+              "shrink-0 grid place-items-center size-6 touch:size-8 clip-corner-lg",
               "text-muted-foreground hover:text-primary hover:bg-secondary transition-colors disabled:opacity-60",
             )}
           >

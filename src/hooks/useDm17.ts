@@ -86,6 +86,7 @@ import { useWireScopes } from "@/wire/useWireScopes";
 import { dmThreadScope, emitWireScopes } from "@/wire/bus";
 import { dm17NotifyCandidates, feedNotifyCandidates } from "@/wire/notify";
 import type { SendStatus } from "@/hooks/useSendStatusMap";
+import { shareByRumorId } from "@/lib/shareRows";
 import type { NostrEvent, NostrFilter, NostrSigner } from "@nostrify/nostrify";
 
 const SYNC_MIN_INTERVAL_MS = 30_000;
@@ -678,6 +679,8 @@ export interface Dm17Thread {
   timerChanges: OpenedDm[];
   /** Disappearing-messages timer in seconds; 0/undefined = off. Either side may set it. */
   timer: number | undefined;
+  /** The timer for something sent now: waits for the stored one rather than taking undefined as off. */
+  resolveTimer: () => Promise<number>;
   /** Both sides' messages then carry `sent_at + seconds` as their NIP-40 expiration. */
   setTimer: (seconds: number) => void;
   isLoading: boolean;
@@ -792,6 +795,8 @@ export function useDm17Thread(
 
   const query = useQuery<OpenedDm[]>({
     queryKey,
+    // Keyed: older pages shift every index (see shareRows).
+    structuralSharing: shareByRumorId,
     // Store read: no retry ladder holding the skeleton over on-disk rumors. See storeQuery.
     ...STORE_READ,
     enabled: queryEnabled,
@@ -1340,6 +1345,7 @@ export function useDm17Thread(
     reactionsByTarget,
     timerChanges,
     timer,
+    resolveTimer,
     setTimer,
     // Wait for a focused row's local lookup so the permalink hunter doesn't backfill first.
     isLoading: query.isLoading || (Boolean(focusedRumorId) && focusedQuery.isLoading),

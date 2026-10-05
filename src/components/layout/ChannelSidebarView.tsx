@@ -76,13 +76,16 @@ export function ChannelSidebarView({
         className,
       )}
     >
-      {/* Header is exactly 60px on desktop so the divider lines up with the rail's
-          first icon and the chat header card. On mobile a banner fills this block as
-          a background so the layout doesn't jump between servers with and without one. */}
+      {/* Desktop: the title sits in the top-bar band (12-60px) and the block ends on
+          the 80px content line, where the banner, the rail's second entry and the
+          member list start. On mobile a banner fills this block as a background so
+          the layout doesn't jump between servers with and without one. */}
       <div
         className={cn(
-          "relative pl-3 pr-3 pb-[1.625rem] flex",
+          "relative pl-5 pr-3 pb-[1.625rem] flex",
           "pt-[calc(1.5rem+var(--safe-area-inset-top,env(safe-area-inset-top,0px)))]",
+          "sidebar:pb-5 sidebar:pt-[calc(0.75rem+var(--safe-area-inset-top,env(safe-area-inset-top,0px)))]",
+          "sidebar:h-[calc(5rem+var(--safe-area-inset-top,env(safe-area-inset-top,0px)))]",
           // Same alignment with or without a banner; the mobile banner is absolute.
           titleIcon ? "items-center gap-1" : "flex-col justify-center",
         )}
@@ -112,19 +115,27 @@ export function ChannelSidebarView({
           )}
           {badge}
         </div>
+        {/* Inside the header so it takes no room of its own. On desktop the banner's
+            edge does this job. */}
+        <div
+          aria-hidden
+          className={cn("absolute inset-x-3 bottom-0 h-0.5 bg-chrome-divider", banner && "sidebar:hidden")}
+        />
       </div>
 
       {titleExpansion}
 
-      {banner && <div className="hidden sidebar:block h-20 shrink-0 overflow-hidden">{banner}</div>}
+      {/* 80-168px: ends where the rail's first community starts, past the bell, DMs and divider. */}
+      {banner && <div className="hidden sidebar:block h-[5.5rem] shrink-0 overflow-hidden">{banner}</div>}
 
-      <div className="mx-3 h-0.5 shrink-0 bg-chrome-divider" />
-
-      <div ref={scrollRef} className="flex-1 overflow-y-auto px-1 pt-[11px] pb-2 flex flex-col gap-5">
+      {/* The member list's rhythm: the first row 8px under the content line (so its
+          center meets the first member's and the first community's), then sections
+          that each open with a 40px heading band and no other gap. */}
+      <div ref={scrollRef} className="flex-1 overflow-y-auto px-3 pt-2 pb-2 flex flex-col">
         {preChannels && <div className="space-y-0.5">{preChannels}</div>}
 
         <div className="space-y-0.5">
-          <div className="flex items-center justify-between pl-4 pr-2 py-1">
+          <div className="flex h-10 items-center justify-between px-2">
             <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
               Channels
             </span>

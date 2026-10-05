@@ -17,13 +17,12 @@ import {
   type AppScope,
 } from "@/contexts/AppsContext";
 import type { AppSync } from "@/hooks/useWebxdcApi";
-import { cn } from "@/lib/utils";
 
 function appHeader(app: AppKind): { label: string; icon: React.ReactNode } {
   if (app.type === "youtube") {
-    return { label: "Watch together", icon: <MonitorPlay className="size-4 text-primary" /> };
+    return { label: "Watch together", icon: <MonitorPlay className="size-3 text-primary" /> };
   }
-  return { label: app.name ?? "Webxdc app", icon: <Blocks className="size-4 text-primary" /> };
+  return { label: app.name ?? "Webxdc app", icon: <Blocks className="size-3 text-primary" /> };
 }
 
 function AppSurface({ app, sessionId, sync }: { app: AppKind; sessionId: string; sync: AppSync }) {
@@ -91,35 +90,33 @@ function RunningApp({
 
   const renderStage = (sync: AppSync) => {
     const stage = (
-      <div className="px-1 pt-1">
-        <div className="clip-corner-lg bg-chrome shadow-lg overflow-hidden">
-          <div className={cn(
-            "flex items-center gap-2 px-3 py-2",
-            active.app.type !== "webxdc" && "border-b border-border/50",
-          )}>
+      <div className="mx-gutter mt-3">
+        <div className="clip-corner-lg bg-chrome overflow-hidden">
+          {/* The pinned bar's header: an uppercase label, then compact ghost actions. */}
+          <div className="flex items-center gap-1.5 pl-3 pr-1.5 py-1.5">
             {icon}
-            <span className="text-sm font-medium truncate flex-1 min-w-0">{label}</span>
+            <span className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground/80 truncate flex-1 min-w-0">{label}</span>
             <Button
               variant="ghost"
               size="icon"
-              className="size-7 text-muted-foreground"
+              className="size-6 touch:size-10 text-muted-foreground"
               aria-label={stageOpen ? "Minimize app" : "Expand app"}
               onClick={onToggle}
             >
-              {stageOpen ? <Minimize2 className="size-4" /> : <Maximize2 className="size-4" />}
+              {stageOpen ? <Minimize2 className="size-3.5" /> : <Maximize2 className="size-3.5" />}
             </Button>
             <Button
               variant="ghost"
               size="icon"
-              className="size-7 text-muted-foreground"
+              className="size-6 touch:size-10 text-muted-foreground"
               aria-label="Close app"
               onClick={onClose}
             >
-              <X className="size-4" />
+              <X className="size-3.5" />
             </Button>
           </div>
           {stageOpen && (
-            <div className="p-2 max-h-[80vh] overflow-y-auto">
+            <div className="px-3 pb-3 max-h-[80vh] overflow-y-auto">
               <AppSurface app={active.app} sessionId={active.sessionId} sync={sync} />
             </div>
           )}

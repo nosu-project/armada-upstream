@@ -296,7 +296,7 @@ export function SnapSheet({ open, onOpenChange, expanded, onExpandedChange, titl
           }}
           className={cn(
             // Rest heights are translations, so a drag never re-lays-out the grid.
-            "fixed inset-x-0 bottom-0 top-[var(--safe-area-inset-top,env(safe-area-inset-top,0px))] z-50 flex flex-col overflow-hidden rounded-t-2xl bg-background shadow-[0_-8px_30px_rgba(0,0,0,0.25)] outline-none touch-none will-change-transform",
+            "fixed inset-x-0 bottom-0 top-[var(--safe-area-inset-top,env(safe-area-inset-top,0px))] z-50 flex flex-col overflow-hidden bg-background shadow-[0_-8px_30px_rgba(0,0,0,0.25)] outline-none touch-none will-change-transform",
             !open && "!pointer-events-none",
             className,
           )}

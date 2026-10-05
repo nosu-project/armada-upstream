@@ -10,9 +10,6 @@ import { PaymentMethodIcon } from "@/components/PaymentMethodIcon";
 import { ZapSuccessScreen } from "@/components/ZapSuccessScreen";
 import { Button } from "@/components/ui/button";
 import {
-  DialogTitle,
-} from "@/components/ui/dialog";
-import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
@@ -240,7 +237,7 @@ export default function ZapDialogImpl({ target, sendZap, sendOnchainZap, onDone 
   return (
     <>
       <div className="flex items-center justify-between px-4 h-12">
-        <DialogTitle className="text-base font-semibold flex items-center gap-1.5 min-w-0">
+        <h2 className="font-mono text-lg font-bold lowercase tracking-tight flex items-center gap-1.5 min-w-0">
           {success ? (
             "Success"
           ) : showingInvoice ? (
@@ -278,7 +275,7 @@ export default function ZapDialogImpl({ target, sendZap, sendOnchainZap, onDone 
               {isPrivate ? (
                 methodTitle(currentMethod)
               ) : (
-                <>Zap <DisplayName pubkey={target.pubkey} name={displayName} /></>
+                <>Zap <span className="normal-case"><DisplayName pubkey={target.pubkey} name={displayName} /></span></>
               )}
             </span>
           )}
@@ -298,11 +295,11 @@ export default function ZapDialogImpl({ target, sendZap, sendOnchainZap, onDone 
               </PopoverContent>
             </Popover>
           )}
-        </DialogTitle>
+        </h2>
         <button
           type="button"
           onClick={onDone}
-          className="p-1.5 -mr-1.5 rounded-full text-muted-foreground hover:text-foreground hover:bg-secondary/60 transition-colors"
+          className="inline-flex size-8 touch:size-11 -mr-1.5 items-center justify-center clip-corner-lg text-muted-foreground hover:text-foreground hover:bg-secondary/60 transition-colors"
           aria-label="Close"
         >
           <X className="size-5" />
@@ -473,7 +470,7 @@ function LightningZapPane({
           onClick={onZap}
           disabled={busy || amountSats <= 0 || walletRequired}
           variant={isLarge && !busy ? "destructive" : "default"}
-          className="flex-1 rounded-full"
+          className="flex-1 clip-corner-lg"
         >
           {busy ? (
             <>
@@ -493,7 +490,7 @@ function LightningZapPane({
           onClick={() => setShowComment(!showComment)}
           aria-label="Add a comment"
           aria-pressed={showComment}
-          className={`rounded-full ${comment.trim() ? "text-primary" : "text-muted-foreground"}`}
+          className={`clip-corner-lg touch:size-11 ${comment.trim() ? "text-primary" : "text-muted-foreground"}`}
         >
           <MessageCircle className="size-4" />
         </Button>

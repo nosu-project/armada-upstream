@@ -27,6 +27,7 @@ import { DisplayName } from "@/components/DisplayName";
 import { DmAvatar } from "@/components/DmAvatar";
 import { NoteToSelfAvatar, NoteToSelfIcon, NOTE_TO_SELF_NAME } from "@/components/NoteToSelfAvatar";
 import { ReportDialog } from "@/components/ReportDialog";
+import { ModerationMenuSection } from "@/components/chat/ModerationMenuSection";
 import { SearchField } from "@/components/ui/search-field";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -136,6 +137,13 @@ import { parseProfileImeta, type ProfileImeta } from "@/lib/profileImeta";
  * Highlight case-insensitive `query` matches in `text`, rendering NIP-30 emoji
  * from the message's own `emoji` tags (kind-4 has none, so shortcodes stay literal).
  */
+const MENU_PARTS = {
+  Item: DropdownMenuItem,
+  Sub: DropdownMenuSub,
+  SubTrigger: DropdownMenuSubTrigger,
+  SubContent: DropdownMenuSubContent,
+};
+
 function Highlight({
   text,
   query,
@@ -242,7 +250,7 @@ const ConversationRow = memo(function ConversationRow({
           onClick={() => actions.open(conversation)}
           className={cn(
             // Larger than a channel row: avatar and preview carry recognition here.
-            "flex items-center gap-3 w-full px-2.5 py-2.5 rounded-lg text-left transition-colors",
+            "flex items-center gap-3 w-full px-2 py-2.5 clip-corner text-left transition-colors",
             active ? "bg-secondary" : "hover:bg-secondary/60",
           )}
         >
@@ -419,7 +427,7 @@ function DmPlaceholderRow({
           <button
             type="button"
             onClick={() => onDecrypt?.(id)}
-            className="inline-flex items-center gap-1.5 rounded-md border border-border/70 bg-muted/40 px-2 py-1 text-xs text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+            className="inline-flex items-center gap-1.5 clip-corner-lg bg-muted/60 px-2 py-1 text-xs text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
           >
             <Lock className="size-3" />
             Encrypted message. Tap to decrypt.
@@ -445,7 +453,7 @@ function DmLegacyBadge() {
       <PopoverTrigger asChild>
         <button
           type="button"
-          className="inline-flex items-center gap-0.5 rounded-full bg-muted/60 px-1.5 py-0.5 text-3xs font-medium leading-none text-muted-foreground/80 hover:text-foreground shrink-0 select-none"
+          className="inline-flex items-center gap-0.5 clip-corner bg-muted/60 px-1.5 py-0.5 text-3xs font-medium leading-none text-muted-foreground/80 hover:text-foreground shrink-0 select-none"
           aria-label="Older, less private encryption. Tap for details."
         >
           <Lock className="size-2.5" aria-hidden />
@@ -478,7 +486,7 @@ function DmLegacyFallbackNotice({
   onEnable: () => void;
 }) {
   return (
-    <div className="mx-2 mb-3 rounded-lg border border-border/60 bg-muted/40 px-4 py-3 text-sm">
+    <div className="mx-gutter mb-3 clip-hairline-lg [--fill:var(--muted)/0.4] [--fill-hover:var(--muted)/0.4] px-4 py-3 text-sm">
       <div className="flex items-start gap-2.5">
         <Lock className="size-4 mt-0.5 shrink-0 text-muted-foreground" aria-hidden />
         <div className="min-w-0 space-y-2">
@@ -540,7 +548,7 @@ function DmRequestNotice({
 }) {
   return (
     // Action beside the text, not under it: this ADDS to the composer's height.
-    <div className="mx-2 mb-3 rounded-lg border border-border/60 bg-muted/40 px-4 py-2.5 text-sm">
+    <div className="mx-gutter mb-3 clip-hairline-lg [--fill:var(--muted)/0.4] [--fill-hover:var(--muted)/0.4] px-4 py-2.5 text-sm">
       <div className="flex items-center gap-3">
         <Inbox className="size-4 shrink-0 text-muted-foreground" aria-hidden />
         <div className="min-w-0 flex-1">
@@ -606,7 +614,7 @@ const Conversation = memo(function Conversation({
       ? route.messageId
       : undefined;
   }, [location.pathname, conversation]);
-  const { transport, entries, syncing, disappearingTimer, setDisappearingTimer, encryptedIds, dm17Ids, dm17Enabled, legacyPinned, decryptVisible, decryptOne, decryptAll, decryptDeclined, hasEncrypted, send } =
+  const { transport, entries, syncing, disappearingTimer, resolveDisappearingTimer, setDisappearingTimer, encryptedIds, dm17Ids, dm17Enabled, legacyPinned, decryptVisible, decryptOne, decryptAll, decryptDeclined, hasEncrypted, send } =
     useDmTransport(conversation, peers, focusedRumorId);
   const { messages } = transport;
 
@@ -889,7 +897,7 @@ const Conversation = memo(function Conversation({
     <div className="flex flex-col flex-1 min-h-0">
       {/* Keyed by CONVERSATION, matching the launch card's `ChatScopeContext`. */}
       <AppStageSlot scope={{ kind: "dm", conversation }} />
-      <header className="relative h-12 touch:h-14 mx-2 mt-3 px-2 sidebar:px-3 flex items-center gap-2 shrink-0 clip-corner-lg bg-chrome">
+      <header className="relative h-12 touch:h-14 mx-gutter mt-3 px-2 sidebar:px-3 flex items-center gap-2 shrink-0 clip-corner-lg bg-chrome">
         <Button
           variant="ghost"
           size="icon"
@@ -952,13 +960,13 @@ const Conversation = memo(function Conversation({
               <MoreVertical className="size-4" />
             </Button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-64 p-1.5">
-            <DropdownMenuItem className="px-3 py-2" onClick={() => setSearchOpen(true)}>
+          <DropdownMenuContent align="end" className="w-64">
+            <DropdownMenuItem onClick={() => setSearchOpen(true)}>
               <Search className="size-4" />
               Search messages
             </DropdownMenuItem>
             <DropdownMenuSub>
-              <DropdownMenuSubTrigger className="px-3 py-2">
+              <DropdownMenuSubTrigger>
                 {(() => {
                   const lvl = dmLevel(conversation);
                   const Icon = lvl === "nothing" ? BellOff : lvl === "mentions" ? AtSign : Bell;
@@ -985,7 +993,7 @@ const Conversation = memo(function Conversation({
             </DropdownMenuSub>
             {!group && (
             <DropdownMenuSub>
-              <DropdownMenuSubTrigger className="px-3 py-2">
+              <DropdownMenuSubTrigger>
                 {dmProtocol === "nip04" ? (
                   <Lock className="mr-2 size-4" />
                 ) : (
@@ -1032,8 +1040,8 @@ const Conversation = memo(function Conversation({
             {/* Disappearing messages need NIP-17 sealed rumors; hidden on legacy-pinned threads. */}
             {dm17Enabled && (
               <DropdownMenuSub>
-                <DropdownMenuSubTrigger className="px-3 py-2">
-                  <Timer className="mr-2 size-4 shrink-0" />
+                <DropdownMenuSubTrigger>
+                  <Timer className="size-4 shrink-0" />
                   {/* Duration under the label: beside it, the label wraps. */}
                   <div className="min-w-0">
                     <div>Disappearing messages</div>
@@ -1064,7 +1072,7 @@ const Conversation = memo(function Conversation({
             )}
             {!group && (
               <DropdownMenuItem
-                className="px-3 py-2"
+               
                 onClick={() => openProfile(tryNpubEncode(peer) ?? peer)}
                 onPointerEnter={() => prefetchProfile(peer)}
                 onFocus={() => prefetchProfile(peer)}
@@ -1074,7 +1082,7 @@ const Conversation = memo(function Conversation({
               </DropdownMenuItem>
             )}
             {dittoProfileHref && (
-              <DropdownMenuItem className="px-3 py-2" asChild>
+              <DropdownMenuItem asChild>
                 <a href={dittoProfileHref} target="_blank" rel="noopener noreferrer">
                   <DittoIcon className="size-4" />
                   View on Ditto
@@ -1086,33 +1094,33 @@ const Conversation = memo(function Conversation({
             {!noteToSelf && !group && (
               <>
                 <DropdownMenuSeparator />
-                {mute.muted ? (
+                {/* Its own items rather than useUserModeration's: blocking a DM peer
+                    hides the whole conversation, so it confirms first. */}
+                <ModerationMenuSection parts={MENU_PARTS}>
+                  {mute.muted ? (
+                    <DropdownMenuItem disabled={mute.pending} onClick={() => void mute.toggle()}>
+                      <UserCheck className="size-4" />
+                      Unblock person
+                    </DropdownMenuItem>
+                  ) : (
+                    <DropdownMenuItem
+                      className="text-destructive focus:text-destructive"
+                      onClick={() => setMuteConfirmOpen(true)}
+                    >
+                      <UserX className="size-4" />
+                      Block person
+                    </DropdownMenuItem>
+                  )}
+                  {/* DMs have no moderator: reports go to the public network in the
+                      clear, and never name the message (NIP-17 rumor ids resolve for no one). */}
                   <DropdownMenuItem
-                    className="px-3 py-2"
-                    disabled={mute.pending}
-                    onClick={() => void mute.toggle()}
+                    className="text-destructive focus:text-destructive"
+                    onClick={() => setReportOpen(true)}
                   >
-                    <UserCheck className="size-4" />
-                    Unblock person
+                    <Flag className="size-4" />
+                    Report person
                   </DropdownMenuItem>
-                ) : (
-                  <DropdownMenuItem
-                    className="px-3 py-2 text-destructive focus:text-destructive"
-                    onClick={() => setMuteConfirmOpen(true)}
-                  >
-                    <UserX className="size-4" />
-                    Block person
-                  </DropdownMenuItem>
-                )}
-                {/* DMs have no moderator: reports go to the public network in the
-                    clear, and never name the message (NIP-17 rumor ids resolve for no one). */}
-                <DropdownMenuItem
-                  className="px-3 py-2 text-destructive focus:text-destructive"
-                  onClick={() => setReportOpen(true)}
-                >
-                  <Flag className="size-4" />
-                  Report person
-                </DropdownMenuItem>
+                </ModerationMenuSection>
               </>
             )}
           </DropdownMenuContent>
@@ -1303,6 +1311,7 @@ const Conversation = memo(function Conversation({
           onCancelReply={() => setReplyTo(undefined)}
           // Client-side AES-256-GCM attachments on NIP-17 only (kind 4 can't carry the key).
           encryptAttachments={dm17Enabled}
+          disappearingTimer={resolveDisappearingTimer}
           // Not on touch: the keyboard would spring up mid slide-in.
           autoFocus={!isTouch}
           onTyping={publishTyping}
@@ -1444,7 +1453,7 @@ function RecipientSuggestion({
       onClick={onSelect}
       data-active={active}
       className={cn(
-        "flex w-full items-center gap-3 rounded-lg p-2.5 text-left transition-colors",
+        "flex w-full items-center gap-3 clip-corner p-2.5 text-left transition-colors",
         active ? "bg-secondary" : "hover:bg-secondary/60",
       )}
     >
@@ -1517,7 +1526,7 @@ function RecipientChip({ pubkey, onRemove }: { pubkey: string; onRemove: () => v
         type="button"
         onClick={onRemove}
         aria-label={`Remove ${name}`}
-        className="shrink-0 rounded-full text-muted-foreground hover:text-foreground"
+        className="shrink-0 clip-corner text-muted-foreground hover:text-foreground"
       >
         <X className="size-3.5" />
       </button>
@@ -1611,7 +1620,7 @@ function NewDMPane({
 
   return (
     <div className="flex h-full min-h-0 flex-col safe-area-top">
-      <header className="h-12 touch:h-14 mx-2 mt-3 px-2 sidebar:px-3 flex items-center gap-2 shrink-0 clip-corner-lg bg-chrome">
+      <header className="h-12 touch:h-14 mx-gutter mt-3 px-2 sidebar:px-3 flex items-center gap-2 shrink-0 clip-corner-lg bg-chrome">
         <Button
           variant="ghost"
           size="icon"
@@ -1683,7 +1692,7 @@ function NewDMPane({
           <button
             type="button"
             onClick={() => setGroup(true)}
-            className="flex w-full items-center gap-3 rounded-lg p-2.5 text-left transition-colors hover:bg-secondary/60"
+            className="flex w-full items-center gap-3 clip-corner p-2.5 text-left transition-colors hover:bg-secondary/60"
           >
             <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-primary/20 text-primary">
               <Users className="size-4" aria-hidden />
@@ -1775,7 +1784,7 @@ function ConversationSectionHeader({
   return (
     <div
       className={cn(
-        "px-2.5 pt-3 pb-1 text-2xs font-semibold uppercase tracking-wider text-muted-foreground",
+        "px-2.5 pt-3 pb-px text-2xs font-semibold uppercase tracking-wider text-muted-foreground",
         className,
       )}
     >
@@ -1839,7 +1848,8 @@ function RequestsEntryRow({ count, onClick }: { count: number; onClick: () => vo
     <button
       type="button"
       onClick={onClick}
-      className="flex items-center gap-3 w-full px-2.5 py-2.5 rounded-lg text-left transition-colors hover:bg-secondary/60"
+      // Phones: 4px up, keeping pace with the rail's tighter mobile spacing.
+      className="flex items-center gap-3 w-full px-2 py-2.5 max-sidebar:-mt-1 clip-corner text-left transition-colors hover:bg-secondary/60"
     >
       <span className="flex size-12 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground">
         <Inbox className="size-5" aria-hidden />
@@ -2054,6 +2064,8 @@ export function ConversationList({
     [hasMore, isLoadingMore, loadMore],
   );
 
+  const showRequestsEntry = config.showDmRequests && requestRows.length > 0 && search.trim().length === 0;
+
   return (
     <aside
       className={cn(
@@ -2062,12 +2074,16 @@ export function ConversationList({
         className,
       )}
     >
-      <div className="px-1 pt-[calc(0.75rem+var(--safe-area-inset-top,env(safe-area-inset-top,0px)))] shrink-0">
+      {/* Phones: 2px tighter, keeping pace with the rail's tighter mobile spacing. */}
+      <div className="px-3 pt-[calc(0.625rem+var(--safe-area-inset-top,env(safe-area-inset-top,0px)))] sidebar:pt-[calc(0.75rem+var(--safe-area-inset-top,env(safe-area-inset-top,0px)))] shrink-0">
         <div className="relative overflow-hidden">
           <div
             className={cn(
-              "flex items-center justify-between pr-2 py-1 min-h-6",
-              requesting ? "pl-1" : "pl-4",
+              // Desktop: the top-bar band (12-60px). Rows then step by the rail's 68px, the first
+              // avatar exactly over the rail's DM icon (80-128px). Phones hold the inbox's
+              // button height while Requests hides them, so both lists start on one line.
+              "flex items-center justify-between py-1 min-h-10 touch:min-h-[3.25rem] sidebar:h-12 sidebar:py-0",
+              requesting ? "pl-0" : "pl-2",
             )}
           >
             {requesting ? (
@@ -2135,11 +2151,11 @@ export function ConversationList({
 
           <div
             className={cn(
-              "absolute inset-y-0 inset-x-0 z-10 flex items-center gap-1.5 pl-4 pr-2",
+              "absolute inset-y-0 inset-x-0 z-10 flex items-center gap-1.5 pl-2",
               "bg-chrome",
               "transition-transform duration-300 ease-in-out",
               searchOpen
-                ? "translate-x-0 pointer-events-auto"
+                ? "transform-none pointer-events-auto"
                 : "translate-x-full pointer-events-none",
             )}
           >
@@ -2168,14 +2184,14 @@ export function ConversationList({
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-2 space-y-0.5" onScroll={handleListScroll}>
+      <div className="flex-1 overflow-y-auto px-3 py-2 sidebar:pt-2.5" onScroll={handleListScroll}>
         {!dmSupported ? (
           <p className="text-sm text-muted-foreground p-3">
             Your signer doesn't support encryption, so direct messages are unavailable.
           </p>
         ) : requesting ? (
           <>
-            <p className="px-2.5 pt-1 pb-2 text-xs text-muted-foreground">
+            <p className="px-2 pt-1 pb-2 text-xs text-muted-foreground">
               Messages from people you don't follow. Reply to one and it moves
               to your inbox. Nobody here is told you've seen theirs.
             </p>
@@ -2218,7 +2234,7 @@ export function ConversationList({
         ) : (
           <>
             {/* The request entry covers the whole list; hidden while searching. */}
-            {config.showDmRequests && requestRows.length > 0 && search.trim().length === 0 && (
+            {showRequestsEntry && (
               <RequestsEntryRow
                 count={requestRows.length}
                 onClick={() => onViewChange("requests")}
@@ -2226,10 +2242,11 @@ export function ConversationList({
             )}
             {sectioned ? (
               <>
-                <ConversationSectionHeader className="pt-1">Pinned</ConversationSectionHeader>
+                {/* First in the list it needs room under the top bar; after the requests row it doesn't. */}
+                <ConversationSectionHeader className={showRequestsEntry ? "pt-0.5" : "pt-[9px]"}>Pinned</ConversationSectionHeader>
                 {pinnedRows.map((c, i) => renderRow(c, i))}
                 {otherRows.length > 0 && (
-                  <ConversationSectionHeader>Recent</ConversationSectionHeader>
+                  <ConversationSectionHeader className="pt-1">Recent</ConversationSectionHeader>
                 )}
                 {/* Numbering continues across sections (position in the scroll container is what matters). */}
                 {otherRows.map((c, i) => renderRow(c, pinnedRows.length + i))}

@@ -286,6 +286,9 @@ const VERIFY_GRACE_MS = 15_000;
  */
 const JOIN_VIDEO_EXPAND_WINDOW_MS = 10_000;
 
+/** The floating window is the frame, so its one tile fills it square-cornered. */
+const FLOATING_TILE = "h-full w-full [&>*]:rounded-none [&>*]:ring-0";
+
 /** Minimum hold on the floating window's active speaker, so brief interjections don't flicker it. */
 const FLOATING_SPEAKER_HOLD_MS = 2_000;
 
@@ -465,7 +468,7 @@ function RaisedHandBadge({ pubkey }: { pubkey: string }) {
   if (!raisedHands.has(pubkey)) return null;
   return (
     <div
-      className="absolute top-1.5 left-1.5 z-10 flex items-center justify-center rounded-md bg-amber-500 text-white size-6 shadow-md animate-in fade-in-0 zoom-in-75"
+      className="absolute top-1.5 left-1.5 z-10 flex items-center justify-center rounded-md bg-warning text-warning-foreground size-6 shadow-md animate-in fade-in-0 zoom-in-75"
       aria-label="Hand raised"
     >
       <Hand className="size-3.5" />
@@ -1307,7 +1310,7 @@ function HeroAvatarView({
         {handRaised && (
           <span
             className={cn(
-              "absolute top-0 right-0 flex items-center justify-center rounded-full bg-amber-500 text-white shadow",
+              "absolute top-0 right-0 flex items-center justify-center rounded-full bg-warning text-warning-foreground shadow",
               s.badge,
             )}
             aria-label="Hand raised"
@@ -1544,7 +1547,7 @@ function CallHero({
   return (
     <div
       className={cn(
-        "shrink-0 mx-2 mt-2",
+        "shrink-0 mx-gutter mt-stack",
         exiting
           ? "animate-out fade-out-0 slide-out-to-top-2 duration-200 fill-mode-forwards"
           : "animate-in fade-in-0 slide-in-from-top-2 duration-200",
@@ -2201,7 +2204,7 @@ export function CallStage({
             // only this tile remounts.
             <div
               key={`${selectedShareTrackRef.participant.identity}:${selectedShareTrackRef.publication?.trackSid ?? "ss"}`}
-              className="h-full w-full"
+              className={FLOATING_TILE}
             >
               <VideoTile
                 trackRef={selectedShareTrackRef}
@@ -2213,7 +2216,7 @@ export function CallStage({
               />
             </div>
           ) : primaryTile ? (
-            <div key={primaryTile.key} className="h-full w-full">
+            <div key={primaryTile.key} className={FLOATING_TILE}>
               {primaryTile.render(true)}
             </div>
           ) : (
@@ -2244,7 +2247,7 @@ export function CallStage({
   return (
     <div
       className={cn(
-        "shrink-0 mx-2 mt-2 overflow-hidden ease-out animate-in fade-in-0 duration-200",
+        "shrink-0 mx-gutter mt-stack overflow-hidden ease-out animate-in fade-in-0 duration-200",
         // No transition while dragging (it would lag the pointer).
         dockedResize.current ? "" : "transition-[max-height] duration-200",
       )}

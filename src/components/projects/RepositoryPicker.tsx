@@ -1,10 +1,10 @@
 import { useNostr } from "@nostrify/react";
-import { FolderGit2, HelpCircle, Loader2, Search } from "lucide-react";
+import { FolderGit2, HelpCircle, Loader2 } from "lucide-react";
 import { nip19 } from "nostr-tools";
 import { useCallback, useMemo, useState } from "react";
 
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { Input } from "@/components/ui/input";
+import { SearchField } from "@/components/ui/search-field";
 import {
   Tooltip,
   TooltipContent,
@@ -68,7 +68,7 @@ function RepositoryRow({ repository, connected, onSelect }: { repository: GitRep
       disabled={connected}
       onClick={onSelect}
       className={cn(
-        "flex w-full min-w-0 items-center gap-2.5 rounded-md px-2.5 py-2 text-left transition-colors",
+        "flex w-full min-w-0 items-center gap-2.5 clip-corner px-2.5 py-2 text-left transition-colors",
         connected ? "opacity-50" : "hover:bg-foreground/[0.05]",
       )}
     >
@@ -136,24 +136,24 @@ export function RepositoryPicker({ connectedCoordinates, onSelect, autoFocus = t
 
   return (
     <div className={cn("min-w-0 space-y-2.5", className)}>
-      <div className="flex items-center gap-2 rounded-md border border-input px-2.5 focus-within:ring-1 focus-within:ring-ring">
-        <Search className="size-4 shrink-0 text-muted-foreground" />
-        <Input
+      <div className="flex items-center gap-1">
+        <SearchField
           value={query}
-          onChange={(event) => setQuery(event.target.value)}
+          onChange={setQuery}
           placeholder="Search, or paste an address"
           autoFocus={autoFocus}
           disabled={resolving}
-          // Inputs' intrinsic width comes from `size`; min-w-0 lets it shrink.
-          className="h-9 min-w-0 border-0 px-0 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
+          busy={resolving}
+          className="flex-1"
         />
+        {/* Beside the field, not its `hint`: the hint is non-interactive and hides once typing starts. */}
         <TooltipProvider delayDuration={300}>
           <Tooltip>
             <TooltipTrigger asChild>
               <button
                 type="button"
                 aria-label="What can I paste?"
-                className="shrink-0 p-1 -mr-1 text-muted-foreground transition-colors hover:text-foreground"
+                className="flex size-9 touch:size-11 shrink-0 items-center justify-center clip-corner-lg text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
               >
                 <HelpCircle className="size-4" />
               </button>
@@ -168,15 +168,15 @@ export function RepositoryPicker({ connectedCoordinates, onSelect, autoFocus = t
           </Tooltip>
         </TooltipProvider>
       </div>
-      <div className="max-h-64 min-w-0 space-y-0.5 overflow-y-auto rounded-lg bg-secondary/40 p-1">
+      <div className="max-h-64 min-w-0 space-y-0.5 overflow-y-auto clip-corner-lg bg-secondary/40 p-1">
         {looksLikeAddress ? (
           <button
             type="button"
             disabled={resolving}
             onClick={() => void resolveAddress()}
-            className="flex w-full min-w-0 items-center gap-2.5 rounded-md px-2.5 py-2 text-left transition-colors hover:bg-foreground/[0.05]"
+            className="flex w-full min-w-0 items-center gap-2.5 clip-corner px-2.5 py-2 text-left transition-colors hover:bg-foreground/[0.05]"
           >
-            <span className="flex size-8 shrink-0 items-center justify-center rounded-md border border-border/60 bg-muted/40">
+            <span className="flex size-8 shrink-0 items-center justify-center clip-corner bg-muted/60">
               {resolving ? <Loader2 className="size-4 animate-spin text-muted-foreground" /> : <FolderGit2 className="size-4 text-muted-foreground" />}
             </span>
             <span className="min-w-0 flex-1">

@@ -15,6 +15,7 @@ export function NewPostPane({
   canMentionEveryone,
   conversationRelays,
   canSend,
+  disappearingTimer,
   onSubmit,
   onCancel,
   className,
@@ -25,6 +26,8 @@ export function NewPostPane({
   canMentionEveryone?: boolean;
   conversationRelays?: string[];
   canSend?: () => string | null;
+  /** See ChatComposer's. */
+  disappearingTimer?: () => Promise<number>;
   onSubmit: (title: string, content: string, tags: string[][]) => Promise<void>;
   onCancel: () => void;
   className?: string;
@@ -112,6 +115,7 @@ export function NewPostPane({
                 placeholder="Write your post"
                 draftScope={`post:${groupId}`}
                 encryptAttachments
+                disappearingTimer={disappearingTimer}
                 pollsEnabled={false}
                 canSend={gate}
                 sendOverride={submit}

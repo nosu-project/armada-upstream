@@ -1915,7 +1915,7 @@ function ServerRailInner({
 
         {user && renderNodes.length > 0 && (
           <div
-            className="h-px w-7 shrink-0 bg-chrome-divider"
+            className="h-px w-7 shrink-0 -mb-px bg-chrome-divider"
             data-rail-account-separator
             aria-hidden
           />
@@ -1947,7 +1947,7 @@ function ServerRailInner({
           ),
         )}
 
-        {renderNodes.length > 0 && <div className="w-7 h-px bg-chrome-divider shrink-0" />}
+        {renderNodes.length > 0 && <div className="w-7 h-px -mb-px bg-chrome-divider shrink-0" />}
 
         <CommunityListLocked />
 
@@ -2014,7 +2014,7 @@ function ServerRailInner({
       {/* Bottom safe-area padding lives here so Settings lines up with ChannelSidebar's account switcher. */}
       <div
         className={cn(
-          "flex flex-col items-center shrink-0 w-full pt-3 sidebar:pt-4",
+          "flex flex-col items-center shrink-0 w-full pt-3",
           contentBelow && "border-t border-chrome-divider",
           "pb-[calc(var(--safe-area-pad-bottom,0.75rem)+0.5rem)] sidebar:pb-[calc(var(--safe-area-pad-bottom-tight,0.25rem)+0.5rem)]",
         )}

@@ -45,6 +45,8 @@ vi.mock("@/hooks/useMuteList", () => ({
     toggle: async () => {},
   }),
 }));
+// Each row's `useUserModeration` asks who the viewer is; logged out offers no actions.
+vi.mock("@/hooks/useCurrentUser", () => ({ useCurrentUser: () => ({ user: undefined }) }));
 vi.mock("@/hooks/useUserStatus", () => ({
   useUserStatus: (pubkey?: string, type = "general") => {
     spies.useUserStatus(pubkey, type);
@@ -137,7 +139,7 @@ describe("MemberList viewport gating", () => {
   it("mounts NO offscreen rows on a large roster until they intersect", () => {
     const members = pubkeys(500);
     const { container } = render(
-      <MemberList admins={[]} members={members} canModerate={false} />,
+      <MemberList admins={[]} members={members} />,
     );
 
     // Nothing visible yet ⇒ no rows mounted, no per-row query hooks stood up.
@@ -162,7 +164,7 @@ describe("MemberList viewport gating", () => {
     // room's first chat REQ, and visibly filled in ahead of the messages.
     const members = pubkeys(40);
     const { container } = render(
-      <MemberList admins={[]} members={members} canModerate={false} />,
+      <MemberList admins={[]} members={members} />,
     );
 
     expect(rowCount(container)).toBe(0);
@@ -180,7 +182,7 @@ describe("MemberList viewport gating", () => {
 
     const t0 = performance.now();
     const { container } = render(
-      <MemberList admins={[]} members={members} canModerate={false} />,
+      <MemberList admins={[]} members={members} />,
     );
     const gatedMs = performance.now() - t0;
 

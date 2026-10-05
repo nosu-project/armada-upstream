@@ -257,7 +257,7 @@ export function CommunitySettingsView({
               ) : (
                 <button
                   type="button"
-                  className="flex h-32 w-full items-center justify-center rounded-lg bg-secondary/40 text-muted-foreground transition-colors hover:bg-secondary/60"
+                  className="flex h-32 w-full items-center justify-center clip-corner-lg bg-secondary/40 text-muted-foreground transition-colors hover:bg-secondary/60"
                   onClick={() => handlePickImage("banner")}
                   aria-label="Add banner"
                 >
@@ -267,7 +267,7 @@ export function CommunitySettingsView({
               {canManageMetadata && (
                 <button
                   type="button"
-                  className="absolute bottom-2 right-2 grid size-8 place-items-center rounded-full bg-background/70 text-foreground backdrop-blur transition-colors hover:bg-background/90"
+                  className="absolute bottom-2 right-2 grid size-8 touch:size-11 place-items-center clip-corner-lg bg-background/70 text-foreground backdrop-blur transition-colors hover:bg-background/90"
                   onClick={() => handlePickImage("banner")}
                   disabled={uploading === "banner"}
                   aria-label="Change banner"
@@ -297,7 +297,7 @@ export function CommunitySettingsView({
                 ) : canManageMetadata ? (
                   <button
                     type="button"
-                    className="grid size-16 place-items-center rounded-2xl bg-secondary/50 text-muted-foreground transition-colors hover:bg-secondary/70"
+                    className="grid size-16 place-items-center clip-corner-lg bg-secondary/50 text-muted-foreground transition-colors hover:bg-secondary/70"
                     onClick={() => handlePickImage("icon")}
                     aria-label="Add icon"
                   >
@@ -311,7 +311,7 @@ export function CommunitySettingsView({
                 {canManageMetadata && (
                   <button
                     type="button"
-                    className="absolute -bottom-1 -right-1 grid size-6 place-items-center rounded-full bg-background text-foreground ring-1 ring-border transition-colors hover:bg-secondary"
+                    className="absolute -bottom-1 -right-1 grid size-6 touch:size-11 place-items-center clip-corner-lg bg-background text-foreground transition-colors hover:bg-secondary"
                     onClick={() => handlePickImage("icon")}
                     disabled={uploading === "icon"}
                     aria-label="Change icon"
@@ -341,7 +341,7 @@ export function CommunitySettingsView({
                       type="button"
                       size="icon"
                       variant="ghost"
-                      className="size-6 shrink-0 text-muted-foreground"
+                      className="size-6 touch:size-11 shrink-0 text-muted-foreground"
                       aria-label="Edit name"
                       onClick={() => setEditingField("name")}
                     >
@@ -374,7 +374,7 @@ export function CommunitySettingsView({
                     type="button"
                     size="icon"
                     variant="ghost"
-                    className="size-6 shrink-0 text-muted-foreground"
+                    className="size-6 touch:size-11 shrink-0 text-muted-foreground"
                     aria-label="Edit description"
                     onClick={() => setEditingField("description")}
                   >
@@ -551,7 +551,7 @@ export function ConnectedRepositoriesSection({
       <div className="flex items-center justify-between">
         <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Connected repositories</span>
         {canManage && channels.length > 0 && (
-          <Button type="button" size="icon" variant="ghost" className="size-6 shrink-0 text-muted-foreground" aria-label="Connect repository" onClick={() => setConnectOpen(true)}>
+          <Button type="button" size="icon" variant="ghost" className="size-6 touch:size-11 shrink-0 text-muted-foreground" aria-label="Connect repository" onClick={() => setConnectOpen(true)}>
             <Plus className="size-3.5" />
           </Button>
         )}
@@ -709,7 +709,7 @@ function ConnectedRepositoryRow({ channel, address, owner, relayHints, fallbackN
     <OwnerAvatar pubkey={owner} className="size-6" />
     <span className="min-w-0 flex-1"><OwnerSlashRepo owner={owner} name={name} /></span>
     <span className="shrink-0 text-2xs text-muted-foreground">#{channel.name}</span>
-    {canManage && <Button type="button" size="icon" variant="ghost" className="size-6 shrink-0 text-muted-foreground hover:text-destructive" aria-label={`Disconnect ${name}`} title={address} onClick={onDetach}><Trash2 className="size-3.5" /></Button>}
+    {canManage && <Button type="button" size="icon" variant="ghost" className="size-6 touch:size-11 shrink-0 text-muted-foreground hover:text-destructive" aria-label={`Disconnect ${name}`} title={address} onClick={onDetach}><Trash2 className="size-3.5" /></Button>}
   </div>;
 }
 
@@ -761,7 +761,7 @@ function InlineEdit({
         type="submit"
         size="icon"
         variant="ghost"
-        className="size-8 shrink-0"
+        className="size-8 touch:size-11 shrink-0"
         disabled={saving || (!multiline && !value.trim())}
         aria-label="Save"
       >
@@ -771,7 +771,7 @@ function InlineEdit({
         type="button"
         size="icon"
         variant="ghost"
-        className="size-8 shrink-0 text-muted-foreground"
+        className="size-8 touch:size-11 shrink-0 text-muted-foreground"
         onClick={onCancel}
         disabled={saving}
         aria-label="Cancel"
@@ -1062,7 +1062,7 @@ function ChannelsSection({
           />
         </span>
         {dragged && (
-          <span className="pointer-events-none absolute inset-x-0 inset-y-px clip-corner-lg border-2 border-dashed border-primary/50 bg-primary/5" />
+          <span className="pointer-events-none absolute inset-x-0 inset-y-px clip-hairline-lg [--edge:var(--primary)/0.5] [--fill:var(--primary)/0.05] [--fill-hover:var(--primary)/0.05]" />
         )}
       </div>
     );
@@ -1079,7 +1079,7 @@ function ChannelsSection({
             type="button"
             size="icon"
             variant="ghost"
-            className="size-6 shrink-0 text-muted-foreground"
+            className="size-6 touch:size-11 shrink-0 text-muted-foreground"
             aria-label="Add channel"
             onClick={() => setCreating(true)}
           >
@@ -1123,10 +1123,10 @@ function ChannelsSection({
           <div
             data-ch-newzone
             className={cn(
-              "mt-2 flex items-center justify-center gap-1.5 clip-corner-lg border-2 border-dashed px-2 py-3 text-2xs font-semibold uppercase tracking-wider transition-colors",
+              "mt-2 flex items-center justify-center gap-1.5 clip-hairline-lg px-2 py-3 text-2xs font-semibold uppercase tracking-wider transition-colors",
               channelDrag.target?.newCategory
-                ? "border-primary bg-primary/5 text-primary"
-                : "border-primary/50 text-muted-foreground/70",
+                ? "[--edge:var(--primary)] [--fill:var(--primary)/0.05] [--fill-hover:var(--primary)/0.05] text-primary"
+                : "[--edge:var(--primary)/0.5] [--fill:var(--background)/0.4] [--fill-hover:var(--background)/0.4] text-muted-foreground/70",
             )}
           >
             <Plus className="size-3.5" />
@@ -1159,7 +1159,7 @@ function ChannelsSection({
               type="submit"
               size="icon"
               variant="ghost"
-              className="size-7 shrink-0"
+              className="size-7 touch:size-11 shrink-0"
               disabled={isAddingChannel || !newName.trim()}
               aria-label="Create channel"
             >
@@ -1327,7 +1327,7 @@ function ChannelRow({
             type="submit"
             size="icon"
             variant="ghost"
-            className="size-7 shrink-0"
+            className="size-7 touch:size-11 shrink-0"
             disabled={disabled}
             aria-label="Save name"
           >
@@ -1502,7 +1502,7 @@ function ChannelRow({
                   type="submit"
                   size="icon"
                   variant="ghost"
-                  className="size-7 shrink-0"
+                  className="size-7 touch:size-11 shrink-0"
                   disabled={busy || !roleDraft.trim()}
                   aria-label="Create access role"
                 >
@@ -1793,7 +1793,7 @@ function VoiceServersSection({
             type="button"
             size="icon"
             variant="ghost"
-            className="size-6 shrink-0 text-muted-foreground"
+            className="size-6 touch:size-11 shrink-0 text-muted-foreground"
             aria-label="Edit voice servers"
             onClick={startEditing}
           >
@@ -1830,7 +1830,7 @@ function VoiceServersSection({
                   type="button"
                   size="icon"
                   variant="ghost"
-                  className="size-6 shrink-0 text-muted-foreground hover:text-destructive"
+                  className="size-6 touch:size-11 shrink-0 text-muted-foreground hover:text-destructive"
                   aria-label={`Remove ${b}`}
                   disabled={saving || checking}
                   onClick={() => setDraft(draft.filter((x) => x !== b))}
@@ -1860,7 +1860,7 @@ function VoiceServersSection({
                 type="submit"
                 size="icon"
                 variant="ghost"
-                className="size-7 shrink-0"
+                className="size-7 touch:size-11 shrink-0"
                 disabled={saving || checking || !addValue.trim()}
                 aria-label="Add voice server"
               >

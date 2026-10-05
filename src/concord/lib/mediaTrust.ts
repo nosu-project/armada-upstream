@@ -99,12 +99,37 @@ export function holdsMedia(author: string, i: MediaHoldInputs): boolean {
   if (i.mode === "always") return false;
   if (i.mode === "never") return true;
   if (i.isStaff?.(author) || i.trusted?.has(author) || i.follows?.has(author)) return false;
-  const seen = i.sightings?.authors[author];
-  if (seen === undefined) return true;
+  return !seenEstablished(i.sightings, author, i.now);
+}
+
+/** Whether the sightings alone clear `author` at `now`. */
+function seenEstablished(sightings: Sightings | undefined, author: string, now: number): boolean {
+  const seen = sightings?.authors[author];
+  if (seen === undefined) return false;
   // Present before the reader arrived: a member they joined, not a newcomer.
-  const arrived = firstReadAt(i.sightings!);
-  if (arrived !== undefined && seen < arrived) return false;
-  return i.now - seen < MEDIA_PROBATION_MS;
+  const arrived = firstReadAt(sightings!);
+  if (arrived !== undefined && seen < arrived) return true;
+  return now - seen >= MEDIA_PROBATION_MS;
+}
+
+/**
+ * Whether swapping `prev` for `next` changes any author's verdict at `now`. Paging
+ * history moves stamps earlier on nearly every page; most moves decide nothing, and
+ * every message body re-renders on a new hold.
+ */
+export function sightingsVerdictsDiffer(prev: Sightings | undefined, next: Sightings | undefined, now: number): boolean {
+  if (prev === next) return false;
+  if (!prev || !next) return true;
+  if (firstReadAt(prev) !== firstReadAt(next)) return true;
+  for (const author in next.authors) {
+    if (next.authors[author] !== prev.authors[author] && seenEstablished(prev, author, now) !== seenEstablished(next, author, now)) {
+      return true;
+    }
+  }
+  for (const author in prev.authors) {
+    if (!(author in next.authors) && seenEstablished(prev, author, now)) return true;
+  }
+  return false;
 }
 
 /**
@@ -140,10 +165,13 @@ const pending = new Map<string, Sightings>();
 const listeners = new Set<() => void>();
 let flushTimer: ReturnType<typeof setTimeout> | undefined;
 let revision = 0;
+/** A flush moves already-visible records from `pending` to the cache: nothing to re-render. */
+let flushing = false;
 
 export const MEDIA_SIGHTINGS_FLUSH_MS = 2000;
 
 function bump(): void {
+  if (flushing) return;
   revision++;
   for (const l of listeners) {
     try {
@@ -197,7 +225,12 @@ export function flushSightings(): void {
   flushTimer = undefined;
   const staged = [...pending];
   pending.clear();
-  for (const [id, value] of staged) cache.set(id, value);
+  flushing = true;
+  try {
+    for (const [id, value] of staged) cache.set(id, value);
+  } finally {
+    flushing = false;
+  }
 }
 
 /** Resolves once the record is warm (tests). */

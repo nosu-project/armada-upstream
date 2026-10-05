@@ -183,40 +183,43 @@ export function MeshMentionAutocomplete({
   const dropdown = (
     <div
       data-autocomplete-dropdown
-      className="fixed z-[300] w-[280px] rounded-xl border border-border bg-popover shadow-lg overflow-hidden animate-in fade-in-0 zoom-in-95 slide-in-from-bottom-2 duration-150 pointer-events-auto"
+      className="fixed z-[300] w-[280px] vessel-lift pointer-events-auto"
       style={{ bottom: dropdownPos.bottom, left: dropdownPos.left }}
     >
-      <div ref={listRef} className="max-h-[240px] overflow-y-auto py-1">
-        {candidates.map((candidate, index) => (
-          <button
-            key={candidate.peerID}
-            data-mesh-mention-item
-            className={cn(
-              "w-full flex items-center gap-3 px-3 py-2 text-left transition-colors cursor-pointer",
-              index === selectedIndex ? "bg-accent text-accent-foreground" : "hover:bg-secondary/60",
-            )}
-            // Pointer-down fires reliably on touch; preventDefault keeps composer focus.
-            onPointerDown={(e) => {
-              e.preventDefault();
-              selectCandidate(candidate);
-            }}
-          >
-            <span
-              className="size-8 shrink-0 rounded-full flex items-center justify-center text-xs font-semibold"
-              style={{ backgroundColor: `${candidate.color}33`, color: candidate.color }}
+      <div className="vessel overflow-hidden animate-in fade-in-0 zoom-in-95 slide-in-from-bottom-2 duration-150">
+        <div ref={listRef} className="max-h-[240px] overflow-y-auto scroll-py-1 p-1">
+          {candidates.map((candidate, index) => (
+            <button
+              key={candidate.peerID}
+              data-mesh-mention-item
+              data-highlighted={index === selectedIndex || undefined}
+              className={cn(
+                "relative w-full flex items-center gap-3 menu-row clip-corner px-2 py-1.5 text-left transition-colors cursor-pointer",
+                index === selectedIndex ? "bg-foreground/[0.08]" : "hover:bg-foreground/[0.05]",
+              )}
+              // Pointer-down fires reliably on touch; preventDefault keeps composer focus.
+              onPointerDown={(e) => {
+                e.preventDefault();
+                selectCandidate(candidate);
+              }}
             >
-              {candidate.name[0]?.toUpperCase() || "?"}
-            </span>
-            <div className="flex-1 min-w-0">
-              <div className="font-semibold text-sm truncate" style={{ color: candidate.color }}>
-                {candidate.name}
+              <span
+                className="size-8 shrink-0 rounded-full flex items-center justify-center text-xs font-semibold"
+                style={{ backgroundColor: `${candidate.color}33`, color: candidate.color }}
+              >
+                {candidate.name[0]?.toUpperCase() || "?"}
+              </span>
+              <div className="flex-1 min-w-0">
+                <div className="font-semibold text-sm truncate" style={{ color: candidate.color }}>
+                  {candidate.name}
+                </div>
+                <div className="text-2xs text-muted-foreground truncate font-mono">
+                  #{candidate.suffix}
+                </div>
               </div>
-              <div className="text-2xs text-muted-foreground truncate font-mono">
-                #{candidate.suffix}
-              </div>
-            </div>
-          </button>
-        ))}
+            </button>
+          ))}
+        </div>
       </div>
     </div>
   );

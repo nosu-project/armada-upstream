@@ -355,7 +355,7 @@ export function VideoPlayer({
   if (gif) {
     return (
       <div
-        className={cn("relative my-1.5 rounded-xl overflow-hidden max-w-xs bg-transparent", className)}
+        className={cn("relative my-1.5 clip-corner-lg overflow-hidden max-w-xs bg-transparent", className)}
         style={{ aspectRatio }}
         onClick={(e) => e.stopPropagation()}
       >
@@ -397,9 +397,9 @@ export function VideoPlayer({
       ref={containerRef}
       data-video-player
       className={cn(
-        "relative my-1.5 rounded-xl overflow-hidden max-w-md border border-border bg-black group",
+        "relative my-1.5 clip-corner-lg overflow-hidden max-w-md bg-black group",
         className,
-        isFullscreen && "m-0 w-full h-full max-w-none max-h-none rounded-none border-0 bg-black",
+        isFullscreen && "m-0 w-full h-full max-w-none max-h-none rounded-none [clip-path:none] bg-black",
       )}
       style={isFullscreen ? undefined : { aspectRatio }}
       onMouseMove={revealControls}
@@ -658,7 +658,7 @@ function VideoDownloadButton({ src, nameHint, mime }: { src: string; nameHint: s
       title="Download"
       disabled={busy}
       onClick={handleDownload}
-      className="size-9 touch:size-11 rounded-full bg-black/60 text-white flex items-center justify-center backdrop-blur-sm hover:bg-black/80 transition-colors disabled:opacity-60 disabled:cursor-wait"
+      className="size-9 touch:size-11 clip-corner-lg bg-black/60 text-white flex items-center justify-center backdrop-blur-sm hover:bg-black/80 transition-colors disabled:opacity-60 disabled:cursor-wait"
     >
       {busy ? <Loader2 className="size-5 animate-spin" /> : <Download className="size-5" />}
     </button>

@@ -1,5 +1,5 @@
-import { SmilePlus } from "lucide-react";
-import { lazy, Suspense, useCallback, useRef, useState } from "react";
+import { ChevronDown, Shield, SmilePlus } from "lucide-react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 
 import { ReactionGlyph } from "@/components/chat/ReactionBar";
 import { Drawer, DrawerContent, DrawerTitle } from "@/components/ui/drawer";
@@ -49,6 +49,13 @@ export function MessageActionSheet({
   const { user } = useCurrentUser();
   const { emojis: customEmojis } = useCustomEmojis();
   const frequent = useFrequentReactions(user?.pubkey, QUICK_SLOTS_SHEET);
+  const [moderationOpen, setModerationOpen] = useState(false);
+  const main = actions.filter((a) => !a.moderation);
+  const moderation = actions.filter((a) => a.moderation);
+  // The sheet stays mounted between opens; each opening starts collapsed.
+  useEffect(() => {
+    if (!open) setModerationOpen(false);
+  }, [open]);
 
   // Back closes only the sheet. Needed because SwipeReveal's handler would
   // otherwise slide the pane away with the (body-portalled) menu still up.
@@ -95,7 +102,7 @@ export function MessageActionSheet({
         <DrawerTitle className="sr-only">Message actions</DrawerTitle>
 
         {pickerOpen ? (
-          <div className="flex w-full flex-col pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
+          <div className="flex w-full flex-col pt-2 pb-[var(--safe-area-pad-bottom,0.75rem)]">
             <Suspense fallback={<div className="w-full" />}>
               <LazyEmojiPicker
                 customEmojis={customEmojis}
@@ -108,10 +115,10 @@ export function MessageActionSheet({
             </Suspense>
           </div>
         ) : (
-          <div className="overflow-y-auto overscroll-contain pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
+          <div className="overflow-y-auto overscroll-contain pt-2 pb-[var(--safe-area-pad-bottom,0.75rem)]">
             {reactions && (
               <div className="flex items-center gap-2 px-3 pb-2">
-                <div className="flex flex-1 items-center gap-0.5 rounded-full bg-muted/60 p-1">
+                <div className="flex flex-1 items-center gap-0.5 clip-corner-lg bg-muted/60 p-1">
                   {frequent.map((f) => {
                     const mine = reactions.tallies.find((t) => t.key === f.key)?.mine ?? false;
                     return (
@@ -121,8 +128,8 @@ export function MessageActionSheet({
                         aria-label={mine ? `Remove ${f.key} reaction` : `React with ${f.key}`}
                         aria-pressed={mine}
                         className={cn(
-                          "flex size-11 flex-1 items-center justify-center rounded-full transition-colors",
-                          mine ? "bg-primary/20 ring-1 ring-primary" : "active:bg-background",
+                          "flex size-11 flex-1 items-center justify-center clip-corner-lg transition-colors",
+                          mine ? "bg-primary/20" : "active:bg-background",
                         )}
                         onClick={() => react(f.key, f.url)}
                       >
@@ -138,7 +145,7 @@ export function MessageActionSheet({
                 <button
                   type="button"
                   aria-label="Add reaction"
-                  className="flex size-12 shrink-0 items-center justify-center rounded-full bg-muted/60 text-muted-foreground active:bg-secondary"
+                  className="flex size-12 shrink-0 items-center justify-center clip-corner-lg bg-muted/60 text-muted-foreground active:bg-secondary"
                   onClick={() => setPickerOpen(true)}
                 >
                   <SmilePlus className="size-6" />
@@ -147,34 +154,63 @@ export function MessageActionSheet({
             )}
 
             <div className="px-2 pb-1">
-              {actions.map((action) => (
+              {main.map((action) => (
                 <div key={action.id}>
-                  {action.groupStart && <div className="mx-3 my-1.5 h-px bg-border/60" />}
-                  <button
-                    type="button"
-                    className={cn(
-                      "flex w-full items-center gap-3.5 rounded-xl px-3 py-3 text-left text-chat font-medium active:bg-secondary",
-                      action.destructive ? "text-destructive" : "text-foreground",
-                    )}
-                    onClick={() => {
-                      onOpenChange(false);
-                      action.onSelect();
-                    }}
-                  >
-                    <action.icon
-                      className={cn(
-                        "size-5 shrink-0",
-                        !action.destructive && "text-muted-foreground",
-                      )}
-                    />
-                    {action.label}
-                  </button>
+                  {action.groupStart && <div className="mx-3 my-1.5 h-px bg-foreground/10" />}
+                  <SheetActionRow action={action} onDone={() => onOpenChange(false)} />
                 </div>
               ))}
+              {moderation.length > 0 && (
+                <>
+                  {main.length > 0 && <div className="mx-3 my-1.5 h-px bg-foreground/10" />}
+                  {/* One tap away from the everyday rows, so a slip can't hide, block or ban. */}
+                  <button
+                    type="button"
+                    aria-expanded={moderationOpen}
+                    className="flex min-h-11 w-full items-center gap-3 clip-corner px-3 py-2.5 text-left text-chat font-medium text-foreground active:bg-secondary"
+                    onClick={() => setModerationOpen((o) => !o)}
+                  >
+                    <span className="flex size-10 shrink-0 items-center justify-center clip-corner-lg bg-secondary">
+                      <Shield className="size-5 text-muted-foreground" />
+                    </span>
+                    Moderation
+                    <ChevronDown className={cn("ml-auto size-5 text-muted-foreground transition-transform", moderationOpen && "rotate-180")} />
+                  </button>
+                  {moderationOpen && (
+                    <div className="ml-8 border-l border-foreground/10 pl-1">
+                      {moderation.map((action) => (
+                        <SheetActionRow key={action.id} action={action} onDone={() => onOpenChange(false)} />
+                      ))}
+                    </div>
+                  )}
+                </>
+              )}
             </div>
           </div>
         )}
       </DrawerContent>
     </Drawer>
+  );
+}
+
+function SheetActionRow({ action, onDone }: { action: MessageActionItem; onDone: () => void }) {
+  return (
+    <button
+      type="button"
+      disabled={action.disabled}
+      className={cn(
+        "flex min-h-11 w-full items-center gap-3 clip-corner px-3 py-2.5 text-left text-chat font-medium active:bg-secondary disabled:opacity-50",
+        action.destructive ? "text-destructive" : "text-foreground",
+      )}
+      onClick={() => {
+        onDone();
+        action.onSelect();
+      }}
+    >
+      <span className="flex size-10 shrink-0 items-center justify-center clip-corner-lg bg-secondary">
+        <action.icon className={cn("size-5", !action.destructive && "text-muted-foreground")} />
+      </span>
+      {action.label}
+    </button>
   );
 }

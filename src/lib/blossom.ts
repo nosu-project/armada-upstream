@@ -95,6 +95,20 @@ export function getEffectiveBlossomServers(
   return dedupeServers([...head, ...appServers, ...userMeta.servers]);
 }
 
+/**
+ * How long an attachment's blob outlives its disappearing message's own deadline: it's uploaded
+ * when picked, and the message is stamped only when sent.
+ */
+const ATTACHMENT_EXPIRATION_SLACK_SECS = 24 * 60 * 60;
+
+/**
+ * When the blob of an attachment uploaded now may be deleted (`X-Expiration`, blossom#115), for a
+ * message under a `timerSecs` disappearing timer; undefined when the timer is off.
+ */
+export function attachmentExpiration(timerSecs: number, nowMs = Date.now()): number | undefined {
+  return timerSecs > 0 ? Math.floor(nowMs / 1000) + timerSecs + ATTACHMENT_EXPIRATION_SLACK_SECS : undefined;
+}
+
 /** A content-addressed path `/<sha256>` (64 hex), optionally with an extension. */
 export const BLOSSOM_SHA256_PATH_REGEX = /^\/[a-f0-9]{64}\b/i;
 

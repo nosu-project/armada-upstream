@@ -73,9 +73,8 @@ function RouteCardShell({
         if (e.key === "Enter") open(e);
       }}
       className={cn(
-        "block max-w-md w-full rounded-2xl border border-border overflow-hidden cursor-pointer",
-        "transition-colors hover:bg-secondary/40 my-1.5",
-        "focus:outline-none focus-visible:ring-2 focus-visible:ring-primary",
+        "block max-w-md w-full clip-hairline-lg [--edge:var(--border)/0.5] [--fill:var(--background)/0.4] [--fill-hover:var(--secondary)/0.4] overflow-hidden cursor-pointer my-1.5",
+        "focus:outline-none focus-visible:[--edge:var(--primary)]",
         className,
       )}
     >

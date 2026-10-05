@@ -38,7 +38,7 @@ export function ChatSearchBar({
         "absolute inset-y-0 right-0 left-10 sidebar:left-0 z-10 flex items-center gap-1.5 px-2 sidebar:px-3",
         "bg-chrome clip-corner-lg overflow-hidden",
         "transition-transform duration-300 ease-in-out",
-        open ? "translate-x-0 pointer-events-auto" : "translate-x-full pointer-events-none",
+        open ? "transform-none pointer-events-auto" : "translate-x-full pointer-events-none",
       )}
     >
       <Search className="size-4 text-muted-foreground shrink-0" />
@@ -55,7 +55,7 @@ export function ChatSearchBar({
         }}
         placeholder={placeholder}
         aria-label={label}
-        className="h-8 touch:h-10 flex-1 border-0 bg-transparent px-1 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
+        className="h-8 touch:h-11 flex-1 border-0 bg-transparent px-1 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
       />
       {filters}
       <Button

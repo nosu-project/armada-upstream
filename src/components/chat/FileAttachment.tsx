@@ -113,7 +113,7 @@ export function FileAttachment({ url, mime, name, size, encryption, fallbacks, t
   if (format) {
     return (
       <div
-        className={cn("my-1.5 w-full max-w-md overflow-hidden rounded-2xl border border-border bg-secondary/30", className)}
+        className={cn("my-1.5 w-full max-w-md overflow-hidden clip-hairline-lg [--edge:var(--border)/0.5] [--fill:var(--secondary)/0.3] [--fill-hover:var(--secondary)/0.3]", className)}
         onClick={(e) => e.stopPropagation()}
       >
         {viewing3d ? (
@@ -132,7 +132,7 @@ export function FileAttachment({ url, mime, name, size, encryption, fallbacks, t
               onClick={() => void download()}
               disabled={status === "loading"}
               aria-label={`Download ${displayName}`}
-              className="absolute right-3 top-3 z-10 flex size-10 touch:size-11 items-center justify-center rounded-full bg-background/90 text-foreground shadow-sm backdrop-blur transition-colors hover:bg-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+              className="absolute right-3 top-3 z-10 flex size-10 touch:size-11 items-center justify-center clip-corner-lg bg-background/90 text-foreground shadow-sm backdrop-blur transition-colors hover:bg-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
             >
               {status === "loading" ? <Loader2 className="size-5 animate-spin" /> : <Download className="size-5" />}
             </button>
@@ -150,7 +150,7 @@ export function FileAttachment({ url, mime, name, size, encryption, fallbacks, t
               <ModelPlaceholder />
             )}
             <span className="absolute inset-x-0 bottom-0 flex justify-center p-4">
-              <span className="inline-flex items-center gap-2 rounded-full bg-background/90 px-4 py-2 text-sm font-medium shadow-sm backdrop-blur transition-colors hover:bg-background">
+              <span className="inline-flex items-center gap-2 clip-corner-lg bg-background/90 px-4 py-2 text-sm font-medium shadow-sm backdrop-blur transition-colors hover:bg-background">
                 <Rotate3d className="size-4" />
                 View in 3D
                 {size ? <span className="text-muted-foreground tabular-nums">· {formatBytes(size)}</span> : null}
@@ -170,11 +170,11 @@ export function FileAttachment({ url, mime, name, size, encryption, fallbacks, t
         void download();
       }}
       className={cn(
-        "group my-1.5 flex w-full items-center gap-3 max-w-sm rounded-2xl border border-border bg-secondary/30 px-3 py-2.5 text-left hover:bg-secondary/50 transition-colors",
+        "group my-1.5 flex w-full items-center gap-3 max-w-sm clip-hairline-lg [--edge:var(--border)/0.5] [--fill:var(--secondary)/0.3] [--fill-hover:var(--secondary)/0.5] px-3 py-2.5 text-left",
         className,
       )}
     >
-      <span className="size-10 shrink-0 rounded-lg bg-primary/10 text-primary flex items-center justify-center">
+      <span className="size-10 shrink-0 clip-corner-lg bg-primary/10 text-primary flex items-center justify-center">
         <Icon className="size-5" />
       </span>
       <span className="min-w-0 flex-1">

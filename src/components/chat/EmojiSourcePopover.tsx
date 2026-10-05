@@ -34,7 +34,7 @@ export function EmojiSourcePopover({ name, url, imgClassName, authorPubkey }: Em
         side="top"
         align="start"
         sideOffset={8}
-        className="w-56 p-0 rounded-xl border-border shadow-lg overflow-hidden"
+        className="w-56 p-0 overflow-hidden"
       >
         <div className="flex items-center gap-2 px-3 py-2">
           <CustomEmojiImg

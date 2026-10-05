@@ -49,10 +49,10 @@ export function XdcAttachment({
 
   return (
     <div
-      className="my-1.5 flex items-center gap-3 max-w-sm rounded-xl border border-border bg-secondary/30 px-3.5 py-2.5"
+      className="my-1.5 flex items-center gap-3 max-w-sm clip-hairline-lg [--edge:var(--border)/0.5] [--fill:var(--secondary)/0.3] [--fill-hover:var(--secondary)/0.3] px-3.5 py-2.5"
       onClick={(e) => e.stopPropagation()}
     >
-      <div className="size-9 rounded-lg bg-primary/10 flex items-center justify-center shrink-0 overflow-hidden">
+      <div className="size-9 clip-corner-lg bg-primary/10 flex items-center justify-center shrink-0 overflow-hidden">
         {icon ? (
           <img src={icon} alt="" className="size-full object-cover" />
         ) : (

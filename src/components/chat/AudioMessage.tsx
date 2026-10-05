@@ -213,7 +213,7 @@ export function AudioMessage({
       type="button"
       onClick={togglePlay}
       aria-label={isPlaying ? "Pause" : "Play"}
-      className="size-9 shrink-0 rounded-full bg-primary text-primary-foreground flex items-center justify-center hover:opacity-90 transition-opacity"
+      className="size-9 touch:size-11 shrink-0 rounded-full bg-primary text-primary-foreground flex items-center justify-center hover:opacity-90 transition-opacity"
     >
       {isPlaying ? <Pause className="size-4" fill="currentColor" /> : <Play className="size-4 ml-0.5" fill="currentColor" />}
     </button>
@@ -258,7 +258,7 @@ export function AudioMessage({
     return (
       <div
         className={cn(
-          "flex items-center gap-3 my-1.5 max-w-sm rounded-2xl border border-border bg-secondary/30 p-2 pr-3",
+          "flex items-center gap-3 my-1.5 max-w-sm clip-hairline-lg [--edge:var(--border)/0.5] [--fill:var(--secondary)/0.3] [--fill-hover:var(--secondary)/0.3] p-2 pr-3",
           className,
         )}
         onClick={(e) => e.stopPropagation()}
@@ -284,7 +284,7 @@ export function AudioMessage({
   return (
     <div
       className={cn(
-        "flex items-center gap-2.5 my-1.5 max-w-sm rounded-2xl border border-border bg-secondary/30 px-3 py-2",
+        "flex items-center gap-2.5 my-1.5 max-w-sm clip-hairline-lg [--edge:var(--border)/0.5] [--fill:var(--secondary)/0.3] [--fill-hover:var(--secondary)/0.3] px-3 py-2",
         className,
       )}
       onClick={(e) => e.stopPropagation()}
@@ -300,7 +300,7 @@ export function AudioMessage({
 function CoverArt({ src }: { src?: string }) {
   const [broken, setBroken] = useState<string | undefined>(undefined);
   return (
-    <div className="size-20 shrink-0 overflow-hidden rounded-lg bg-secondary flex items-center justify-center text-muted-foreground">
+    <div className="size-20 shrink-0 overflow-hidden clip-corner-lg bg-secondary flex items-center justify-center text-muted-foreground">
       {src && broken !== src ? (
         <img src={src} alt="" className="size-full object-cover" onError={() => setBroken(src)} />
       ) : (

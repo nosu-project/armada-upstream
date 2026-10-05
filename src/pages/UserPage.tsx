@@ -87,7 +87,7 @@ export function UserPage() {
       overlay={user ? <ProfileDialog pubkey={pubkey} onClose={closeProfile} /> : undefined}
     >
       {!user && (
-        <div className="flex flex-col items-center gap-4 rounded-xl border border-border/60 bg-card px-6 py-8 text-center">
+        <div className="flex flex-col items-center gap-4 clip-hairline-lg [--fill:var(--card)] [--fill-hover:var(--card)] px-6 py-8 text-center">
           <Avatar shape={getAvatarShape(metadata)} className="size-24 border-[3px] border-background">
             <AvatarImage src={metadata?.picture} imeta={author.data?.imeta?.picture} alt={displayName} />
             <AvatarFallback className="bg-primary/20 text-primary text-3xl">

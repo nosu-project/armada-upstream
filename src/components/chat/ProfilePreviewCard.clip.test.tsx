@@ -10,8 +10,8 @@ import { MemberActionsContext, type MemberActionItem } from "@/contexts/MemberAc
 
 // jsdom has no layout: these assertions are STRUCTURAL. They check that a
 // card whose height is capped to the space Radix reports as available has a
-// scroll container between that cap and its last row (the moderation
-// buttons), which is what keeps a tall card reachable on a short viewport
+// scroll container between that cap and its rows, which is what keeps a
+// tall card reachable on a short viewport
 // (landscape phone, or an avatar low on a portrait screen).
 
 vi.mock("@/hooks/useAuthor", () => ({
@@ -66,7 +66,7 @@ function openCard() {
     </MemoryRouter>,
   );
   fireEvent.click(screen.getByRole("button", { name: "avatar" }));
-  return screen.getByRole("button", { name: "Ban & lock out" });
+  return screen.getByRole("button", { name: "Follow" });
 }
 
 function classesOf(el: Element) {
@@ -75,24 +75,32 @@ function classesOf(el: Element) {
 
 describe("ProfilePreviewCard on a short viewport", () => {
   it("caps the card to the available height", () => {
-    const ban = openCard();
-    const content = ban.closest("[data-radix-popper-content-wrapper] > *") as HTMLElement;
+    const row = openCard();
+    const content = row.closest("[data-radix-popper-content-wrapper] > *") as HTMLElement;
     expect(content).toBeTruthy();
     expect(classesOf(content)).toContain("max-h-[var(--radix-popover-content-available-height)]");
   });
 
-  it("puts a scroll container between that cap and the moderation buttons", () => {
-    const ban = openCard();
-    const content = ban.closest("[data-radix-popper-content-wrapper] > *") as HTMLElement;
+  it("puts a scroll container between that cap and the card's rows", () => {
+    const row = openCard();
+    const content = row.closest("[data-radix-popper-content-wrapper] > *") as HTMLElement;
 
     const scrollers: string[] = [];
-    for (let el: HTMLElement | null = ban; el; el = el.parentElement) {
+    for (let el: HTMLElement | null = row; el; el = el.parentElement) {
       const c = classesOf(el);
       if (c.some((k) => /^overflow(-y)?-(auto|scroll)$/.test(k))) scrollers.push(el.className);
       if (el === content) break;
     }
     // Without one, a max-h element whose overflow is hidden clips its last
-    // rows — the moderation buttons — with no way to reach them.
+    // rows with no way to reach them.
     expect(scrollers).not.toHaveLength(0);
+  });
+});
+
+describe("ProfilePreviewCard moderation", () => {
+  it("lists the scope's member actions in the overflow menu, not on the card", () => {
+    openCard();
+    expect(screen.queryByRole("button", { name: "Ban & lock out" })).toBeNull();
+    expect(screen.getByRole("button", { name: "More actions" })).toBeTruthy();
   });
 });

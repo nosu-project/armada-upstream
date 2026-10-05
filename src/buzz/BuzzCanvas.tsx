@@ -20,13 +20,13 @@ export function BuzzCanvasBar({
 
   if (!open) return null;
   return (
-    <div className="mx-2 mt-2 clip-corner-lg bg-chrome max-h-[45vh] flex flex-col overflow-hidden">
+    <div className="mx-gutter mt-stack clip-corner-lg bg-chrome max-h-[45vh] flex flex-col overflow-hidden">
       <div className="flex items-center gap-2 px-3 pt-2 pb-1 shrink-0">
         <ScrollText className="size-4 text-muted-foreground" />
         <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground flex-1">
           Canvas
         </span>
-        <Button variant="ghost" size="icon" aria-label="Close canvas" className="size-7" onClick={onClose}>
+        <Button variant="ghost" size="icon" aria-label="Close canvas" className="size-7 touch:size-11 clip-corner-lg" onClick={onClose}>
           <X className="size-4" />
         </Button>
       </div>

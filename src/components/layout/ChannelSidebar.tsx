@@ -96,7 +96,7 @@ function ChannelLink({
         onClick={onNavigate}
         className={({ isActive }) =>
           cn(
-            "flex items-center gap-2 pl-3 pr-2 py-1.5 touch:py-3 text-sm transition-colors",
+            "flex items-center gap-2 px-2 py-1.5 touch:py-3 text-sm transition-colors",
             !isActive && "text-muted-foreground hover:text-foreground hover:bg-foreground/5 clip-corner-lg",
             // Muted channels never bold — their unread is deliberately silent.
             !isActive && hasUnread && !muted && "text-foreground font-semibold",
@@ -331,7 +331,7 @@ export function ChannelSidebar({ relayUrl, onNavigate, className }: ChannelSideb
       titleExpansion={
         <Collapsible open={serverMenuOpen} onOpenChange={setServerMenuOpen}>
           <CollapsibleContent className="overflow-hidden data-[state=open]:animate-collapsible-down data-[state=closed]:animate-collapsible-up">
-            <div className="mx-2 mb-2 mt-1 p-1 space-y-0.5 clip-corner-lg bg-secondary">
+            <div className="mx-3 mb-2 mt-1 p-1 space-y-0.5 clip-corner-lg bg-secondary">
               {([
                 {
                   show: !!user && hasUnread,
@@ -423,7 +423,7 @@ export function ChannelSidebar({ relayUrl, onNavigate, className }: ChannelSideb
                 onClick={onNavigate}
                 className={({ isActive }) =>
                   cn(
-                    "flex w-full items-center gap-2 pl-3 pr-2 py-1.5 touch:py-3 text-sm transition-colors clip-corner-lg",
+                    "flex w-full items-center gap-2 px-2 py-1.5 touch:py-3 text-sm transition-colors clip-corner-lg",
                     isActive
                       ? "bg-primary text-primary-foreground font-medium"
                       : "text-muted-foreground hover:text-foreground hover:bg-foreground/5",
@@ -448,7 +448,7 @@ export function ChannelSidebar({ relayUrl, onNavigate, className }: ChannelSideb
                 onClick={onNavigate}
                 className={({ isActive }) =>
                   cn(
-                    "flex w-full items-center gap-2 pl-3 pr-2 py-1.5 touch:py-3 text-sm transition-colors clip-corner-lg",
+                    "flex w-full items-center gap-2 px-2 py-1.5 touch:py-3 text-sm transition-colors clip-corner-lg",
                     isActive
                       ? "bg-primary text-primary-foreground font-medium"
                       : "text-muted-foreground hover:text-foreground hover:bg-foreground/5",
@@ -467,7 +467,7 @@ export function ChannelSidebar({ relayUrl, onNavigate, className }: ChannelSideb
           <>
             {buzzSections.forums.length > 0 && (
               <div className="space-y-0.5">
-                <div className="pl-4 pr-2 py-1">
+                <div className="flex h-10 items-center px-2">
                   <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                     Forums
                   </span>
@@ -479,7 +479,7 @@ export function ChannelSidebar({ relayUrl, onNavigate, className }: ChannelSideb
             )}
             {buzzSections.dms.length > 0 && (
               <div className="space-y-0.5">
-                <div className="flex items-center gap-1.5 pl-4 pr-2 py-1">
+                <div className="flex h-10 items-center gap-1.5 px-2">
                   <MessageSquareText className="size-3 text-muted-foreground" />
                   <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                     Direct messages
@@ -492,7 +492,7 @@ export function ChannelSidebar({ relayUrl, onNavigate, className }: ChannelSideb
             )}
             {buzzSections.archived.length > 0 && (
               <div className="space-y-0.5">
-                <div className="pl-4 pr-2 py-1">
+                <div className="flex h-10 items-center px-2">
                   <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground/70">
                     Archived
                   </span>
@@ -559,7 +559,7 @@ export function ChannelSidebar({ relayUrl, onNavigate, className }: ChannelSideb
           ))}
           {missingIds.length > 0 && (
             <div className="space-y-0.5 pt-2">
-              <div className="pl-4 pr-2 py-1">
+              <div className="flex h-10 items-center px-2">
                 <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground/70">
                   Not found on this server
                 </span>

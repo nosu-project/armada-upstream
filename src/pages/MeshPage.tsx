@@ -472,7 +472,7 @@ function ChannelRow({
       type="button"
       onClick={onClick}
       className={cn(
-        "w-full flex items-center gap-2 pl-3 pr-2 py-1.5 text-sm transition-colors text-left",
+        "w-full flex items-center gap-2 px-2 py-1.5 text-sm transition-colors text-left",
         !active && "text-muted-foreground hover:text-foreground hover:bg-foreground/5 clip-corner-lg",
         active && "clip-corner-lg bg-primary text-primary-foreground font-medium",
       )}
@@ -499,7 +499,7 @@ function MemberRow({
       type="button"
       onClick={onClick}
       className={cn(
-        "w-full flex items-center gap-2 pl-3 pr-2 py-1.5 text-sm transition-colors text-left",
+        "w-full flex items-center gap-2 px-2 py-1.5 text-sm transition-colors text-left",
         !active && "text-muted-foreground hover:text-foreground hover:bg-foreground/5 clip-corner-lg",
         active && "clip-corner-lg bg-primary text-primary-foreground font-medium",
       )}
@@ -545,7 +545,7 @@ function ChatHeader({
   const membersShown = membersVisible || membersOpen;
 
   return (
-    <header className="relative h-12 mx-2 mt-3 px-2 sidebar:px-3 flex items-center gap-2 shrink-0 clip-corner-lg bg-chrome">
+    <header className="relative h-12 mx-gutter mt-3 px-2 sidebar:px-3 flex items-center gap-2 shrink-0 clip-corner-lg bg-chrome">
       <Button
         variant="ghost"
         size="icon"
@@ -653,12 +653,12 @@ function MeshMemberPanel({
       <div
         className={cn(
           "relative h-full flex w-full sidebar:w-[16.5rem] transition-transform duration-200 ease-out",
-          open ? "translate-x-0" : "translate-x-full",
-          visible ? "sidebar:translate-x-0" : "sidebar:translate-x-full",
+          open ? "transform-none" : "translate-x-full",
+          visible ? "sidebar:transform-none" : "sidebar:translate-x-full",
         )}
       >
         <div aria-hidden className="absolute inset-0 -z-10 bg-background sidebar:hidden" />
-        <aside className="flex flex-col h-full w-full sidebar:w-[16.5rem] mx-2 mt-3 mb-2 clip-corner-lg bg-chrome overflow-hidden">
+        <aside className="flex flex-col h-full w-full sidebar:w-[16.5rem] mx-gutter mt-3 mb-2 clip-corner-lg bg-chrome overflow-hidden">
           <div className="flex items-center justify-between px-4 h-12 shrink-0 sidebar:hidden">
             <span className="text-sm font-semibold">Nearby</span>
             <Button variant="ghost" size="icon" aria-label="Close nearby" className="size-8 touch:size-11" onClick={onClose}>

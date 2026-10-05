@@ -61,9 +61,9 @@ interface AttachSheetProps {
  * sheet rests at keyboard height and expands to full screen. Without the
  * camera roll it's just the tiles.
  */
-export function AttachSheet(props: AttachSheetProps) {
+export const AttachSheet = memo(function AttachSheet(props: AttachSheetProps) {
   return hasMediaGallery() ? <GallerySheet {...props} /> : <TilesSheet {...props} />;
-}
+});
 
 function useTiles(actions: AttachAction[], apps: AttachAction[], gamePicker: ReactNode, openApps: () => void) {
   const hasApps = apps.length > 0 || gamePicker !== undefined;
@@ -250,14 +250,14 @@ function orderOf(selected: GalleryItem[], item: GalleryItem): number | undefined
 function SheetHeader({ title, onBack }: { title?: string; onBack?: () => void }) {
   return (
     <div className="shrink-0">
-      <div className="mx-auto mt-2.5 mb-2 h-1 w-9 rounded-full bg-muted-foreground/30" />
+      <div className="mx-auto mt-2.5 mb-2 h-1 w-9 shrink-0 rounded-full bg-muted-foreground/30" />
       {onBack && (
         <div className="flex items-center gap-1 px-2">
           <button
             type="button"
             aria-label="Back"
             onClick={onBack}
-            className="flex size-11 items-center justify-center rounded-full text-muted-foreground active:bg-secondary"
+            className="flex size-11 items-center justify-center clip-corner-lg text-muted-foreground active:bg-secondary"
           >
             <ChevronLeft className="size-5" />
           </button>
@@ -288,13 +288,13 @@ function Tiles({ tiles, onOpenChange, className, cut }: {
           }}
           className={cn(
             "flex flex-col items-center gap-1.5 py-1 text-xs font-medium text-muted-foreground disabled:opacity-40 active:bg-secondary/60",
-            cut ? "clip-corner-lg" : "rounded-xl",
+            "clip-corner-lg",
           )}
         >
           <span
             className={cn(
               "flex items-center justify-center",
-              cut ? "h-11 w-12 clip-corner-lg" : "size-14 rounded-full",
+              cut ? "h-11 w-12 clip-corner-lg" : "size-14 clip-corner-lg",
               action.active ? "bg-primary text-primary-foreground" : "bg-secondary text-foreground",
             )}
           >
@@ -329,9 +329,9 @@ function AppsPage({ apps, gamePicker, onOpenChange, scrollable }: {
                 onOpenChange(false);
                 app.onSelect();
               }}
-              className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-chat font-medium active:bg-secondary disabled:opacity-40"
+              className="flex min-h-11 w-full items-center gap-3 clip-corner px-3 py-2.5 text-left text-chat font-medium active:bg-secondary disabled:opacity-40"
             >
-              <span className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-secondary">
+              <span className="flex size-10 shrink-0 items-center justify-center clip-corner-lg bg-secondary">
                 <app.icon className="size-5" />
               </span>
               <span className="flex-1">{app.label}</span>
@@ -387,7 +387,7 @@ function TilesSheet({ open, onOpenChange, actions, apps = [], gamePicker }: Atta
                 type="button"
                 aria-label="Back"
                 onClick={() => setPage("main")}
-                className="flex size-11 items-center justify-center rounded-full text-muted-foreground active:bg-secondary"
+                className="flex size-11 items-center justify-center clip-corner-lg text-muted-foreground active:bg-secondary"
               >
                 <ChevronLeft className="size-5" />
               </button>
@@ -543,7 +543,7 @@ function RecentMediaGrid({ expanded, selected, onToggle, onPreview, onResetSelec
     // Top-aligned: a centred prompt would sit under the tiles.
     return (
       <div className="flex min-h-0 flex-1 flex-col items-center gap-2 px-8 pt-6 text-center">
-        <span className="flex size-12 items-center justify-center rounded-full bg-secondary">
+        <span className="flex size-12 items-center justify-center clip-corner-lg bg-secondary">
           <ImageIcon className="size-6 text-muted-foreground" />
         </span>
         <p className="text-chat font-semibold">Share photos and videos</p>
@@ -554,7 +554,7 @@ function RecentMediaGrid({ expanded, selected, onToggle, onPreview, onResetSelec
         </p>
         <Button
           size="sm"
-          className="mt-2 rounded-full px-5 touch:h-11"
+          className="mt-2 clip-corner-lg px-5 touch:h-11"
           onClick={() => void (access === "denied" ? openMediaSettings().catch(() => undefined) : ask())}
         >
           {access === "denied" ? "Open settings" : "Allow access"}
@@ -570,7 +570,7 @@ function RecentMediaGrid({ expanded, selected, onToggle, onPreview, onResetSelec
           <p className="flex-1 text-[13px] leading-snug text-muted-foreground">
             Armada can only see the photos and videos you chose.
           </p>
-          <Button size="sm" variant="secondary" className="h-8 shrink-0 rounded-full px-4 touch:h-11" onClick={() => void ask()}>
+          <Button size="sm" variant="secondary" className="h-8 shrink-0 clip-corner-lg px-4 touch:h-11" onClick={() => void ask()}>
             Manage
           </Button>
         </div>
@@ -592,7 +592,7 @@ function RecentMediaGrid({ expanded, selected, onToggle, onPreview, onResetSelec
             ) : failed ? (
               <span className="flex flex-col items-center gap-2">
                 Couldn't load your gallery.
-                <Button size="sm" variant="secondary" className="rounded-full px-4 touch:h-11" onClick={() => void load(0)}>Retry</Button>
+                <Button size="sm" variant="secondary" className="clip-corner-lg px-4 touch:h-11" onClick={() => void load(0)}>Retry</Button>
               </span>
             ) : (
               "No photos or videos yet."
@@ -676,7 +676,7 @@ const GalleryTile = memo(function GalleryTile({ item, order, onToggle, onPreview
           draggable={false}
           loading="lazy"
           decoding="async"
-          className={cn("size-full object-cover transition-transform duration-150", picked && "scale-90 rounded-lg")}
+          className={cn("size-full object-cover transition-transform duration-150", picked && "scale-90 clip-corner-lg")}
         />
       )}
       {item.video && (
@@ -720,7 +720,7 @@ function GalleryPreview({ item, order, onToggle, onClose }: {
           type="button"
           aria-label="Close preview"
           onClick={onClose}
-          className="flex size-11 items-center justify-center rounded-full active:bg-white/10"
+          className="flex size-11 items-center justify-center clip-corner-lg active:bg-white/10"
         >
           <X className="size-5" />
         </button>
@@ -729,7 +729,7 @@ function GalleryPreview({ item, order, onToggle, onClose }: {
           aria-pressed={picked}
           aria-label={picked ? "Deselect" : "Select"}
           onClick={() => onToggle(item)}
-          className="flex size-11 items-center justify-center rounded-full active:bg-white/10"
+          className="flex size-11 items-center justify-center clip-corner-lg active:bg-white/10"
         >
           <SelectBadge order={order} className="size-7" />
         </button>
@@ -744,7 +744,7 @@ function GalleryPreview({ item, order, onToggle, onClose }: {
       <div className="flex shrink-0 justify-center px-4 pt-3 pb-[var(--safe-area-pad-bottom,0.75rem)]">
         <Button
           variant={picked ? "secondary" : "default"}
-          className="h-11 w-full max-w-sm rounded-full font-semibold"
+          className="h-11 w-full max-w-sm clip-corner-lg font-semibold"
           onClick={() => {
             if (!picked) onToggle(item);
             onClose();

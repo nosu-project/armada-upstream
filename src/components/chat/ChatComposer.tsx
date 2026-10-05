@@ -18,7 +18,7 @@ import {
   X,
 } from "lucide-react";
 import { nip19 } from "nostr-tools";
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, memo, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from "react";
 
 import { AttachSheet, type AttachAction } from "@/components/chat/AttachSheet";
 import { AttachmentTray, MAX_ALT_CHARS, type TrayItem } from "@/components/chat/AttachmentTray";
@@ -39,7 +39,7 @@ import { WebxdcGamePicker } from "@/components/chat/WebxdcGamePicker";
 import { DisplayName } from "@/components/DisplayName";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { PillTabs, type PillTab } from "@/components/ui/pill-tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useComposerBoundsRef } from "@/contexts/ComposerBoundsContext";
@@ -81,6 +81,7 @@ import { extractWebxdcMeta } from "@/lib/webxdcMeta";
 import { contentTagsFor, forwardedAttachment, stripUrlsFromText } from "@/lib/forwardMessage";
 import { IMETA_MEDIA_URL_REGEX, mimeFromExt, modelFormat, modelMimeFromExt, type ModelFormat } from "@/lib/mediaUrls";
 import { MAX_ENCRYPTED_BYTES, deviceInputLimit, keepUserFields, mimeOfPicked } from "@/lib/attachmentLimits";
+import { attachmentExpiration } from "@/lib/blossom";
 import { describeRefusal, uploadFailureReason } from "@/lib/blossomPreflight";
 import { KIND_GROUP_CHAT, relayRejectionMessage } from "@/lib/nip29";
 import { resizeImage } from "@/lib/resizeImage";
@@ -320,6 +321,11 @@ interface ChatComposerProps {
    */
   encryptAttachments?: boolean;
   /**
+   * The conversation's disappearing-message timer in seconds (0 = off), read as an encrypted
+   * attachment uploads so its blob can be dropped after the message (`X-Expiration`).
+   */
+  disappearingTimer?: () => Promise<number>;
+  /**
    * Offer bot commands to a roster. An invocation carries a `["bot", <pubkey>]`
    * tag, so this must stay OFF where tags are plaintext (NIP-04 DMs) — it would
    * publish who commands which bot. For 1:1 bot DMs use {@link botDmPeer}.
@@ -372,12 +378,107 @@ function GifGlyph({ className }: { className?: string }) {
   );
 }
 
+const plusButtonClass = "p-2 shrink-0 clip-corner-lg transition-colors flex items-center justify-center size-9 touch:size-11";
+const preventCloseAutoFocus = (e: Event) => e.preventDefault();
+
+// The toolbar is memoized apart from the composer, which re-renders per keystroke:
+// each Radix tooltip/menu root is a Popper subtree.
+
+/** Pointer: a double-click on "+" skips the menu and opens the file picker. */
+const DesktopPlusMenu = memo(function DesktopPlusMenu({
+  open,
+  onOpenChange,
+  highlighted,
+  actions,
+  onDoubleClick,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  highlighted: boolean;
+  actions: AttachAction[];
+  onDoubleClick: () => void;
+}) {
+  return (
+    // Non-modal: a modal menu blocks pointer events on the trigger, eating the double-click.
+    <DropdownMenu open={open} onOpenChange={onOpenChange} modal={false}>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          aria-label="More options"
+          onDoubleClick={onDoubleClick}
+          className={cn(plusButtonClass, highlighted
+            ? "text-primary bg-primary/10"
+            : "text-muted-foreground hover:text-foreground hover:bg-secondary")}
+        >
+          <Plus absoluteStrokeWidth className={cn("size-5 touch:size-6 transition-transform", open && "rotate-45")} />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent
+        side="top"
+        align="start"
+        sideOffset={8}
+        // Items like Poll/Commands focus the textarea themselves; don't clobber it.
+        onCloseAutoFocus={preventCloseAutoFocus}
+        className="w-52"
+      >
+        {actions.map((action, i) => (
+          <div key={action.id}>
+            {i === 1 && <DropdownMenuSeparator />}
+            <DropdownMenuItem
+              disabled={action.disabled}
+              className={action.active ? "text-primary focus:text-primary" : undefined}
+              onSelect={action.onSelect}
+            >
+              <action.icon className="size-4" />
+              {action.label}
+            </DropdownMenuItem>
+          </div>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+});
+
+const PickerToggleButton = memo(function PickerToggleButton({
+  label,
+  tooltip,
+  active,
+  icon: Icon,
+  onClick,
+}: {
+  label: string;
+  /** Hidden while its own tab is showing. */
+  tooltip: string | null;
+  active: boolean;
+  icon: ComponentType<{ className?: string }>;
+  onClick: () => void;
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          onClick={onClick}
+          aria-label={label}
+          className={cn(
+            "p-2 shrink-0 clip-corner-lg transition-colors flex items-center justify-center size-9 touch:size-11",
+            active ? "text-primary bg-primary/10" : "text-muted-foreground hover:text-foreground hover:bg-secondary",
+          )}
+        >
+          <Icon className="size-5" />
+        </button>
+      </TooltipTrigger>
+      {tooltip && <TooltipContent>{tooltip}</TooltipContent>}
+    </Tooltip>
+  );
+});
+
 /**
  * Rich chat composer: mentions, shortcodes, pickers, uploads with NIP-92 imeta,
  * voice, NIP-88 polls, replies, NIP-18 quotes, drafts. With `sendOverride` it
  * doubles as a generic composer (DMs, Concord).
  */
-export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelReply, sealed = false, onSent, shareLabel, shareIconUrl, sendOverride, canSend, mentionPubkeys, canMentionEveryone = false, placeholder, draftScope, shareRoute, onOptimisticInsert, onOptimisticSent, onOptimisticFailed, canModerate = false, autoFocus = false, onTyping, onSlashAction, encryptAttachments = false, botCommands = false, botDmPeer, recentAuthors, conversationRelays, pollsEnabled = true, onPollSubmit, messageKind = KIND_GROUP_CHAT, onEditLast, layout = "bar", documentEnterSends = false, submitLabel = "Post", onCancel }: ChatComposerProps) {
+export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelReply, sealed = false, onSent, shareLabel, shareIconUrl, sendOverride, canSend, mentionPubkeys, canMentionEveryone = false, placeholder, draftScope, shareRoute, onOptimisticInsert, onOptimisticSent, onOptimisticFailed, canModerate = false, autoFocus = false, onTyping, onSlashAction, encryptAttachments = false, disappearingTimer, botCommands = false, botDmPeer, recentAuthors, conversationRelays, pollsEnabled = true, onPollSubmit, messageKind = KIND_GROUP_CHAT, onEditLast, layout = "bar", documentEnterSends = false, submitLabel = "Post", onCancel }: ChatComposerProps) {
   const isDocument = layout === "document";
   const { user } = useCurrentUser();
   const composerBoundsRef = useComposerBoundsRef();
@@ -1096,17 +1197,19 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
         }
       }
 
+      const expiration = encryptAttachments && disappearingTimer ? attachmentExpiration(await disappearingTimer()) : undefined;
+
       // Poster first: small, and its failure mustn't cost the file.
       let posterUrl: string | undefined;
       if (posterFile) {
         try {
-          posterUrl = (await uploadFile({ file: posterFile, signal: abort.signal }))[0][1];
+          posterUrl = (await uploadFile({ file: posterFile, signal: abort.signal, expiration }))[0][1];
         } catch {
           posterUrl = undefined;
         }
       }
 
-      const tags = await uploadFile({ file: uploadableFile, signal: abort.signal });
+      const tags = await uploadFile({ file: uploadableFile, signal: abort.signal, expiration });
       const url = tags[0][1];
       // Under the inline-decrypt cap only: past it a render wouldn't download it either.
       if (plainFile.size <= MAX_DECRYPT_BYTES) primeAttachment(url, encryption, plainFile);
@@ -1191,7 +1294,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
       setPendingUploads((prev) => prev.filter((p) => p.id !== pendingId));
       if (previewUrl) URL.revokeObjectURL(previewUrl);
     }
-  }, [uploadFile, preflightUpload, toast, encryptAttachments, user?.pubkey]);
+  }, [uploadFile, preflightUpload, toast, encryptAttachments, disappearingTimer, user?.pubkey]);
 
   const handleFiles = useCallback((files: Iterable<File | DeferredFile>, options?: { spoiler?: boolean }) => {
     for (const file of files) void handleFileUpload(file, options);
@@ -1747,7 +1850,8 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
         encryption = { algorithm: "aes-gcm", key: enc.key, nonce: enc.nonce, ox: enc.originalHash };
       }
 
-      const uploadTags = await uploadFile(file);
+      const expiration = encryptAttachments && disappearingTimer ? attachmentExpiration(await disappearingTimer()) : undefined;
+      const uploadTags = await uploadFile({ file, expiration });
       const audioUrl = uploadTags[0][1];
       primeAttachment(audioUrl, encryption, plainFile);
 
@@ -1794,7 +1898,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     } finally {
       setIsPublishingVoice(false);
     }
-  }, [user, voiceRecorder, uploadFile, buildMessageTags, createEvent, relayUrl, sendOverride, canSend, encryptAttachments, onCancelReply, onSent, noteSent, toast, messageKind]);
+  }, [user, voiceRecorder, uploadFile, buildMessageTags, createEvent, relayUrl, sendOverride, canSend, encryptAttachments, disappearingTimer, onCancelReply, onSent, noteSent, toast, messageKind]);
 
   const handleStartRecording = useCallback(async () => {
     try {
@@ -1944,7 +2048,16 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     [conversationRelays, registerGame],
   );
 
-  const plusButtonClass = "p-2 shrink-0 clip-corner-lg transition-colors flex items-center justify-center size-9 touch:size-11";
+  const openFilePicker = useCallback(() => {
+    setPlusOpen(false);
+    fileInputRef.current?.click();
+  }, []);
+  // Compact: the only picker toggle left, so it closes whatever tab is showing.
+  const toggleEmojiPicker = useCallback(
+    () => (compact && pickerOpen ? setPickerOpen(false) : togglePickerTab("emoji")),
+    [compact, pickerOpen, togglePickerTab],
+  );
+  const toggleGifPicker = useCallback(() => togglePickerTab("gif"), [togglePickerTab]);
 
   const charCount = content.length;
   const placeholderText = mode === "poll" ? "Ask a question…" : (placeholder ?? "Message this channel…");
@@ -1961,7 +2074,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
       onDrop={handleDrop}
     >
       {isDragging && (
-        <div className="absolute inset-0 z-30 m-1 flex items-center justify-center clip-corner-lg border-2 border-dashed border-primary/60 bg-primary/10 backdrop-blur-sm pointer-events-none animate-in fade-in-0 duration-150">
+        <div className="absolute inset-0 z-30 m-1 flex items-center justify-center clip-hairline-lg [--edge:var(--primary)/0.6] [--fill:var(--primary)/0.1] [--fill-hover:var(--primary)/0.1] backdrop-blur-sm pointer-events-none animate-in fade-in-0 duration-150">
           <div className="flex items-center gap-2 text-sm font-medium text-primary">
             <Paperclip className="size-4" />
             Drop files to upload
@@ -1996,9 +2109,9 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
         onUpdate={updateAttachment}
       />
 
-      <div className="p-2">
+      <div className="px-gutter py-2">
         {voiceRecorder.isRecording || isPublishingVoice ? (
-          <div className="flex items-center gap-3 rounded-xl bg-destructive/5 border border-destructive/20 px-3 py-2.5">
+          <div className="flex items-center gap-3 clip-hairline-lg [--edge:var(--destructive)/0.2] [--fill:var(--destructive)/0.05] [--fill-hover:var(--destructive)/0.05] px-3 py-2.5">
             <div className="flex items-center gap-2 min-w-0">
               <div className="size-2.5 rounded-full bg-destructive animate-pulse shrink-0" />
               <span className="text-sm font-medium tabular-nums text-destructive">
@@ -2025,7 +2138,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                   type="button"
                   onClick={voiceRecorder.cancelRecording}
                   disabled={isPublishingVoice}
-                  className="p-2 touch:p-3.5 rounded-full text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors disabled:opacity-40"
+                  className="p-2 touch:p-3.5 clip-corner-lg text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors disabled:opacity-40"
                 >
                   <X className="size-[18px]" />
                 </button>
@@ -2036,7 +2149,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
             <Button
               onClick={handleStopAndSendVoice}
               disabled={isPublishingVoice || voiceRecorder.recordingDuration < 0.5}
-              className="rounded-full px-4 font-bold"
+              className="clip-corner-lg px-4 font-bold"
               size="sm"
             >
               {isPublishingVoice
@@ -2093,60 +2206,13 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                   />
                 </>
               ) : (
-                <Popover open={plusOpen} onOpenChange={setPlusOpen}>
-                  <PopoverTrigger asChild>
-                    <button
-                      type="button"
-                      aria-label="More options"
-                      onDoubleClick={() => {
-                        setPlusOpen(false);
-                        fileInputRef.current?.click();
-                      }}
-                      className={cn(plusButtonClass, plusOpen || mode === "poll"
-                        ? "text-primary bg-primary/10"
-                        : "text-muted-foreground hover:text-foreground hover:bg-secondary")}
-                    >
-                      <Plus absoluteStrokeWidth className={cn("size-5 touch:size-6 transition-transform", plusOpen && "rotate-45")} />
-                    </button>
-                  </PopoverTrigger>
-                  <PopoverContent
-                    side="top"
-                    align="start"
-                    sideOffset={8}
-                    // Items like Poll/Commands focus the textarea themselves; don't clobber it.
-                    onCloseAutoFocus={(e) => e.preventDefault()}
-                    className="w-60 p-1.5 rounded-xl border-border shadow-lg"
-                  >
-                    <div className="flex flex-col gap-0.5">
-                      {menuActions.map((action, i) => (
-                        <button
-                          key={action.id}
-                          type="button"
-                          disabled={action.disabled}
-                          onClick={() => {
-                            setPlusOpen(false);
-                            action.onSelect();
-                          }}
-                          className={cn(
-                            "group/item flex items-center gap-3 w-full px-2 py-1.5 rounded-lg text-sm font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed",
-                            action.active ? "text-primary bg-primary/10" : "text-foreground/90 hover:bg-secondary/70 enabled:hover:text-foreground",
-                            i === 1 && "mt-1 relative before:absolute before:-top-0.5 before:inset-x-2 before:h-px before:bg-border/60",
-                          )}
-                        >
-                          <span
-                            className={cn(
-                              "flex size-8 shrink-0 items-center justify-center rounded-lg",
-                              action.active ? "bg-primary/15" : "bg-secondary/80 text-muted-foreground group-hover/item:text-foreground",
-                            )}
-                          >
-                            <action.icon className="size-[18px]" />
-                          </span>
-                          {action.label}
-                        </button>
-                      ))}
-                    </div>
-                  </PopoverContent>
-                </Popover>
+                <DesktopPlusMenu
+                  open={plusOpen}
+                  onOpenChange={setPlusOpen}
+                  highlighted={plusOpen || mode === "poll"}
+                  actions={menuActions}
+                  onDoubleClick={openFilePicker}
+                />
               )}
 
               <div className={cn("relative flex-1 min-w-0", isDocument && "order-first basis-full")}>
@@ -2223,25 +2289,13 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
               </div>
 
               <div ref={pickerToggleGroupRef} className="flex shrink-0 items-center gap-0.5 touch:gap-1">
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <button
-                      type="button"
-                      // Compact: the only picker toggle left, so it closes whatever tab is showing.
-                      onClick={() => (compact && pickerOpen ? setPickerOpen(false) : togglePickerTab("emoji"))}
-                      aria-label="Emoji / Stickers"
-                      className={cn(
-                        "p-2 shrink-0 clip-corner-lg transition-colors flex items-center justify-center size-9 touch:size-11",
-                        pickerOpen && (compact || pickerTab !== "gif")
-                          ? "text-primary bg-primary/10"
-                          : "text-muted-foreground hover:text-foreground hover:bg-secondary",
-                      )}
-                    >
-                      <Smile className="size-5" />
-                    </button>
-                  </TooltipTrigger>
-                  {(!pickerOpen || pickerTab === "gif") && <TooltipContent>Emoji</TooltipContent>}
-                </Tooltip>
+                <PickerToggleButton
+                  label="Emoji / Stickers"
+                  tooltip={!pickerOpen || pickerTab === "gif" ? "Emoji" : null}
+                  active={pickerOpen && (compact || pickerTab !== "gif")}
+                  icon={Smile}
+                  onClick={toggleEmojiPicker}
+                />
 
                 {/* Compact (touch, typing): the GIF button folds into the emoji picker's tabs, as in Signal. */}
                 <div
@@ -2255,24 +2309,13 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                     compact ? "max-w-0 opacity-0 -ml-1" : "max-w-11 opacity-100",
                   )}
                 >
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <button
-                        type="button"
-                        onClick={() => togglePickerTab("gif")}
-                        aria-label="GIFs"
-                        className={cn(
-                          "p-2 shrink-0 clip-corner-lg transition-colors flex items-center justify-center size-9 touch:size-11",
-                          pickerOpen && pickerTab === "gif"
-                            ? "text-primary bg-primary/10"
-                            : "text-muted-foreground hover:text-foreground hover:bg-secondary",
-                        )}
-                      >
-                        <GifGlyph className="size-5" />
-                      </button>
-                    </TooltipTrigger>
-                    {(!pickerOpen || pickerTab !== "gif") && <TooltipContent>GIFs</TooltipContent>}
-                  </Tooltip>
+                  <PickerToggleButton
+                    label="GIFs"
+                    tooltip={!pickerOpen || pickerTab !== "gif" ? "GIFs" : null}
+                    active={pickerOpen && pickerTab === "gif"}
+                    icon={GifGlyph}
+                    onClick={toggleGifPicker}
+                  />
                 </div>
               </div>
 
@@ -2363,7 +2406,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                       type="button"
                       aria-label="Close poll"
                       onClick={() => setMode("post")}
-                      className="p-1 touch:p-2.5 rounded-full text-muted-foreground hover:text-foreground transition-colors"
+                      className="p-1 touch:p-2.5 clip-corner-lg text-muted-foreground hover:text-foreground transition-colors"
                     >
                       <X className="size-3.5" />
                     </button>
@@ -2380,7 +2423,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                           )}
                         placeholder={`Option ${idx + 1}`}
                         maxLength={100}
-                        className="flex-1 bg-secondary/40 rounded-lg px-3 py-1.5 text-sm outline-none focus:ring-1 focus:ring-primary/40 placeholder:text-muted-foreground"
+                        className="flex-1 bg-secondary/40 clip-corner-lg px-3 py-1.5 text-sm outline-none focus:bg-secondary/70 transition-colors placeholder:text-muted-foreground"
                       />
                       <button
                         type="button"
@@ -2391,7 +2434,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                           }
                         }}
                         disabled={pollOptions.length <= 2}
-                        className="p-1 touch:p-2.5 rounded-full text-muted-foreground hover:text-destructive transition-colors disabled:opacity-20"
+                        className="p-1 touch:p-2.5 clip-corner-lg text-muted-foreground hover:text-destructive transition-colors disabled:opacity-20"
                       >
                         <X className="size-3.5" />
                       </button>
@@ -2417,10 +2460,10 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                       type="button"
                       onClick={() => setPollType(t)}
                       className={cn(
-                        "text-xs px-2.5 py-1 touch:px-3.5 touch:py-2 rounded-full border transition-colors",
+                        "text-xs px-2.5 py-1 touch:px-3.5 touch:py-2 clip-corner-lg transition-colors",
                         pollType === t
-                          ? "border-primary bg-primary/10 text-primary font-medium"
-                          : "border-border text-muted-foreground hover:text-foreground hover:border-foreground/30",
+                          ? "bg-primary/10 text-primary font-medium"
+                          : "bg-secondary text-muted-foreground hover:text-foreground",
                       )}
                     >
                       {t === "singlechoice" ? "Single choice" : "Multiple choice"}
@@ -2433,10 +2476,10 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                       type="button"
                       onClick={() => setPollDuration(d)}
                       className={cn(
-                        "text-xs px-2.5 py-1 touch:px-3.5 touch:py-2 rounded-full border transition-colors",
+                        "text-xs px-2.5 py-1 touch:px-3.5 touch:py-2 clip-corner-lg transition-colors",
                         pollDuration === d
-                          ? "border-primary bg-primary/10 text-primary font-medium"
-                          : "border-border text-muted-foreground hover:text-foreground hover:border-foreground/30",
+                          ? "bg-primary/10 text-primary font-medium"
+                          : "bg-secondary text-muted-foreground hover:text-foreground",
                       )}
                     >
                       {d === 0 ? "∞" : `${d}d`}
@@ -2516,6 +2559,10 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
             <WebxdcGamePicker onSelect={registerGame} relays={conversationRelays} />
           ) : (
             <GifPicker
+              // Without the tab row the emoji tab shows, grow by its height so the panel holds still.
+              className={!showPickerTabs && pickerTabs.length > 1
+                ? "h-[calc(min(360px,55dvh)+2.25rem)] touch:h-[calc(min(360px,55dvh)+3rem)]"
+                : undefined}
               onSelect={(gif) => {
                 registerAttachment(gif.url, "image/gif", `${gif.width}x${gif.height}`);
                 setPickerOpen(false);
@@ -2550,7 +2597,7 @@ function ReplyBanner({ event, onCancel }: { event: NostrRumor; onCancel?: () => 
   const held = useMediaHeld(event.pubkey) && !revealed;
 
   return (
-    <div className="flex items-center gap-2 rounded-md bg-secondary/50 py-2 pl-2.5 pr-1 text-sm animate-in slide-in-from-top-2 fade-in-0 duration-200">
+    <div className="flex items-center gap-2 clip-corner-lg bg-secondary/50 py-2 pl-2.5 pr-1 text-sm animate-in slide-in-from-top-2 fade-in-0 duration-200">
       <Reply className="size-4 text-muted-foreground shrink-0" />
       <span className="min-w-0 flex-1 flex items-center gap-1.5 text-muted-foreground">
         {/* Narrow screens: the reply icon says it, and the snippet needs the room. */}
@@ -2572,7 +2619,7 @@ function ReplyBanner({ event, onCancel }: { event: NostrRumor; onCancel?: () => 
         type="button"
         aria-label="Cancel reply"
         onClick={onCancel}
-        className="-mr-0.5 flex size-8 touch:size-11 items-center justify-center rounded-full text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors shrink-0"
+        className="-mr-0.5 flex size-8 touch:size-11 items-center justify-center clip-corner-lg text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors shrink-0"
       >
         <X className="size-4" />
       </button>
@@ -2593,7 +2640,7 @@ function QuoteBanner({ embed, onRemove }: { embed: DetectedEmbed; onRemove: () =
   const isLoading = isAddr ? addrQuery.isLoading : noteQuery.isLoading;
 
   return (
-    <div className="flex items-center gap-2 rounded-md bg-secondary/50 py-2 pl-2.5 pr-1 text-sm animate-in slide-in-from-top-2 fade-in-0 duration-200">
+    <div className="flex items-center gap-2 clip-corner-lg bg-secondary/50 py-2 pl-2.5 pr-1 text-sm animate-in slide-in-from-top-2 fade-in-0 duration-200">
       <Quote className="size-4 text-muted-foreground shrink-0" />
       {event ? (
         <QuoteBannerBody event={event} />
@@ -2606,7 +2653,7 @@ function QuoteBanner({ embed, onRemove }: { embed: DetectedEmbed; onRemove: () =
         type="button"
         aria-label="Remove quote"
         onClick={onRemove}
-        className="-mr-0.5 flex size-8 touch:size-11 items-center justify-center rounded-full text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors shrink-0"
+        className="-mr-0.5 flex size-8 touch:size-11 items-center justify-center clip-corner-lg text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors shrink-0"
       >
         <X className="size-4" />
       </button>

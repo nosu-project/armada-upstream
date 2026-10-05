@@ -31,7 +31,13 @@ describe("screen-share quality policy", () => {
     };
 
     expect(screenShareCaptureOptions(quality)).toEqual({
-      audio: true,
+      audio: {
+        restrictOwnAudio: true,
+        autoGainControl: false,
+        noiseSuppression: false,
+        channelCount: 2,
+        sampleRate: 48_000,
+      },
       contentHint: "detail",
       resolution: { width: 2560, height: 1440, frameRate: 60 },
     });
@@ -55,6 +61,10 @@ describe("screen-share quality policy", () => {
       height: 720,
       encoding: { maxBitrate: 2_500_000, maxFramerate: 60 },
     });
+    // Its own stereo preset, not the room's mic-tuned dtx/red defaults.
+    expect(publish.forceStereo).toBe(true);
+    expect(publish.dtx).toBe(false);
+    expect(publish.red).toBe(false);
   });
 
   it("publishes only the full-resolution encoding in full-quality mode", () => {
@@ -112,23 +122,26 @@ describe("screen-share quality policy", () => {
     expect(screenShareDisplayMediaOptions(quality).audio).toBe(false);
   });
 
-  it("requests audio by default", () => {
-    expect(screenShareCaptureOptions(DEFAULT_SCREEN_SHARE_QUALITY).audio).toBe(true);
-    // The direct getDisplayMedia path carries the flag on the audio track, so
-    // audio is a constraints object rather than a bare boolean.
+  it("requests audio by default, as a constraints object on both capture paths", () => {
+    expect(typeof screenShareCaptureOptions(DEFAULT_SCREEN_SHARE_QUALITY).audio).toBe("object");
     expect(typeof screenShareDisplayMediaOptions(DEFAULT_SCREEN_SHARE_QUALITY).audio)
       .toBe("object");
   });
 
-  it("restricts own audio on the direct-capture path when audio is on", () => {
-    // The direct getDisplayMedia path (screen-share switching) must exclude the
-    // call's own playback so a sharer on speakers doesn't echo participants back
-    // (livekit/client-sdk-js#1799). Chromium/Electron read the flag only as an
-    // audio-track constraint — a top-level member is ignored — so it lives
-    // inside `audio`.
-    const audio = screenShareDisplayMediaOptions(DEFAULT_SCREEN_SHARE_QUALITY)
-      .audio as MediaTrackConstraints;
-    expect(audio.restrictOwnAudio).toBe(true);
+  it("requests fidelity-preserving audio constraints on both capture paths when audio is on", () => {
+    // restrictOwnAudio keeps the call out (livekit/client-sdk-js#1799); the
+    // rest keep speech processing and mono off system audio.
+    for (const options of [
+      screenShareCaptureOptions(DEFAULT_SCREEN_SHARE_QUALITY),
+      screenShareDisplayMediaOptions(DEFAULT_SCREEN_SHARE_QUALITY),
+    ]) {
+      const audio = options.audio as MediaTrackConstraints;
+      expect(audio.restrictOwnAudio).toBe(true);
+      expect(audio.autoGainControl).toBe(false);
+      expect(audio.noiseSuppression).toBe(false);
+      expect(audio.channelCount).toBe(2);
+      expect(audio.sampleRate).toBe(48_000);
+    }
   });
 
   it("falls back when stored JSON is unreadable", () => {

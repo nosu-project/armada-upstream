@@ -20,6 +20,7 @@ import { useWireScopes } from "@/wire/useWireScopes";
 
 import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
 import type { NostrRumor } from "@/lib/nostrRumor";
+import { shareById } from "@/lib/shareRows";
 
 const PAGE_SIZE = 40;
 /** Aux (edit/delete/vote) window fetched alongside each content read. */
@@ -138,6 +139,8 @@ export function useBuzzMessages(
 
   const query = useQuery<NostrRumor[]>({
     queryKey,
+    // Keyed: older pages shift every index (see shareRows).
+    structuralSharing: shareById,
     queryFn: async ({ signal }) => {
       const store = await eventStore;
       const existing = queryClient.getQueryData<NostrRumor[]>(queryKey) ?? [];

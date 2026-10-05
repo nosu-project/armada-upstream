@@ -11,6 +11,9 @@ export interface MessageActionItem {
   onSelect: () => void;
   /** Destructive style; listed last by convention. */
   destructive?: boolean;
+  disabled?: boolean;
   /** Draws a separator before it. */
   groupStart?: boolean;
+  /** Hide/block/report/delete/kick/ban: listed behind the moderation section. */
+  moderation?: boolean;
 }

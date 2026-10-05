@@ -12,7 +12,6 @@ import {
   Pencil,
   UserCheck,
   UserPlus,
-  UserX,
   Users,
   X,
   Zap,
@@ -35,6 +34,9 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useCommunity } from "@/concord/hooks/useCommunityList";
@@ -50,7 +52,8 @@ import { useFollowList } from "@/hooks/useFollowList";
 import { useFollowerCount, useFollowingOf, useSharedFollowers } from "@/hooks/useFollowStats";
 import { useFollowToggle } from "@/hooks/useFollowToggle";
 import { useMediaSrc } from "@/hooks/useMediaPolicy";
-import { useMuteToggle } from "@/hooks/useMuteList";
+import { useUserModeration } from "@/hooks/useUserModeration";
+import { UserModerationMenuSection } from "@/components/chat/ModerationMenuSection";
 import { useNsite } from "@/hooks/useNsite";
 import { useOpenProfile } from "@/hooks/useOpenProfile";
 import { useProfileBadges, type ProfileBadge } from "@/hooks/useProfileBadges";
@@ -95,6 +98,13 @@ const ProfileThemeEditor = lazy(
  * overlay inside the `relative` `<main>`, with Escape and backdrop dismissal
  * hand-wired. Wears the owner's Ditto profile theme (kind 16767), scoped here.
  */
+const MENU_PARTS = {
+  Item: DropdownMenuItem,
+  Sub: DropdownMenuSub,
+  SubTrigger: DropdownMenuSubTrigger,
+  SubContent: DropdownMenuSubContent,
+};
+
 export function ProfileDialog({ pubkey, onClose }: { pubkey: string; onClose: () => void }) {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -196,7 +206,7 @@ function ProfileView({ pubkey, onClose }: { pubkey: string; onClose: () => void 
   const fields = useMemo(() => parseProfileFields(author.data?.event?.content), [author.data?.event]);
   const website = sanitizeUrl(metadata?.website);
   const dittoHref = dittoProfileUrl(pubkey);
-  const mute = useMuteToggle(pubkey);
+  const moderation = useUserModeration(pubkey);
   const { isFollowing, isPending: followPending, toggle: toggleFollow } = useFollowToggle(pubkey);
   const { accept } = useAcceptedDms();
   const { reopen } = useClosedDms();
@@ -268,6 +278,7 @@ function ProfileView({ pubkey, onClose }: { pubkey: string; onClose: () => void 
       className="theme-scope relative h-full overflow-hidden bg-background text-foreground"
       style={pageStyle}
     >
+      {moderation.dialogs}
       {background && backgroundSrc && (
         <div aria-hidden className="absolute inset-0" style={backgroundStyle(background, backgroundSrc)} />
       )}
@@ -276,7 +287,7 @@ function ProfileView({ pubkey, onClose }: { pubkey: string; onClose: () => void 
         size="icon"
         variant="ghost"
         aria-label="Close profile"
-        className="absolute right-3 top-3 z-10 size-9 touch:size-11 rounded-full bg-background/60 backdrop-blur-sm hover:bg-background/80"
+        className="absolute right-3 top-3 z-10 size-9 touch:size-11 clip-corner-lg bg-background/60 backdrop-blur-sm hover:bg-background/80"
         onClick={onClose}
       >
         <X className="size-5" />
@@ -351,7 +362,7 @@ function ProfileView({ pubkey, onClose }: { pubkey: string; onClose: () => void 
                             : <><UserPlus className="size-4 mr-1.5" />Follow</>}
                         </Button>
                       )}
-                      {user && mute.canMute && (
+                      {moderation.actions.length > 0 && (
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
                             <Button
@@ -363,17 +374,8 @@ function ProfileView({ pubkey, onClose }: { pubkey: string; onClose: () => void 
                               <MoreHorizontal className="size-4" />
                             </Button>
                           </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end" className="w-44">
-                            <DropdownMenuItem
-                              disabled={mute.pending}
-                              className={!mute.muted ? "text-destructive focus:text-destructive" : undefined}
-                              onSelect={() => void mute.toggle()}
-                            >
-                              {mute.muted
-                                ? <UserCheck className="mr-2 size-4" />
-                                : <UserX className="mr-2 size-4" />}
-                              {mute.label}
-                            </DropdownMenuItem>
+                          <DropdownMenuContent align="end" className="w-52">
+                            <UserModerationMenuSection parts={MENU_PARTS} actions={moderation.actions} />
                           </DropdownMenuContent>
                         </DropdownMenu>
                       )}
@@ -770,7 +772,7 @@ function PersonRow({ pubkey }: { pubkey: string }) {
       <button
         type="button"
         onClick={() => openProfile(npub ?? pubkey)}
-        className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 touch:py-2.5 hover:bg-secondary transition-colors min-w-0 text-left"
+        className="flex w-full items-center gap-2 clip-corner px-2 py-1.5 touch:py-2.5 hover:bg-secondary transition-colors min-w-0 text-left"
       >
         <Avatar shape={getAvatarShape(metadata)} className="size-7 shrink-0">
           <AvatarImage src={metadata?.picture} imeta={author.data?.imeta?.picture} alt="" />
@@ -794,7 +796,7 @@ function SharedCommunityRow({ entry }: { entry: SharedCommunity }) {
     <li>
       <Link
         to={`/c/${entry.idHex}`}
-        className="flex items-center gap-2 rounded-md px-2 py-1.5 touch:py-2.5 hover:bg-secondary transition-colors min-w-0"
+        className="flex items-center gap-2 clip-corner px-2 py-1.5 touch:py-2.5 hover:bg-secondary transition-colors min-w-0"
       >
         <span className="flex size-7 shrink-0 items-center justify-center overflow-hidden clip-corner-lg bg-primary/15 text-primary text-xs font-bold">
           {iconUrl ? (

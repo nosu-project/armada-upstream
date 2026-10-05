@@ -261,7 +261,7 @@ function FieldRow({
           type="button"
           variant="ghost"
           size="icon"
-          className="h-[18px] w-6 text-muted-foreground disabled:opacity-30"
+          className="h-[18px] w-6 touch:h-11 touch:w-9 text-muted-foreground disabled:opacity-30"
           disabled={!canMoveUp}
           onClick={onMoveUp}
           aria-label="Move field up"
@@ -272,7 +272,7 @@ function FieldRow({
           type="button"
           variant="ghost"
           size="icon"
-          className="h-[18px] w-6 text-muted-foreground disabled:opacity-30"
+          className="h-[18px] w-6 touch:h-11 touch:w-9 text-muted-foreground disabled:opacity-30"
           disabled={!canMoveDown}
           onClick={onMoveDown}
           aria-label="Move field down"
@@ -812,7 +812,7 @@ export function ProfileSettings({ onSaved, saveLabel, centerSave, showNip05 = tr
                   control={form.control}
                   name="bot"
                   render={({ field }) => (
-                    <FormItem className="flex items-center justify-between rounded-lg border bg-card p-3">
+                    <FormItem className="flex items-center justify-between clip-hairline-lg [--edge:var(--border)/0.5] [--fill:var(--card)] [--fill-hover:var(--card)] p-3">
                       <div>
                         <FormLabel className="text-sm">Bot Account</FormLabel>
                         <FormDescription className="text-xs">Mark this account as automated</FormDescription>

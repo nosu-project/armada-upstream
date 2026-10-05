@@ -152,7 +152,7 @@ function conversations(n: number) {
 
 /** Mounted conversation rows (each ConversationRow renders one button). */
 function rowCount(container: HTMLElement): number {
-  return container.querySelectorAll("button.rounded-lg").length;
+  return container.querySelectorAll("button.clip-corner").length;
 }
 
 /** Unmounted rows still showing their spacer. */

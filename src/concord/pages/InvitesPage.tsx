@@ -204,7 +204,7 @@ function StatPopover({
         align="start"
         // Close explicitly: Radix skips `onDismiss` if anything prevented the default.
         onInteractOutside={() => setOpen(false)}
-        className={cn(width, "border-0 p-0 clip-corner-lg bg-chrome")}
+        className={cn(width, "p-0 [--vessel-fill:hsl(var(--chrome))]")}
       >
         {children}
       </PopoverContent>
@@ -451,7 +451,7 @@ export function InviteDetail({
   return (
     <div className="relative flex flex-1 flex-col min-h-0 safe-area-top h-full overflow-hidden">
       <InviteTide hue={hue} />
-      <header className="relative h-12 touch:h-14 mx-2 mt-3 px-2 sidebar:px-3 flex items-center gap-1.5 shrink-0 clip-corner-lg bg-chrome">
+      <header className="relative h-12 touch:h-14 mx-gutter mt-3 px-2 sidebar:px-3 flex items-center gap-1.5 shrink-0 clip-corner-lg bg-chrome">
         <Button
           variant="ghost"
           size="icon"
@@ -757,7 +757,7 @@ export function InvitesPage() {
         <>
           <ServerRail />
           <div className="flex flex-1 sidebar:flex-none sidebar:w-80 min-w-0 flex-col safe-area-top h-full">
-            <header className="relative h-12 touch:h-14 mx-2 mt-3 px-2 sidebar:px-3 flex items-center gap-1.5 shrink-0 clip-corner-lg bg-chrome">
+            <header className="relative h-12 touch:h-14 mx-gutter mt-3 px-2 sidebar:px-3 flex items-center gap-1.5 shrink-0 clip-corner-lg bg-chrome">
               <MailPlus className="size-5 text-muted-foreground shrink-0" />
               <h1 className="font-semibold truncate leading-tight">Invites</h1>
               {unreadCount > 0 && (

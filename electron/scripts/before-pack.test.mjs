@@ -74,7 +74,8 @@ describe("desktop package staging guard", () => {
 // named there too. An omission is invisible until a packaged build boots:
 // `Error: Cannot find module './autoLaunch'` inside app.asar, with the app
 // running fine from `npm start` and every unit test green. This walks the
-// require graph from the entry points and checks each edge against the list.
+// require graph (plus scripts forked by path) from the entry points and checks
+// each edge against the list.
 describe("the packaged file list", () => {
   it("names every shell module reachable from main.js and preload.js", () => {
     const config = parseYaml(fs.readFileSync(path.join(SHELL_DIR, "electron-builder.yml"), "utf8"));
@@ -91,6 +92,10 @@ describe("the packaged file list", () => {
       for (const match of source.matchAll(/require\(\s*["']\.\/([^"']+)["']\s*\)/g)) {
         const target = match[1];
         queue.push(/\.c?js$/.test(target) ? target : `${target}.js`);
+      }
+      // Scripts loaded by path rather than require: preload, utility processes.
+      for (const match of source.matchAll(/path\.join\(__dirname,\s*["']([^"'/]+\.c?js)["']\)/g)) {
+        queue.push(match[1]);
       }
     }
     expect(missing).toEqual([]);

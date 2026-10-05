@@ -429,10 +429,10 @@ function ServerStep({
               type="button"
               onClick={() => onPick(g.id)}
               className={cn(
-                "flex w-full items-center gap-3 rounded-lg border p-2.5 text-left transition-colors",
+                "flex w-full items-center gap-3 clip-corner-lg p-2.5 text-left transition-colors",
                 guildId === g.id
-                  ? "border-primary bg-primary/10"
-                  : "border-border bg-secondary/40 hover:bg-secondary/70",
+                  ? "bg-primary/15 text-foreground"
+                  : "bg-secondary/40 hover:bg-secondary/70",
               )}
             >
               {g.icon ? (
@@ -659,7 +659,7 @@ function ReviewStep(props: {
                   type="button"
                   variant="ghost"
                   size="icon"
-                  className="size-6 shrink-0 text-muted-foreground hover:text-destructive"
+                  className="size-6 touch:size-11 shrink-0 text-muted-foreground hover:text-destructive"
                   aria-label={`Remove ${r}`}
                   onClick={() => props.onRemoveRelay(r)}
                 >

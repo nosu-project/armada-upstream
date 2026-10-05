@@ -1,4 +1,4 @@
-import { Braces, ChevronDown, Copy, EyeOff, Flag, Link2, Link as LinkIcon, Loader2, Maximize2, MessagesSquare, Minimize2, Pencil, Reply, Trash2, UserCheck, UserX, X, Zap } from "lucide-react";
+import { Braces, ChevronDown, Copy, EyeOff, Flag, Link2, Link as LinkIcon, Loader2, Maximize2, MessagesSquare, Minimize2, Pencil, Reply, Trash2, X, Zap } from "lucide-react";
 import { nip19 } from "nostr-tools";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
@@ -33,7 +33,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
-import { DropdownMenuItem, DropdownMenuSeparator } from "@/components/ui/dropdown-menu";
+import { MessageMenuItems } from "@/components/chat/MessageMenuItems";
 import { LazyContextMenuContent, useLazyContextMenu } from "@/components/chat/LazyContextMenu";
 import { EventJsonDialog } from "@/components/EventJsonDialog";
 import { useAndroidBack } from "@/hooks/useAndroidBack";
@@ -42,7 +42,8 @@ import { useAutosizeTextarea } from "@/hooks/useAutosizeTextarea";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useChatScope } from "@/hooks/useChatScope";
 import { useHiddenMessages } from "@/hooks/useHiddenMessages";
-import { useMutedPubkeys, useMuteToggle } from "@/hooks/useMuteList";
+import { useMutedPubkeys } from "@/hooks/useMuteList";
+import { useUserModeration } from "@/hooks/useUserModeration";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useIsTouch } from "@/hooks/useIsMobile";
 import { useLongPress } from "@/hooks/useLongPress";
@@ -163,7 +164,7 @@ export function ThreadMessage({
   const reportTo = reportDestination(chatScope);
   const canReport = Boolean(reportTo && user && !isOwn);
   // Blocking needs no destination; hiding is viewer-local.
-  const mute = useMuteToggle(event.pubkey);
+  const personModeration = useUserModeration(event.pubkey, { report: false });
   const hiddenMessages = useHiddenMessages();
   const reportTarget: ReportTarget =
     isRumor && reportTo?.kind === "network"
@@ -212,27 +213,15 @@ export function ThreadMessage({
     });
   }
   menuActions.push({ id: "json", label: "View event JSON", icon: Braces, onSelect: () => setJsonOpen(true) });
-  // Only the first of hide/block/report/delete opens the moderation group.
   const showHide = hiddenMessages.canHide && !isEditing && !isOwn;
-  const showMute = mute.canMute && !isEditing;
   const showReport = canReport && !isEditing;
   if (showHide) {
     menuActions.push({
       id: "hide",
       label: "Hide message",
       icon: EyeOff,
-      groupStart: true,
+      moderation: true,
       onSelect: () => hiddenMessages.hide(event.id),
-    });
-  }
-  if (showMute) {
-    menuActions.push({
-      id: "mute",
-      label: mute.muted ? "Unblock person" : "Block person",
-      icon: mute.muted ? UserCheck : UserX,
-      destructive: !mute.muted,
-      groupStart: !showHide,
-      onSelect: () => void mute.toggle(),
     });
   }
   if (showReport) {
@@ -241,7 +230,7 @@ export function ThreadMessage({
       label: "Report message",
       icon: Flag,
       destructive: true,
-      groupStart: !showHide && !showMute,
+      moderation: true,
       onSelect: () => setReportOpen(true),
     });
   }
@@ -251,10 +240,17 @@ export function ThreadMessage({
       label: "Delete message",
       icon: Trash2,
       destructive: true,
-      groupStart: !showHide && !showMute && !showReport,
+      // Your own message is housekeeping; someone else's is moderation.
+      groupStart: isOwn,
+      moderation: !isOwn,
       onSelect: () => setConfirmDelete(true),
     });
   }
+  // The person behind the message: the same actions as the member list and profile card.
+  if (!isEditing) {
+    for (const action of personModeration.actions) menuActions.push({ ...action, moderation: true });
+  }
+
   const overflowActions = menuActions.filter((a) => a.id !== "zap");
   const isPost = presentation === "post";
   const isComment = presentation === "comment";
@@ -419,7 +415,7 @@ export function ThreadMessage({
             <button
               type="button"
               onClick={() => onReply(event)}
-              className="inline-flex items-center gap-1 rounded px-2 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-secondary/60 hover:text-foreground touch:py-2"
+              className="inline-flex items-center gap-1 clip-corner px-2 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-secondary/60 hover:text-foreground touch:py-2"
             >
               <Reply className="size-3.5" />
               Reply
@@ -431,7 +427,7 @@ export function ThreadMessage({
       {!isTouch && !isEditing ? (
         // A comment row has its own padding, so the strip sits inside its top edge.
         <div className={cn(
-          "absolute right-2.5 z-20 flex flex-wrap justify-end items-center max-w-[calc(100%-1.25rem)] gap-0.5 rounded-md border bg-background/95 px-1 py-0.5 shadow-sm select-none opacity-0 group-hover/threadmsg:opacity-100 focus-within:opacity-100 transition-opacity",
+          "absolute right-2.5 z-20 flex flex-wrap justify-end items-center max-w-[calc(100%-1.25rem)] gap-0.5 vessel [--vessel-cut:0.45rem] px-1 py-0.5 select-none opacity-0 group-hover/threadmsg:opacity-100 focus-within:opacity-100 transition-opacity",
           isComment ? "top-1" : continuation ? "-top-3" : "-top-2.5",
         )}>
           {toolbar}
@@ -446,18 +442,7 @@ export function ThreadMessage({
         className="w-52"
         collisionPadding={contextMenu.open ? getComposerCollisionPadding(composerBoundsRef) : undefined}
       >
-        {menuActions.map((action, i) => (
-          <div key={action.id}>
-            {action.groupStart && i > 0 && <DropdownMenuSeparator />}
-            <DropdownMenuItem
-              className={action.destructive ? "text-destructive focus:text-destructive" : undefined}
-              onSelect={action.onSelect}
-            >
-              <action.icon className="mr-2 size-4" />
-              {action.label}
-            </DropdownMenuItem>
-          </div>
-        ))}
+        <MessageMenuItems actions={menuActions} />
       </LazyContextMenuContent>
     )}
     {isTouch && (
@@ -510,6 +495,7 @@ export function ThreadMessage({
         }
       />
     )}
+    {personModeration.dialogs}
     </>
   );
 }
@@ -528,6 +514,8 @@ interface ThreadPanelProps {
    * must set it, or reply images reach Blossom in the clear.
    */
   encryptAttachments?: boolean;
+  /** See ChatComposer's. */
+  disappearingTimer?: () => Promise<number>;
   groupId: string;
   canWrite: boolean;
   /** Required for Concord (`relayUrl="dm"`); NIP-29 derives the roster itself. */
@@ -556,7 +544,7 @@ interface ThreadPanelProps {
  * Thread side panel: root, replies and a reply composer. Transport-driven
  * (`threadRepliesFor`/`sendThreadReply`); replies never appear in the main timeline.
  */
-export function ThreadPanel({ root, rootTitle, transport, relayUrl, groupId, canWrite, mentionPubkeys, botCommands, conversationRelays, encryptAttachments = false, autoFocus = false, open = true, permalink, onClose, onExpandChange, title, rootHeader, rootReadOnly = false, documentMarkdown = false, placeholder, readOnlyNotice }: ThreadPanelProps) {
+export function ThreadPanel({ root, rootTitle, transport, relayUrl, groupId, canWrite, mentionPubkeys, botCommands, conversationRelays, encryptAttachments = false, disappearingTimer, autoFocus = false, open = true, permalink, onClose, onExpandChange, title, rootHeader, rootReadOnly = false, documentMarkdown = false, placeholder, readOnlyNotice }: ThreadPanelProps) {
   const isPost = Boolean(rootTitle);
   const replyNoun = isPost ? "comment" : "reply";
   const replyNounPlural = isPost ? "comments" : "replies";
@@ -754,7 +742,7 @@ export function ThreadPanel({ root, rootTitle, transport, relayUrl, groupId, can
     <aside className={cn(
       // `thread:ml-0` drops the left gap only at ≥1200px (in-flow); below, it
       // overlays the chat and keeps the gutter.
-      "flex flex-col min-h-0 flex-1 min-w-0 m-2 sidebar:my-3 sidebar:mr-2 thread:ml-0 p-1.5 clip-corner-lg bg-chrome",
+      "flex flex-col min-h-0 flex-1 min-w-0 mt-stack mb-2 sidebar:mb-3 mx-gutter thread:ml-0 p-1.5 clip-corner-lg bg-chrome",
     )}>
       <div className="flex items-center justify-between px-2 py-1 shrink-0">
         <div className="flex items-center gap-2 min-w-0">
@@ -802,7 +790,7 @@ export function ThreadPanel({ root, rootTitle, transport, relayUrl, groupId, can
             <button
               type="button"
               onClick={() => scrollToBottom()}
-              className="pointer-events-auto inline-flex items-center gap-1.5 rounded-full border border-border/60 bg-secondary/90 backdrop-blur px-4 py-2 text-xs font-medium text-foreground shadow-lg hover:bg-secondary transition-colors"
+              className="pointer-events-auto inline-flex items-center gap-1.5 clip-corner-lg bg-secondary/90 backdrop-blur px-4 py-2 text-xs font-medium text-foreground shadow-lg hover:bg-secondary transition-colors"
               aria-label="Jump to latest replies"
             >
               <ChevronDown className="size-4" />
@@ -818,6 +806,7 @@ export function ThreadPanel({ root, rootTitle, transport, relayUrl, groupId, can
           botCommands={botCommands}
           conversationRelays={conversationRelays}
           encryptAttachments={encryptAttachments}
+          disappearingTimer={disappearingTimer}
           groupId={groupId}
           messages={[]}
           mentionPubkeys={mentionPubkeys}

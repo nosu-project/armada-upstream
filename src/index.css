@@ -63,9 +63,21 @@
      * max(0.25rem, inset) keeps the tight desktop look while clearing the bar on
      * a landscape phone. */
     --safe-area-pad-bottom-tight: max(0.25rem, var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
+    /* The desktop grid. Panes sit on 12px side gutters; top bars span 12-60px and
+     * bottom bars end 12px up. Below a top bar, content steps by 20px (`stack`), so
+     * it starts at 80px, where the rail's second entry starts too (48px icons, 20px
+     * gaps, a divider adding one more gap). Phones keep 8px. */
+    --gutter: 0.5rem;
+    --stack: 0.5rem;
     /* System emoji first; the bundled Twemoji only fills what they lack. Read
      * by Tailwind's `font-sans`/`font-emoji` and the emoji picker's shadow DOM. */
     --emoji-fonts: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", "Twemoji Mozilla", "Android Emoji", "Armada Twemoji";
+  }
+  @media (min-width: 900px) {
+    :root {
+      --gutter: 0.75rem;
+      --stack: 1.25rem;
+    }
   }
 }
 
@@ -270,6 +282,29 @@
 }
 
 @layer utilities {
+  /*
+   * A timeline row the browser may skip laying out while offscreen: a long
+   * scroll-back keeps thousands of rows mounted, and every page then forced a
+   * layout of all of them. Skippable only once `data-settled` (MessageTimeline),
+   * i.e. after one real layout recorded its size: an estimated row resizes as it
+   * scrolls into view and shifts what the reader is looking at. `auto` implies
+   * paint containment, which clips at the padding box, so the row reaches up
+   * over the one above for the hover toolbar (MessageRow, `-top-3`); that reach
+   * passes pointers through to the row above.
+   */
+  .timeline-row {
+    contain-intrinsic-size: auto 4rem;
+    padding-top: 0.75rem;
+    margin-top: -0.75rem;
+    pointer-events: none;
+  }
+  .timeline-row[data-settled] {
+    content-visibility: auto;
+  }
+  .timeline-row > * {
+    pointer-events: auto;
+  }
+
   /*
    * Always-visible, styled, grabbable scrollbar for primary scroll regions
    * (chat message lists, thread panels). Reserves a stable gutter so the bar
@@ -503,7 +538,13 @@
   }
 
   /* Menu row: chamfered highlight plus the gutter tick, lit by Radix's
-     data-highlighted so keyboard focus shows it as well as hover. */
+     data-highlighted so keyboard focus shows it as well as hover. The cut and
+     radius sit concentric inside a `.vessel` at its 4px (`p-1`) padding: a 45°
+     chamfer inset by d shrinks by d·(2−√2). */
+  .menu-row {
+    --cut: calc(var(--vessel-cut, 0.6rem) - 0.15rem);
+    border-radius: 0.25rem;
+  }
   .menu-row::before {
     content: "";
     position: absolute;
@@ -519,6 +560,7 @@
     transition: height 120ms ease, opacity 120ms ease;
   }
   .menu-row[data-highlighted]::before,
+  .menu-row[data-selected="true"]::before,
   .menu-row[data-state="open"]::before {
     height: 55%;
     opacity: 1;
@@ -540,6 +582,9 @@
     --fill: var(--background) / 0.4;
     --fill-hover: var(--background) / 0.6;
     --edge: var(--border) / 0.6;
+    /* What a translucent fill sits on. Without it the fill composites over the
+       edge colour, and every card reads as a tint of the border. */
+    --fill-base: var(--background);
     position: relative;
     isolation: isolate;
     border-radius: 0.55rem;
@@ -570,11 +615,20 @@
       0 100%,
       0 var(--cut)
     );
-    background: hsl(var(--fill));
-    transition: background-color 150ms;
+    background-color: hsl(var(--fill-base));
+    background-image: linear-gradient(hsl(var(--fill)), hsl(var(--fill)));
   }
   .clip-hairline-lg:hover::before {
-    background: hsl(var(--fill-hover));
+    background-image: linear-gradient(hsl(var(--fill-hover)), hsl(var(--fill-hover)));
+  }
+  :is(.bg-chrome, .chrome-dialog) .clip-hairline-lg {
+    --fill-base: var(--chrome);
+  }
+  .bg-chrome-deep .clip-hairline-lg {
+    --fill-base: var(--chrome-deep);
+  }
+  .vessel .clip-hairline-lg {
+    --fill-base: var(--popover);
   }
 
   /*
@@ -786,7 +840,9 @@
 
 /*
  * Theme background image. Each opaque surface repaints the same fixed image under
- * its own tint, so layers beneath it (swipe panels, overlays) stay hidden.
+ * its own tint, so layers beneath it (swipe panels, overlays) stay hidden. Any
+ * transform on an ancestor (even translate-x-0) detaches `fixed` and the surface
+ * paints its own misaligned copy: slide panels rest at `transform-none`.
  */
 html.theme-bg body,
 html.theme-bg #root .bg-background {

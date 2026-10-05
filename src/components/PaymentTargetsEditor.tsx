@@ -148,7 +148,7 @@ export const PaymentTargetsEditor = forwardRef<PaymentTargetsEditorHandle>(
                 return (
                   <div
                     key={draft.key}
-                    className="flex items-center gap-3 rounded-lg border bg-card/50 p-3"
+                    className="flex items-center gap-3 clip-hairline-lg [--edge:var(--border)/0.5] [--fill:var(--card)/0.5] [--fill-hover:var(--card)/0.5] p-3"
                   >
                     <div className="flex items-center gap-2 w-28 shrink-0 text-sm font-medium">
                       <PaymentMethodIcon method={method} className="text-muted-foreground" />
@@ -166,7 +166,7 @@ export const PaymentTargetsEditor = forwardRef<PaymentTargetsEditorHandle>(
                       variant="ghost"
                       size="icon"
                       onClick={() => removeDraft(draft.key)}
-                      className="h-9 w-9 shrink-0 text-muted-foreground hover:text-destructive"
+                      className="h-9 w-9 touch:size-11 shrink-0 text-muted-foreground hover:text-destructive"
                       title={`Remove ${method.label}`}
                       aria-label={`Remove ${method.label}`}
                     >
@@ -205,9 +205,9 @@ export const PaymentTargetsEditor = forwardRef<PaymentTargetsEditorHandle>(
             <DropdownMenuTrigger asChild>
               <Button
                 type="button"
-                variant="outline"
+                variant="secondary"
                 disabled={availableMethods.length === 0}
-                className="w-full h-11 gap-2 border-dashed"
+                className="w-full h-11 gap-2 clip-corner-lg"
               >
                 <Plus className="h-4 w-4" />
                 Add donation

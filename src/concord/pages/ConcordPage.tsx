@@ -101,7 +101,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ChannelNavContext } from "@/contexts/ChannelNavContext";
-import { MemberActionsContext, type MemberActionItem, type MemberActionsValue } from "@/contexts/MemberActionsContext";
+import { MemberActionsContext, type MemberActionItem, type MemberActionsValue, type MemberRolePicker } from "@/contexts/MemberActionsContext";
 import { MemberRolesContext, type MemberRolesValue } from "@/contexts/MemberRolesContext";
 import type { AppScope } from "@/contexts/AppsContext";
 import { ComposerBoundsProvider } from "@/contexts/ComposerBoundsContext";
@@ -157,7 +157,7 @@ import { RotateKeysDialog } from "@/concord/components/RotateKeysDialog";
 import type { BanPhase } from "@/concord/hooks/useModeration";
 import { hasForeignLiveLinks } from "@/concord/lib/control";
 import { replyTargetOf } from "@/concord/lib/chat";
-import { communityTimerNotice } from "@/concord/lib/disappearing";
+import { communityTimerNotice, messageExpirationOf } from "@/concord/lib/disappearing";
 import { sweepExpiredCommunityRumors } from "@/concord/lib/rumorStore";
 import { useDecryptedImage } from "@/concord/hooks/useDecryptedImage";
 import { useGuestbook } from "@/concord/hooks/useGuestbook";
@@ -187,6 +187,7 @@ import { completeMemberlist } from "@/concord/lib/guestbook";
 import { badgeOf, byDisplayOrder, canActOnMember, canActOnPosition, isAuthorized, isAuthorizedIn, MAX_ROLES_PER_MEMBER, Permissions, stockTierOf, tierMoves } from "@/concord/lib/roles";
 import { channelGitRepositoryAttachments, type Channel, type Community, type ImagePointer } from "@/concord/lib/types";
 import { matchGitTicketRepository, parseGitRepositoryAddress, sortAndDedupeGitTimelineActivities, trustedGitStatusAuthors, type GitComment, type GitStatusKind, type GitTicket } from "@/lib/gitActivity";
+import { tierChangeConfirm } from "@/lib/memberTierConfirm";
 import { cn, pickDefaultChannel } from "@/lib/utils";
 import { chatRoute, parseChatRoute, type ChatRoute, type Concord2Pane } from "@/lib/routes";
 import { useLegacyFocusParams } from "@/hooks/useLegacyFocusParams";
@@ -202,6 +203,7 @@ const LAST_CHANNEL_SETTLE_MS = 1500;
 
 /** Stable empty replies array so a thread-less row keeps a constant prop. */
 const EMPTY_REPLIES: ChatMsg[] = [];
+const NO_MEMBER_ACTIONS: MemberActionItem[] = [];
 
 /** Shared empty feed, so a chat-presented channel keeps a stable reference. */
 const NO_POSTS: ForumPost[] = [];
@@ -286,11 +288,6 @@ interface ChatMessage2Props {
   replyParent: ChatMsg | undefined;
   onJumpToReply: (id: string) => void;
   onDelete: ((event: ChatMsg) => void) | undefined;
-  /** Kick/ban openers; `canKick`/`canBan` gate visibility per author (strict outrank). */
-  onKick: ((pubkey: string) => void) | undefined;
-  onBan: ((pubkey: string) => void) | undefined;
-  canKick: boolean;
-  canBan: boolean;
   /** Pins (CORD-04 §7) — both present only for PIN_MESSAGES holders. */
   isPinned: boolean;
   onTogglePin: ((event: ChatMsg) => void) | undefined;
@@ -326,10 +323,6 @@ const ConcordChatMessage = memo(function ConcordChatMessage({
   replyParent,
   onJumpToReply,
   onDelete,
-  onKick,
-  onBan,
-  canKick,
-  canBan,
   isPinned,
   onTogglePin,
   onRetry,
@@ -386,10 +379,6 @@ const ConcordChatMessage = memo(function ConcordChatMessage({
       onReply={onReply}
       replyContext={replyContext}
       onDelete={onDelete}
-      onKick={onKick}
-      onBan={onBan}
-      canKick={canKick}
-      canBan={canBan}
       isPinned={isPinned}
       onTogglePin={onTogglePin}
       // Only a failed row gets Retry/Discard closures (keeps ChatMessage's memo).
@@ -514,7 +503,7 @@ export const ChannelRow = memo(function ChannelRow({
               }}
               className={cn(
                 // Selected: filled primary with the house cut-corner chamfer (matches ChannelSidebar).
-                "flex flex-1 min-w-0 items-center gap-2 pl-3 pr-2 py-1.5 touch:py-3 text-sm transition-colors text-left",
+                "flex flex-1 min-w-0 items-center gap-2 px-2 py-1.5 touch:py-3 text-sm transition-colors text-left",
                 !active && "text-muted-foreground group-hover/row:text-foreground",
                 // Unread reads brighter + bold, except muted channels.
                 !active && hasUnread && !muted && "text-foreground font-semibold",
@@ -549,7 +538,7 @@ export const ChannelRow = memo(function ChannelRow({
                 aria-label={occupied ? "Join call" : "Start call"}
                 title={occupied ? "Join call" : "Start call"}
                 className={cn(
-                  "shrink-0 flex items-center justify-center size-7 mr-1 rounded transition-opacity",
+                  "shrink-0 flex items-center justify-center size-7 mr-2 clip-corner transition-opacity",
                   "opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100",
                   // No hover on touch: hidden unless a call is live.
                   !occupied && "touch:hidden",
@@ -588,7 +577,7 @@ export const ChannelRow = memo(function ChannelRow({
         {onSetCategory && (
           <ContextMenuSub>
             <ContextMenuSubTrigger>
-              <Folder className="mr-2 size-4" />
+              <Folder className="size-4" />
               Move to category
             </ContextMenuSubTrigger>
             <ContextMenuSubContent className="w-52">
@@ -984,6 +973,9 @@ export function ConcordPage() {
 
   const baseCommunity = useCommunity(communityId);
   const { data: folded } = useControlFold(baseCommunity);
+  // What `useSendMessage` stamps messages with, so their attachments can expire alongside.
+  const messageTimer = messageExpirationOf(folded?.metadata);
+  const resolveMessageTimer = useCallback(async () => messageTimer, [messageTimer]);
   const community = useMemo<Community | undefined>(() => {
     if (!baseCommunity) return undefined;
     if (!folded?.metadata) return baseCommunity;
@@ -2284,89 +2276,109 @@ export function ConcordPage() {
     toggleRole: (pk: string, roleId: string, on: boolean) => Promise<void>;
     kick: (pk: string) => void;
     unban: (pk: string) => void;
-    banLabel: (pk: string) => string;
   } | null>(null);
   const handleSetRoleStable = useCallback((pk: string, roles: string[]) => memberOpsRef.current?.setRole(pk, roles), []);
   const handleToggleRoleStable = useCallback(
     (pk: string, roleId: string, on: boolean) => memberOpsRef.current?.toggleRole(pk, roleId, on),
     [],
   );
-  const handleKickMember = useCallback((pk: string) => memberOpsRef.current?.kick(pk), []);
   const handleUnbanMember = useCallback((pk: string) => memberOpsRef.current?.unban(pk), []);
-  const memberBanLabel = useCallback((pk: string) => memberOpsRef.current?.banLabel(pk) ?? "Ban", []);
   const openAddMembers = useCallback(() => setAddMembersOpen(true), []);
   const closeMembers = useCallback(() => setMembersOpen(false), [setMembersOpen]);
 
   // Moderate a person from wherever they were clicked, gated like the message menu.
-  const memberActionsValue = useMemo<MemberActionsValue>(
-    () => ({
+  // Every chat row consumes this, so it depends only on identity-stable inputs (not
+  // `moderation`, a fresh object per render) and hands back one array per pubkey.
+  const bannedHere = moderation.banned;
+  const canRekeyHere = moderation.canRekey;
+  const memberActionsValue = useMemo<MemberActionsValue>(() => {
+    const actionsCache = new Map<string, MemberActionItem[]>();
+    const pickerCache = new Map<string, MemberRolePicker | undefined>();
+    const buildActions = (pubkey: string): MemberActionItem[] => {
+      if (!user || pubkey === user.pubkey) return NO_MEMBER_ACTIONS;
+      const out: MemberActionItem[] = [];
+      // Tier moves first: the card is where anyone clicked lands, poster or not.
+      if (canManageRoles && roster) {
+        const current = stockTierOf(roster, pubkey);
+        for (const tier of tierMoves(roster, user.pubkey, ownerHex, pubkey)) {
+          out.push(
+            tier === "admin"
+              ? {
+                id: "make-admin",
+                label: "Make admin",
+                icon: Crown,
+                confirm: tierChangeConfirm("concord", "admin"),
+                onSelect: () => void handleSetRoleStable(pubkey, ["admin"]),
+              }
+              : tier === "moderator"
+                ? {
+                  id: "make-moderator",
+                  label: current === "admin" ? "Demote to moderator" : "Make moderator",
+                  icon: Shield,
+                  confirm: tierChangeConfirm("concord", current === "admin" ? "demote" : "moderator"),
+                  onSelect: () => void handleSetRoleStable(pubkey, ["moderator"]),
+                }
+                : {
+                  id: "remove-tier",
+                  label: current === "admin" ? "Remove admin" : "Remove moderator",
+                  icon: ShieldOff,
+                  confirm: tierChangeConfirm("concord", "remove"),
+                  onSelect: () => void handleSetRoleStable(pubkey, []),
+                },
+          );
+        }
+      }
+      if (canKickAny && roster && canActOnMember(roster, user.pubkey, ownerHex, pubkey, Permissions.KICK)) {
+        out.push({
+          id: "kick",
+          label: "Kick",
+          icon: UserMinus,
+          // The confirm dialog, not an instant kick: easy to hit by accident.
+          onSelect: () => setKickTarget(pubkey),
+        });
+      }
+      if (bannedHere.has(pubkey)) {
+        // A banned member's old messages outlive their roster row.
+        if (canBanAny) {
+          out.push({ id: "unban", label: "Unban", icon: ShieldOff, onSelect: () => handleUnbanMember(pubkey) });
+        }
+      } else if (canBanAny && roster && canActOnMember(roster, user.pubkey, ownerHex, pubkey, Permissions.BAN)) {
+        out.push({
+          id: "ban",
+          // A Private ban rotates keys unless someone ELSE holds a live link.
+          label: folded && canRekeyHere && !hasForeignLiveLinks(folded, user.pubkey, pubkey) ? "Ban & lock out" : "Ban",
+          icon: Ban,
+          destructive: true,
+          onSelect: () => setBanTarget(pubkey),
+        });
+      }
+      return out.length > 0 ? out : NO_MEMBER_ACTIONS;
+    };
+    // The Roles picker on the card too, only if some role is assignable.
+    const buildPicker = (pubkey: string): MemberRolePicker | undefined => {
+      if (!canManageRoles || !roleCatalog?.some((r) => r.assignable) || !canEditMemberRoles(pubkey)) return undefined;
+      return {
+        catalog: roleCatalog,
+        heldRoleIds: intendedRolesFor(pubkey),
+        isToggling: isRoleTogglePending,
+        onToggle: handleToggleRoleStable,
+      };
+    };
+    return {
       actionsFor: (pubkey: string) => {
-        if (!user || pubkey === user.pubkey) return [];
-        const out: MemberActionItem[] = [];
-        // Tier moves first: the card is where anyone clicked lands, poster or not.
-        if (canManageRoles && roster) {
-          const current = stockTierOf(roster, pubkey);
-          for (const tier of tierMoves(roster, user.pubkey, ownerHex, pubkey)) {
-            out.push(
-              tier === "admin"
-                ? { id: "make-admin", label: "Make admin", icon: Crown, onSelect: () => void handleSetRoleStable(pubkey, ["admin"]) }
-                : tier === "moderator"
-                  ? {
-                    id: "make-moderator",
-                    label: current === "admin" ? "Demote to moderator" : "Make moderator",
-                    icon: Shield,
-                    onSelect: () => void handleSetRoleStable(pubkey, ["moderator"]),
-                  }
-                  : {
-                    id: "remove-tier",
-                    label: current === "admin" ? "Remove admin" : "Remove moderator",
-                    icon: ShieldOff,
-                    onSelect: () => void handleSetRoleStable(pubkey, []),
-                  },
-            );
-          }
-        }
-        if (canKickAny && moderation.canKick(pubkey)) {
-          out.push({
-            id: "kick",
-            label: "Kick",
-            icon: UserMinus,
-            // The confirm dialog, not an instant kick: easy to hit by accident.
-            onSelect: () => setKickTarget(pubkey),
-          });
-        }
-        if (moderation.banned.has(pubkey)) {
-          // A banned member's old messages outlive their roster row.
-          if (canBanAny) {
-            out.push({ id: "unban", label: "Unban", icon: ShieldOff, onSelect: () => handleUnbanMember(pubkey) });
-          }
-        } else if (canBanAny && moderation.canBan(pubkey)) {
-          out.push({
-            id: "ban",
-            label: memberBanLabel(pubkey),
-            icon: Ban,
-            destructive: true,
-            onSelect: () => setBanTarget(pubkey),
-          });
-        }
-        return out;
+        let hit = actionsCache.get(pubkey);
+        if (!hit) actionsCache.set(pubkey, (hit = buildActions(pubkey)));
+        return hit;
       },
-      // The Roles picker on the card too, only if some role is assignable.
       rolePickerFor: (pubkey: string) => {
-        if (!canManageRoles || !roleCatalog?.some((r) => r.assignable) || !canEditMemberRoles(pubkey)) return undefined;
-        return {
-          catalog: roleCatalog,
-          heldRoleIds: intendedRolesFor(pubkey),
-          isToggling: isRoleTogglePending,
-          onToggle: handleToggleRoleStable,
-        };
+        if (!pickerCache.has(pubkey)) pickerCache.set(pubkey, buildPicker(pubkey));
+        return pickerCache.get(pubkey);
       },
-    }),
-    [
-      user, canKickAny, canBanAny, moderation, handleUnbanMember, memberBanLabel, roster, ownerHex, handleSetRoleStable,
-      canManageRoles, roleCatalog, canEditMemberRoles, intendedRolesFor, isRoleTogglePending, handleToggleRoleStable,
-    ],
-  );
+    };
+  }, [
+    user, canKickAny, canBanAny, bannedHere, canRekeyHere, handleUnbanMember, folded, roster, ownerHex, handleSetRoleStable,
+    canManageRoles, roleCatalog, canEditMemberRoles, intendedRolesFor, isRoleTogglePending, handleToggleRoleStable,
+  ]);
 
   const suppressChannelClick = channelDrag.shouldSuppressClick;
   const handleSelectChannel = useCallback(
@@ -2548,10 +2560,6 @@ export function ConcordPage() {
     toggleRole: handleToggleRole,
     kick: (pk: string) => void moderation.kick({ target: pk }).catch(() => {}),
     unban: (pk: string) => void moderation.unban({ target: pk }).catch(() => {}),
-    banLabel: (pk: string) =>
-      folded && user && moderation.canRekey && !hasForeignLiveLinks(folded, user.pubkey, pk)
-        ? "Ban & lock out"
-        : "Ban",
   };
 
   // A ban rotates keys unless someone ELSE holds a live link (it'd be stranded).
@@ -2622,7 +2630,7 @@ export function ConcordPage() {
       />
       </span>
       {dragged && (
-        <span className="pointer-events-none absolute inset-x-0 inset-y-px clip-corner-lg border-2 border-dashed border-primary/50 bg-primary/5" />
+        <span className="pointer-events-none absolute inset-x-0 inset-y-px clip-hairline-lg [--edge:var(--primary)/0.5] [--fill:var(--primary)/0.05] [--fill-hover:var(--primary)/0.05]" />
       )}
       </div>
     );
@@ -2658,7 +2666,7 @@ export function ConcordPage() {
         community ? (
           <Collapsible open={communityMenuOpen} onOpenChange={setCommunityMenuOpen}>
             <CollapsibleContent className="overflow-hidden data-[state=open]:animate-collapsible-down data-[state=closed]:animate-collapsible-up">
-              <div className="mx-2 mb-2 mt-1 p-1 space-y-0.5 clip-corner-lg bg-secondary">
+              <div className="mx-3 mb-2 mt-1 p-1 space-y-0.5 clip-corner-lg bg-secondary">
                 {[
                   {
                     show: Object.keys(unreadByChannel).length > 0,
@@ -2792,7 +2800,7 @@ export function ConcordPage() {
                 onNavigate?.();
               }}
               className={cn(
-                "flex w-full items-center gap-2 pl-3 pr-2 py-1.5 touch:py-3 text-sm transition-colors text-left clip-corner-lg",
+                "flex w-full items-center gap-2 px-2 py-1.5 touch:py-3 text-sm transition-colors text-left clip-corner-lg",
                 view === "all"
                   ? "bg-primary text-primary-foreground font-medium"
                   : "text-muted-foreground hover:text-foreground hover:bg-foreground/5",
@@ -2809,7 +2817,7 @@ export function ConcordPage() {
                 onNavigate?.();
               }}
               className={cn(
-                "flex w-full items-center gap-2 pl-3 pr-2 py-1.5 touch:py-3 text-sm transition-colors text-left clip-corner-lg",
+                "flex w-full items-center gap-2 px-2 py-1.5 touch:py-3 text-sm transition-colors text-left clip-corner-lg",
                 view === "mentions"
                   ? "bg-primary text-primary-foreground font-medium"
                   : "text-muted-foreground hover:text-foreground hover:bg-foreground/5",
@@ -2835,7 +2843,7 @@ export function ConcordPage() {
                 onNavigate?.();
               }}
               className={cn(
-                "flex w-full items-center gap-2 pl-3 pr-2 py-1.5 touch:py-3 text-sm transition-colors text-left clip-corner-lg",
+                "flex w-full items-center gap-2 px-2 py-1.5 touch:py-3 text-sm transition-colors text-left clip-corner-lg",
                 view === "threads"
                   ? "bg-primary text-primary-foreground font-medium"
                   : "text-muted-foreground hover:text-foreground hover:bg-foreground/5",
@@ -2861,7 +2869,7 @@ export function ConcordPage() {
                   onNavigate?.();
                 }}
                 className={cn(
-                  "flex w-full items-center gap-2 pl-3 pr-2 py-1.5 touch:py-3 text-sm transition-colors text-left clip-corner-lg",
+                  "flex w-full items-center gap-2 px-2 py-1.5 touch:py-3 text-sm transition-colors text-left clip-corner-lg",
                   view === "projects"
                     ? "bg-primary text-primary-foreground font-medium"
                     : "text-muted-foreground hover:text-foreground hover:bg-foreground/5",
@@ -2927,10 +2935,10 @@ export function ConcordPage() {
             <div
               data-ch-newzone
               className={cn(
-                "mt-2 flex items-center justify-center gap-1.5 clip-corner-lg border-2 border-dashed px-2 py-3 text-2xs font-semibold uppercase tracking-wider transition-colors",
+                "mt-2 flex items-center justify-center gap-1.5 clip-hairline-lg px-2 py-3 text-2xs font-semibold uppercase tracking-wider transition-colors",
                 channelDrag.target?.newCategory
-                  ? "border-primary bg-primary/5 text-primary"
-                  : "border-primary/50 text-muted-foreground/70",
+                  ? "[--edge:var(--primary)] [--fill:var(--primary)/0.05] [--fill-hover:var(--primary)/0.05] text-primary"
+                  : "[--edge:var(--primary)/0.5] [--fill:var(--background)/0.4] [--fill-hover:var(--background)/0.4] text-muted-foreground/70",
               )}
             >
               <Plus className="size-3.5" />
@@ -3057,7 +3065,7 @@ export function ConcordPage() {
 
               <DropdownMenu>
                 <ChatHeaderMenuTrigger />
-                <DropdownMenuContent align="end" className="w-52 p-1.5">
+                <DropdownMenuContent align="end" className="w-52">
                   <ChatHeaderViewItems
                     onSearch={view === "channel" && channel ? () => setSearchOpen(true) : undefined}
                     onMembers={() => setMembersOpen(true)}
@@ -3065,33 +3073,33 @@ export function ConcordPage() {
                     onToggleMembers={toggleMembersVisible}
                   />
                   {view === "channel" && channel && channel.view !== "forum" && calendar.canModerate && calendar.events.length === 0 && (
-                    <DropdownMenuItem className="px-3 py-2" onClick={() => setCreateEventOpen(true)}>
+                    <DropdownMenuItem onClick={() => setCreateEventOpen(true)}>
                       <CalendarClock className="size-4" />
                       Schedule an event
                     </DropdownMenuItem>
                   )}
                   {view === "channel" && channel?.isPrivate && addableChannelRoles.length > 0 && (
-                    <DropdownMenuItem className="px-3 py-2" onClick={openAddMembers}>
+                    <DropdownMenuItem onClick={openAddMembers}>
                       <UserPlus className="size-4" />
                       Add members
                     </DropdownMenuItem>
                   )}
                   {user && !dissolved && (
-                    <DropdownMenuItem className="px-3 py-2" onClick={() => setInviteOpen(true)}>
+                    <DropdownMenuItem onClick={() => setInviteOpen(true)}>
                       <UserPlus className="size-4" />
                       Invite people
                     </DropdownMenuItem>
                   )}
                   {/* A forum's alternate view (CORD-03 §2): the plain timeline. */}
                   {view === "channel" && channel?.view === "forum" && (
-                    <DropdownMenuItem className="px-3 py-2" onClick={toggleForumPresentation}>
+                    <DropdownMenuItem onClick={toggleForumPresentation}>
                       {forumOpensAsChat ? <MessageSquareText className="size-4" /> : <Hash className="size-4" />}
                       {forumOpensAsChat ? "View as posts" : "View as chat"}
                     </DropdownMenuItem>
                   )}
                   {user && community && channel && (
                     <DropdownMenuItem
-                      className="px-3 py-2"
+                     
                       onClick={() => toggleConcordChannelMute("c2", community.idHex, channel.idHex)}
                     >
                       {channelMuted ? <Bell className="size-4" /> : <BellOff className="size-4" />}
@@ -3100,7 +3108,7 @@ export function ConcordPage() {
                   )}
                   {canManageChannels && community && !dissolved && (
                     communityPause ? (
-                      <DropdownMenuItem className="px-3 py-2" onClick={() => clearPause.mutate()}>
+                      <DropdownMenuItem onClick={() => clearPause.mutate()}>
                         <Play className="size-4" />
                         Resume community
                       </DropdownMenuItem>
@@ -3108,7 +3116,7 @@ export function ConcordPage() {
                       // A duration submenu, not a toggle: pausing freezes chat for
                       // everyone, and a bounded pause lifts on its own (CORD-04 §8).
                       <DropdownMenuSub>
-                        <DropdownMenuSubTrigger className="px-3 py-2">
+                        <DropdownMenuSubTrigger>
                           <Pause className="size-4" />
                           Pause community
                         </DropdownMenuSubTrigger>
@@ -3117,7 +3125,7 @@ export function ConcordPage() {
                             {PAUSE_DURATIONS.map((d) => (
                               <DropdownMenuItem
                                 key={d.label}
-                                className="px-3 py-2"
+                               
                                 onClick={() =>
                                   setPaused.mutate(
                                     d.secs === undefined
@@ -3345,6 +3353,7 @@ export function ConcordPage() {
                       canMentionEveryone={transport.canMentionEveryone}
                       conversationRelays={community?.relays}
                       canSend={composerCanSend}
+                      disappearingTimer={resolveMessageTimer}
                       onSubmit={handleCreatePost}
                       onCancel={() => setNewPostOpen(false)}
                     />
@@ -3361,6 +3370,7 @@ export function ConcordPage() {
                       canWrite={canWrite}
                       mentionPubkeys={memberPubkeys}
                       conversationRelays={community?.relays}
+                      disappearingTimer={resolveMessageTimer}
                       autoFocus={threadAutoFocus}
                       onBack={closeThread}
                     />
@@ -3452,10 +3462,6 @@ export function ConcordPage() {
                         replyParent={replyId ? (messagesById.get(replyId) ?? olderReplyParents.get(replyId)) : undefined}
                         onJumpToReply={jumpWithinChannel}
                         onDelete={transport.deleteMessage}
-                        onKick={canKickAny ? setKickTarget : undefined}
-                        onBan={canBanAny ? setBanTarget : undefined}
-                        canKick={canKickAny && moderation.canKick(msg.pubkey)}
-                        canBan={canBanAny && moderation.canBan(msg.pubkey)}
                         onRetry={transport.retry}
                         onDiscard={transport.discard}
                         isEditing={editingId === msg.id}
@@ -3470,7 +3476,7 @@ export function ConcordPage() {
 
                   {presentation !== "feed" && typingPubkeys.length > 0 && <TypingIndicator pubkeys={typingPubkeys} />}
                   {dissolved ? (
-                    <div className="mx-2 mb-3 mt-1 px-3 py-3 clip-corner-lg bg-destructive/10 flex items-center gap-3">
+                    <div className="mx-gutter mb-3 mt-1 px-3 py-3 clip-corner-lg bg-destructive/10 flex items-center gap-3">
                       <Trash2 className="size-5 shrink-0 text-destructive" />
                       <div className="min-w-0 flex-1 text-sm">
                         <p className="font-medium text-destructive">This community was dissolved by its owner.</p>
@@ -3489,7 +3495,7 @@ export function ConcordPage() {
                       </Button>
                     </div>
                   ) : excluded ? (
-                    <div className="mx-2 mb-3 mt-1 px-3 py-3 clip-corner-lg bg-muted/60 flex items-center gap-3">
+                    <div className="mx-gutter mb-3 mt-1 px-3 py-3 clip-corner-lg bg-muted/60 flex items-center gap-3">
                       <Lock className="size-5 shrink-0 text-muted-foreground" />
                       <div className="min-w-0 flex-1 text-sm">
                         <p className="font-medium">You no longer have access to this community.</p>
@@ -3509,7 +3515,7 @@ export function ConcordPage() {
                       </Button>
                     </div>
                   ) : stranded ? (
-                    <div className="mx-2 mb-3 mt-1 px-3 py-3 clip-corner-lg bg-muted/60 flex items-center gap-3">
+                    <div className="mx-gutter mb-3 mt-1 px-3 py-3 clip-corner-lg bg-muted/60 flex items-center gap-3">
                       <Lock className="size-5 shrink-0 text-muted-foreground" />
                       <div className="min-w-0 flex-1 text-sm">
                         <p className="font-medium">This invite link is out of date.</p>
@@ -3569,6 +3575,7 @@ export function ConcordPage() {
                           onCancelReply={() => setReplyTo(undefined)}
                           onTyping={publishTyping}
                           encryptAttachments
+                          disappearingTimer={resolveMessageTimer}
                           onEditLast={canWrite ? editLast : undefined}
                           // Focus on open/switch, except on touch (keyboard).
                           autoFocus={!isTouchDevice}
@@ -3613,6 +3620,7 @@ export function ConcordPage() {
                   botCommands
                   conversationRelays={community?.relays}
                   encryptAttachments
+                  disappearingTimer={resolveMessageTimer}
                   autoFocus={threadAutoFocus}
                   open={Boolean(threadRoot)}
                   onClose={closeThread}
@@ -3633,29 +3641,18 @@ export function ConcordPage() {
               <div
                 className={cn(
                   "relative h-full flex w-full sidebar:w-[16.5rem] transition-transform duration-200 ease-out",
-                  membersOpen ? "translate-x-0" : "translate-x-full",
-                  membersVisible ? "sidebar:translate-x-0" : "sidebar:translate-x-full",
+                  membersOpen ? "transform-none" : "translate-x-full",
+                  membersVisible ? "sidebar:transform-none" : "sidebar:translate-x-full",
                 )}
               >
                 <div aria-hidden className="absolute inset-0 -z-10 bg-background sidebar:hidden" />
                 <MemberList
                   admins={panelAdmins}
                   members={panelMembers}
-                  canModerate={canManageRoles || canKickAny || canBanAny}
-                  viewerIsAdmin={iAmOwner}
                   currentUserPubkey={user?.pubkey}
-                  onSetRole={canManageRoles ? handleSetRoleStable : undefined}
                   roleCatalog={roleCatalog}
                   memberRoleIds={memberRoleIds}
-                  canEditMemberRoles={canEditMemberRoles}
-                  onToggleRole={canManageRoles ? handleToggleRoleStable : undefined}
-                  isRoleToggling={roleIntent.isPending}
                   roleSections={panelSections}
-                  onKick={canKickAny ? handleKickMember : undefined}
-                  onBan={canBanAny ? setBanTarget : undefined}
-                  banLabel={memberBanLabel}
-                  onUnban={canBanAny ? handleUnbanMember : undefined}
-                  bannedPubkeys={moderation.banned}
                   onAddMembers={addableChannelRoles.length > 0 ? openAddMembers : undefined}
                   onClose={closeMembers}
                 />

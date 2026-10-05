@@ -4,6 +4,34 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.64.4] - 2026-10-05
+
+The cut-corner look now covers the whole client: popovers, menus, dialogs,
+cards, pickers and search fields share one style and a common desktop layout
+grid. Screen-share audio is captured in stereo, calls hold up better in the
+background, attachments in disappearing conversations expire on the server,
+and long timelines scroll more smoothly.
+
+### Added
+- Attachments sent in conversations with disappearing messages ask the file server to delete them after the timer runs out
+- A moderation submenu on messages and members, with confirmation before changing someone's staff role
+
+### Changed
+- Popovers, menus, autocompletes, dialogs, cards and embeds use the cut-corner design, and the server rail, sidebars, member list and DM rows line up on a shared layout grid
+- Emoji, GIF, sticker, game and member pickers share one search field and cut-corner tabs and tiles; on touch, the GIF button folds into the picker's tabs while typing
+- The GIF panel keeps the emoji panel's height, and the desktop + menu uses the standard dropdown
+- Settings text is shorter and the zap success screen is calmer
+- Screen-share audio is captured and sent in stereo without voice processing
+- Calls keep their timing when the app is in the background, Android holds Wi-Fi awake during calls, and hanging up a DM call reaches the other side faster
+- Long message timelines re-render and scroll with less work
+
+### Fixed
+- No leave sound plays when your own call reconnects
+- On Linux desktop, the screen-share audio helper no longer lingers after quitting
+- Context menus keep their layout while closing
+- The Concord timeline stays put when jumping to a message it already shows, and mobile side panels are no longer see-through
+- The zap pill's touch padding matches the reaction pill
+
 ## [0.64.3] - 2026-10-04
 
 Screen shares in calls are now opt-in: you choose which streams to watch, and

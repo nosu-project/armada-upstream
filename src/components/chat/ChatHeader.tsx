@@ -13,7 +13,7 @@ export const ChatHeader = forwardRef<HTMLElement, { className?: string; children
       <header
         ref={ref}
         className={cn(
-          "relative h-12 touch:h-14 max-sidebar:h-auto max-sidebar:py-2 mx-2 mt-3 px-2 sidebar:px-3 flex items-center gap-1.5 shrink-0 clip-corner-lg bg-chrome",
+          "relative h-12 touch:h-14 max-sidebar:h-auto max-sidebar:py-2 mx-gutter mt-3 px-2 sidebar:px-3 flex items-center gap-1.5 shrink-0 clip-corner-lg bg-chrome",
           className,
         )}
       >
@@ -202,16 +202,16 @@ export function ChatHeaderViewItems({
   return (
     <>
       {onSearch && (
-        <DropdownMenuItem className="px-3 py-2 sidebar:hidden" onClick={onSearch}>
+        <DropdownMenuItem className="sidebar:hidden" onClick={onSearch}>
           <Search className="size-4" />
           Search messages
         </DropdownMenuItem>
       )}
-      <DropdownMenuItem className="px-3 py-2 sidebar:hidden" onClick={onMembers}>
+      <DropdownMenuItem className="sidebar:hidden" onClick={onMembers}>
         <Users className="size-4" />
         Members
       </DropdownMenuItem>
-      <DropdownMenuItem className="px-3 py-2 hidden sidebar:flex" onClick={onToggleMembers}>
+      <DropdownMenuItem className="hidden sidebar:flex" onClick={onToggleMembers}>
         <Users className="size-4" />
         {membersVisible ? "Hide members" : "Show members"}
       </DropdownMenuItem>

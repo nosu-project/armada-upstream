@@ -107,7 +107,7 @@ function InviteResolvedCard({
   return (
     <div
       className={cn(
-        "block max-w-sm w-full rounded-2xl border border-border bg-secondary/30 overflow-hidden my-1.5",
+        "block max-w-sm w-full clip-hairline-lg [--edge:var(--border)/0.5] [--fill:var(--secondary)/0.3] [--fill-hover:var(--secondary)/0.3] overflow-hidden my-1.5",
         className,
       )}
       onClick={(e) => e.stopPropagation()}
@@ -164,7 +164,7 @@ function InviteSkeleton({ className }: { className?: string }) {
   return (
     <div
       className={cn(
-        "max-w-sm w-full rounded-2xl border border-border bg-secondary/30 overflow-hidden my-1.5",
+        "max-w-sm w-full clip-hairline-lg [--edge:var(--border)/0.5] [--fill:var(--secondary)/0.3] [--fill-hover:var(--secondary)/0.3] overflow-hidden my-1.5",
         className,
       )}
     >
@@ -187,7 +187,7 @@ function InviteTombstone({ message, className }: { message: string; className?: 
   return (
     <div
       className={cn(
-        "flex items-center gap-2 max-w-sm rounded-2xl border border-dashed border-border px-3.5 py-4 my-1.5 text-muted-foreground",
+        "flex items-center gap-2 max-w-sm clip-corner-lg bg-secondary/20 px-3.5 py-4 my-1.5 text-muted-foreground",
         className,
       )}
     >

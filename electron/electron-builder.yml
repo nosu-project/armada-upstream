@@ -54,6 +54,9 @@ files:
   - nostrUpdateProvider.js
   - updateFeed.cjs
   - linuxAudioSources.js
+  # venmic's host process, forked by main.js on the first screen-share audio
+  # request; unlisted, Linux screen shares quietly lose their audio.
+  - linuxAudioWorker.js
   - linuxVideoAcceleration.js
   - displayMediaPolicy.js
   - youtubeEmbedIdentity.js

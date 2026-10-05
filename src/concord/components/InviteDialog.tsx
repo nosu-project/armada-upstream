@@ -50,7 +50,7 @@ export function InviteDialog({
       <Drawer open={open} onOpenChange={onOpenChange}>
         <DrawerContent
           ref={setPortalNode}
-          className="mt-0 h-[100dvh] max-h-[100dvh] rounded-t-none bg-chrome pt-[env(safe-area-inset-top)]"
+          className="mt-0 h-[100dvh] max-h-[100dvh] rounded-none bg-chrome pt-[env(safe-area-inset-top)]"
         >
           <DrawerTitle className="sr-only">Invite people</DrawerTitle>
           {/* A full-screen sheet has no visible edge to swipe, so offer a close button. */}
@@ -322,7 +322,7 @@ function InviteBody({ community, canCreateLink }: { community: Community | undef
               />
             </div>
 
-            <div className="mt-3 rounded-lg border border-chrome p-3 space-y-2.5">
+            <div className="mt-3 clip-hairline-lg [--edge:var(--chrome-divider)] [--fill:var(--chrome)] [--fill-hover:var(--chrome)] p-3 space-y-2.5">
               <Label
                 htmlFor="list-publicly"
                 className="flex items-start justify-between gap-3 cursor-pointer"

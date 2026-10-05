@@ -278,38 +278,41 @@ export function EmojiShortcodeAutocomplete({
   const dropdown = (
     <div
       data-autocomplete-dropdown
-      className="fixed z-[300] w-[280px] max-w-[calc(100vw-1rem)] rounded-xl border border-border bg-popover shadow-lg overflow-hidden animate-in fade-in-0 zoom-in-95 slide-in-from-bottom-2 duration-150 pointer-events-auto"
+      className="fixed z-[300] w-[280px] max-w-[calc(100vw-1rem)] vessel-lift pointer-events-auto"
       style={{ bottom: dropdownPos.bottom, left: dropdownPos.left }}
     >
-      <div ref={listRef} className="max-h-[280px] overflow-y-auto py-1">
-        {results.map((emoji, index) => (
-          <button
-            key={emoji.id}
-            data-emoji-item
-            className={cn(
-              "w-full flex items-center gap-3 px-3 py-1.5 text-left text-popover-foreground transition-colors cursor-pointer",
-              index === selectedIndex ? "bg-secondary/60" : "hover:bg-secondary/60",
-            )}
-            // Pointer-down fires reliably on touch; preventDefault keeps composer focus.
-            onPointerDown={(e) => {
-              e.preventDefault();
-              selectEmoji(emoji);
-            }}
-          >
-            {emoji.customUrl ? (
-              <CustomEmojiImg
-                name={emoji.name}
-                url={emoji.customUrl}
-                className="size-5 object-contain shrink-0"
-              />
-            ) : (
-              <span className="text-xl leading-none shrink-0">{emoji.native}</span>
-            )}
-            <span className="text-sm truncate">
-              :{emoji.id.replace("custom:", "")}:
-            </span>
-          </button>
-        ))}
+      <div className="vessel overflow-hidden animate-in fade-in-0 zoom-in-95 slide-in-from-bottom-2 duration-150">
+        <div ref={listRef} className="max-h-[280px] overflow-y-auto scroll-py-1 p-1">
+          {results.map((emoji, index) => (
+            <button
+              key={emoji.id}
+              data-emoji-item
+              data-highlighted={index === selectedIndex || undefined}
+              className={cn(
+                "relative w-full flex items-center gap-3 menu-row clip-corner px-2 py-1.5 text-left text-popover-foreground transition-colors cursor-pointer",
+                index === selectedIndex ? "bg-foreground/[0.08]" : "hover:bg-foreground/[0.05]",
+              )}
+              // Pointer-down fires reliably on touch; preventDefault keeps composer focus.
+              onPointerDown={(e) => {
+                e.preventDefault();
+                selectEmoji(emoji);
+              }}
+            >
+              {emoji.customUrl ? (
+                <CustomEmojiImg
+                  name={emoji.name}
+                  url={emoji.customUrl}
+                  className="size-5 object-contain shrink-0"
+                />
+              ) : (
+                <span className="text-xl leading-none shrink-0">{emoji.native}</span>
+              )}
+              <span className="text-sm truncate">
+                :{emoji.id.replace("custom:", "")}:
+              </span>
+            </button>
+          ))}
+        </div>
       </div>
     </div>
   );

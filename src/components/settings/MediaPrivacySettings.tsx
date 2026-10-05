@@ -144,7 +144,7 @@ function TrustedHostListEditor({ hosts, onChange }: { hosts: string[]; onChange:
   return (
     <div className="space-y-1.5">
       {hosts.map((host) => (
-        <div key={host} className="flex items-center gap-2 rounded-md bg-background/40 px-3 py-2.5">
+        <div key={host} className="flex items-center gap-2 clip-corner bg-background/40 px-3 py-2.5">
           <div className="flex-1 min-w-0">
             <HostIdentity host={host} />
           </div>
@@ -238,7 +238,7 @@ function MediaProxyListEditor({ proxies, onChange, onReset }: MediaProxyListEdit
   return (
     <div className="space-y-1.5">
       {proxies.map((proxy) => (
-        <div key={proxy} className="flex items-center gap-2 rounded-md bg-background/40 px-3 py-2.5">
+        <div key={proxy} className="flex items-center gap-2 clip-corner bg-background/40 px-3 py-2.5">
           <div className="flex-1 min-w-0">
             <ProxyIdentity proxy={proxy} />
           </div>
@@ -246,7 +246,7 @@ function MediaProxyListEditor({ proxies, onChange, onReset }: MediaProxyListEdit
             variant="ghost"
             size="icon"
             aria-label={`Remove ${proxy}`}
-            className="size-7 text-muted-foreground hover:text-destructive shrink-0"
+            className="size-7 touch:size-11 text-muted-foreground hover:text-destructive shrink-0"
             onClick={() => onChange(proxies.filter((p) => p !== proxy))}
           >
             <X className="size-4" />

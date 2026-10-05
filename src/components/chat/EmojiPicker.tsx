@@ -60,6 +60,10 @@ function lucideMask(body: string): string {
  * Manages the emoji-mart Picker web component imperatively: `@emoji-mart/react`
  * constructs it in an effect, which throws "Illegal constructor" on remount.
  */
+/** Grid cell and hover tile (px): emoji-mart's 24px emoji with an even 5px around it. */
+const EMOJI_CELL = 40;
+const EMOJI_TILE = 34;
+
 export function EmojiPicker({ onSelect, customEmojis, onBrowsePacks, packsLinkInHost }: EmojiPickerProps) {
   const isMobile = useIsMobile();
   const { user } = useCurrentUser();
@@ -133,9 +137,14 @@ export function EmojiPicker({ onSelect, customEmojis, onBrowsePacks, packsLinkIn
       maxFrequentRows: 1,
       navPosition: "bottom",
       dynamicWidth: true,
+      emojiButtonSize: EMOJI_CELL,
       parent: container,
       autoFocus: !isMobile,
     };
+    // emoji-mart sizes the frequent row from `perLine` (default 9) before dynamicWidth
+    // measures, orphaning emoji in a narrower picker. Same formula as its own.
+    const width = container.getBoundingClientRect().width;
+    if (width > 0) pickerOptions.perLine = Math.max(1, Math.floor(width / EMOJI_CELL));
 
     if (customCategories) {
       // Before the constructor: reconciles emoji-mart's global category table (see
@@ -191,7 +200,12 @@ export function EmojiPicker({ onSelect, customEmojis, onBrowsePacks, packsLinkIn
           "#nav button:hover { color: hsl(var(--foreground)) !important; }",
           "#nav button[aria-selected] { color: hsl(var(--primary)) !important; }",
           "#nav .bar { background-color: hsl(var(--primary)) !important; }",
-          ".category button .background { background-color: hsl(var(--muted)) !important; }",
+          // Hover/keyboard tile in the menu-row idiom: a chamfered square at the menus' tint, not a disc.
+          // Equal cells (emoji-mart spreads them with space-between) and a square tile
+          // centred in each, so the emoji has the same margin to the highlight on every side.
+          ".row > * { flex: 1 1 0 !important; width: auto !important; }",
+          `.category button .background { top: 50% !important; left: 50% !important; right: auto !important; bottom: auto !important; width: ${EMOJI_TILE}px !important; height: ${EMOJI_TILE}px !important; transform: translate(-50%, -50%) !important; background-color: hsl(var(--foreground) / 0.08) !important; border-radius: 0.3rem !important; clip-path: polygon(0.375rem 0, 100% 0, 100% calc(100% - 0.375rem), calc(100% - 0.375rem) 100%, 0 100%, 0 0.375rem) !important; }`,
+          "#nav .bar { border-radius: 0 !important; }",
           ".scroll::-webkit-scrollbar { width: 6px !important; }",
           ".scroll::-webkit-scrollbar-thumb { background-color: transparent !important; border: 0 !important; border-radius: 9999px !important; }",
           ".scroll:hover::-webkit-scrollbar-thumb { background-color: hsl(var(--border)) !important; }",
@@ -237,14 +251,14 @@ export function EmojiPicker({ onSelect, customEmojis, onBrowsePacks, packsLinkIn
 function BrowsePacksFooter({ hasCustom, onBrowse }: { hasCustom: boolean; onBrowse: () => void }) {
   const navigate = useStableNavigate();
   return (
-    <div className="flex shrink-0 items-center gap-2 border-t border-border/60 px-3 py-1.5">
+    <div className="flex shrink-0 items-center gap-2 border-t border-foreground/10 px-3 py-1.5">
       <div className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
         {hasCustom ? "Find more emoji packs" : "Add custom emoji packs"}
       </div>
       <Button
         size="sm"
         variant="secondary"
-        className="h-7 touch:h-11 shrink-0 rounded-lg px-2 text-xs"
+        className="h-7 touch:h-11 shrink-0 clip-corner-lg px-2 text-xs"
         onClick={() => {
           onBrowse();
           navigate("/discover?tab=emojis");

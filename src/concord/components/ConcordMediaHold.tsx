@@ -8,6 +8,7 @@ import {
   nextEstablishedAt,
   readSightings,
   sightingsRevision,
+  sightingsVerdictsDiffer,
   subscribeSightings,
 } from "@/concord/lib/mediaTrust";
 import { useAppContext } from "@/hooks/useAppContext";
@@ -74,17 +75,27 @@ export function ConcordMediaHold({
     return () => clearTimeout(t);
   }, [sightings, now]);
 
+  // The record the predicate reads moves only when some verdict does. Re-checked on
+  // every new record and probation crossing (`now`), so a held-back record is never
+  // stale by a decision.
+  const decidingRef = useRef(sightings);
+  const deciding = useMemo(() => {
+    void now;
+    if (sightingsVerdictsDiffer(decidingRef.current, sightings, Date.now())) decidingRef.current = sightings;
+    return decidingRef.current;
+  }, [sightings, now]);
+
   const self = user?.pubkey;
   const holds = useMemo<MediaHold>(() => {
     // `now` re-memoizes on a probation crossing; the predicate reads the clock itself.
     void now;
-    const inputs = () => ({ mode, self, isStaff, trusted: stableTrusted, follows, sightings, now: Date.now() });
+    const inputs = () => ({ mode, self, isStaff, trusted: stableTrusted, follows, sightings: deciding, now: Date.now() });
     return {
       mode,
       media: (author) => holdsMedia(author, inputs()),
       host: (author, url) => hostsOnly && holdsMediaUrl(author, url, { self, proxied }, knownHosts),
     };
-  }, [mode, hostsOnly, proxied, self, isStaff, stableTrusted, follows, sightings, now, knownHosts]);
+  }, [mode, hostsOnly, proxied, self, isStaff, stableTrusted, follows, deciding, now, knownHosts]);
 
   return <MediaHoldContext.Provider value={holds}>{children}</MediaHoldContext.Provider>;
 }

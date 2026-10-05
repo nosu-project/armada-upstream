@@ -47,7 +47,7 @@ export function PollView({ event, tally, canVote, isVoting, onVote }: PollViewPr
   };
 
   return (
-    <div className="max-w-md rounded-xl border border-border bg-secondary/20 px-3 py-2.5 my-1.5 space-y-2">
+    <div className="max-w-md clip-hairline-lg [--edge:var(--border)/0.5] [--fill:var(--secondary)/0.2] [--fill-hover:var(--secondary)/0.2] px-3 py-2.5 my-1.5 space-y-2">
       <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
         <BarChart3 className="size-3.5" />
         <span>Poll{pollType === "multiplechoice" ? " · multiple choice" : ""}</span>
@@ -65,7 +65,7 @@ export function PollView({ event, tally, canVote, isVoting, onVote }: PollViewPr
 
           if (showResults) {
             return (
-              <div key={option.id} className="relative rounded-lg overflow-hidden border border-border/60">
+              <div key={option.id} className="relative clip-corner overflow-hidden bg-secondary/30">
                 <div
                   className={cn("absolute inset-y-0 left-0", isMine ? "bg-primary/25" : "bg-secondary/80")}
                   style={{ width: `${pct}%` }}
@@ -85,10 +85,10 @@ export function PollView({ event, tally, canVote, isVoting, onVote }: PollViewPr
               type="button"
               onClick={() => toggleSelect(option.id)}
               className={cn(
-                "w-full flex items-center gap-2 rounded-lg border px-3 py-1.5 text-sm text-left transition-colors",
+                "w-full flex items-center gap-2 clip-corner px-3 py-1.5 touch:py-3 text-sm text-left transition-colors",
                 isSelected
-                  ? "border-primary bg-primary/10 text-primary"
-                  : "border-border/60 hover:border-foreground/30 hover:bg-secondary/40",
+                  ? "bg-primary/10 text-primary"
+                  : "bg-secondary hover:bg-secondary/70",
               )}
             >
               <span
@@ -113,7 +113,7 @@ export function PollView({ event, tally, canVote, isVoting, onVote }: PollViewPr
         {!showResults && (
           <Button
             size="sm"
-            className="h-7 rounded-full px-4 text-xs"
+            className="h-7 touch:h-11 clip-corner-lg px-4 text-xs"
             disabled={selected.size === 0 || isVoting || !user}
             onClick={submit}
           >

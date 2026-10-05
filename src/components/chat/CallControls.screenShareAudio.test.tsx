@@ -142,7 +142,7 @@ describe("screen share audio after an audio-source failure", () => {
     // 1. First share of a surface with no openable loopback endpoint. Default
     //    quality captures audio, so the request asks for it — and fails.
     await startShare();
-    expect(captures[0]?.audio).toBe(true);
+    expect(captures[0]?.audio).toBeTruthy();
 
     // 2. The recovery toast offers "Share without audio". Tap it.
     const recovery = toast.mock.calls
@@ -163,7 +163,7 @@ describe("screen share audio after an audio-source failure", () => {
     //    it. Today the recovery's audio-off leaked into persisted state, so it
     //    does not: the share is silently muted, exactly as reported.
     await startShare();
-    expect(captures[2]?.audio).toBe(true);
+    expect(captures[2]?.audio).toBeTruthy();
     // And the persisted preference must not have been clobbered by the
     // one-shot recovery: whatever is stored keeps audio on.
     expect(getScreenShareQuality().captureAudio).toBe(true);

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   APP_BLOSSOM_SERVERS,
+  attachmentExpiration,
   blossomFallbackUrls,
   getEffectiveBlossomServers,
   mediaCandidates,
@@ -251,5 +252,12 @@ describe("normalizeBlossomServerUrl", () => {
     expect(normalizeBlossomServerUrl("")).toBeNull();
     expect(normalizeBlossomServerUrl("   ")).toBeNull();
     expect(normalizeBlossomServerUrl("http://")).toBeNull();
+  });
+});
+
+describe("attachmentExpiration", () => {
+  it("outlives the message by a day, and is never without a timer", () => {
+    expect(attachmentExpiration(3600, 1_000_000_500)).toBe(1_000_000 + 3600 + 86_400);
+    expect(attachmentExpiration(0, 1_000_000_500)).toBeUndefined();
   });
 });

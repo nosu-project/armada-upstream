@@ -295,7 +295,7 @@ export function MembersView({
         <button
           type="button"
           onClick={() => setSuspiciousOnly((v) => !v)}
-          className={`flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm transition-colors ${
+          className={`flex w-full items-center gap-2 clip-corner-lg px-3 py-2 text-left text-sm transition-colors ${
             suspiciousOnly ? "bg-destructive/25 text-destructive" : "bg-destructive/10 text-destructive"
           }`}
         >
@@ -310,7 +310,7 @@ export function MembersView({
         <button
           type="button"
           onClick={() => setBehindOnly((v) => !v)}
-          className={`flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm transition-colors ${
+          className={`flex w-full items-center gap-2 clip-corner-lg px-3 py-2 text-left text-sm transition-colors ${
             behindOnly ? "bg-warning/20 text-warning" : "bg-warning/10 text-warning"
           }`}
         >
@@ -407,68 +407,70 @@ export function MembersView({
       )}
 
       {selectable && selected.length > 0 && (
-        <div className="sticky bottom-2 z-10 flex flex-wrap items-center gap-2 rounded-lg border border-border bg-background/95 px-3 py-2 shadow-lg backdrop-blur pb-safe">
-          <span className="text-sm font-medium">{selected.length} selected</span>
-          <div className="ml-auto flex flex-wrap items-center gap-2">
-            {healTargets.length > 0 && (
-              <Button type="button" size="sm" variant="outline" disabled={healing !== null} onClick={runMassHeal}>
-                {healing ? (
-                  <>
-                    <Loader2 className="size-3.5 animate-spin" />
-                    Sending {healing.done}/{healing.total}
-                  </>
-                ) : (
-                  <>
-                    <KeyRound className="size-3.5" />
-                    Send keys ({healTargets.length})
-                  </>
-                )}
-              </Button>
-            )}
-            {tierTarget && tierOptions.map((tier) => (
-              <Button
-                key={tier ?? "none"}
-                type="button"
-                size="sm"
-                variant="secondary"
-                disabled={isSettingTier}
-                onClick={() => void runSetTier(tierTarget, tier)}
-              >
-                {tier === "admin" ? <Crown className="size-3.5" /> : tier === "moderator" ? <Shield className="size-3.5" /> : <ShieldOff className="size-3.5" />}
-                {tier === "admin"
-                  ? "Make admin"
-                  : tier === "moderator"
-                    ? tierCurrent === "admin" ? "Demote to moderator" : "Make moderator"
-                    : tierCurrent === "admin" ? "Remove admin" : "Remove moderator"}
-              </Button>
-            ))}
-            {canModerate && (
-              <>
+        <div className="vessel-lift sticky bottom-2 z-10">
+          <div className="vessel flex flex-wrap items-center gap-2 px-3 py-2 pb-safe">
+            <span className="text-sm font-medium">{selected.length} selected</span>
+            <div className="ml-auto flex flex-wrap items-center gap-2">
+              {healTargets.length > 0 && (
+                <Button type="button" size="sm" variant="secondary" disabled={healing !== null} onClick={runMassHeal}>
+                  {healing ? (
+                    <>
+                      <Loader2 className="size-3.5 animate-spin" />
+                      Sending {healing.done}/{healing.total}
+                    </>
+                  ) : (
+                    <>
+                      <KeyRound className="size-3.5" />
+                      Send keys ({healTargets.length})
+                    </>
+                  )}
+                </Button>
+              )}
+              {tierTarget && tierOptions.map((tier) => (
                 <Button
+                  key={tier ?? "none"}
                   type="button"
                   size="sm"
-                  variant="outline"
-                  disabled={kickable.length === 0}
-                  onClick={() => setKickTargets(kickable)}
+                  variant="secondary"
+                  disabled={isSettingTier}
+                  onClick={() => void runSetTier(tierTarget, tier)}
                 >
-                  <UserMinus className="size-3.5" />
-                  Kick{kickable.length > 0 ? ` (${kickable.length})` : ""}
+                  {tier === "admin" ? <Crown className="size-3.5" /> : tier === "moderator" ? <Shield className="size-3.5" /> : <ShieldOff className="size-3.5" />}
+                  {tier === "admin"
+                    ? "Make admin"
+                    : tier === "moderator"
+                      ? tierCurrent === "admin" ? "Demote to moderator" : "Make moderator"
+                      : tierCurrent === "admin" ? "Remove admin" : "Remove moderator"}
                 </Button>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="destructive"
-                  disabled={bannable.length === 0}
-                  onClick={() => setBanTargets(bannable)}
-                >
-                  <Ban className="size-3.5" />
-                  Ban{bannable.length > 0 ? ` (${bannable.length})` : ""}
-                </Button>
-              </>
-            )}
-            <Button type="button" size="sm" variant="ghost" onClick={() => setSelection(emptySelection())}>
-              Clear
-            </Button>
+              ))}
+              {canModerate && (
+                <>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="secondary"
+                    disabled={kickable.length === 0}
+                    onClick={() => setKickTargets(kickable)}
+                  >
+                    <UserMinus className="size-3.5" />
+                    Kick{kickable.length > 0 ? ` (${kickable.length})` : ""}
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="destructive"
+                    disabled={bannable.length === 0}
+                    onClick={() => setBanTargets(bannable)}
+                  >
+                    <Ban className="size-3.5" />
+                    Ban{bannable.length > 0 ? ` (${bannable.length})` : ""}
+                  </Button>
+                </>
+              )}
+              <Button type="button" size="sm" variant="ghost" onClick={() => setSelection(emptySelection())}>
+                Clear
+              </Button>
+            </div>
           </div>
         </div>
       )}

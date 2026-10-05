@@ -23,7 +23,7 @@ export function DetailPage({ title, icon, children, overlay }: DetailPageProps) 
     <>
       <ServerRail />
       <main className="relative flex-1 min-w-0 flex flex-col safe-area-top">
-        <header className="relative h-12 touch:h-14 mx-2 mt-3 w-[calc(100%-1rem)] max-w-2xl sm:mx-auto px-2 sidebar:px-3 flex items-center gap-1.5 shrink-0 clip-corner-lg bg-chrome">
+        <header className="relative h-12 touch:h-14 mx-gutter mt-3 w-[calc(100%-2*var(--gutter))] max-w-2xl sm:mx-auto px-2 sidebar:px-3 flex items-center gap-1.5 shrink-0 clip-corner-lg bg-chrome">
           <Button variant="ghost" size="icon" className="size-9 touch:size-11 shrink-0" aria-label="Back" onClick={back}>
             <ArrowLeft className="size-5" />
           </Button>

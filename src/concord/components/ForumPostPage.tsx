@@ -42,6 +42,7 @@ export function ForumPostPage({
   canWrite,
   mentionPubkeys,
   conversationRelays,
+  disappearingTimer,
   autoFocus = false,
   onBack,
   className,
@@ -55,6 +56,8 @@ export function ForumPostPage({
   canWrite: boolean;
   mentionPubkeys?: string[];
   conversationRelays?: string[];
+  /** See ChatComposer's. */
+  disappearingTimer?: () => Promise<number>;
   autoFocus?: boolean;
   onBack: () => void;
   className?: string;
@@ -192,6 +195,7 @@ export function ForumPostPage({
       pollsEnabled={false}
       // Attachments sealed like the post's: Blossom holds ciphertext, key in imeta.
       encryptAttachments
+      disappearingTimer={disappearingTimer}
       canSend={transport.canSend}
       sendOverride={async (text, tags) => {
         // `buildConcordCommentTags` inherits the root pointer from `parent`.

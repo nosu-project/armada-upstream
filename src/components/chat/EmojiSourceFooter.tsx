@@ -48,7 +48,7 @@ export function EmojiSourceFooter({ url, authorPubkey }: { url: string; authorPu
           <div className="text-3xs uppercase tracking-wide text-muted-foreground">From</div>
           <Skeleton className="h-3 w-24" />
         </div>
-        <Skeleton className="h-7 w-14 shrink-0 rounded-lg touch:h-9" />
+        <Skeleton className="h-7 w-14 shrink-0 clip-corner-lg touch:h-11" />
       </div>
     );
   }
@@ -68,7 +68,7 @@ export function EmojiSourceFooter({ url, authorPubkey }: { url: string; authorPu
         <Button
           size="sm"
           variant="secondary"
-          className="h-7 touch:h-9 shrink-0 rounded-lg px-2 text-xs"
+          className="h-7 touch:h-11 shrink-0 clip-corner-lg px-2 text-xs"
           onClick={onAdd}
           disabled={isPending}
         >

@@ -71,6 +71,7 @@ import { markOwnWebPushEvent } from "@/lib/webPushState";
 import { invalidateSyncTopic } from "@/sync/syncManager";
 import { useSyncTopic } from "@/sync/useSyncTopic";
 import { useWireScopes } from "@/wire/useWireScopes";
+import { shareByRumorId } from "@/lib/shareRows";
 
 import type { NostrEvent } from "@nostrify/nostrify";
 
@@ -305,6 +306,8 @@ export function useChannelTimeline(
 
   const query = useQuery<OpenedChat[]>({
     queryKey,
+    // Keyed: older pages shift every index (see shareRows).
+    structuralSharing: shareByRumorId,
     // Store-read policy: no offline pause or backoff behind the skeleton.
     ...STORE_READ,
     enabled: Boolean(community && channel),

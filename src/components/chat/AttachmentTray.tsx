@@ -163,7 +163,7 @@ function AttachmentCard({
       {isTouch ? (
         <CornerButton label={`Remove ${item.label}`} onClick={() => onRemove(item.url)} />
       ) : (
-        <div className="absolute right-1 top-1 flex overflow-hidden rounded-md bg-background/95 opacity-0 shadow-sm transition-opacity group-hover/att:opacity-100 focus-within:opacity-100">
+        <div className="absolute right-1 top-1 flex overflow-hidden clip-corner-lg bg-background/95 opacity-0 shadow-sm transition-opacity group-hover/att:opacity-100 focus-within:opacity-100">
           <ToolbarButton label="Edit attachment" onClick={() => onEdit(item.url)}>
             <Pencil className="size-3.5" />
           </ToolbarButton>
