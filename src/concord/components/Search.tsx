@@ -38,7 +38,7 @@ function MediaToggle({ media, onChange }: { media: SearchMedia; onChange: (m: Se
         <ToggleGroupItem
           key={o.value}
           value={o.value}
-          className="h-8 gap-1 px-2 text-xs data-[state=on]:bg-primary data-[state=on]:text-primary-foreground"
+          className="gap-1.5 h-auto px-3 py-1.5 touch:py-2.5 text-sm font-normal clip-corner-lg text-muted-foreground hover:bg-foreground/5 hover:text-foreground data-[state=on]:bg-primary data-[state=on]:font-medium data-[state=on]:text-primary-foreground"
         >
           {o.icon && <o.icon className="size-3.5" />}
           {o.label}

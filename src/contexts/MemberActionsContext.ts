@@ -16,7 +16,18 @@ export interface MemberActionItem {
   icon: LucideIcon;
   /** Rendered in the destructive style and, by convention, listed last. */
   destructive?: boolean;
+  disabled?: boolean;
+  /** Ask first, saying what changes. Every surface honours it via `useUserModeration`. */
+  confirm?: MemberActionConfirm;
   onSelect: () => void;
+}
+
+export interface MemberActionConfirm {
+  title: string;
+  /** What the change does and who can undo it. */
+  consequences: string[];
+  confirmLabel: string;
+  icon: LucideIcon;
 }
 
 export interface MemberActionsValue {

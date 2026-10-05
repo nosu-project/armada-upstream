@@ -164,7 +164,7 @@ function VoiceParticipantRow({
         {isStreaming && (isSelf ? <LiveBadge /> : <WatchableLiveBadge pubkey={pubkey} />)}
         {isRaised && (
           <Hand
-            className="size-3.5 shrink-0 text-amber-500"
+            className="size-3.5 shrink-0 text-warning"
             aria-label="Hand raised"
           />
         )}

@@ -32,7 +32,7 @@ export function ThreadPanelSlot({
       <div
         className={cn(
           "relative h-full flex w-full transition-transform duration-200 ease-out",
-          open ? "translate-x-0" : "translate-x-full",
+          open ? "transform-none" : "translate-x-full",
           expanded ? "thread:w-full" : "thread:w-[23rem]",
         )}
       >

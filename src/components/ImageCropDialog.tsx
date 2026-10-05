@@ -1,10 +1,10 @@
 import { useState, useCallback } from 'react';
 import Cropper from 'react-easy-crop';
 import type { Area, Point } from 'react-easy-crop';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
+import { ChromeDialogContent, ChromeDialogFooter, ChromeDialogHeader, Dialog } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
-import { ZoomIn, ZoomOut, RotateCcw } from 'lucide-react';
+import { Crop, ZoomIn, ZoomOut, RotateCcw } from 'lucide-react';
 
 interface ImageCropDialogProps {
   open: boolean;
@@ -72,12 +72,10 @@ export function ImageCropDialog({ open, imageSrc, aspect, title = 'Crop Image', 
 
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!v) onCancel(); }}>
-      <DialogContent className="chrome-dialog sm:max-w-lg border-0 rounded-[0.55rem] clip-corner-lg bg-chrome shadow-none p-0 gap-0 overflow-hidden">
-        <DialogHeader className="px-5 pt-5 pb-3">
-          <DialogTitle className="chrome-dialog-title font-mono font-bold lowercase tracking-tight">{title}</DialogTitle>
-        </DialogHeader>
+      <ChromeDialogContent title={title} className="sm:max-w-lg">
+        <ChromeDialogHeader icon={Crop} title={title} />
 
-        <div className="relative bg-black" style={{ height: 320 }}>
+        <div className="relative mt-5 overflow-hidden clip-corner-lg bg-black" style={{ height: 320 }}>
           <Cropper
             image={imageSrc}
             crop={crop}
@@ -93,7 +91,7 @@ export function ImageCropDialog({ open, imageSrc, aspect, title = 'Crop Image', 
           />
         </div>
 
-        <div className="px-5 py-4 space-y-3 border-t">
+        <div className="mt-4 space-y-3">
           <div className="flex items-center gap-3">
             <ZoomOut className="size-4 text-muted-foreground shrink-0" />
             <Slider
@@ -115,15 +113,15 @@ export function ImageCropDialog({ open, imageSrc, aspect, title = 'Crop Image', 
           </div>
         </div>
 
-        <DialogFooter className="px-5 pb-5 gap-2 flex-row justify-end">
-          <Button variant="outline" onClick={onCancel} disabled={isProcessing} size="sm">
+        <ChromeDialogFooter>
+          <Button variant="secondary" onClick={onCancel} disabled={isProcessing}>
             Cancel
           </Button>
-          <Button onClick={handleConfirm} disabled={isProcessing} size="sm">
-            {isProcessing ? 'Processing…' : 'Apply Crop'}
+          <Button onClick={handleConfirm} disabled={isProcessing}>
+            {isProcessing ? 'Processing…' : 'Apply crop'}
           </Button>
-        </DialogFooter>
-      </DialogContent>
+        </ChromeDialogFooter>
+      </ChromeDialogContent>
     </Dialog>
   );
 }

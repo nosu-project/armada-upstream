@@ -6,6 +6,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { DmAvatar } from "@/components/DmAvatar";
 import { DisplayName } from "@/components/DisplayName";
 import { Button } from "@/components/ui/button";
+import { ChromeDialogContent, Dialog } from "@/components/ui/dialog";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useCall } from "@/hooks/useCall";
@@ -806,11 +807,19 @@ function IncomingCallOverlay({
   const name = getDisplayName(author.data?.metadata, signal.author);
 
   return (
-    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-background/80 backdrop-blur-sm">
-      <div className="flex flex-col items-center gap-6 px-8 py-10 clip-corner-lg bg-chrome-deep shadow-xl w-80 max-w-[calc(100vw-2rem)]">
+    // Only Accept/Decline end the ring: Escape, outside clicks and back don't dismiss it.
+    <Dialog open onOpenChange={() => {}}>
+      <ChromeDialogContent
+        title="Incoming call"
+        hideClose
+        className="w-80 max-w-[calc(100vw-2rem)]"
+        contentClassName="flex flex-col items-center gap-6 px-8 py-10 sm:px-8 sm:py-10"
+        onEscapeKeyDown={(e) => e.preventDefault()}
+        onInteractOutside={(e) => e.preventDefault()}
+      >
         <DmAvatar peers={[signal.author]} selfPubkey={selfPubkey} sizePx={96} className="size-24" />
         <div className="text-center space-y-1 min-w-0 w-full">
-          <div className="text-lg font-semibold truncate">
+          <div className="chrome-dialog-title font-mono font-bold lowercase tracking-tight truncate">
             <DisplayName pubkey={signal.author} name={name} />
           </div>
           <div className="text-sm text-muted-foreground animate-pulse">Incoming call…</div>
@@ -839,7 +848,7 @@ function IncomingCallOverlay({
             <span className="text-xs text-muted-foreground">Accept</span>
           </div>
         </div>
-      </div>
-    </div>
+      </ChromeDialogContent>
+    </Dialog>
   );
 }

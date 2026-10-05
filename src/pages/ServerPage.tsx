@@ -95,29 +95,29 @@ export function ServerPage() {
                   <MoreVertical className="size-4" />
                 </Button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-56 p-2">
+              <DropdownMenuContent align="end" className="w-56">
                 {user && (
-                  <DropdownMenuItem className="gap-3 px-3 py-2.5" onClick={() => setProfileOpen(true)}>
+                  <DropdownMenuItem onClick={() => setProfileOpen(true)}>
                     <IdCard className="size-4" />
                     Server identity
                   </DropdownMenuItem>
                 )}
                 {user && (
                   <DropdownMenuItem
-                    className="gap-3 px-3 py-2.5"
+                   
                     onClick={toggleMute}
                   >
                     {serverMuted ? <Bell className="size-4" /> : <BellOff className="size-4" />}
                     {serverMuted ? "Unmute server" : "Mute server"}
                   </DropdownMenuItem>
                 )}
-                <DropdownMenuItem className="gap-3 px-3 py-2.5" onClick={copyLink}>
+                <DropdownMenuItem onClick={copyLink}>
                   <Link2 className="size-4" />
                   Copy link
                 </DropdownMenuItem>
                 {isRemovable && (
                   <DropdownMenuItem
-                    className="gap-3 px-3 py-2.5 text-destructive focus:text-destructive"
+                    className="text-destructive focus:text-destructive"
                     onClick={removeServer}
                   >
                     <Trash2 className="size-4" />

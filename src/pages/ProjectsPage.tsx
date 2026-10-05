@@ -41,7 +41,7 @@ export function ProjectsPage() {
         }
       >
         <main className="flex-1 min-w-0 flex flex-col safe-area-top h-full">
-          <header className="relative h-12 touch:h-14 mx-2 mt-3 px-2 sidebar:px-3 flex items-center gap-1.5 shrink-0 clip-corner-lg bg-chrome">
+          <header className="relative h-12 touch:h-14 mx-gutter mt-3 px-2 sidebar:px-3 flex items-center gap-1.5 shrink-0 clip-corner-lg bg-chrome">
             <Button
               variant="ghost"
               size="icon"

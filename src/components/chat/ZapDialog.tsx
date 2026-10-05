@@ -1,6 +1,6 @@
 import { lazy, Suspense } from "react";
 
-import { Dialog, DialogContent } from "@/components/ui/dialog";
+import { ChromeDialogContent, Dialog } from "@/components/ui/dialog";
 
 import type { ChatMsg, OnchainZapAnnouncement, ZapPayment } from "@/components/chat/transport";
 
@@ -20,9 +20,11 @@ export interface ZapDialogProps {
 export function ZapDialog({ open, onOpenChange, target, sendZap, sendOnchainZap }: ZapDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent
+      <ChromeDialogContent
+        title="Zap"
         hideClose
-        className="sm:max-w-[425px] border-0 rounded-[0.55rem] clip-corner-lg bg-chrome shadow-none p-0 gap-0 overflow-hidden max-h-[95vh]"
+        className="sm:max-w-[425px] gap-0 overflow-hidden max-h-[95vh]"
+        contentClassName="p-0 sm:p-0"
         data-testid="zap-modal"
       >
         {open && (
@@ -30,7 +32,7 @@ export function ZapDialog({ open, onOpenChange, target, sendZap, sendOnchainZap 
             <LazyZapDialogImpl target={target} sendZap={sendZap} sendOnchainZap={sendOnchainZap} onDone={() => onOpenChange(false)} />
           </Suspense>
         )}
-      </DialogContent>
+      </ChromeDialogContent>
     </Dialog>
   );
 }

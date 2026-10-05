@@ -486,7 +486,7 @@ export function RaiseHandButton({ className }: { className?: string }) {
       className={cn(
         CTRL,
         myHandRaised
-          ? "bg-amber-500/25 text-amber-500 hover:bg-amber-500/35"
+          ? "bg-warning/25 text-warning hover:bg-warning/35"
           : "bg-foreground/10 text-foreground hover:bg-foreground/20",
         className,
       )}

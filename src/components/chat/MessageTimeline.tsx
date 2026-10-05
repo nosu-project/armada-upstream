@@ -926,7 +926,7 @@ export function MessageTimeline({
                   distanceRef.current = 0;
                   pinToBottomNow();
                 }}
-                className="pointer-events-auto inline-flex items-center gap-2 rounded-full border border-border/60 bg-secondary/90 backdrop-blur px-5 py-2.5 text-sm font-medium text-foreground shadow-lg hover:bg-secondary transition-colors"
+                className="pointer-events-auto inline-flex items-center gap-2 clip-corner-lg bg-secondary/90 backdrop-blur px-5 py-2.5 text-sm font-medium text-foreground shadow-lg hover:bg-secondary transition-colors"
                 aria-label="Jump to the latest messages"
               >
                 <ChevronDown className="size-4" />

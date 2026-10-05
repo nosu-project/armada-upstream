@@ -310,7 +310,7 @@ function CloneButton({ url }: { url: string }) {
         <Button
           variant="ghost"
           size="icon"
-          className="size-7 text-muted-foreground hover:text-foreground"
+          className="size-7 touch:size-11 text-muted-foreground hover:text-foreground"
           aria-label="Copy clone URL"
           onClick={() =>
             writeClipboardText(url).then(() => toast({ title: "Clone URL copied" }), () => undefined)}
@@ -413,7 +413,7 @@ function RepoCard({ repo, summary, people, selected, onOpen }: {
           {web && (
             <Tooltip>
               <TooltipTrigger asChild>
-                <Button variant="ghost" size="icon" className="size-7 text-muted-foreground hover:text-foreground" asChild>
+                <Button variant="ghost" size="icon" className="size-7 touch:size-11 text-muted-foreground hover:text-foreground" asChild>
                   <a href={web} target="_blank" rel="noopener noreferrer" aria-label="View on web">
                     <ExternalLink className="size-3.5" />
                   </a>
@@ -490,7 +490,7 @@ function RepoRow({ repo, summary, people, selected, onOpen }: {
       </div>
       <div className="relative z-10 flex shrink-0 items-center">
         {web && (
-          <Button variant="ghost" size="icon" className="size-7 text-muted-foreground hover:text-foreground" asChild>
+          <Button variant="ghost" size="icon" className="size-7 touch:size-11 text-muted-foreground hover:text-foreground" asChild>
             <a href={web} target="_blank" rel="noopener noreferrer" aria-label="View on web">
               <ExternalLink className="size-3.5" />
             </a>
@@ -607,7 +607,7 @@ function Overview({
               ))}
             </div>
           ) : (
-            <p className="clip-corner-lg border border-dashed border-border/60 px-4 py-10 text-center text-sm text-muted-foreground">
+            <p className="clip-hairline-lg [--fill-hover:var(--background)/0.4] px-4 py-10 text-center text-sm text-muted-foreground">
               No activity yet.
             </p>
           )}
@@ -843,7 +843,7 @@ export function ProjectsView({
                 <Button
                   variant={viewMode === "grid" ? "secondary" : "ghost"}
                   size="icon"
-                  className="size-7"
+                  className="size-7 touch:size-11"
                   aria-label="Grid layout"
                   aria-pressed={viewMode === "grid"}
                   onClick={() => setViewMode("grid")}
@@ -853,7 +853,7 @@ export function ProjectsView({
                 <Button
                   variant={viewMode === "list" ? "secondary" : "ghost"}
                   size="icon"
-                  className="size-7"
+                  className="size-7 touch:size-11"
                   aria-label="List layout"
                   aria-pressed={viewMode === "list"}
                   onClick={() => setViewMode("list")}

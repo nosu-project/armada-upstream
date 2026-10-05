@@ -50,7 +50,7 @@ export function GenericPaymentContent({ method, target }: GenericPaymentContentP
           onClick={handleCopy}
           title={target.authority}
           aria-label={`Copy ${method.label} address`}
-          className="flex items-center gap-2 rounded-full border px-4 py-2 text-sm font-mono text-muted-foreground hover:bg-muted/50 transition-colors cursor-pointer max-w-full"
+          className="flex items-center gap-2 clip-corner-lg bg-secondary px-4 py-2 touch:min-h-11 text-sm font-mono text-muted-foreground hover:bg-secondary/80 hover:text-foreground transition-colors cursor-pointer max-w-full"
         >
           <span className="truncate">{displayAddress}</span>
           {copied ? (

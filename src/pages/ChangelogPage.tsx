@@ -52,7 +52,7 @@ export function ChangelogPage() {
 
   return (
     <main className="flex-1 min-w-0 flex flex-col safe-area-top">
-      <header className="relative h-12 touch:h-14 mx-2 mt-3 w-[calc(100%-1rem)] max-w-2xl sm:mx-auto px-2 sidebar:px-3 flex items-center gap-1.5 shrink-0 clip-corner-lg bg-chrome">
+      <header className="relative h-12 touch:h-14 mx-gutter mt-3 w-[calc(100%-2*var(--gutter))] max-w-2xl sm:mx-auto px-2 sidebar:px-3 flex items-center gap-1.5 shrink-0 clip-corner-lg bg-chrome">
         <Button variant="ghost" size="icon" className="size-9 shrink-0" aria-label="Back" onClick={back}>
           <ArrowLeft className="size-5" />
         </Button>
@@ -196,7 +196,7 @@ function ChangelogEntryCard({ entry }: { entry: ChangelogEntry }) {
   }, [measure]);
 
   return (
-    <div className="rounded-2xl border border-border overflow-hidden">
+    <div className="clip-hairline-lg [--edge:var(--border)/0.5] p-px overflow-hidden">
       <div className="flex items-center gap-3 px-4 py-3">
         <a
           href={`${GITLAB_REPO}/-/releases/v${entry.version}`}
@@ -264,7 +264,7 @@ function ChangelogEntryCard({ entry }: { entry: ChangelogEntry }) {
 /** Banner shown at the top of the changelog for untagged (pre-release) builds. */
 function PreReleaseBanner({ latestVersion }: { latestVersion: string }) {
   return (
-    <div className="rounded-2xl border border-dashed border-warning/50 bg-warning/5 px-4 py-3 space-y-1.5">
+    <div className="clip-hairline-lg [--edge:var(--warning)/0.5] [--fill:var(--warning)/0.05] [--fill-hover:var(--warning)/0.05] px-4 py-3 space-y-1.5">
       <div className="flex items-center gap-2">
         <FlaskConical className="size-4 text-warning shrink-0" />
         <span className="text-sm font-medium text-warning">Pre-release build</span>
@@ -298,7 +298,7 @@ function ChangelogSkeleton() {
   return (
     <div className="space-y-4 pt-1">
       {[1, 2].map((i) => (
-        <div key={i} className="rounded-2xl border border-border overflow-hidden">
+        <div key={i} className="clip-hairline-lg [--edge:var(--border)/0.5] p-px overflow-hidden">
       <div className="flex items-center gap-3 px-4 py-3">
             <Skeleton className="size-4 rounded" />
             <Skeleton className="h-4 w-16" />

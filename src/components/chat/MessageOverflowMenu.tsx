@@ -1,13 +1,8 @@
 import { MoreHorizontal } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+import { MessageMenuItems } from "@/components/chat/MessageMenuItems";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 import type { MessageActionItem } from "@/components/chat/messageActions";
@@ -34,18 +29,7 @@ export function MessageOverflowMenu({ actions }: { actions: MessageActionItem[] 
         <TooltipContent>More actions</TooltipContent>
       </Tooltip>
       <DropdownMenuContent align="end" className="w-52">
-        {actions.map((action, i) => (
-          <div key={action.id}>
-            {action.groupStart && i > 0 && <DropdownMenuSeparator />}
-            <DropdownMenuItem
-              className={action.destructive ? "text-destructive focus:text-destructive" : undefined}
-              onSelect={action.onSelect}
-            >
-              <action.icon className="mr-2 size-4" />
-              {action.label}
-            </DropdownMenuItem>
-          </div>
-        ))}
+        <MessageMenuItems actions={actions} />
       </DropdownMenuContent>
     </DropdownMenu>
   );

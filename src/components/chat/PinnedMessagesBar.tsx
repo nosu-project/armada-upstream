@@ -33,7 +33,7 @@ function PinnedRow({
   const preview = event ? previewText(event.content) : "Pinned message";
 
   return (
-    <div className="group/pin flex items-start gap-2 min-w-0 rounded-md px-2 py-1.5 hover:bg-secondary/60">
+    <div className="group/pin flex items-start gap-2 min-w-0 clip-corner px-2 py-1.5 hover:bg-secondary/60">
       <button
         type="button"
         onClick={() => onJump(eventId)}
@@ -62,20 +62,15 @@ function PinnedRow({
         <TooltipContent>Jump to message</TooltipContent>
       </Tooltip>
       {canModerate && (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant="ghost"
-              size="icon"
-              aria-label="Unpin message"
-              className="size-6 touch:size-10 shrink-0 text-muted-foreground hover:text-destructive opacity-0 group-hover/pin:opacity-100 touch:opacity-100 focus-visible:opacity-100 transition-opacity"
-              onClick={() => onUnpin(eventId)}
-            >
-              <X className="size-3.5" />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent>Unpin</TooltipContent>
-        </Tooltip>
+        <Button
+          variant="ghost"
+          size="sm"
+          aria-label="Unpin message"
+          className="h-6 touch:h-9 shrink-0 px-2 touch:px-3 text-2xs touch:text-xs text-muted-foreground hover:text-destructive opacity-0 group-hover/pin:opacity-100 touch:opacity-100 focus-visible:opacity-100 transition-opacity"
+          onClick={() => onUnpin(eventId)}
+        >
+          Unpin
+        </Button>
       )}
     </div>
   );
@@ -116,7 +111,7 @@ function PinnedAddrRow({
   const preview = event ? title || previewText(event.content) : "Pinned event";
 
   return (
-    <div className="group/pin flex items-start gap-2 min-w-0 rounded-md px-2 py-1.5 hover:bg-secondary/60">
+    <div className="group/pin flex items-start gap-2 min-w-0 clip-corner px-2 py-1.5 hover:bg-secondary/60">
       <div className="flex min-w-0 flex-1 flex-col items-start gap-0.5">
         <span className="flex max-w-full items-center gap-1.5">
           <span className="shrink-0 text-3xs font-semibold uppercase tracking-wide text-amber-500/90">
@@ -133,20 +128,15 @@ function PinnedAddrRow({
         </span>
       </div>
       {canModerate && (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant="ghost"
-              size="icon"
-              aria-label="Unpin event"
-              className="size-6 touch:size-10 shrink-0 text-muted-foreground hover:text-destructive opacity-0 group-hover/pin:opacity-100 touch:opacity-100 focus-visible:opacity-100 transition-opacity"
-              onClick={() => onUnpin(pinRef)}
-            >
-              <X className="size-3.5" />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent>Unpin</TooltipContent>
-        </Tooltip>
+        <Button
+          variant="ghost"
+          size="sm"
+          aria-label="Unpin event"
+          className="h-6 touch:h-9 shrink-0 px-2 touch:px-3 text-2xs touch:text-xs text-muted-foreground hover:text-destructive opacity-0 group-hover/pin:opacity-100 touch:opacity-100 focus-visible:opacity-100 transition-opacity"
+          onClick={() => onUnpin(pinRef)}
+        >
+          Unpin
+        </Button>
       )}
     </div>
   );
@@ -177,8 +167,8 @@ export function PinnedMessagesBar({
   return (
     <div
       className={cn(
-        "shrink-0 mx-2 overflow-hidden transition-all duration-300 ease-in-out",
-        expanded ? "mt-2 max-h-72 opacity-100" : "mt-0 max-h-0 opacity-0",
+        "shrink-0 mx-gutter overflow-hidden transition-all duration-300 ease-in-out",
+        expanded ? "mt-stack max-h-72 opacity-100" : "mt-0 max-h-0 opacity-0",
       )}
       aria-hidden={!expanded}
     >

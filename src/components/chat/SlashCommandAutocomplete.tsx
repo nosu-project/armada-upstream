@@ -260,80 +260,83 @@ export function SlashCommandAutocomplete({
   const dropdown = (
     <div
       data-autocomplete-dropdown
-      className="fixed z-[300] w-[320px] max-w-[calc(100vw-1rem)] rounded-xl border border-border bg-popover shadow-lg overflow-hidden animate-in fade-in-0 zoom-in-95 slide-in-from-bottom-2 duration-150 pointer-events-auto"
+      className="fixed z-[300] w-[320px] max-w-[calc(100vw-1rem)] vessel-lift pointer-events-auto"
       style={{ bottom: dropdownPos.bottom, left: dropdownPos.left }}
     >
-      {/* No top padding: it would inset the sticky headers and leave a slit. */}
-      <div ref={listRef} className="max-h-[260px] overflow-y-auto overflow-x-hidden pb-1">
-        {sections.map((section) => (
-          <div key={section.key}>
-            {(section.bot || section.label) && (
-              // Sticky per section so the current bot's header stays pinned. Opaque.
-              <div className="sticky top-0 z-10 flex items-center gap-1.5 bg-popover px-3 pt-2 pb-1 text-3xs font-semibold uppercase tracking-wide text-muted-foreground">
-                {section.bot ? <BotIdentity pubkey={section.bot} /> : section.label}
-              </div>
-            )}
-            {section.rows.map((row) => {
-              flatIndex += 1;
-              const index = flatIndex;
-              const isBot = row.type === "bot";
-              const command = isBot ? row.entry.command : row.command;
-              const args = isBot ? row.entry.command.args : [];
-              return (
-                <button
-                  key={rowKey(row)}
-                  data-slash-item
-                  className={cn(
-                    // scroll-mt clears the sticky header when arrowing.
-                    "w-full flex items-baseline gap-2 scroll-mt-8 px-3 py-2 text-left transition-colors cursor-pointer",
-                    index === selectedIndex ? "bg-accent text-accent-foreground" : "hover:bg-secondary/60",
-                  )}
-                  // Pointer-down fires reliably on touch; preventDefault keeps composer focus.
-                  onPointerDown={(e) => {
-                    e.preventDefault();
-                    selectRow(row);
-                  }}
-                >
-                  {section.key === "recents" && row.type === "bot" && (
-                    <span className="self-center">
-                      <BotIdentity pubkey={row.entry.bot} avatarOnly />
+      <div className="vessel overflow-hidden animate-in fade-in-0 zoom-in-95 slide-in-from-bottom-2 duration-150">
+        {/* No top padding: it would inset the sticky headers and leave a slit. */}
+        <div ref={listRef} className="max-h-[260px] overflow-y-auto overflow-x-hidden px-1 pb-1">
+          {sections.map((section) => (
+            <div key={section.key}>
+              {(section.bot || section.label) && (
+                // Sticky per section so the current bot's header stays pinned. Opaque.
+                <div className="sticky top-0 z-10 flex items-center gap-1.5 bg-popover px-2 pt-2 pb-1 text-3xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  {section.bot ? <BotIdentity pubkey={section.bot} /> : section.label}
+                </div>
+              )}
+              {section.rows.map((row) => {
+                flatIndex += 1;
+                const index = flatIndex;
+                const isBot = row.type === "bot";
+                const command = isBot ? row.entry.command : row.command;
+                const args = isBot ? row.entry.command.args : [];
+                return (
+                  <button
+                    key={rowKey(row)}
+                    data-slash-item
+                    data-highlighted={index === selectedIndex || undefined}
+                    className={cn(
+                      // scroll-mt clears the sticky header when arrowing.
+                      "relative w-full flex items-baseline gap-2 scroll-mt-8 menu-row clip-corner px-2 py-1.5 text-left transition-colors cursor-pointer",
+                      index === selectedIndex ? "bg-foreground/[0.08]" : "hover:bg-foreground/[0.05]",
+                    )}
+                    // Pointer-down fires reliably on touch; preventDefault keeps composer focus.
+                    onPointerDown={(e) => {
+                      e.preventDefault();
+                      selectRow(row);
+                    }}
+                  >
+                    {section.key === "recents" && row.type === "bot" && (
+                      <span className="self-center">
+                        <BotIdentity pubkey={row.entry.bot} avatarOnly />
+                      </span>
+                    )}
+                    <span className="font-mono text-sm font-semibold shrink-0">
+                      {!isBot && row.command.usage ? row.command.usage : `/${command.name}`}
                     </span>
-                  )}
-                  <span className="font-mono text-sm font-semibold shrink-0">
-                    {!isBot && row.command.usage ? row.command.usage : `/${command.name}`}
-                  </span>
-                  {args.slice(0, MAX_VISIBLE_ARGS).map((a) => (
-                    <span
-                      key={a.name}
-                      className={cn("font-mono text-xs shrink-0", a.required ? "text-foreground/70" : "text-muted-foreground/60")}
-                    >
-                      {a.name}
+                    {args.slice(0, MAX_VISIBLE_ARGS).map((a) => (
+                      <span
+                        key={a.name}
+                        className={cn("font-mono text-xs shrink-0", a.required ? "text-foreground/70" : "text-muted-foreground/60")}
+                      >
+                        {a.name}
+                      </span>
+                    ))}
+                    {args.length > MAX_VISIBLE_ARGS && (
+                      <span
+                        className="shrink-0 font-mono text-xs text-muted-foreground/60"
+                        title={args.slice(MAX_VISIBLE_ARGS).map((a) => a.name).join(" ")}
+                      >
+                        +{args.length - MAX_VISIBLE_ARGS}
+                      </span>
+                    )}
+                    {/* min-w-0 lets `truncate` bite so no row widens the menu. */}
+                    <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+                      {command.description}
                     </span>
-                  ))}
-                  {args.length > MAX_VISIBLE_ARGS && (
-                    <span
-                      className="shrink-0 font-mono text-xs text-muted-foreground/60"
-                      title={args.slice(MAX_VISIBLE_ARGS).map((a) => a.name).join(" ")}
-                    >
-                      +{args.length - MAX_VISIBLE_ARGS}
-                    </span>
-                  )}
-                  {/* min-w-0 lets `truncate` bite so no row widens the menu. */}
-                  <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
-                    {command.description}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-        ))}
+                  </button>
+                );
+              })}
+            </div>
+          ))}
 
-        {showLoading && (
-          <div className="flex items-center gap-2 px-3 py-2 text-xs text-muted-foreground">
-            <span className="size-3 shrink-0 animate-spin rounded-full border-2 border-current border-t-transparent" />
-            {botCount > 0 ? `Loading ${botCount} bot${botCount === 1 ? "" : "s"}…` : "Looking for bots…"}
-          </div>
-        )}
+          {showLoading && (
+            <div className="flex items-center gap-2 px-3 py-2 text-xs text-muted-foreground">
+              <span className="size-3 shrink-0 animate-spin rounded-full border-2 border-current border-t-transparent" />
+              {botCount > 0 ? `Loading ${botCount} bot${botCount === 1 ? "" : "s"}…` : "Looking for bots…"}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

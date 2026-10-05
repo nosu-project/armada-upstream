@@ -1,12 +1,11 @@
-import { ArrowDown, ArrowUp, CheckCircle2, Circle, Loader2, Plus, RotateCcw, Trash2 } from "lucide-react";
+import { ArrowDown, ArrowUp, Bitcoin, CheckCircle2, Circle, DollarSign, Loader2, Plus, RotateCcw, Trash2 } from "lucide-react";
 import { useState } from "react";
-
-import { cn } from "@/lib/utils";
 
 import { nwcWalletPubkey } from "@/lib/walletStorage";
 import { DEFAULT_ESPLORA_APIS, readEsploraApis, writeEsploraApis } from "@/lib/esploraStorage";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { PillTabs, type PillTab } from "@/components/ui/pill-tabs";
 import { Switch } from "@/components/ui/switch";
 import {
   Select,
@@ -23,10 +22,17 @@ import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useToast } from "@/hooks/useToast";
 import { useWallet } from "@/hooks/useWallet";
 
+import type { CurrencyDisplay } from "@/contexts/AppContext";
+
 /**
  * NWC management + zap preferences. The connection string is a SPENDING
  * SECRET: stored per account, never rendered back (only alias and pubkey prefix).
  */
+const CURRENCY_TABS: readonly PillTab<CurrencyDisplay>[] = [
+  { id: "usd", label: "USD", icon: DollarSign },
+  { id: "sats", label: "sats", icon: Bitcoin },
+];
+
 export function WalletSettings() {
   const { connections, activeConnection, addConnection, removeConnection, setActive, webln } = useWallet();
   const { config, updateConfig } = useAppContext();
@@ -193,32 +199,13 @@ export function WalletSettings() {
         label="Display amounts in"
         description="The unit for zaps, fees and totals."
       >
-        <div className="flex items-center gap-1 rounded-lg border border-border p-0.5">
-          <button
-            type="button"
-            onClick={() => updateConfig((c) => ({ ...c, currencyDisplay: "usd" }))}
-            className={cn(
-              "px-3 py-1.5 text-xs font-medium rounded-md transition-colors touch:px-4 touch:py-2",
-              config.currencyDisplay === "usd"
-                ? "bg-primary text-primary-foreground"
-                : "text-muted-foreground hover:text-foreground",
-            )}
-          >
-            USD
-          </button>
-          <button
-            type="button"
-            onClick={() => updateConfig((c) => ({ ...c, currencyDisplay: "sats" }))}
-            className={cn(
-              "px-3 py-1.5 text-xs font-medium rounded-md transition-colors touch:px-4 touch:py-2",
-              config.currencyDisplay === "sats"
-                ? "bg-primary text-primary-foreground"
-                : "text-muted-foreground hover:text-foreground",
-            )}
-          >
-            sats
-          </button>
-        </div>
+        <PillTabs
+          tabs={CURRENCY_TABS}
+          value={config.currencyDisplay}
+          onChange={(currencyDisplay) => updateConfig((c) => ({ ...c, currencyDisplay }))}
+          labels="always"
+          className="w-auto shrink-0"
+        />
       </SettingsRow>
 
       <SettingsRow
@@ -261,13 +248,13 @@ export function WalletSettings() {
                   {i === 0 ? "Primary" : `Fallback ${i}`}
                 </span>
                 <span className="text-xs font-mono truncate flex-1">{url}</span>
-                <Button variant="ghost" size="icon" className="size-7" onClick={() => handleMoveEsplora(i, -1)} disabled={i === 0} title="Move up">
+                <Button variant="ghost" size="icon" className="size-7 touch:size-11" onClick={() => handleMoveEsplora(i, -1)} disabled={i === 0} title="Move up">
                   <ArrowUp className="size-3.5" />
                 </Button>
-                <Button variant="ghost" size="icon" className="size-7" onClick={() => handleMoveEsplora(i, 1)} disabled={i === esploraUrls.length - 1} title="Move down">
+                <Button variant="ghost" size="icon" className="size-7 touch:size-11" onClick={() => handleMoveEsplora(i, 1)} disabled={i === esploraUrls.length - 1} title="Move down">
                   <ArrowDown className="size-3.5" />
                 </Button>
-                <Button variant="ghost" size="icon" className="size-7" onClick={() => handleRemoveEsplora(i)} disabled={esploraUrls.length <= 1} title="Remove">
+                <Button variant="ghost" size="icon" className="size-7 touch:size-11" onClick={() => handleRemoveEsplora(i)} disabled={esploraUrls.length <= 1} title="Remove">
                   <Trash2 className="size-3.5 text-destructive" />
                 </Button>
               </div>

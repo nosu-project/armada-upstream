@@ -1,4 +1,4 @@
-import { AtSign, Check, Copy, Flag, Globe, MessageSquare, MoreHorizontal, Music, UserCheck, UserMinus, UserX } from "lucide-react";
+import { AtSign, Check, Copy, Globe, MessageSquare, MoreHorizontal, Music, UserCog, UserMinus } from "lucide-react";
 import { Slot } from "@radix-ui/react-slot";
 import { useState, type MouseEvent } from "react";
 import { useNavigate } from "react-router-dom";
@@ -6,22 +6,25 @@ import { useNavigate } from "react-router-dom";
 import { DittoIcon } from "@/components/brand/DittoIcon";
 import { BotPill } from "@/components/BotPill";
 import { EmojifiedText } from "@/components/chat/CustomEmoji";
-import { MemberModerationActions } from "@/components/chat/MemberModerationActions";
+import { UserModerationMenuSection } from "@/components/chat/ModerationMenuSection";
+import { RolePickerItems } from "@/components/chat/RolePickerItems";
 import { FollowButton } from "@/components/FollowButton";
-import { ReportDialog } from "@/components/ReportDialog";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { FallbackImage } from "@/components/ui/FallbackImage";
 import {
   DropdownMenu,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useAuthor } from "@/hooks/useAuthor";
-import { useChatScope } from "@/hooks/useChatScope";
-import { useMuteToggle } from "@/hooks/useMuteList";
 import { useNsite } from "@/hooks/useNsite";
 import { useOpenProfile } from "@/hooks/useOpenProfile";
 import { usePrefetchProfile } from "@/hooks/usePrefetchProfile";
@@ -32,16 +35,23 @@ import { useFollowToggle } from "@/hooks/useFollowToggle";
 import { requestMention } from "@/hooks/useMentionBus";
 import { useProfileTheme, usePrefetchProfileTheme } from "@/hooks/useProfileTheme";
 import { isStatusExpired, useUserStatus } from "@/hooks/useUserStatus";
+import { useUserModeration, type UserModeration } from "@/hooks/useUserModeration";
 import { toast } from "@/hooks/useToast";
 import { getAvatarShape } from "@/lib/avatarShape";
 import { dittoProfileUrl } from "@/lib/dittoUrl";
 import { getDisplayName } from "@/lib/getDisplayName";
-import { reportDestination } from "@/lib/report";
 import { tryNpubEncode } from "@/lib/safeNip19";
 import { sanitizeImageSrc } from "@/lib/sanitizeUrl";
 import { cn } from "@/lib/utils";
 import { writeClipboardText } from "@/lib/clipboard";
 import { buildThemeVarStyle } from "@/themes";
+
+const MENU_PARTS = {
+  Item: DropdownMenuItem,
+  Sub: DropdownMenuSub,
+  SubTrigger: DropdownMenuSubTrigger,
+  SubContent: DropdownMenuSubContent,
+};
 
 interface ProfilePreviewCardProps {
   pubkey: string;
@@ -51,12 +61,11 @@ interface ProfilePreviewCardProps {
 function ProfilePreviewBody({
   pubkey,
   onAction,
-  onReport,
+  moderation,
 }: {
   pubkey: string;
   onAction?: () => void;
-  /** Absent when this surface has no one to report to (see `reportDestination`). */
-  onReport?: () => void;
+  moderation: UserModeration;
 }) {
   const author = useAuthor(pubkey);
   const navigate = useNavigate();
@@ -77,7 +86,6 @@ function ProfilePreviewBody({
   const npub = tryNpubEncode(pubkey);
   const [copied, setCopied] = useState(false);
   const isSelf = user?.pubkey === pubkey;
-  const mute = useMuteToggle(pubkey);
   const { isFollowing, isPending: followPending, toggle: toggleFollow } = useFollowToggle(pubkey);
 
   const copyNpub = () => {
@@ -116,54 +124,51 @@ function ProfilePreviewBody({
       <div className="h-16 bg-secondary relative">
         <FallbackImage src={banner} imeta={author.data?.imeta?.banner} className="w-full h-full object-cover" loading="lazy" />
 
-        {/* Negative actions (unfollow, mute, report) live in this overflow menu. */}
-        {!isSelf && (isFollowing || mute.canMute || (user && onReport)) && (
+        {/* Negative actions (unfollow, roles, moderation) live in this overflow menu. */}
+        {(moderation.rolePicker || (!isSelf && (isFollowing || moderation.actions.length > 0))) && (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button
                 size="icon"
                 variant="ghost"
                 aria-label="More actions"
-                className="absolute right-1.5 top-1.5 z-10 size-8 rounded-full text-foreground drop-shadow hover:bg-background/40"
+                className="absolute right-1.5 top-1.5 z-10 size-8 touch:size-11 clip-corner-lg text-foreground drop-shadow hover:bg-background/40"
               >
                 <MoreHorizontal className="size-4" />
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-44">
+            <DropdownMenuContent align="end" className="w-52">
               {/* Stays open so the flip back to Follow is visible. */}
-              {isFollowing && (
-                <DropdownMenuItem
-                  disabled={followPending}
-                  onSelect={() => void toggleFollow()}
-                >
-                  <UserMinus className="mr-2 size-4" />
+              {!isSelf && isFollowing && (
+                <DropdownMenuItem disabled={followPending} onSelect={() => void toggleFollow()}>
+                  <UserMinus className="size-4" />
                   Unfollow
                 </DropdownMenuItem>
               )}
-              {mute.canMute && (
-                <DropdownMenuItem
-                  disabled={mute.pending}
-                  className={!mute.muted ? "text-destructive focus:text-destructive" : undefined}
-                  onSelect={() => {
-                    // Muting unmounts the card, so close the popover first.
-                    onAction?.();
-                    void mute.toggle();
-                  }}
-                >
-                  {mute.muted
-                    ? <UserCheck className="mr-2 size-4" />
-                    : <UserX className="mr-2 size-4" />}
-                  {mute.label}
-                </DropdownMenuItem>
+              {moderation.rolePicker && (
+                <DropdownMenuSub>
+                  <DropdownMenuSubTrigger>
+                    <UserCog className="size-4" />
+                    Roles
+                  </DropdownMenuSubTrigger>
+                  <DropdownMenuSubContent className="w-56 max-h-72 overflow-y-auto">
+                    <RolePickerItems
+                      CheckboxItem={DropdownMenuCheckboxItem}
+                      pubkey={pubkey}
+                      catalog={moderation.rolePicker.catalog}
+                      heldRoleIds={moderation.rolePicker.heldRoleIds}
+                      isToggling={moderation.rolePicker.isToggling}
+                      onToggle={moderation.rolePicker.onToggle}
+                    />
+                  </DropdownMenuSubContent>
+                </DropdownMenuSub>
               )}
-              {user && onReport && (
-                <DropdownMenuItem
-                  className="text-destructive focus:text-destructive"
-                  onSelect={onReport}
-                >
-                  <Flag className="mr-2 size-4" />
-                  Report
-                </DropdownMenuItem>
+              {moderation.actions.length > 0 && (
+                <>
+                  {!isSelf && (isFollowing || moderation.rolePicker) && <DropdownMenuSeparator />}
+                  {/* Blocking or kicking unmounts the card, so close it first. */}
+                  <UserModerationMenuSection parts={MENU_PARTS} actions={moderation.actions} onBeforeSelect={onAction} />
+                </>
               )}
             </DropdownMenuContent>
           </DropdownMenu>
@@ -317,7 +322,7 @@ function ProfilePreviewBody({
             View profile
           </Button>
           {dittoProfileHref && (
-            <Button size="icon" variant="secondary" className="size-8 clip-corner-lg shrink-0" asChild>
+            <Button size="icon" variant="secondary" className="size-8 touch:size-11 clip-corner-lg shrink-0" asChild>
               <a
                 href={dittoProfileHref}
                 target="_blank"
@@ -331,7 +336,7 @@ function ProfilePreviewBody({
             </Button>
           )}
           {nsite && (
-            <Button size="icon" variant="secondary" className="size-8 clip-corner-lg shrink-0" asChild>
+            <Button size="icon" variant="secondary" className="size-8 touch:size-11 clip-corner-lg shrink-0" asChild>
               <a
                 href={nsite.url}
                 target="_blank"
@@ -346,8 +351,6 @@ function ProfilePreviewBody({
           )}
         </div>
 
-        {/* Renders nothing unless the viewer is staff over this member. */}
-        <MemberModerationActions pubkey={pubkey} onAction={onAction} className="mt-3" />
       </div>
     </>
   );
@@ -361,11 +364,7 @@ export function ProfilePreviewCard({ pubkey, children }: ProfilePreviewCardProps
   const [open, setOpen] = useState(false);
   // The Popover is built on first open (every row has two triggers); latched.
   const [armed, setArmed] = useState(false);
-  const [reportOpen, setReportOpen] = useState(false);
   const prefetchTheme = usePrefetchProfileTheme();
-  // The surrounding room decides where reports go; no room means public.
-  const chatScope = useChatScope();
-  const reportTo = reportDestination(chatScope);
 
   if (!armed) {
     return (
@@ -386,8 +385,30 @@ export function ProfilePreviewCard({ pubkey, children }: ProfilePreviewCardProps
   }
 
   return (
+    <ArmedPreviewCard pubkey={pubkey} open={open} onOpenChange={setOpen} prefetchTheme={prefetchTheme}>
+      {children}
+    </ArmedPreviewCard>
+  );
+}
+
+/** Split out so rows that were never opened don't pay for the moderation hook. */
+function ArmedPreviewCard({
+  pubkey,
+  open,
+  onOpenChange,
+  prefetchTheme,
+  children,
+}: {
+  pubkey: string;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  prefetchTheme: (pubkey: string) => void;
+  children: React.ReactNode;
+}) {
+  const moderation = useUserModeration(pubkey);
+  return (
     <>
-      <Popover open={open} onOpenChange={setOpen}>
+      <Popover open={open} onOpenChange={onOpenChange}>
         <PopoverTrigger
           asChild
           onPointerEnter={() => prefetchTheme(pubkey)}
@@ -396,29 +417,11 @@ export function ProfilePreviewCard({ pubkey, children }: ProfilePreviewCardProps
           {children}
         </PopoverTrigger>
         {open && (
-          <ThemedPreviewContent
-            pubkey={pubkey}
-            onClose={() => setOpen(false)}
-            onReport={
-              reportTo
-                ? () => {
-                    setOpen(false);
-                    setReportOpen(true);
-                  }
-                : undefined
-            }
-          />
+          <ThemedPreviewContent pubkey={pubkey} onClose={() => onOpenChange(false)} moderation={moderation} />
         )}
       </Popover>
       {/* Outside the popover: Report closes the card, which would unmount the dialog. */}
-      {reportOpen && reportTo && (
-        <ReportDialog
-          open={reportOpen}
-          onOpenChange={setReportOpen}
-          destination={reportTo}
-          target={{ pubkey }}
-        />
-      )}
+      {moderation.dialogs}
     </>
   );
 }
@@ -427,11 +430,11 @@ export function ProfilePreviewCard({ pubkey, children }: ProfilePreviewCardProps
 function ThemedPreviewContent({
   pubkey,
   onClose,
-  onReport,
+  moderation,
 }: {
   pubkey: string;
   onClose: () => void;
-  onReport?: () => void;
+  moderation: UserModeration;
 }) {
   const dittoTheme = useProfileTheme(pubkey).data?.theme;
   const themeStyle = dittoTheme ? buildThemeVarStyle(dittoTheme.colors) : undefined;
@@ -443,10 +446,10 @@ function ThemedPreviewContent({
       sideOffset={8}
       style={themeStyle}
       // Scrolls when taller than Radix's available height rather than clipping.
-      className="w-72 p-0 rounded-2xl overflow-x-hidden overflow-y-auto overscroll-contain border border-border shadow-xl"
+      className="w-72 p-0 overflow-x-hidden overflow-y-auto overscroll-contain"
       onClick={(e) => e.stopPropagation()}
     >
-      <ProfilePreviewBody pubkey={pubkey} onAction={onClose} onReport={onReport} />
+      <ProfilePreviewBody pubkey={pubkey} onAction={onClose} moderation={moderation} />
     </PopoverContent>
   );
 }

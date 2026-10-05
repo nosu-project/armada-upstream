@@ -200,7 +200,7 @@ export function RelayBootstrapForm({
               <button
                 type="button"
                 aria-label="What is a relay address?"
-                className="-m-1.5 flex size-7 items-center justify-center rounded-full p-1.5 text-muted-foreground/60 hover:text-muted-foreground touch:size-11"
+                className="-m-1.5 flex size-7 items-center justify-center clip-corner-lg p-1.5 text-muted-foreground/60 hover:text-muted-foreground touch:size-11"
               >
                 <HelpCircle className="size-3.5" />
               </button>

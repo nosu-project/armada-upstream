@@ -111,7 +111,7 @@ export function EmojiPackCard({ event, expanded = false, className }: EmojiPackC
   return (
     <div
       className={cn(
-        "flex flex-col max-w-sm w-full rounded-xl border border-border/60 bg-card overflow-hidden my-1.5",
+        "flex flex-col max-w-sm w-full clip-hairline-lg [--edge:var(--border)/0.6] [--fill:var(--card)] [--fill-hover:var(--card)] overflow-hidden my-1.5",
         className,
       )}
       onClick={(e) => e.stopPropagation()}
@@ -121,7 +121,7 @@ export function EmojiPackCard({ event, expanded = false, className }: EmojiPackC
           {picture ? (
             <FallbackImage
               src={picture}
-              className="size-8 shrink-0 rounded-md object-cover border border-border/60"
+              className="size-8 shrink-0 clip-corner object-cover"
               fallback={<Smile className="size-4 shrink-0 text-primary" />}
             />
           ) : (

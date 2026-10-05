@@ -302,7 +302,7 @@ export function QuickSwitcher() {
       <CommandInput placeholder="Where would you like to go?" onValueChange={setQuery} />
       {/* Prevent mousedown so the input keeps focus. */}
       <div
-        className="flex flex-wrap gap-1 border-b px-2 py-1.5"
+        className="flex flex-wrap gap-1 border-b border-chrome px-3 py-2"
         onMouseDown={(e) => e.preventDefault()}
       >
         <ToggleGroup
@@ -315,7 +315,7 @@ export function QuickSwitcher() {
             <ToggleGroupItem
               key={t.value}
               value={t.value}
-              className="h-7 px-2 text-xs data-[state=on]:bg-primary data-[state=on]:text-primary-foreground"
+              className="h-auto px-3 py-1.5 touch:py-2.5 text-sm font-normal clip-corner-lg text-muted-foreground hover:bg-foreground/5 hover:text-foreground data-[state=on]:bg-primary data-[state=on]:font-medium data-[state=on]:text-primary-foreground"
             >
               {t.label}
             </ToggleGroupItem>

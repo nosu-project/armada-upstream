@@ -320,7 +320,7 @@ export function Lightbox({ media, currentIndex, onClose, onNext, onPrev }: Light
               type="button"
               aria-label="Close"
               title="Close (Esc)"
-              className="p-2.5 rounded-full text-white/70 hover:text-white hover:bg-white/10 transition-colors"
+              className="p-2.5 touch:p-3 clip-corner-lg text-white/70 hover:text-white hover:bg-white/10 transition-colors"
               onClick={(e) => {
                 e.stopPropagation();
                 e.preventDefault();
@@ -341,7 +341,7 @@ export function Lightbox({ media, currentIndex, onClose, onNext, onPrev }: Light
               e.stopPropagation();
               onPrev();
             }}
-            className="absolute left-3 top-1/2 -translate-y-1/2 z-10 p-2 rounded-full bg-black/40 text-white/80 hover:text-white hover:bg-black/60 backdrop-blur-sm transition-all hidden sm:flex"
+            className="absolute left-3 top-1/2 -translate-y-1/2 z-10 p-2 touch:p-2.5 clip-corner-lg bg-black/40 text-white/80 hover:text-white hover:bg-black/60 backdrop-blur-sm transition-all hidden sm:flex"
           >
             <ChevronLeft className="size-6" />
           </button>
@@ -355,7 +355,7 @@ export function Lightbox({ media, currentIndex, onClose, onNext, onPrev }: Light
               e.stopPropagation();
               onNext();
             }}
-            className="absolute right-3 top-1/2 -translate-y-1/2 z-10 p-2 rounded-full bg-black/40 text-white/80 hover:text-white hover:bg-black/60 backdrop-blur-sm transition-all hidden sm:flex"
+            className="absolute right-3 top-1/2 -translate-y-1/2 z-10 p-2 touch:p-2.5 clip-corner-lg bg-black/40 text-white/80 hover:text-white hover:bg-black/60 backdrop-blur-sm transition-all hidden sm:flex"
           >
             <ChevronRight className="size-6" />
           </button>
@@ -382,7 +382,7 @@ export function Lightbox({ media, currentIndex, onClose, onNext, onPrev }: Light
                       const url = media[i].url;
                       setRevealed((prev) => new Set(prev).add(url));
                     }}
-                    className="flex flex-col items-center gap-3 rounded-2xl bg-white/10 px-8 py-6 text-white transition-colors hover:bg-white/15"
+                    className="flex flex-col items-center gap-3 clip-corner-lg bg-white/10 px-8 py-6 text-white transition-colors hover:bg-white/15"
                   >
                     <EyeOff className="size-8" />
                     <span className="text-sm font-bold tracking-wide">SPOILER</span>
@@ -477,7 +477,7 @@ function LightboxDownloadButton({ item }: { item: LightboxItem }) {
       aria-label={`Download ${noun}`}
       title="Download"
       disabled={downloading}
-      className="p-2.5 rounded-full text-white/70 hover:text-white hover:bg-white/10 transition-colors disabled:opacity-60 disabled:cursor-wait"
+      className="p-2.5 touch:p-3 clip-corner-lg text-white/70 hover:text-white hover:bg-white/10 transition-colors disabled:opacity-60 disabled:cursor-wait"
       onClick={handleDownload}
     >
       {downloading ? <Loader2 className="size-5 animate-spin" /> : <Download className="size-5" />}
@@ -527,7 +527,7 @@ function LightboxShareButton({ item }: { item: LightboxItem }) {
       aria-label={`Share ${noun}`}
       title="Share"
       disabled={sharing}
-      className="p-2.5 rounded-full text-white/70 hover:text-white hover:bg-white/10 transition-colors disabled:opacity-60 disabled:cursor-wait"
+      className="p-2.5 touch:p-3 clip-corner-lg text-white/70 hover:text-white hover:bg-white/10 transition-colors disabled:opacity-60 disabled:cursor-wait"
       onClick={handleShare}
     >
       {sharing ? <Loader2 className="size-5 animate-spin" /> : <Share2 className="size-5" />}
@@ -941,7 +941,7 @@ function LightboxImage({
       <ContextMenuContent className="w-48" style={{ zIndex: 210 }}>
         {actions.map((action) => (
           <ContextMenuItem key={action.id} onSelect={action.onSelect}>
-            <action.icon className="mr-2 size-4" />
+            <action.icon className="size-4" />
             {action.label}
           </ContextMenuItem>
         ))}

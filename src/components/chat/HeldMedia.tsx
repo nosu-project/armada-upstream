@@ -43,7 +43,7 @@ export function HeldMedia({
   }
 
   return (
-    <div className="my-1.5 flex max-w-sm items-center gap-3 rounded-lg bg-muted/60 px-3 py-2 whitespace-normal">
+    <div className="my-1.5 flex max-w-sm items-center gap-3 clip-corner-lg bg-muted/60 px-3 py-2 whitespace-normal">
       <EyeOff className="size-4 shrink-0 text-muted-foreground" aria-hidden />
       <div className="min-w-0 flex-1">
         <div className="truncate text-sm font-medium leading-tight">{title}</div>

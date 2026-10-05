@@ -118,7 +118,7 @@ export function ProfileShareDialog({ open, onOpenChange }: ProfileShareDialogPro
               <button
                 type="button"
                 onClick={copy}
-                className="group w-full min-w-0 max-w-full overflow-hidden flex items-center gap-2 clip-corner-lg border-transparent bg-background/40 px-3 py-3 text-left transition-colors hover:bg-background/70"
+                className="group w-full min-w-0 max-w-full overflow-hidden flex items-center gap-2 clip-corner-lg bg-background/40 px-3 py-3 text-left transition-colors hover:bg-background/70"
               >
                 <Link2 className="size-4 shrink-0 text-muted-foreground" />
                 <span className="flex-1 min-w-0 truncate font-mono text-sm">{url}</span>

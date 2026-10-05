@@ -1,4 +1,4 @@
-import { AlertCircle, Ban, Braces, Copy, EyeOff, Flag, Forward, Link, Link2, MessagesSquare, Pencil, Pin, PinOff, Reply, Trash2, User, UserCheck, UserMinus, UserX, Zap } from "lucide-react";
+import { AlertCircle, Braces, Copy, EyeOff, Flag, Forward, Link, Link2, MessagesSquare, Pencil, Pin, PinOff, Reply, Trash2, User, Zap } from "lucide-react";
 import { nip19 } from "nostr-tools";
 import { memo, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 
@@ -27,7 +27,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
-import { DropdownMenuItem, DropdownMenuSeparator } from "@/components/ui/dropdown-menu";
+import { MessageMenuItems } from "@/components/chat/MessageMenuItems";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { LazyContextMenuContent, useLazyContextMenu } from "@/components/chat/LazyContextMenu";
 import { EventJsonDialog } from "@/components/EventJsonDialog";
@@ -37,7 +37,7 @@ import { useChatScope } from "@/hooks/useChatScope";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useHiddenMessages } from "@/hooks/useHiddenMessages";
 import { useIsTouch } from "@/hooks/useIsMobile";
-import { useMuteToggle } from "@/hooks/useMuteList";
+import { useUserModeration } from "@/hooks/useUserModeration";
 import { useMediaWithFallback } from "@/hooks/useMediaWithFallback";
 import { useOpenProfile } from "@/hooks/useOpenProfile";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
@@ -253,7 +253,7 @@ function ThreadBadge({
     <button
       type="button"
       onClick={onClick}
-      className="mt-1 inline-flex max-w-full items-center gap-2 rounded-lg border border-transparent bg-primary/[0.07] py-1 pl-1 pr-2.5 touch:py-2 touch:pr-3.5 text-left transition-colors hover:border-primary/30 hover:bg-primary/[0.12]"
+      className="mt-1 inline-flex max-w-full items-center gap-2 clip-corner bg-primary/[0.07] py-1 pl-1 pr-2.5 touch:py-2 touch:pr-3.5 text-left transition-colors hover:bg-primary/[0.12]"
     >
       <span className="flex shrink-0 -space-x-1.5">
         {shown.map((pk) => (
@@ -322,12 +322,6 @@ export interface ChatMessageProps {
   onDiscard?: () => void;
   onTogglePin?: (event: ChatMsg) => void;
   onDelete?: (event: ChatMsg) => void;
-  /** Concord kick; per-author visibility gated by {@link canKick}. Confirms first. */
-  onKick?: (pubkey: string) => void;
-  canKick?: boolean;
-  /** Concord ban; gated by {@link canBan}. Confirms first (may rotate keys). */
-  onBan?: (pubkey: string) => void;
-  canBan?: boolean;
   onOpenThread?: (event: ChatMsg) => void;
   /** Inline (quoted) reply, distinct from a thread reply. */
   onReply?: (event: ChatMsg) => void;
@@ -395,10 +389,6 @@ const ChatMessageInner = memo(function ChatMessageInner({
   onDiscard,
   onTogglePin,
   onDelete,
-  onKick,
-  canKick,
-  onBan,
-  canBan,
   onOpenThread,
   onReply,
   onForward,
@@ -496,7 +486,7 @@ const ChatMessageInner = memo(function ChatMessageInner({
   const canReport = Boolean(reportTo && user && !isOwn && !identityOverride);
 
   // A private list on the user's account, so offered in every room.
-  const mute = useMuteToggle(identityOverride ? undefined : event.pubkey);
+  const personModeration = useUserModeration(identityOverride ? undefined : event.pubkey, { report: false });
 
   // Suppressed for mesh/proxied rows (peer id, not a key).
   const openProfile = useOpenProfile();
@@ -651,28 +641,15 @@ const ChatMessageInner = memo(function ChatMessageInner({
       },
     });
   }
-  // Only the first of hide/block/report/delete opens the moderation group.
   const showHide = hiddenMessages.canHide && !isEditing && !isOwn;
-  const showMute = mute.canMute && !isEditing;
   const showReport = canReport && !isEditing;
   if (showHide) {
     menuActions.push({
       id: "hide",
       label: "Hide message",
       icon: EyeOff,
-      groupStart: true,
+      moderation: true,
       onSelect: () => hiddenMessages.hide(event.id),
-    });
-  }
-  if (showMute) {
-    menuActions.push({
-      id: "mute",
-      label: mute.muted ? "Unblock person" : "Block person",
-      icon: mute.muted ? UserCheck : UserX,
-      // Unblocking restores someone, so it isn't styled destructive.
-      destructive: !mute.muted,
-      groupStart: !showHide,
-      onSelect: () => void mute.toggle(),
     });
   }
   if (showReport) {
@@ -681,7 +658,7 @@ const ChatMessageInner = memo(function ChatMessageInner({
       label: "Report message",
       icon: Flag,
       destructive: true,
-      groupStart: !showHide && !showMute,
+      moderation: true,
       onSelect: () => setReportOpen(true),
     });
   }
@@ -691,32 +668,16 @@ const ChatMessageInner = memo(function ChatMessageInner({
       label: "Delete message",
       icon: Trash2,
       destructive: true,
-      groupStart: !showHide && !showMute && !showReport,
+      // Your own message is housekeeping; someone else's is moderation.
+      groupStart: isOwn,
+      moderation: !isOwn,
       onSelect: () => setConfirmDelete(true),
     });
   }
-  // `canKick`/`canBan` already exclude self and the owner.
-  const showKick = Boolean(onKick) && Boolean(canKick) && !isEditing && !isOwn;
-  const showBan = Boolean(onBan) && Boolean(canBan) && !isEditing && !isOwn;
-  if (showKick) {
-    menuActions.push({
-      id: "kick",
-      label: "Kick from community",
-      icon: UserMinus,
-      destructive: true,
-      groupStart: !showMute && !showReport && !canDelete,
-      onSelect: () => onKick?.(event.pubkey),
-    });
-  }
-  if (showBan) {
-    menuActions.push({
-      id: "ban",
-      label: "Ban from community",
-      icon: Ban,
-      destructive: true,
-      groupStart: !showMute && !showReport && !canDelete && !showKick,
-      onSelect: () => onBan?.(event.pubkey),
-    });
+
+  // The person behind the message: the same actions as the member list and profile card.
+  if (!isEditing) {
+    for (const action of personModeration.actions) menuActions.push({ ...action, moderation: true });
   }
 
   const overflowActions = menuActions.filter(
@@ -971,18 +932,7 @@ const ChatMessageInner = memo(function ChatMessageInner({
         onCloseAutoFocus={keepActionFocus}
         collisionPadding={contextMenu.open ? getComposerCollisionPadding(composerBoundsRef) : undefined}
       >
-        {withImageActions(imageActions, menuActions).map((action, i) => (
-          <div key={action.id}>
-            {action.groupStart && i > 0 && <DropdownMenuSeparator />}
-            <DropdownMenuItem
-              className={action.destructive ? "text-destructive focus:text-destructive" : undefined}
-              onSelect={action.onSelect}
-            >
-              <action.icon className="mr-2 size-4" />
-              {action.label}
-            </DropdownMenuItem>
-          </div>
-        ))}
+        <MessageMenuItems actions={withImageActions(imageActions, menuActions)} />
       </LazyContextMenuContent>
     )}
     {isTouch && (sheetOpen || sheetBuilt) && (

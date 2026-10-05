@@ -321,7 +321,7 @@ export function ForumFeed({
 
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain scrollbar-stable">
         <div className="mx-auto w-full max-w-2xl px-3 py-4 sm:px-4">
-          <div className="mb-3 flex flex-wrap items-center gap-2">
+          <div className="mt-0.5 mb-[18px] flex flex-wrap items-center gap-2">
             <PillTabs tabs={SORT_TABS} value={sort} onChange={onSortChange} className="w-auto" />
             {onNewPost && (
               <Button size="sm" className="ml-auto clip-corner-lg h-9 gap-1.5 touch:h-11" onClick={onNewPost}>

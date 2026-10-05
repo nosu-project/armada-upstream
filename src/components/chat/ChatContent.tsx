@@ -1905,7 +1905,7 @@ function LightningInvoice({ invoice }: { invoice: string }) {
     <span className="inline-flex items-center gap-1 max-w-full my-1">
       <button
         type="button"
-        className="inline-flex items-center gap-1.5 min-w-0 px-2.5 py-1 touch:px-3.5 touch:py-2 rounded-full border border-amber-500/40 bg-amber-500/10 text-amber-500 text-xs hover:bg-amber-500/20 transition-colors"
+        className="inline-flex items-center gap-1.5 min-w-0 px-2.5 py-1 touch:px-3.5 touch:py-2 touch:min-h-11 clip-corner-lg bg-amber-500/15 text-amber-500 text-xs hover:bg-amber-500/25 transition-colors"
         onClick={(e) => {
           e.stopPropagation();
           writeClipboardText(invoice).then(() => {
@@ -1925,10 +1925,10 @@ function LightningInvoice({ invoice }: { invoice: string }) {
         <button
           type="button"
           className={cn(
-            "shrink-0 px-2.5 py-1 touch:px-3.5 touch:py-2 rounded-full border text-xs font-medium transition-colors disabled:opacity-60",
+            "shrink-0 px-2.5 py-1 touch:px-3.5 touch:py-2 touch:min-h-11 clip-corner-lg text-xs font-medium transition-colors disabled:opacity-60",
             armed
-              ? "border-amber-500 bg-amber-500 text-amber-950 hover:bg-amber-400"
-              : "border-amber-500 bg-amber-500/20 text-amber-500 hover:bg-amber-500/30",
+              ? "bg-amber-500 text-amber-950 hover:bg-amber-400"
+              : "bg-amber-500/25 text-amber-500 hover:bg-amber-500/35",
           )}
           onClick={handlePay}
           disabled={paying || paid}

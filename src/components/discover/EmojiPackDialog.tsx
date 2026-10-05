@@ -475,10 +475,10 @@ function EmojiPackForm({ editEvent, onDone }: { editEvent?: NostrRumor; onDone: 
           disabled={busy}
           aria-label="Pack icon"
           className={cn(
-            "flex size-14 shrink-0 items-center justify-center overflow-hidden rounded-lg border transition-colors",
+            "flex size-14 shrink-0 items-center justify-center overflow-hidden clip-corner-lg transition-colors",
             icon
-              ? "border-transparent"
-              : "border-dashed border-border text-muted-foreground hover:border-muted-foreground/60 hover:bg-foreground/5",
+              ? "bg-secondary/40"
+              : "bg-secondary/40 text-muted-foreground hover:bg-secondary/70 hover:text-foreground",
           )}
         >
           {iconUploading ? (
@@ -575,10 +575,10 @@ function EmojiPackForm({ editEvent, onDone }: { editEvent?: NostrRumor; onDone: 
             onDrop={onDrop}
             disabled={busy}
             className={cn(
-              "flex w-full flex-col items-center gap-2 rounded-lg border border-dashed px-6 py-8 text-center transition-colors",
+              "flex w-full flex-col items-center gap-2 clip-corner-lg px-6 py-8 text-center transition-colors",
               dragging
-                ? "border-primary bg-primary/10 text-foreground"
-                : "border-border text-muted-foreground hover:border-muted-foreground/60 hover:bg-foreground/5",
+                ? "bg-primary/15 text-foreground"
+                : "bg-secondary/40 text-muted-foreground hover:bg-secondary/70",
             )}
           >
             <ImagePlus className="size-6" />

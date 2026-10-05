@@ -35,6 +35,9 @@ export default {
 		extend: {
 			spacing: {
 				'22': '5.5rem',
+				// The layout grid's one gutter (see `--gutter` in index.css).
+				'gutter': 'var(--gutter)',
+				'stack': 'var(--stack)',
 			},
 			// Below `xs`, for dense chat chrome; `chat` is message body text and
 			// `monogram` is avatar initials only, never reading text.

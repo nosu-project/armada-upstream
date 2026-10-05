@@ -9,7 +9,7 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
+import { ChromeDialogContent, ChromeDialogFooter, ChromeDialogHeader, Dialog } from '@/components/ui/dialog';
 import type { EmojiSelection } from '@/components/chat/EmojiPicker';
 import { sanitizeImageSrc } from '@/lib/sanitizeUrl';
 import { FallbackImage } from '@/components/ui/FallbackImage';
@@ -256,12 +256,13 @@ export function ProfileCard({
               </DropdownMenu>
 
               <Dialog open={emojiPickerOpen} onOpenChange={setEmojiPickerOpen}>
-                <DialogContent className="w-fit max-w-[calc(100vw-2rem)] border-0 rounded-[0.55rem] clip-corner-lg bg-popover shadow-none p-0 gap-0 overflow-hidden">
-                  <DialogHeader className="px-4 pt-4 pb-2">
-                    <DialogTitle className="chrome-dialog-title font-mono font-bold lowercase tracking-tight">Set avatar shape</DialogTitle>
-                    <DialogDescription>Pick an emoji to mask your avatar</DialogDescription>
-                  </DialogHeader>
-                  <Suspense fallback={<div className="h-[360px] w-[352px] max-w-[calc(100vw-2rem)]" />}>
+                <ChromeDialogContent
+                  title="Set avatar shape"
+                  className="w-fit max-w-[calc(100vw-2rem)] sm:max-w-[calc(100vw-2rem)]"
+                  contentClassName="p-4 sm:p-5"
+                >
+                  <ChromeDialogHeader icon={SmilePlus} title="set avatar shape" description="Pick an emoji to mask your avatar" className="mb-4" />
+                  <Suspense fallback={<div className="h-[360px] w-[352px] max-w-[calc(100vw-4rem)]" />}>
                     <LazyEmojiPicker onSelect={(selection: EmojiSelection) => {
                       if (selection.type === 'native') {
                         onAvatarShape?.(selection.emoji);
@@ -270,20 +271,19 @@ export function ProfileCard({
                     }} />
                   </Suspense>
                   {hasCustomShape && (
-                    <div className="px-4 pb-4 pt-2 border-t">
+                    <ChromeDialogFooter className="mt-4">
                       <Button
                         type="button"
-                        variant="outline"
-                        size="sm"
-                        className="w-full text-destructive hover:text-destructive"
+                        variant="secondary"
+                        className="text-destructive hover:text-destructive"
                         onClick={() => { onAvatarShape?.(''); setEmojiPickerOpen(false); }}
                       >
                         <XIcon className="size-3.5 mr-1.5" />
                         Remove avatar shape
                       </Button>
-                    </div>
+                    </ChromeDialogFooter>
                   )}
-                </DialogContent>
+                </ChromeDialogContent>
               </Dialog>
             </>
           ) : (
@@ -390,7 +390,7 @@ export function ProfileCard({
                     onChange={(e) => updateField(i, 'value', e.target.value)}
                     className="h-8 text-base md:text-sm"
                   />
-                  <Button type="button" variant="ghost" size="icon" onClick={() => removeField(i)} className="h-8 w-8 text-destructive hover:text-destructive">
+                  <Button type="button" variant="ghost" size="icon" onClick={() => removeField(i)} className="size-8 touch:size-11 text-destructive hover:text-destructive">
                     <Trash2 className="size-3.5" />
                   </Button>
                 </div>

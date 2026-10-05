@@ -513,10 +513,10 @@ export function VoiceDeviceSettings() {
               setRecordingPushToTalk(false);
             }}
             className={cn(
-              "flex min-h-10 touch:min-h-11 w-full items-center justify-center rounded-md border px-3 text-sm font-medium transition-colors",
+              "flex min-h-10 touch:min-h-11 w-full items-center justify-center clip-corner-lg px-3 text-sm font-medium transition-colors",
               recordingPushToTalk
-                ? "border-primary bg-primary/10 text-primary"
-                : "border-transparent bg-background/40 hover:bg-background/70 disabled:cursor-default disabled:opacity-80",
+                ? "bg-primary/10 text-primary"
+                : "bg-secondary hover:bg-secondary/80 disabled:cursor-default disabled:opacity-80",
             )}
           >
             {recordingPushToTalk

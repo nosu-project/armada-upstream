@@ -1,4 +1,4 @@
-import { Copy, MoreVertical, UserCheck, UserX, Volume2, VolumeX } from "lucide-react";
+import { Copy, MoreVertical, Volume2, VolumeX } from "lucide-react";
 
 import { DisplayName } from "@/components/DisplayName";
 import {
@@ -8,6 +8,9 @@ import {
   ContextMenuItem,
   ContextMenuLabel,
   ContextMenuSeparator,
+  ContextMenuSub,
+  ContextMenuSubContent,
+  ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import {
@@ -17,10 +20,14 @@ import {
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Slider } from "@/components/ui/slider";
-import { useMuteToggle } from "@/hooks/useMuteList";
+import { useUserModeration } from "@/hooks/useUserModeration";
+import { UserModerationMenuSection } from "@/components/chat/ModerationMenuSection";
 import { toast } from "@/hooks/useToast";
 import { useScreenShareVolume, useUserVolume } from "@/hooks/useUserVolume";
 import { writeClipboardText } from "@/lib/clipboard";
@@ -79,7 +86,8 @@ function useVoiceMenuItems(
   verified: boolean,
   volumeTarget: PlaybackVolumeTarget,
 ) {
-  const mute = useMuteToggle(pubkey);
+  // Only VERIFIED pubkeys: acting on an unclaimed identity would hit someone else.
+  const moderation = useUserModeration(verified ? pubkey : undefined);
   const [userVolume, setUserVolume] = useUserVolume(pubkey);
   const [screenShareVolume, setScreenShareVolume] = useScreenShareVolume(pubkey);
   const volume = volumeTarget === "screenShare" ? screenShareVolume : userVolume;
@@ -96,16 +104,22 @@ function useVoiceMenuItems(
     );
   };
 
-  return function renderMenuItems({
+  const renderMenuItems = function renderMenuItems({
     Item,
     CheckboxItem,
     Label,
     Separator,
+    Sub,
+    SubTrigger,
+    SubContent,
   }: {
     Item: typeof ContextMenuItem | typeof DropdownMenuItem;
     CheckboxItem: typeof ContextMenuCheckboxItem | typeof DropdownMenuCheckboxItem;
     Label: typeof ContextMenuLabel | typeof DropdownMenuLabel;
     Separator: typeof ContextMenuSeparator | typeof DropdownMenuSeparator;
+    Sub: typeof ContextMenuSub | typeof DropdownMenuSub;
+    SubTrigger: typeof ContextMenuSubTrigger | typeof DropdownMenuSubTrigger;
+    SubContent: typeof ContextMenuSubContent | typeof DropdownMenuSubContent;
   }) {
     return (
       <>
@@ -139,26 +153,16 @@ function useVoiceMenuItems(
           <Copy className="size-4" />
           Copy npub
         </Item>
-        {/* NIP-51 mute, only for VERIFIED pubkeys: muting an unclaimed identity would
-            write someone else's pubkey to the list. */}
-        {verified && mute.canMute && (
+        {moderation.actions.length > 0 && (
           <>
             <Separator />
-            <Item
-              className={cn(
-                "gap-2",
-                !mute.muted && "text-destructive focus:text-destructive",
-              )}
-              onSelect={() => void mute.toggle()}
-            >
-              {mute.muted ? <UserCheck className="size-4" /> : <UserX className="size-4" />}
-              {mute.muted ? "Unblock person" : "Block person"}
-            </Item>
+            <UserModerationMenuSection parts={{ Item, Sub, SubTrigger, SubContent }} actions={moderation.actions} />
           </>
         )}
       </>
     );
   };
+  return { renderMenuItems, dialogs: moderation.dialogs };
 }
 
 /** Right-click voice user menu; pair with {@link VoiceUserMenuButton} for touch. */
@@ -178,7 +182,7 @@ export function VoiceUserContextMenu({
   verified?: boolean;
   children: React.ReactNode;
 }) {
-  const renderMenuItems = useVoiceMenuItems(
+  const { renderMenuItems, dialogs } = useVoiceMenuItems(
     pubkey,
     displayName,
     showVolume,
@@ -187,6 +191,7 @@ export function VoiceUserContextMenu({
   );
 
   return (
+    <>
     <ContextMenu>
       {/* Stop propagation, or the enclosing channel row's context menu opens too. */}
       <ContextMenuTrigger asChild onContextMenu={(e) => e.stopPropagation()}>
@@ -198,9 +203,14 @@ export function VoiceUserContextMenu({
           CheckboxItem: ContextMenuCheckboxItem,
           Label: ContextMenuLabel,
           Separator: ContextMenuSeparator,
+          Sub: ContextMenuSub,
+          SubTrigger: ContextMenuSubTrigger,
+          SubContent: ContextMenuSubContent,
         })}
       </ContextMenuContent>
     </ContextMenu>
+    {dialogs}
+    </>
   );
 }
 
@@ -220,7 +230,7 @@ export function VoiceUserMenuButton({
   verified?: boolean;
   className?: string;
 }) {
-  const renderMenuItems = useVoiceMenuItems(
+  const { renderMenuItems, dialogs } = useVoiceMenuItems(
     pubkey,
     displayName,
     showVolume,
@@ -229,6 +239,7 @@ export function VoiceUserMenuButton({
   );
 
   return (
+    <>
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <button
@@ -239,7 +250,7 @@ export function VoiceUserMenuButton({
           onClick={(e) => e.stopPropagation()}
           onContextMenu={(e) => e.stopPropagation()}
           className={cn(
-            "shrink-0 inline-flex items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-foreground/10 data-[state=open]:text-foreground",
+            "shrink-0 inline-flex items-center justify-center clip-corner-lg text-muted-foreground hover:text-foreground hover:bg-secondary data-[state=open]:text-foreground",
             className,
           )}
         >
@@ -252,8 +263,13 @@ export function VoiceUserMenuButton({
           CheckboxItem: DropdownMenuCheckboxItem,
           Label: DropdownMenuLabel,
           Separator: DropdownMenuSeparator,
+          Sub: DropdownMenuSub,
+          SubTrigger: DropdownMenuSubTrigger,
+          SubContent: DropdownMenuSubContent,
         })}
       </DropdownMenuContent>
     </DropdownMenu>
+    {dialogs}
+    </>
   );
 }

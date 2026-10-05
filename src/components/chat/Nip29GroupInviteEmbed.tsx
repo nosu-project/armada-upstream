@@ -64,7 +64,7 @@ export function Nip29GroupInviteEmbed({ group, className }: Nip29GroupInviteEmbe
   return (
     <div
       className={cn(
-        "block max-w-sm w-full rounded-2xl border border-border bg-secondary/30 overflow-hidden my-1.5",
+        "block max-w-sm w-full clip-hairline-lg [--edge:var(--border)/0.5] [--fill:var(--secondary)/0.3] [--fill-hover:var(--secondary)/0.3] overflow-hidden my-1.5",
         className,
       )}
       onClick={(e) => e.stopPropagation()}

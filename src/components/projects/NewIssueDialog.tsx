@@ -129,10 +129,10 @@ export function NewIssueDialog({ repos, items, onCreate }: {
                     disabled={sending || (!active && labels.length >= MAX_GIT_LABELS)}
                     onClick={() => toggleLabel(label)}
                     className={cn(
-                      "rounded-full border px-2 py-0.5 text-2xs transition-colors disabled:opacity-40",
+                      "clip-corner px-2 py-0.5 text-2xs transition-colors disabled:opacity-40",
                       active
-                        ? "border-primary/60 bg-primary/15 text-foreground"
-                        : "border-border/60 text-muted-foreground hover:border-primary/40 hover:text-foreground",
+                        ? "bg-primary/10 text-primary"
+                        : "bg-secondary text-muted-foreground hover:text-foreground",
                     )}
                   >
                     {label}
@@ -146,7 +146,7 @@ export function NewIssueDialog({ repos, items, onCreate }: {
                   aria-pressed
                   disabled={sending}
                   onClick={() => toggleLabel(label)}
-                  className="flex items-center gap-1 rounded-full border border-primary/60 bg-primary/15 px-2 py-0.5 text-2xs text-foreground"
+                  className="flex items-center gap-1 clip-corner bg-primary/10 px-2 py-0.5 text-2xs text-primary"
                 >
                   {label}
                   <X className="size-2.5" />
@@ -177,7 +177,7 @@ export function NewIssueDialog({ repos, items, onCreate }: {
                     }
                   }}
                   onBlur={commitLabelDraft}
-                  className="min-w-0 rounded-full border border-primary/60 bg-transparent px-2 py-0.5 text-2xs text-foreground outline-none placeholder:text-muted-foreground/60 focus-visible:ring-1 focus-visible:ring-ring"
+                  className="min-w-0 clip-corner bg-secondary px-2 py-0.5 text-2xs text-foreground outline-none placeholder:text-muted-foreground/60 focus-visible:ring-1 focus-visible:ring-ring"
                 />
               ) : labels.length < MAX_GIT_LABELS && (
                 <button
@@ -185,7 +185,7 @@ export function NewIssueDialog({ repos, items, onCreate }: {
                   aria-label="Add a label"
                   disabled={sending}
                   onClick={() => setAddingLabel(true)}
-                  className="flex items-center rounded-full border border-dashed border-border/70 px-2 py-0.5 text-muted-foreground transition-colors hover:border-primary/50 hover:text-foreground disabled:opacity-40"
+                  className="flex items-center clip-corner bg-secondary px-2 py-0.5 text-muted-foreground transition-colors hover:text-foreground disabled:opacity-40"
                 >
                   <Plus className="size-3" />
                 </button>
@@ -208,7 +208,7 @@ export function NewIssueDialog({ repos, items, onCreate }: {
             <Button
               variant="ghost"
               size="icon"
-              className="size-8 text-muted-foreground"
+              className="size-8 touch:size-11 text-muted-foreground"
               aria-label="Attach files"
               disabled={isUploading}
               onClick={() => fileInput.current?.click()}

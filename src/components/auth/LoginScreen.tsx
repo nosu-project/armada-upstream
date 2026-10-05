@@ -469,7 +469,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ isOpen, onClose, onLogin, onS
                         type='button'
                         variant='ghost'
                         size='icon'
-                        className='absolute right-0 top-0 h-full w-10 rounded-l-none border-l border-input bg-muted/40 hover:bg-muted'
+                        className='absolute right-0 top-0 h-full w-10 touch:w-11 clip-corner-lg text-muted-foreground hover:bg-muted/60'
                         title='More login options'
                         aria-label='More login options'
                       >

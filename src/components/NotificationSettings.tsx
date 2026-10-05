@@ -112,7 +112,7 @@ function NativeNotificationHealthPanel({
   return (
     <div className="space-y-3">
       {(blocked || degraded || callsBlocked) && (
-        <div className="rounded-lg border border-warning/40 bg-warning/10 p-3">
+        <div className="clip-hairline-lg [--edge:var(--warning)/0.4] [--fill:var(--warning)/0.1] [--fill-hover:var(--warning)/0.1] p-3">
           <div className="flex items-start gap-2">
             <AlertTriangle className="mt-0.5 size-4 shrink-0 text-warning" />
             <div className="min-w-0 flex-1 space-y-2">
@@ -174,7 +174,7 @@ function NativeNotificationHealthPanel({
         </div>
       )}
 
-      <details className="rounded-lg border border-border px-3 py-2 text-xs">
+      <details className="clip-hairline-lg [--edge:var(--border)/0.5] [--fill-hover:var(--background)/0.4] px-3 py-2 text-xs">
         <summary className="cursor-pointer font-medium">Notification diagnostics</summary>
         <dl className="mt-3 grid grid-cols-[minmax(0,1fr)_auto] gap-x-4 gap-y-1 text-muted-foreground">
           <dt>Service / config</dt>
@@ -373,7 +373,7 @@ function BatteryOptimizationWarning() {
   if (!optimized) return null;
 
   return (
-    <div className="rounded-lg border border-warning/40 bg-warning/10 p-3">
+    <div className="clip-hairline-lg [--edge:var(--warning)/0.4] [--fill:var(--warning)/0.1] [--fill-hover:var(--warning)/0.1] p-3">
       <div className="flex items-start gap-2">
         <AlertTriangle className="mt-0.5 size-4 shrink-0 text-warning" />
         <div className="min-w-0 flex-1">

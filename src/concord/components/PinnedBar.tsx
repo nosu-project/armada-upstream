@@ -43,7 +43,7 @@ function PinRow({
   const jumpable = Boolean(onJump);
 
   return (
-    <div className="group/pin flex items-start gap-2 min-w-0 rounded-md px-2 py-1.5 hover:bg-secondary/60">
+    <div className="group/pin flex items-start gap-2 min-w-0 clip-corner px-2 py-1.5 hover:bg-secondary/60">
       <div className="flex min-w-0 flex-1 flex-col items-start gap-0.5">
       <button
         type="button"
@@ -90,20 +90,15 @@ function PinRow({
       <PinAttachments content={pin.content} tags={pin.tags} onOpenImage={onOpenImage} />
       </div>
       {canUnpin && (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant="ghost"
-              size="sm"
-              disabled={busy}
-              className="h-6 touch:h-9 shrink-0 px-2 touch:px-3 text-muted-foreground hover:text-primary"
-              onClick={() => onUnpin(pin.rumorId)}
-            >
-              {busy ? <Loader2 className="size-3.5 animate-spin" /> : <X className="size-3.5" />}
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent>Unpin</TooltipContent>
-        </Tooltip>
+        <Button
+          variant="ghost"
+          size="sm"
+          disabled={busy}
+          className={cn("h-6 touch:h-9 shrink-0 px-2 touch:px-3 text-2xs touch:text-xs text-muted-foreground hover:text-destructive opacity-0 group-hover/pin:opacity-100 touch:opacity-100 focus-visible:opacity-100 transition-opacity", busy && "opacity-100")}
+          onClick={() => onUnpin(pin.rumorId)}
+        >
+          {busy ? <Loader2 className="size-3.5 animate-spin" /> : "Unpin"}
+        </Button>
       )}
     </div>
   );
@@ -165,8 +160,8 @@ export function PinnedBar({
   return (
     <div
       className={cn(
-        "shrink-0 mx-2 overflow-hidden transition-all duration-300 ease-in-out",
-        expanded ? "mt-2 max-h-72 opacity-100" : "mt-0 max-h-0 opacity-0",
+        "shrink-0 mx-gutter overflow-hidden transition-all duration-300 ease-in-out",
+        expanded ? "mt-stack max-h-72 opacity-100" : "mt-0 max-h-0 opacity-0",
       )}
       aria-hidden={!expanded}
     >
@@ -193,7 +188,7 @@ export function PinnedBar({
             type="button"
             disabled={isRefreshingEdits}
             onClick={onRefreshEdits}
-            className="mb-1.5 flex w-full items-center gap-2 rounded-md bg-foreground/5 px-2 py-1.5 text-left text-2xs text-muted-foreground disabled:opacity-60"
+            className="mb-1.5 flex w-full items-center gap-2 clip-corner-lg bg-foreground/5 px-2 py-1.5 text-left text-2xs text-muted-foreground disabled:opacity-60"
           >
             <Loader2 className={cn("size-3 shrink-0", isRefreshingEdits && "animate-spin")} />
             {isRefreshingEdits

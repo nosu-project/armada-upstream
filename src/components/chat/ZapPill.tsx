@@ -86,7 +86,7 @@ export function ZapPill({
         side="top"
         align="start"
         sideOffset={8}
-        className="w-64 p-0 rounded-xl border-border shadow-lg overflow-hidden"
+        className="w-64 p-0 overflow-hidden"
       >
         <div className="flex items-center gap-2 border-b border-border/60 px-3 py-2">
           <Zap className="size-4 text-amber-500 fill-current" />

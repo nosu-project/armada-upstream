@@ -58,12 +58,19 @@ function ThemeTile({ label, emoji, colors, active, onClick, onEdit }: TileProps)
         type="button"
         onClick={onClick}
         aria-pressed={active}
-        className={cn(
-          "flex w-full flex-col items-stretch gap-1.5 rounded-xl border-2 p-1.5 text-left transition-all",
-          active ? "border-primary" : "border-transparent hover:border-border",
-        )}
+        className="group/tile relative flex w-full flex-col items-stretch gap-1.5 clip-corner-lg p-1.5 text-left transition-colors hover:bg-secondary/60"
       >
-        <div className="relative aspect-[4/3] w-full overflow-hidden rounded-lg border">
+        {/* Drawn inside: an outer ring would be cut off by the tile's clip-path. */}
+        <span
+          aria-hidden
+          className={cn(
+            "pointer-events-none absolute inset-0 z-[1] clip-corner-lg-ring transition-opacity",
+            active
+              ? "[--ring-edge:hsl(var(--primary))]"
+              : "opacity-0 [--ring-edge:hsl(var(--border))] group-hover/tile:opacity-100 group-focus-visible/tile:opacity-100",
+          )}
+        />
+        <div className="relative aspect-[4/3] w-full overflow-hidden clip-corner">
           <Swatch colors={colors} />
           {active && (
             <span className="absolute right-1 top-1 flex size-4 items-center justify-center rounded-full bg-primary text-primary-foreground">

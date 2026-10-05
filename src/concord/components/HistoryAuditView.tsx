@@ -114,13 +114,13 @@ export function HistoryAuditView({ community, onClose }: HistoryAuditViewProps) 
         </p>
 
         {error && (
-          <div className="rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
+          <div className="clip-hairline-lg [--edge:var(--destructive)/0.4] [--fill:var(--destructive)/0.1] [--fill-hover:var(--destructive)/0.1] p-3 text-sm text-destructive">
             {error}
           </div>
         )}
 
         {busy ? (
-          <div className="space-y-3 rounded-xl border bg-secondary/40 p-4">
+          <div className="space-y-3 clip-hairline-lg [--edge:var(--border)/0.5] [--fill:var(--secondary)/0.4] [--fill-hover:var(--secondary)/0.4] p-4">
             <div className="flex items-center gap-2.5 text-sm">
               <Loader2 className="size-4 animate-spin text-primary" />
               <span>
@@ -206,7 +206,7 @@ export function HistoryAuditView({ community, onClose }: HistoryAuditViewProps) 
                   <ChevronDown className={cn("size-3.5 transition-transform", channelsOpen && "rotate-180")} />
                 </CollapsibleTrigger>
                 <CollapsibleContent className="overflow-hidden data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down">
-                  <div className="mt-2 max-h-52 space-y-0.5 overflow-y-auto rounded-lg border bg-secondary/30 p-2">
+                  <div className="mt-2 max-h-52 space-y-0.5 overflow-y-auto clip-hairline-lg [--edge:var(--border)/0.5] [--fill:var(--secondary)/0.3] [--fill-hover:var(--secondary)/0.3] p-2">
                     {channels.map((c) => (
                       <label
                         key={c.idHex}

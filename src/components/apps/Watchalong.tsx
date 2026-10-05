@@ -1,4 +1,4 @@
-import { ArrowDown, ArrowUp, ListVideo, MonitorPlay, Play, Plus, SkipBack, SkipForward, Trash2 } from "lucide-react";
+import { ArrowDown, ArrowUp, Link2, ListVideo, MonitorPlay, Play, Plus, SkipBack, SkipForward, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { DisplayName } from "@/components/DisplayName";
@@ -277,8 +277,13 @@ export function Watchalong({ sync }: { sync: AppSync }) {
     <div className="flex flex-col gap-3">
       <div>
         <div className="flex items-center gap-2">
-          <div className="relative flex-1">
-            <MonitorPlay className="absolute left-2.5 top-1/2 -translate-y-1/2 size-4 text-muted-foreground pointer-events-none" />
+          <div
+            className={cn(
+              "flex h-9 touch:h-11 min-w-0 flex-1 items-center gap-1.5 px-2 clip-corner-lg",
+              inputError ? "bg-destructive/10" : "bg-foreground/5",
+            )}
+          >
+            <Link2 className="size-4 shrink-0 text-muted-foreground" aria-hidden />
             <Input
               value={urlInput}
               onChange={(e) => {
@@ -289,12 +294,12 @@ export function Watchalong({ sync }: { sync: AppSync }) {
                 if (e.key === "Enter") addToQueue();
               }}
               inputMode="url"
-              placeholder="Paste a YouTube or video link to add to the queue…"
+              placeholder="Paste a YouTube or video link"
               aria-label="YouTube or video link"
-              className={cn("h-9 pl-8 text-sm", inputError && "border-destructive focus-visible:border-destructive")}
+              className="h-full flex-1 min-w-0 border-0 bg-transparent px-1 text-sm shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
             />
           </div>
-          <Button size="sm" className="h-9" onClick={addToQueue} disabled={!urlInput.trim()}>
+          <Button size="sm" className="h-9 touch:h-11 clip-corner-lg" onClick={addToQueue} disabled={!urlInput.trim()}>
             <Plus className="size-4" />
             Add
           </Button>
@@ -318,13 +323,13 @@ export function Watchalong({ sync }: { sync: AppSync }) {
               This video can't be played in this version of Armada.
             </div>
           ) : nativeIosPlayer ? (
-            <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-[#100b15] px-6 text-center text-white">
-              <MonitorPlay className="size-10 text-[#ff0000]" />
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-chrome-deep px-6 text-center text-white">
+              <MonitorPlay className="size-10 text-primary" />
               <div>
                 <p className="text-sm font-semibold">YouTube opens in Armada's video player</p>
                 <p className="mt-1 text-xs text-white/60">It starts at the shared watch position.</p>
               </div>
-              <Button type="button" onClick={openIosPlayer}>
+              <Button type="button" className="clip-corner-lg" onClick={openIosPlayer}>
                 <Play className="size-4 fill-current" />
                 Open player
               </Button>
@@ -348,9 +353,9 @@ export function Watchalong({ sync }: { sync: AppSync }) {
           )}
         </div>
       ) : (
-        <div className="flex flex-col items-center justify-center gap-2 clip-corner-lg bg-secondary/40 py-10 text-center">
+        <div className="flex flex-col items-center justify-center gap-2 clip-corner-lg bg-foreground/5 py-10 text-center">
           <MonitorPlay className="size-7 text-muted-foreground" />
-          <p className="text-sm text-muted-foreground">Paste a YouTube or video link above to start the queue.</p>
+          <p className="text-xs text-muted-foreground">Paste a link above to start the queue.</p>
         </div>
       )}
 
@@ -361,7 +366,7 @@ export function Watchalong({ sync }: { sync: AppSync }) {
               <Button
                 variant="ghost"
                 size="icon"
-                className="size-8 text-muted-foreground"
+                className="size-8 touch:size-11 clip-corner-lg text-muted-foreground"
                 aria-label="Previous"
                 disabled={!canPrev}
                 onClick={() => skip(-1)}
@@ -376,7 +381,7 @@ export function Watchalong({ sync }: { sync: AppSync }) {
               <Button
                 variant="ghost"
                 size="icon"
-                className="size-8 text-muted-foreground"
+                className="size-8 touch:size-11 clip-corner-lg text-muted-foreground"
                 aria-label="Next"
                 disabled={!canNext}
                 onClick={() => skip(1)}
@@ -390,9 +395,9 @@ export function Watchalong({ sync }: { sync: AppSync }) {
       )}
 
       {hasQueue && (
-        <div className="clip-corner-lg bg-chrome p-1.5">
-          <div className="flex items-center gap-1.5 px-2 py-1.5 text-2xs font-semibold uppercase tracking-wide text-muted-foreground/80">
-            <ListVideo className="size-3.5" />
+        <div>
+          <div className="flex items-center gap-1.5 pb-1.5 text-2xs font-semibold uppercase tracking-wide text-muted-foreground/80">
+            <ListVideo className="size-3 text-primary" />
             Up next · {snap.queue.length}
           </div>
           <div className="flex flex-col gap-0.5 max-h-56 overflow-y-auto">
@@ -563,12 +568,12 @@ function QueueRow({
   return (
     <div
       className={cn(
-        "group/row flex items-center gap-2.5 rounded-md px-2 py-1.5 transition-colors",
-        isCurrent ? "bg-primary/10" : "hover:bg-secondary/60",
+        "group/row flex items-center gap-2.5 clip-corner px-2 py-1.5 transition-colors",
+        isCurrent ? "bg-primary/10" : "hover:bg-foreground/5",
       )}
     >
       <button type="button" onClick={onPlay} className="flex items-center gap-2.5 min-w-0 flex-1 text-left" aria-label={`Play ${title}`}>
-        <div className="relative flex h-9 w-14 shrink-0 items-center justify-center overflow-hidden rounded-sm bg-black/80">
+        <div className="relative flex h-9 w-14 shrink-0 items-center justify-center overflow-hidden clip-corner bg-black/80">
           {item.playlistId ? (
             <ListVideo className="size-4 text-white/80" />
           ) : meta?.thumbnail ? (
@@ -596,13 +601,13 @@ function QueueRow({
         </div>
       </button>
       <div className="flex shrink-0 items-center opacity-0 group-hover/row:opacity-100 touch:opacity-100 focus-within:opacity-100 transition-opacity">
-        <Button variant="ghost" size="icon" className="size-6 text-muted-foreground" aria-label="Move up" disabled={!canUp} onClick={onUp}>
+        <Button variant="ghost" size="icon" className="size-6 touch:size-11 clip-corner-lg text-muted-foreground" aria-label="Move up" disabled={!canUp} onClick={onUp}>
           <ArrowUp className="size-3.5" />
         </Button>
-        <Button variant="ghost" size="icon" className="size-6 text-muted-foreground" aria-label="Move down" disabled={!canDown} onClick={onDown}>
+        <Button variant="ghost" size="icon" className="size-6 touch:size-11 clip-corner-lg text-muted-foreground" aria-label="Move down" disabled={!canDown} onClick={onDown}>
           <ArrowDown className="size-3.5" />
         </Button>
-        <Button variant="ghost" size="icon" className="size-6 text-muted-foreground hover:text-destructive" aria-label="Remove from queue" onClick={onRemove}>
+        <Button variant="ghost" size="icon" className="size-6 touch:size-11 clip-corner-lg text-muted-foreground hover:text-destructive" aria-label="Remove from queue" onClick={onRemove}>
           <Trash2 className="size-3.5" />
         </Button>
       </div>

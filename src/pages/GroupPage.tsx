@@ -1,4 +1,4 @@
-import { Bell, BellOff, CalendarClock, DoorOpen, Headphones, IdCard, Loader2, LogOut, MessageSquareText, Phone, Pin, ScrollText, Search, Settings2, Trash2, UserPlus } from "lucide-react";
+import { Bell, BellOff, CalendarClock, Crown, DoorOpen, Headphones, IdCard, Loader2, LogOut, MessageSquareText, Phone, Pin, ScrollText, Search, Settings2, Shield, ShieldOff, Trash2, UserMinus, UserPlus } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
@@ -47,6 +47,7 @@ import { ServerScopeProvider } from "@/components/ServerScopeProvider";
 import { ChannelGlyph } from "@/concord/components/ChannelGlyph";
 import { ChannelNavContext } from "@/contexts/ChannelNavContext";
 import { ChatScopeContext } from "@/contexts/ChatScopeContext";
+import { MemberActionsContext, type MemberActionItem, type MemberActionsValue } from "@/contexts/MemberActionsContext";
 import { CustomEmojisProvider } from "@/hooks/useCustomEmojis";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
@@ -70,6 +71,7 @@ import { useRelayGroups } from "@/hooks/useRelayGroups";
 import { toast } from "@/hooks/useToast";
 import { routeParamToRelay } from "@/lib/platform";
 import { chatRoute } from "@/lib/routes";
+import { NIP29_REMOVE_CONFIRM, tierChangeConfirm, type TierChange } from "@/lib/memberTierConfirm";
 import { relayRejectionMessage, type Nip29Admin } from "@/lib/nip29";
 import { displayHost, sanitizeImageSrc } from "@/lib/sanitizeUrl";
 import { cn } from "@/lib/utils";
@@ -100,7 +102,7 @@ function JoinBanner({ relayUrl, groupId, isClosed }: { relayUrl: string; groupId
   }, [join, code, updateList, groupId, relayUrl]);
 
   return (
-    <div className="flex flex-wrap items-center gap-2 mx-2 mt-2 px-4 py-2.5 clip-corner-lg bg-chrome">
+    <div className="flex flex-wrap items-center gap-2 mx-gutter mt-stack px-4 py-2.5 clip-corner-lg bg-chrome">
       <DoorOpen className="size-4 text-primary shrink-0" />
       <span className="text-sm flex-1 min-w-40">
         {inviteCode ? (
@@ -214,6 +216,47 @@ export function GroupPage() {
     }
     return [...roles.entries()].map(([pubkey, set]) => ({ pubkey, roles: [...set] }));
   }, [details?.admins, relayMemberRoles]);
+
+  // NIP-29 staff actions for every person surface in this group (member list,
+  // message menus, profile card); `useUserModeration` adds block and report.
+  const removeMember = removeUser.mutate;
+  const putMember = putUser.mutate;
+  const memberActionsValue = useMemo<MemberActionsValue>(
+    () => ({
+      actionsFor: (pubkey: string) => {
+        if (!isAdmin || !user || pubkey === user.pubkey) return [];
+        const roles = new Set(mergedAdmins.find((a) => a.pubkey === pubkey)?.roles ?? []);
+        // The owner is never a valid target.
+        if (roles.has("owner")) return [];
+        const targetAdmin = roles.has("admin");
+        const targetModerator = roles.has("moderator");
+        const setRoles = (next: string[]) => putMember({ pubkey, roles: next });
+        const out: MemberActionItem[] = [];
+        const tier = (change: TierChange) => tierChangeConfirm("nip29", change);
+        if (!targetAdmin) {
+          out.push({ id: "make-admin", label: "Make admin", icon: Crown, confirm: tier("admin"), onSelect: () => setRoles(["admin"]) });
+        }
+        if (targetAdmin) {
+          out.push({ id: "make-moderator", label: "Demote to moderator", icon: Shield, confirm: tier("demote"), onSelect: () => setRoles(["moderator"]) });
+        } else if (!targetModerator) {
+          out.push({ id: "make-moderator", label: "Make moderator", icon: Shield, confirm: tier("moderator"), onSelect: () => setRoles(["moderator"]) });
+        }
+        if (targetAdmin || targetModerator) {
+          out.push({ id: "remove-tier", label: "Remove role", icon: ShieldOff, confirm: tier("remove"), onSelect: () => setRoles([]) });
+        }
+        out.push({
+          id: "remove",
+          label: "Remove from channel",
+          icon: UserMinus,
+          destructive: true,
+          confirm: NIP29_REMOVE_CONFIRM,
+          onSelect: () => removeMember({ pubkey }),
+        });
+        return out;
+      },
+    }),
+    [isAdmin, user, mergedAdmins, putMember, removeMember],
+  );
 
   const { data: relayGroups } = useRelayGroups(relayUrl);
   const navChannels = useMemo(
@@ -438,7 +481,7 @@ export function GroupPage() {
             )}
             <DropdownMenu>
               <ChatHeaderMenuTrigger />
-              <DropdownMenuContent align="end" className="w-52 p-1.5">
+              <DropdownMenuContent align="end" className="w-52">
                 <ChatHeaderViewItems
                   onSearch={() => setSearchOpen(true)}
                   onMembers={() => setMembersOpen(true)}
@@ -472,14 +515,14 @@ export function GroupPage() {
                 {user && (
                   <>
                     <DropdownMenuItem
-                      className="px-3 py-2"
+                     
                       onClick={() => toggleChannelMute(relayUrl, groupId)}
                     >
                       {channelMuted ? <Bell className="size-4" /> : <BellOff className="size-4" />}
                       {channelMuted ? "Unmute channel" : "Mute channel"}
                     </DropdownMenuItem>
                     <DropdownMenuItem
-                      className="px-3 py-2"
+                     
                       onClick={() => toggleCommunityMute(relayUrl)}
                     >
                       {serverMuted ? <Bell className="size-4" /> : <BellOff className="size-4" />}
@@ -488,19 +531,19 @@ export function GroupPage() {
                   </>
                 )}
                 {user && (
-                  <DropdownMenuItem className="px-3 py-2" onClick={() => setServerProfileOpen(true)}>
+                  <DropdownMenuItem onClick={() => setServerProfileOpen(true)}>
                     <IdCard className="size-4" />
                     Server identity
                   </DropdownMenuItem>
                 )}
                 {isAdmin && (
-                  <DropdownMenuItem className="px-3 py-2" onClick={() => setInviteOpen(true)}>
+                  <DropdownMenuItem onClick={() => setInviteOpen(true)}>
                     <UserPlus className="size-4" />
                     Invite people
                   </DropdownMenuItem>
                 )}
                 {isAdmin && (
-                  <DropdownMenuItem className="px-3 py-2" onClick={() => setSettingsOpen(true)}>
+                  <DropdownMenuItem onClick={() => setSettingsOpen(true)}>
                     <Settings2 className="size-4" />
                     Channel settings
                   </DropdownMenuItem>
@@ -511,7 +554,7 @@ export function GroupPage() {
                     <DropdownMenuItem
                       onClick={handleDelete}
                       disabled={deleteGroup.isPending}
-                      className="px-3 py-2 text-destructive focus:text-destructive"
+                      className="text-destructive focus:text-destructive"
                     >
                       <Trash2 className="size-4" />
                       Delete channel
@@ -524,7 +567,7 @@ export function GroupPage() {
                     <DropdownMenuItem
                       onClick={handleLeave}
                       disabled={leave.isPending}
-                      className="px-3 py-2 text-destructive focus:text-destructive"
+                      className="text-destructive focus:text-destructive"
                     >
                       <LogOut className="size-4" />
                       Leave channel
@@ -545,7 +588,7 @@ export function GroupPage() {
         </ChatHeader>
 
         {group?.banner && (
-          <div className="mx-2 mt-2 h-24 shrink-0 overflow-hidden clip-corner-lg">
+          <div className="mx-gutter mt-stack h-24 shrink-0 overflow-hidden clip-corner-lg">
             <GroupBannerImage src={group.banner} className="size-full object-cover" />
           </div>
         )}
@@ -589,6 +632,7 @@ export function GroupPage() {
         )}
 
         <ChatScopeContext.Provider value={chatScope}>
+        <MemberActionsContext.Provider value={memberActionsValue}>
         <CustomEmojisProvider>
         <ChannelNavContext.Provider value={channelNav}>
         <div className="relative flex flex-1 min-h-0">
@@ -629,8 +673,8 @@ export function GroupPage() {
             <div
               className={cn(
                 "relative h-full flex w-full sidebar:w-[16.5rem] transition-transform duration-200 ease-out",
-                membersOpen ? "translate-x-0" : "translate-x-full",
-                membersVisible ? "sidebar:translate-x-0" : "sidebar:translate-x-full",
+                membersOpen ? "transform-none" : "translate-x-full",
+                membersVisible ? "sidebar:transform-none" : "sidebar:translate-x-full",
               )}
             >
               <div aria-hidden className="absolute inset-0 -z-10 bg-background sidebar:hidden" />
@@ -640,11 +684,7 @@ export function GroupPage() {
                 memberRoles={details?.memberRoles}
                 presence={isBuzz ? buzzPresence : undefined}
                 onMessage={isBuzz ? handleBuzzMessage : undefined}
-                canModerate={isAdmin}
-                viewerIsAdmin={isAdmin}
                 currentUserPubkey={user?.pubkey}
-                onRemove={(pubkey) => removeUser.mutate({ pubkey })}
-                onSetRole={(pubkey, roles) => putUser.mutate({ pubkey, roles })}
                 onEditProfile={() => setServerProfileOpen(true)}
                 onClose={() => setMembersOpen(false)}
               />
@@ -653,6 +693,7 @@ export function GroupPage() {
         </div>
         </ChannelNavContext.Provider>
         </CustomEmojisProvider>
+        </MemberActionsContext.Provider>
         </ChatScopeContext.Provider>
         </main>
       </SwipeReveal>

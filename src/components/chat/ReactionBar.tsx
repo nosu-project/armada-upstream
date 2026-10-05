@@ -1,5 +1,5 @@
 import { SmilePlus } from "lucide-react";
-import { lazy, Suspense, useCallback, useContext, useEffect, useRef, useState } from "react";
+import { Fragment, lazy, Suspense, useCallback, useContext, useEffect, useRef, useState } from "react";
 
 import { CustomEmojiImg } from "@/components/chat/CustomEmoji";
 import { EmojiSourceFooter } from "@/components/chat/EmojiSourceFooter";
@@ -345,7 +345,7 @@ function ReactionPill({
         onPointerLeave={() => {
           if (!isTouch) scheduleClose();
         }}
-        className="w-56 p-0 rounded-xl border-border shadow-lg overflow-hidden"
+        className="w-56 p-0 overflow-hidden"
       >
         <ReactionDetail tally={tally} />
       </PopoverContent>
@@ -410,27 +410,30 @@ export function ReactionActions({
     <>
       {frequent.map((f) => {
         const mine = tallies.find((t) => t.key === f.key)?.mine ?? false;
+        const button = (
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label={mine ? `Remove ${f.key} reaction` : `React with ${f.key}`}
+            aria-pressed={mine}
+            className={cn(
+              "size-9 md:size-7 touch:size-11 touch:md:size-11",
+              mine ? "text-primary bg-primary/10" : "hover:bg-secondary",
+            )}
+            onClick={() => react(f.key, f.url)}
+          >
+            <ReactionGlyph
+              emojiKey={f.key}
+              url={f.url}
+              className="h-[18px] w-[18px] md:h-4 md:w-4 text-base md:text-sm"
+            />
+          </Button>
+        );
+        // A native emoji is its own label; only a custom one needs its shortcode named.
+        if (!f.url) return <Fragment key={f.key}>{button}</Fragment>;
         return (
           <Tooltip key={f.key}>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon"
-                aria-label={mine ? `Remove ${f.key} reaction` : `React with ${f.key}`}
-                aria-pressed={mine}
-                className={cn(
-                  "size-9 md:size-7 touch:size-11 touch:md:size-11",
-                  mine ? "text-primary bg-primary/10" : "hover:bg-secondary",
-                )}
-                onClick={() => react(f.key, f.url)}
-              >
-                <ReactionGlyph
-                  emojiKey={f.key}
-                  url={f.url}
-                  className="h-[18px] w-[18px] md:h-4 md:w-4 text-base md:text-sm"
-                />
-              </Button>
-            </TooltipTrigger>
+            <TooltipTrigger asChild>{button}</TooltipTrigger>
             <TooltipContent>{mine ? `Remove ${f.key}` : f.key}</TooltipContent>
           </Tooltip>
         );
@@ -455,7 +458,7 @@ export function ReactionActions({
           side="top"
           align="end"
           sideOffset={8}
-          className="flex w-[min(20rem,90vw)] h-[min(360px,55dvh)] max-h-[var(--radix-popover-content-available-height)] p-0 rounded-xl border-border shadow-lg overflow-hidden"
+          className="flex w-[min(20rem,90vw)] h-[min(360px,55dvh)] max-h-[var(--radix-popover-content-available-height)] p-0 overflow-hidden"
         >
           <Suspense fallback={<div className="w-full" />}>
             <LazyEmojiPicker

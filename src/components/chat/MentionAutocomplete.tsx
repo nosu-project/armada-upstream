@@ -206,24 +206,26 @@ export function MentionAutocomplete({
   const dropdown = (
     <div
       data-autocomplete-dropdown
-      className="fixed z-[300] w-[280px] max-w-[calc(100vw-1rem)] rounded-xl border border-border bg-popover shadow-lg overflow-hidden animate-in fade-in-0 zoom-in-95 slide-in-from-bottom-2 duration-150 pointer-events-auto"
+      className="fixed z-[300] w-[280px] max-w-[calc(100vw-1rem)] vessel-lift pointer-events-auto"
       style={{ bottom: dropdownPos.bottom, left: dropdownPos.left }}
     >
-      <div ref={listRef} className="max-h-[240px] overflow-y-auto py-1">
-        {(profiles ?? []).map((profile, index) => (
-          <MentionItem
-            key={profile.pubkey}
-            profile={profile}
-            isSelected={index === selectedIndex}
-            onSelect={() => selectProfile(profile)}
-          />
-        ))}
-        {showEveryone && (
-          <EveryoneMentionItem
-            isSelected={selectedIndex === (profiles?.length ?? 0)}
-            onSelect={selectEveryone}
-          />
-        )}
+      <div className="vessel overflow-hidden animate-in fade-in-0 zoom-in-95 slide-in-from-bottom-2 duration-150">
+        <div ref={listRef} className="max-h-[240px] overflow-y-auto scroll-py-1 p-1">
+          {(profiles ?? []).map((profile, index) => (
+            <MentionItem
+              key={profile.pubkey}
+              profile={profile}
+              isSelected={index === selectedIndex}
+              onSelect={() => selectProfile(profile)}
+            />
+          ))}
+          {showEveryone && (
+            <EveryoneMentionItem
+              isSelected={selectedIndex === (profiles?.length ?? 0)}
+              onSelect={selectEveryone}
+            />
+          )}
+        </div>
       </div>
     </div>
   );
@@ -242,9 +244,10 @@ function EveryoneMentionItem({
   return (
     <button
       data-mention-item
+      data-highlighted={isSelected || undefined}
       className={cn(
-        "w-full flex items-center gap-3 px-3 py-2 text-left transition-colors cursor-pointer",
-        isSelected ? "bg-accent text-accent-foreground" : "hover:bg-secondary/60",
+        "relative w-full flex items-center gap-3 menu-row clip-corner px-2 py-1.5 text-left transition-colors cursor-pointer",
+        isSelected ? "bg-foreground/[0.08]" : "hover:bg-foreground/[0.05]",
       )}
       onPointerDown={(e) => {
         e.preventDefault();
@@ -278,9 +281,10 @@ function MentionItem({
   return (
     <button
       data-mention-item
+      data-highlighted={isSelected || undefined}
       className={cn(
-        "w-full flex items-center gap-3 px-3 py-2 text-left transition-colors cursor-pointer",
-        isSelected ? "bg-accent text-accent-foreground" : "hover:bg-secondary/60",
+        "relative w-full flex items-center gap-3 menu-row clip-corner px-2 py-1.5 text-left transition-colors cursor-pointer",
+        isSelected ? "bg-foreground/[0.08]" : "hover:bg-foreground/[0.05]",
       )}
       // Pointer-down fires reliably on touch; preventDefault keeps composer focus.
       onPointerDown={(e) => {

@@ -16,7 +16,7 @@ function GameRow({ app, onSelect }: { app: WebxdcApp; onSelect: (app: WebxdcApp)
     <button
       type="button"
       onClick={() => onSelect(app)}
-      className="flex items-center gap-3 w-full px-3 py-2.5 rounded-lg text-left hover:bg-secondary/60 transition-colors"
+      className="flex items-center gap-3 w-full px-3 py-2.5 clip-corner text-left hover:bg-secondary/60 transition-colors"
     >
       <div className="size-10 rounded-lg bg-primary/10 flex items-center justify-center shrink-0 overflow-hidden">
         {icon && !iconError ? (
@@ -65,7 +65,7 @@ export function WebxdcGamePicker({
           disabled={!canFilterFollows}
           title={canFilterFollows ? "Only games from people you follow" : "Follow people to filter"}
           className={cn(
-            "flex items-center gap-1.5 h-9 px-3 shrink-0 rounded-lg text-sm font-medium transition-colors disabled:opacity-40",
+            "flex items-center gap-1.5 h-9 touch:h-11 px-3 shrink-0 clip-corner-lg text-sm font-medium transition-colors disabled:opacity-40",
             followsOnly && canFilterFollows
               ? "bg-primary/15 text-primary"
               : "bg-muted/50 text-muted-foreground hover:text-foreground",
