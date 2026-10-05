@@ -45,6 +45,8 @@ vi.mock("@/hooks/useMuteList", () => ({
     toggle: async () => {},
   }),
 }));
+// Each row's `useUserModeration` asks who the viewer is; logged out offers no actions.
+vi.mock("@/hooks/useCurrentUser", () => ({ useCurrentUser: () => ({ user: undefined }) }));
 vi.mock("@/hooks/useUserStatus", () => ({
   useUserStatus: (pubkey?: string, type = "general") => {
     spies.useUserStatus(pubkey, type);

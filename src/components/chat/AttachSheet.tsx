@@ -61,9 +61,9 @@ interface AttachSheetProps {
  * sheet rests at keyboard height and expands to full screen. Without the
  * camera roll it's just the tiles.
  */
-export function AttachSheet(props: AttachSheetProps) {
+export const AttachSheet = memo(function AttachSheet(props: AttachSheetProps) {
   return hasMediaGallery() ? <GallerySheet {...props} /> : <TilesSheet {...props} />;
-}
+});
 
 function useTiles(actions: AttachAction[], apps: AttachAction[], gamePicker: ReactNode, openApps: () => void) {
   const hasApps = apps.length > 0 || gamePicker !== undefined;

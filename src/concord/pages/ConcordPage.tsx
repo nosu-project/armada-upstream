@@ -101,7 +101,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ChannelNavContext } from "@/contexts/ChannelNavContext";
-import { MemberActionsContext, type MemberActionItem, type MemberActionsValue } from "@/contexts/MemberActionsContext";
+import { MemberActionsContext, type MemberActionItem, type MemberActionsValue, type MemberRolePicker } from "@/contexts/MemberActionsContext";
 import { MemberRolesContext, type MemberRolesValue } from "@/contexts/MemberRolesContext";
 import type { AppScope } from "@/contexts/AppsContext";
 import { ComposerBoundsProvider } from "@/contexts/ComposerBoundsContext";
@@ -203,6 +203,7 @@ const LAST_CHANNEL_SETTLE_MS = 1500;
 
 /** Stable empty replies array so a thread-less row keeps a constant prop. */
 const EMPTY_REPLIES: ChatMsg[] = [];
+const NO_MEMBER_ACTIONS: MemberActionItem[] = [];
 
 /** Shared empty feed, so a chat-presented channel keeps a stable reference. */
 const NO_POSTS: ForumPost[] = [];
@@ -2275,7 +2276,6 @@ export function ConcordPage() {
     toggleRole: (pk: string, roleId: string, on: boolean) => Promise<void>;
     kick: (pk: string) => void;
     unban: (pk: string) => void;
-    banLabel: (pk: string) => string;
   } | null>(null);
   const handleSetRoleStable = useCallback((pk: string, roles: string[]) => memberOpsRef.current?.setRole(pk, roles), []);
   const handleToggleRoleStable = useCallback(
@@ -2283,88 +2283,102 @@ export function ConcordPage() {
     [],
   );
   const handleUnbanMember = useCallback((pk: string) => memberOpsRef.current?.unban(pk), []);
-  const memberBanLabel = useCallback((pk: string) => memberOpsRef.current?.banLabel(pk) ?? "Ban", []);
   const openAddMembers = useCallback(() => setAddMembersOpen(true), []);
   const closeMembers = useCallback(() => setMembersOpen(false), [setMembersOpen]);
 
   // Moderate a person from wherever they were clicked, gated like the message menu.
-  const memberActionsValue = useMemo<MemberActionsValue>(
-    () => ({
-      actionsFor: (pubkey: string) => {
-        if (!user || pubkey === user.pubkey) return [];
-        const out: MemberActionItem[] = [];
-        // Tier moves first: the card is where anyone clicked lands, poster or not.
-        if (canManageRoles && roster) {
-          const current = stockTierOf(roster, pubkey);
-          for (const tier of tierMoves(roster, user.pubkey, ownerHex, pubkey)) {
-            out.push(
-              tier === "admin"
+  // Every chat row consumes this, so it depends only on identity-stable inputs (not
+  // `moderation`, a fresh object per render) and hands back one array per pubkey.
+  const bannedHere = moderation.banned;
+  const canRekeyHere = moderation.canRekey;
+  const memberActionsValue = useMemo<MemberActionsValue>(() => {
+    const actionsCache = new Map<string, MemberActionItem[]>();
+    const pickerCache = new Map<string, MemberRolePicker | undefined>();
+    const buildActions = (pubkey: string): MemberActionItem[] => {
+      if (!user || pubkey === user.pubkey) return NO_MEMBER_ACTIONS;
+      const out: MemberActionItem[] = [];
+      // Tier moves first: the card is where anyone clicked lands, poster or not.
+      if (canManageRoles && roster) {
+        const current = stockTierOf(roster, pubkey);
+        for (const tier of tierMoves(roster, user.pubkey, ownerHex, pubkey)) {
+          out.push(
+            tier === "admin"
+              ? {
+                id: "make-admin",
+                label: "Make admin",
+                icon: Crown,
+                confirm: tierChangeConfirm("concord", "admin"),
+                onSelect: () => void handleSetRoleStable(pubkey, ["admin"]),
+              }
+              : tier === "moderator"
                 ? {
-                  id: "make-admin",
-                  label: "Make admin",
-                  icon: Crown,
-                  confirm: tierChangeConfirm("concord", "admin"),
-                  onSelect: () => void handleSetRoleStable(pubkey, ["admin"]),
+                  id: "make-moderator",
+                  label: current === "admin" ? "Demote to moderator" : "Make moderator",
+                  icon: Shield,
+                  confirm: tierChangeConfirm("concord", current === "admin" ? "demote" : "moderator"),
+                  onSelect: () => void handleSetRoleStable(pubkey, ["moderator"]),
                 }
-                : tier === "moderator"
-                  ? {
-                    id: "make-moderator",
-                    label: current === "admin" ? "Demote to moderator" : "Make moderator",
-                    icon: Shield,
-                    confirm: tierChangeConfirm("concord", current === "admin" ? "demote" : "moderator"),
-                    onSelect: () => void handleSetRoleStable(pubkey, ["moderator"]),
-                  }
-                  : {
-                    id: "remove-tier",
-                    label: current === "admin" ? "Remove admin" : "Remove moderator",
-                    icon: ShieldOff,
-                    confirm: tierChangeConfirm("concord", "remove"),
-                    onSelect: () => void handleSetRoleStable(pubkey, []),
-                  },
-            );
-          }
+                : {
+                  id: "remove-tier",
+                  label: current === "admin" ? "Remove admin" : "Remove moderator",
+                  icon: ShieldOff,
+                  confirm: tierChangeConfirm("concord", "remove"),
+                  onSelect: () => void handleSetRoleStable(pubkey, []),
+                },
+          );
         }
-        if (canKickAny && moderation.canKick(pubkey)) {
-          out.push({
-            id: "kick",
-            label: "Kick",
-            icon: UserMinus,
-            // The confirm dialog, not an instant kick: easy to hit by accident.
-            onSelect: () => setKickTarget(pubkey),
-          });
+      }
+      if (canKickAny && roster && canActOnMember(roster, user.pubkey, ownerHex, pubkey, Permissions.KICK)) {
+        out.push({
+          id: "kick",
+          label: "Kick",
+          icon: UserMinus,
+          // The confirm dialog, not an instant kick: easy to hit by accident.
+          onSelect: () => setKickTarget(pubkey),
+        });
+      }
+      if (bannedHere.has(pubkey)) {
+        // A banned member's old messages outlive their roster row.
+        if (canBanAny) {
+          out.push({ id: "unban", label: "Unban", icon: ShieldOff, onSelect: () => handleUnbanMember(pubkey) });
         }
-        if (moderation.banned.has(pubkey)) {
-          // A banned member's old messages outlive their roster row.
-          if (canBanAny) {
-            out.push({ id: "unban", label: "Unban", icon: ShieldOff, onSelect: () => handleUnbanMember(pubkey) });
-          }
-        } else if (canBanAny && moderation.canBan(pubkey)) {
-          out.push({
-            id: "ban",
-            label: memberBanLabel(pubkey),
-            icon: Ban,
-            destructive: true,
-            onSelect: () => setBanTarget(pubkey),
-          });
-        }
-        return out;
+      } else if (canBanAny && roster && canActOnMember(roster, user.pubkey, ownerHex, pubkey, Permissions.BAN)) {
+        out.push({
+          id: "ban",
+          // A Private ban rotates keys unless someone ELSE holds a live link.
+          label: folded && canRekeyHere && !hasForeignLiveLinks(folded, user.pubkey, pubkey) ? "Ban & lock out" : "Ban",
+          icon: Ban,
+          destructive: true,
+          onSelect: () => setBanTarget(pubkey),
+        });
+      }
+      return out.length > 0 ? out : NO_MEMBER_ACTIONS;
+    };
+    // The Roles picker on the card too, only if some role is assignable.
+    const buildPicker = (pubkey: string): MemberRolePicker | undefined => {
+      if (!canManageRoles || !roleCatalog?.some((r) => r.assignable) || !canEditMemberRoles(pubkey)) return undefined;
+      return {
+        catalog: roleCatalog,
+        heldRoleIds: intendedRolesFor(pubkey),
+        isToggling: isRoleTogglePending,
+        onToggle: handleToggleRoleStable,
+      };
+    };
+    return {
+      actionsFor: (pubkey: string) => {
+        let hit = actionsCache.get(pubkey);
+        if (!hit) actionsCache.set(pubkey, (hit = buildActions(pubkey)));
+        return hit;
       },
-      // The Roles picker on the card too, only if some role is assignable.
       rolePickerFor: (pubkey: string) => {
-        if (!canManageRoles || !roleCatalog?.some((r) => r.assignable) || !canEditMemberRoles(pubkey)) return undefined;
-        return {
-          catalog: roleCatalog,
-          heldRoleIds: intendedRolesFor(pubkey),
-          isToggling: isRoleTogglePending,
-          onToggle: handleToggleRoleStable,
-        };
+        if (!pickerCache.has(pubkey)) pickerCache.set(pubkey, buildPicker(pubkey));
+        return pickerCache.get(pubkey);
       },
-    }),
-    [
-      user, canKickAny, canBanAny, moderation, handleUnbanMember, memberBanLabel, roster, ownerHex, handleSetRoleStable,
-      canManageRoles, roleCatalog, canEditMemberRoles, intendedRolesFor, isRoleTogglePending, handleToggleRoleStable,
-    ],
-  );
+    };
+  }, [
+    user, canKickAny, canBanAny, bannedHere, canRekeyHere, handleUnbanMember, folded, roster, ownerHex, handleSetRoleStable,
+    canManageRoles, roleCatalog, canEditMemberRoles, intendedRolesFor, isRoleTogglePending, handleToggleRoleStable,
+  ]);
 
   const suppressChannelClick = channelDrag.shouldSuppressClick;
   const handleSelectChannel = useCallback(
@@ -2546,10 +2560,6 @@ export function ConcordPage() {
     toggleRole: handleToggleRole,
     kick: (pk: string) => void moderation.kick({ target: pk }).catch(() => {}),
     unban: (pk: string) => void moderation.unban({ target: pk }).catch(() => {}),
-    banLabel: (pk: string) =>
-      folded && user && moderation.canRekey && !hasForeignLiveLinks(folded, user.pubkey, pk)
-        ? "Ban & lock out"
-        : "Ban",
   };
 
   // A ban rotates keys unless someone ELSE holds a live link (it'd be stranded).

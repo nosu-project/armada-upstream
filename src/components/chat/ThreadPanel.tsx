@@ -495,6 +495,7 @@ export function ThreadMessage({
         }
       />
     )}
+    {personModeration.dialogs}
     </>
   );
 }

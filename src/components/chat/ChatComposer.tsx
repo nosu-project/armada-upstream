@@ -18,7 +18,7 @@ import {
   X,
 } from "lucide-react";
 import { nip19 } from "nostr-tools";
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, memo, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from "react";
 
 import { AttachSheet, type AttachAction } from "@/components/chat/AttachSheet";
 import { AttachmentTray, MAX_ALT_CHARS, type TrayItem } from "@/components/chat/AttachmentTray";
@@ -377,6 +377,101 @@ function GifGlyph({ className }: { className?: string }) {
     </svg>
   );
 }
+
+const plusButtonClass = "p-2 shrink-0 clip-corner-lg transition-colors flex items-center justify-center size-9 touch:size-11";
+const preventCloseAutoFocus = (e: Event) => e.preventDefault();
+
+// The toolbar is memoized apart from the composer, which re-renders per keystroke:
+// each Radix tooltip/menu root is a Popper subtree.
+
+/** Pointer: a double-click on "+" skips the menu and opens the file picker. */
+const DesktopPlusMenu = memo(function DesktopPlusMenu({
+  open,
+  onOpenChange,
+  highlighted,
+  actions,
+  onDoubleClick,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  highlighted: boolean;
+  actions: AttachAction[];
+  onDoubleClick: () => void;
+}) {
+  return (
+    // Non-modal: a modal menu blocks pointer events on the trigger, eating the double-click.
+    <DropdownMenu open={open} onOpenChange={onOpenChange} modal={false}>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          aria-label="More options"
+          onDoubleClick={onDoubleClick}
+          className={cn(plusButtonClass, highlighted
+            ? "text-primary bg-primary/10"
+            : "text-muted-foreground hover:text-foreground hover:bg-secondary")}
+        >
+          <Plus absoluteStrokeWidth className={cn("size-5 touch:size-6 transition-transform", open && "rotate-45")} />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent
+        side="top"
+        align="start"
+        sideOffset={8}
+        // Items like Poll/Commands focus the textarea themselves; don't clobber it.
+        onCloseAutoFocus={preventCloseAutoFocus}
+        className="w-52"
+      >
+        {actions.map((action, i) => (
+          <div key={action.id}>
+            {i === 1 && <DropdownMenuSeparator />}
+            <DropdownMenuItem
+              disabled={action.disabled}
+              className={action.active ? "text-primary focus:text-primary" : undefined}
+              onSelect={action.onSelect}
+            >
+              <action.icon className="size-4" />
+              {action.label}
+            </DropdownMenuItem>
+          </div>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+});
+
+const PickerToggleButton = memo(function PickerToggleButton({
+  label,
+  tooltip,
+  active,
+  icon: Icon,
+  onClick,
+}: {
+  label: string;
+  /** Hidden while its own tab is showing. */
+  tooltip: string | null;
+  active: boolean;
+  icon: ComponentType<{ className?: string }>;
+  onClick: () => void;
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          onClick={onClick}
+          aria-label={label}
+          className={cn(
+            "p-2 shrink-0 clip-corner-lg transition-colors flex items-center justify-center size-9 touch:size-11",
+            active ? "text-primary bg-primary/10" : "text-muted-foreground hover:text-foreground hover:bg-secondary",
+          )}
+        >
+          <Icon className="size-5" />
+        </button>
+      </TooltipTrigger>
+      {tooltip && <TooltipContent>{tooltip}</TooltipContent>}
+    </Tooltip>
+  );
+});
 
 /**
  * Rich chat composer: mentions, shortcodes, pickers, uploads with NIP-92 imeta,
@@ -1953,7 +2048,16 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     [conversationRelays, registerGame],
   );
 
-  const plusButtonClass = "p-2 shrink-0 clip-corner-lg transition-colors flex items-center justify-center size-9 touch:size-11";
+  const openFilePicker = useCallback(() => {
+    setPlusOpen(false);
+    fileInputRef.current?.click();
+  }, []);
+  // Compact: the only picker toggle left, so it closes whatever tab is showing.
+  const toggleEmojiPicker = useCallback(
+    () => (compact && pickerOpen ? setPickerOpen(false) : togglePickerTab("emoji")),
+    [compact, pickerOpen, togglePickerTab],
+  );
+  const toggleGifPicker = useCallback(() => togglePickerTab("gif"), [togglePickerTab]);
 
   const charCount = content.length;
   const placeholderText = mode === "poll" ? "Ask a question…" : (placeholder ?? "Message this channel…");
@@ -2102,46 +2206,13 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                   />
                 </>
               ) : (
-                // Non-modal: a modal menu blocks pointer events on the trigger, eating the double-click.
-                <DropdownMenu open={plusOpen} onOpenChange={setPlusOpen} modal={false}>
-                  <DropdownMenuTrigger asChild>
-                    <button
-                      type="button"
-                      aria-label="More options"
-                      onDoubleClick={() => {
-                        setPlusOpen(false);
-                        fileInputRef.current?.click();
-                      }}
-                      className={cn(plusButtonClass, plusOpen || mode === "poll"
-                        ? "text-primary bg-primary/10"
-                        : "text-muted-foreground hover:text-foreground hover:bg-secondary")}
-                    >
-                      <Plus absoluteStrokeWidth className={cn("size-5 touch:size-6 transition-transform", plusOpen && "rotate-45")} />
-                    </button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent
-                    side="top"
-                    align="start"
-                    sideOffset={8}
-                    // Items like Poll/Commands focus the textarea themselves; don't clobber it.
-                    onCloseAutoFocus={(e) => e.preventDefault()}
-                    className="w-52"
-                  >
-                    {menuActions.map((action, i) => (
-                      <div key={action.id}>
-                        {i === 1 && <DropdownMenuSeparator />}
-                        <DropdownMenuItem
-                          disabled={action.disabled}
-                          className={action.active ? "text-primary focus:text-primary" : undefined}
-                          onSelect={action.onSelect}
-                        >
-                          <action.icon className="size-4" />
-                          {action.label}
-                        </DropdownMenuItem>
-                      </div>
-                    ))}
-                  </DropdownMenuContent>
-                </DropdownMenu>
+                <DesktopPlusMenu
+                  open={plusOpen}
+                  onOpenChange={setPlusOpen}
+                  highlighted={plusOpen || mode === "poll"}
+                  actions={menuActions}
+                  onDoubleClick={openFilePicker}
+                />
               )}
 
               <div className={cn("relative flex-1 min-w-0", isDocument && "order-first basis-full")}>
@@ -2218,25 +2289,13 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
               </div>
 
               <div ref={pickerToggleGroupRef} className="flex shrink-0 items-center gap-0.5 touch:gap-1">
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <button
-                      type="button"
-                      // Compact: the only picker toggle left, so it closes whatever tab is showing.
-                      onClick={() => (compact && pickerOpen ? setPickerOpen(false) : togglePickerTab("emoji"))}
-                      aria-label="Emoji / Stickers"
-                      className={cn(
-                        "p-2 shrink-0 clip-corner-lg transition-colors flex items-center justify-center size-9 touch:size-11",
-                        pickerOpen && (compact || pickerTab !== "gif")
-                          ? "text-primary bg-primary/10"
-                          : "text-muted-foreground hover:text-foreground hover:bg-secondary",
-                      )}
-                    >
-                      <Smile className="size-5" />
-                    </button>
-                  </TooltipTrigger>
-                  {(!pickerOpen || pickerTab === "gif") && <TooltipContent>Emoji</TooltipContent>}
-                </Tooltip>
+                <PickerToggleButton
+                  label="Emoji / Stickers"
+                  tooltip={!pickerOpen || pickerTab === "gif" ? "Emoji" : null}
+                  active={pickerOpen && (compact || pickerTab !== "gif")}
+                  icon={Smile}
+                  onClick={toggleEmojiPicker}
+                />
 
                 {/* Compact (touch, typing): the GIF button folds into the emoji picker's tabs, as in Signal. */}
                 <div
@@ -2250,24 +2309,13 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                     compact ? "max-w-0 opacity-0 -ml-1" : "max-w-11 opacity-100",
                   )}
                 >
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <button
-                        type="button"
-                        onClick={() => togglePickerTab("gif")}
-                        aria-label="GIFs"
-                        className={cn(
-                          "p-2 shrink-0 clip-corner-lg transition-colors flex items-center justify-center size-9 touch:size-11",
-                          pickerOpen && pickerTab === "gif"
-                            ? "text-primary bg-primary/10"
-                            : "text-muted-foreground hover:text-foreground hover:bg-secondary",
-                        )}
-                      >
-                        <GifGlyph className="size-5" />
-                      </button>
-                    </TooltipTrigger>
-                    {(!pickerOpen || pickerTab !== "gif") && <TooltipContent>GIFs</TooltipContent>}
-                  </Tooltip>
+                  <PickerToggleButton
+                    label="GIFs"
+                    tooltip={!pickerOpen || pickerTab !== "gif" ? "GIFs" : null}
+                    active={pickerOpen && pickerTab === "gif"}
+                    icon={GifGlyph}
+                    onClick={toggleGifPicker}
+                  />
                 </div>
               </div>
 

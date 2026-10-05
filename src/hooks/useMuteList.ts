@@ -569,15 +569,18 @@ export function useMuteToggle(pubkey: string | undefined): MuteToggle {
   const muted = !!pubkey && mutedPubkeys.has(pubkey);
   const canMute = !!pubkey && !!user && pubkey !== user.pubkey;
   const pending = muteUser.isPending || unmuteUser.isPending;
+  // `useMutation`'s result is a fresh object per render; its `mutateAsync` is stable.
+  const mute = muteUser.mutateAsync;
+  const unmute = unmuteUser.mutateAsync;
 
   const toggle = useCallback(async () => {
     if (!pubkey || !canMute) return;
     try {
       if (muted) {
-        await unmuteUser.mutateAsync(pubkey);
+        await unmute(pubkey);
         toast({ title: "Unblocked", description: "You'll see this person again." });
       } else {
-        await muteUser.mutateAsync(pubkey);
+        await mute(pubkey);
         toast({ title: "Blocked", description: "You won't see this person anymore." });
       }
     } catch (e) {
@@ -587,7 +590,7 @@ export function useMuteToggle(pubkey: string | undefined): MuteToggle {
         variant: "destructive",
       });
     }
-  }, [pubkey, canMute, muted, muteUser, unmuteUser]);
+  }, [pubkey, canMute, muted, mute, unmute]);
 
   return { muted, canMute, pending, label: muted ? "Unblock" : "Block", toggle };
 }

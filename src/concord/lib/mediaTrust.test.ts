@@ -16,6 +16,8 @@ import {
   readSightings,
   recordSightings,
   sightingsReady,
+  sightingsRevision,
+  sightingsVerdictsDiffer,
   type MediaHoldInputs,
   type Sightings,
 } from "@/concord/lib/mediaTrust";
@@ -119,6 +121,39 @@ describe("holdsMedia", () => {
   });
 });
 
+describe("sightingsVerdictsDiffer", () => {
+  const joined = noteSightings(undefined, "general", [[ana, NOW - DAY]], NOW)!;
+
+  it("ignores a stamp moving earlier when the author was already established", () => {
+    const paged = noteSightings(joined, "general", [[ana, NOW - 30 * DAY]], NOW + 60_000)!;
+    expect(paged).not.toBe(joined);
+    expect(sightingsVerdictsDiffer(joined, paged, NOW + 60_000)).toBe(false);
+  });
+
+  it("reports a newly observed author", () => {
+    const later = NOW + 2 * DAY;
+    const s = noteSightings(joined, "general", [[spam, later]], later)!;
+    // Held either way (unseen, then on probation): no verdict moved.
+    expect(sightingsVerdictsDiffer(joined, s, later)).toBe(false);
+    const seeded = noteSightings(joined, "general", [[ben, NOW - 2 * DAY]], NOW + 60_000)!;
+    expect(sightingsVerdictsDiffer(joined, seeded, NOW + 60_000)).toBe(true);
+  });
+
+  it("reports a probation crossing only once it has happened", () => {
+    const later = NOW + 2 * DAY;
+    const fresh = noteSightings(joined, "general", [[spam, later]], later)!;
+    const earlier = { ...fresh, authors: { ...fresh.authors, [spam]: later - MEDIA_PROBATION_MS + 60_000 } };
+    expect(sightingsVerdictsDiffer(fresh, earlier, later)).toBe(false);
+    expect(sightingsVerdictsDiffer(fresh, earlier, later + 120_000)).toBe(true);
+  });
+
+  it("reports a changed arrival, and a first record", () => {
+    expect(sightingsVerdictsDiffer(undefined, joined, NOW)).toBe(true);
+    const art = { ...joined, channels: { ...joined.channels, art: NOW - DAY } };
+    expect(sightingsVerdictsDiffer(joined, art, NOW)).toBe(true);
+  });
+});
+
 describe("sightings store", () => {
   it("reads staged records before they are flushed, and keeps them after", async () => {
     await sightingsReady();
@@ -127,5 +162,15 @@ describe("sightings store", () => {
     expect(readSightings(community)?.authors[ana]).toBeDefined();
     flushSightings();
     expect(readSightings(community)?.authors[ana]).toBeDefined();
+  });
+
+  it("notifies on the record, not again on the flush", async () => {
+    await sightingsReady();
+    const community = "d".repeat(64);
+    const before = sightingsRevision();
+    recordSightings(community, "chan", [[ana, Date.now() - 30 * DAY]]);
+    expect(sightingsRevision()).toBe(before + 1);
+    flushSightings();
+    expect(sightingsRevision()).toBe(before + 1);
   });
 });

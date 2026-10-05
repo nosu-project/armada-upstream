@@ -988,6 +988,7 @@ const ChatMessageInner = memo(function ChatMessageInner({
         }
       />
     )}
+    {personModeration.dialogs}
     </ChatImageMenuContext.Provider>
   );
 });
