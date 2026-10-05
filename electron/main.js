@@ -53,6 +53,7 @@ const {
   safeStorage,
   dialog,
   powerMonitor,
+  utilityProcess,
 } = require("electron");
 const { autoUpdater } = require("electron-updater");
 const {
@@ -1238,27 +1239,66 @@ function installDisplayMediaHandler() {
 // selected applications or the default speakers. The renderer adds that mic's
 // track to the display stream before LiveKit publishes it.
 
-let linuxAudioPatchBay;
-let linuxAudioLoadError;
+// venmic lives in a utility process (linuxAudioWorker.js): its native teardown
+// at exit() can abort, and killing the worker on quit skips that teardown.
+let linuxAudioWorker = null;
+let linuxAudioProbe = null;
+let linuxAudioRequestId = 0;
+const linuxAudioPending = new Map();
 const linuxAudioMatchers = new Map();
 
-function getLinuxAudioPatchBay() {
-  if (process.platform !== "linux") return null;
-  if (linuxAudioPatchBay) return linuxAudioPatchBay;
-  if (linuxAudioLoadError) return null;
-  try {
-    const { PatchBay } = require("@vencord/venmic");
-    if (!PatchBay.hasPipeWire()) {
-      linuxAudioLoadError = "PipeWire is not available in this session.";
-      return null;
+function linuxAudioWorkerProcess() {
+  if (linuxAudioWorker) return linuxAudioWorker;
+  const worker = utilityProcess.fork(path.join(__dirname, "linuxAudioWorker.js"), [], {
+    serviceName: "Armada PipeWire Audio",
+  });
+  worker.on("message", ({ id, ok, value, error }) => {
+    const pending = linuxAudioPending.get(id);
+    if (!pending) return;
+    linuxAudioPending.delete(id);
+    if (ok) pending.resolve(value);
+    else pending.reject(new Error(error));
+  });
+  worker.on("exit", (code) => {
+    if (linuxAudioWorker !== worker) return;
+    if (!isQuitting) console.warn(`[screen-share] PipeWire audio worker exited (${code})`);
+    linuxAudioWorker = null;
+    // A fresh worker re-probes, so a crash is recoverable on the next share.
+    linuxAudioProbe = null;
+    for (const pending of linuxAudioPending.values()) {
+      pending.reject(new Error("PipeWire audio worker exited"));
     }
-    linuxAudioPatchBay = new PatchBay();
-    return linuxAudioPatchBay;
-  } catch (error) {
-    linuxAudioLoadError = "The PipeWire audio capture module could not be loaded.";
-    console.warn("[screen-share] failed to load venmic", error);
-    return null;
-  }
+    linuxAudioPending.clear();
+  });
+  linuxAudioWorker = worker;
+  return worker;
+}
+
+function callLinuxAudioWorker(op, args) {
+  const worker = linuxAudioWorkerProcess();
+  const id = ++linuxAudioRequestId;
+  return new Promise((resolve, reject) => {
+    linuxAudioPending.set(id, { resolve, reject });
+    worker.postMessage({ id, op, args });
+  });
+}
+
+// Resolves to { loadError, canUnmute }; only the first call loads venmic.
+function probeLinuxAudio() {
+  if (process.platform !== "linux") return Promise.resolve(null);
+  linuxAudioProbe ??= callLinuxAudioWorker("probe").catch((error) => {
+    console.warn("[screen-share] PipeWire audio worker failed", error);
+    linuxAudioProbe = null;
+    return { loadError: "The PipeWire audio capture module could not be loaded." };
+  });
+  return linuxAudioProbe;
+}
+
+function stopLinuxAudioWorker() {
+  const worker = linuxAudioWorker;
+  if (!worker) return;
+  linuxAudioWorker = null;
+  worker.kill();
 }
 
 function electronAudioServiceMatcher() {
@@ -1266,25 +1306,20 @@ function electronAudioServiceMatcher() {
   return metric ? { "application.process.id": String(metric.pid) } : null;
 }
 
-function listLinuxAudioSources() {
+async function listLinuxAudioSources() {
   if (process.platform !== "linux") {
     return { supported: false, reason: null, sources: [] };
   }
-  const patchBay = getLinuxAudioPatchBay();
-  if (!patchBay) {
-    return {
-      supported: false,
-      reason: linuxAudioLoadError || "Linux application audio requires PipeWire.",
-      sources: [],
-    };
+  const probe = await probeLinuxAudio();
+  if (probe.loadError) {
+    return { supported: false, reason: probe.loadError, sources: [] };
   }
 
   try {
     const audioService = electronAudioServiceMatcher();
-    const applications = listLinuxAudioApplications(
-      patchBay,
-      audioService?.["application.process.id"],
-    );
+    const applications = await callLinuxAudioWorker("applications", {
+      electronAudioProcessId: audioService?.["application.process.id"],
+    });
     // Rebuilt rather than merged: the table only has to resolve ids the picker
     // is still holding, and those ids name the application, so a re-list either
     // yields the same entry or drops one that has gone away.
@@ -1301,11 +1336,10 @@ function listLinuxAudioSources() {
   }
 }
 
-function startLinuxShareAudio(selection) {
-  const patchBay = getLinuxAudioPatchBay();
-  if (!patchBay) return false;
+async function startLinuxShareAudio(selection) {
+  const probe = await probeLinuxAudio();
+  if (!probe || probe.loadError) return false;
   try {
-    patchBay.unlink();
     const exclude = [];
     const audioService = electronAudioServiceMatcher();
     if (audioService) exclude.push(audioService);
@@ -1318,21 +1352,20 @@ function startLinuxShareAudio(selection) {
       only_default_speakers: true,
       // Stay muted until the renderer has attached the virtual microphone;
       // this avoids a short burst through the user's normal mic path.
-      // venmic 6.x (used only for the Flatpak-compatible native addon) starts
-      // unmuted and has no unmute() method; unknown options are harmless.
-      mute: typeof patchBay.unmute === "function",
+      // Unknown options are harmless to venmic 6.x, which cannot unmute.
+      mute: probe.canUnmute,
     };
+    let data = null;
     if (selection?.mode === "system") {
-      return patchBay.link({ ...common, include: [] });
-    }
-    if (selection?.mode === "applications" && Array.isArray(selection.sourceIds)) {
+      data = { ...common, include: [] };
+    } else if (selection?.mode === "applications" && Array.isArray(selection.sourceIds)) {
       const include = selection.sourceIds
         .map((id) => linuxAudioMatchers.get(id))
         .filter(Boolean);
-      if (include.length === 0) return false;
-      return patchBay.link({ ...common, include });
+      if (include.length > 0) data = { ...common, include };
     }
-    return false;
+    if (!data) return false;
+    return await callLinuxAudioWorker("link", { data });
   } catch (error) {
     console.warn("[screen-share] failed to start PipeWire audio", error);
     return false;
@@ -1344,20 +1377,22 @@ function installLinuxShareAudioIpc() {
   ipcMain.handle("armada:linux-share-audio-start", (_event, selection) =>
     startLinuxShareAudio(selection),
   );
-  ipcMain.handle("armada:linux-share-audio-unmute", () => {
+  ipcMain.handle("armada:linux-share-audio-unmute", async () => {
+    if (!linuxAudioWorker || !linuxAudioProbe) return false;
     try {
-      if (!linuxAudioPatchBay) return false;
+      const probe = await linuxAudioProbe;
+      if (probe.loadError) return false;
       // The Flatpak-compatible venmic 6.x addon is already live after link().
-      if (typeof linuxAudioPatchBay.unmute !== "function") return true;
-      linuxAudioPatchBay.unmute();
-      return true;
+      if (!probe.canUnmute) return true;
+      return await callLinuxAudioWorker("unmute");
     } catch {
       return false;
     }
   });
-  ipcMain.handle("armada:linux-share-audio-stop", () => {
+  ipcMain.handle("armada:linux-share-audio-stop", async () => {
+    if (!linuxAudioWorker) return;
     try {
-      linuxAudioPatchBay?.unlink();
+      await callLinuxAudioWorker("unlink");
     } catch (error) {
       console.warn("[screen-share] failed to stop PipeWire audio", error);
     }
@@ -1910,6 +1945,7 @@ if (!gotLock) {
     isQuitting = true;
     stopHiddenTrayMonitor();
     hevcScreenShare.stop("app-quit");
+    stopLinuxAudioWorker();
     // Not awaited: before-quit is synchronous. The catch keeps a bus teardown
   // rejection from surfacing as an unhandled rejection during shutdown.
   void pushToTalk.destroy().catch(() => {});

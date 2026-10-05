@@ -10,6 +10,7 @@ import { cn } from '@/lib/utils';
 
 interface GifPickerProps {
   onSelect: (gif: GifResult) => void;
+  className?: string;
 }
 
 /** Reference column width used to derive thumbnail heights from aspect ratios. */
@@ -169,7 +170,7 @@ function GifGrid({ results, columns: columnCount, onSelect, isFavorite, onToggle
   );
 }
 
-export function GifPicker({ onSelect }: GifPickerProps) {
+export function GifPicker({ onSelect, className }: GifPickerProps) {
   const { query, setQuery, clearQuery, results, isLoading, isError, isSearching, providerName } = useGifSearch();
   const inputRef = useRef<HTMLInputElement>(null);
   const isMobile = useIsMobile();
@@ -192,7 +193,7 @@ export function GifPicker({ onSelect }: GifPickerProps) {
   const favorites = showFavorites ? favoriteList() : [];
 
   return (
-    <div className="flex flex-col w-full h-[min(360px,55dvh)] min-h-[220px] overflow-hidden">
+    <div className={cn('flex flex-col w-full h-[min(360px,55dvh)] min-h-[220px] overflow-hidden', className)}>
       <div className="flex items-center gap-2 px-3 pt-3 pb-2">
         <SearchField
           ref={inputRef}

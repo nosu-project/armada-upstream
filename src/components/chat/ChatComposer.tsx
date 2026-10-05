@@ -39,7 +39,7 @@ import { WebxdcGamePicker } from "@/components/chat/WebxdcGamePicker";
 import { DisplayName } from "@/components/DisplayName";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { PillTabs, type PillTab } from "@/components/ui/pill-tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useComposerBoundsRef } from "@/contexts/ComposerBoundsContext";
@@ -2102,8 +2102,9 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                   />
                 </>
               ) : (
-                <Popover open={plusOpen} onOpenChange={setPlusOpen}>
-                  <PopoverTrigger asChild>
+                // Non-modal: a modal menu blocks pointer events on the trigger, eating the double-click.
+                <DropdownMenu open={plusOpen} onOpenChange={setPlusOpen} modal={false}>
+                  <DropdownMenuTrigger asChild>
                     <button
                       type="button"
                       aria-label="More options"
@@ -2117,45 +2118,30 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                     >
                       <Plus absoluteStrokeWidth className={cn("size-5 touch:size-6 transition-transform", plusOpen && "rotate-45")} />
                     </button>
-                  </PopoverTrigger>
-                  <PopoverContent
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent
                     side="top"
                     align="start"
                     sideOffset={8}
                     // Items like Poll/Commands focus the textarea themselves; don't clobber it.
                     onCloseAutoFocus={(e) => e.preventDefault()}
-                    className="w-60 p-1.5 rounded-xl border-border shadow-lg"
+                    className="w-52"
                   >
-                    <div className="flex flex-col gap-0.5">
-                      {menuActions.map((action, i) => (
-                        <button
-                          key={action.id}
-                          type="button"
+                    {menuActions.map((action, i) => (
+                      <div key={action.id}>
+                        {i === 1 && <DropdownMenuSeparator />}
+                        <DropdownMenuItem
                           disabled={action.disabled}
-                          onClick={() => {
-                            setPlusOpen(false);
-                            action.onSelect();
-                          }}
-                          className={cn(
-                            "group/item flex items-center gap-3 w-full px-2 py-1.5 rounded-lg text-sm font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed",
-                            action.active ? "text-primary bg-primary/10" : "text-foreground/90 hover:bg-secondary/70 enabled:hover:text-foreground",
-                            i === 1 && "mt-1 relative before:absolute before:-top-0.5 before:inset-x-2 before:h-px before:bg-border/60",
-                          )}
+                          className={action.active ? "text-primary focus:text-primary" : undefined}
+                          onSelect={action.onSelect}
                         >
-                          <span
-                            className={cn(
-                              "flex size-8 shrink-0 items-center justify-center rounded-lg",
-                              action.active ? "bg-primary/15" : "bg-secondary/80 text-muted-foreground group-hover/item:text-foreground",
-                            )}
-                          >
-                            <action.icon className="size-[18px]" />
-                          </span>
+                          <action.icon className="mr-2 size-4" />
                           {action.label}
-                        </button>
-                      ))}
-                    </div>
-                  </PopoverContent>
-                </Popover>
+                        </DropdownMenuItem>
+                      </div>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
               )}
 
               <div className={cn("relative flex-1 min-w-0", isDocument && "order-first basis-full")}>
@@ -2525,6 +2511,10 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
             <WebxdcGamePicker onSelect={registerGame} relays={conversationRelays} />
           ) : (
             <GifPicker
+              // Without the tab row the emoji tab shows, grow by its height so the panel holds still.
+              className={!showPickerTabs && pickerTabs.length > 1
+                ? "h-[calc(min(360px,55dvh)+2.25rem)] touch:h-[calc(min(360px,55dvh)+3rem)]"
+                : undefined}
               onSelect={(gif) => {
                 registerAttachment(gif.url, "image/gif", `${gif.width}x${gif.height}`);
                 setPickerOpen(false);
