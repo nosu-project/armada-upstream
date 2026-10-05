@@ -29,6 +29,7 @@ import type { DiscoveredInvite } from "@/concord/lib/inviteDiscovery";
 import { parseInviteLink, type InviteListEntry } from "@/concord/lib/invite";
 import type { Community } from "@/concord/lib/types";
 import { DisplayName } from "@/components/DisplayName";
+import { JsonBlock } from "@/components/JsonBlock";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
@@ -428,18 +429,7 @@ function LinkDetailsDialog({
             The stored record for this link. Secrets are redacted.
           </DialogDescription>
         </DialogHeader>
-        <pre className="max-h-[60vh] overflow-auto rounded-md bg-muted p-3 text-xs leading-relaxed">
-          {json}
-        </pre>
-        <div className="flex justify-end">
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={() => writeClipboardText(json).catch(() => undefined)}
-          >
-            <Copy className="mr-2 size-4" /> Copy JSON
-          </Button>
-        </div>
+        <JsonBlock json={json} />
       </DialogContent>
     </Dialog>
   );

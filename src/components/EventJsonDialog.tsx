@@ -1,7 +1,6 @@
-import { Copy } from "lucide-react";
 import { useMemo } from "react";
 
-import { Button } from "@/components/ui/button";
+import { JsonBlock } from "@/components/JsonBlock";
 import {
   Dialog,
   DialogContent,
@@ -9,7 +8,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { writeClipboardText } from "@/lib/clipboard";
 
 interface EventJsonDialogProps {
   open: boolean;
@@ -30,18 +28,7 @@ export function EventJsonDialog({ open, onOpenChange, source, description }: Eve
           <DialogTitle>Event JSON</DialogTitle>
           <DialogDescription>{description}</DialogDescription>
         </DialogHeader>
-        <pre className="max-h-[60vh] overflow-auto rounded-md bg-muted p-3 text-xs leading-relaxed">
-          {json}
-        </pre>
-        <div className="flex justify-end">
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={() => writeClipboardText(json).catch(() => undefined)}
-          >
-            <Copy className="mr-2 size-4" /> Copy JSON
-          </Button>
-        </div>
+        <JsonBlock json={json} />
       </DialogContent>
     </Dialog>
   );

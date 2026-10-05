@@ -170,7 +170,7 @@ export function FileAttachment({ url, mime, name, size, encryption, fallbacks, t
         void download();
       }}
       className={cn(
-        "group my-1.5 flex items-center gap-3 max-w-sm rounded-2xl border border-border bg-secondary/30 px-3 py-2.5 text-left hover:bg-secondary/50 transition-colors",
+        "group my-1.5 flex w-full items-center gap-3 max-w-sm rounded-2xl border border-border bg-secondary/30 px-3 py-2.5 text-left hover:bg-secondary/50 transition-colors",
         className,
       )}
     >
