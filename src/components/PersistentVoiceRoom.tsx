@@ -96,6 +96,7 @@ import { useListShowing } from "@/contexts/PaneCoveredContext";
 import { ignorePrivateCandidatesFrom } from "@/lib/privateIceCandidates";
 import { getPushToTalkPreferences } from "@/lib/pushToTalk";
 import { isRecoverableDisconnect, rejoinRoom, trackMicIntent } from "@/lib/voiceRejoin";
+import { installWorkerCriticalTimers } from "@/lib/criticalTimers";
 import { cn } from "@/lib/utils";
 import { bytesToBase64 } from "@/lib/fileBytes";
 import {
@@ -304,6 +305,8 @@ function CallSoundEffects() {
         timers.delete(timer);
         if (isHevcScreenShareParticipant(participant, resolveRef.current)) return;
         if (kind === "join" && room.remoteParticipants.get(participant.identity) !== participant) return;
+        // Our own reconnect reports every remote as gone.
+        if (kind === "leave" && room.state !== ConnectionState.Connected) return;
         if (hasSibling(participant)) return;
         if (kind === "join") playJoinSound();
         else playLeaveSound();
@@ -448,6 +451,8 @@ const audioPublishDefaults = {
  * `disconnectOnPageLeave` treats as unload and drops the call. Web keeps it on.
  */
 const disconnectOnPageLeave = !Capacitor.isNativePlatform();
+
+installWorkerCriticalTimers();
 
 function useRoomOptions(extra?: Partial<RoomOptions>): RoomOptions {
   return useMemo<RoomOptions>(() => {
@@ -1546,6 +1551,8 @@ function ConcordVoiceRoom({
 
 /** How long an empty DM room waits for the peer to rejoin before hanging up. */
 const DM_PEER_GONE_GRACE_MS = 60_000;
+/** Data topic a DM peer announces its hang-up on, so it isn't mistaken for a drop. */
+const DM_HANGUP_TOPIC = "armada.dm-call.hangup";
 
 /**
  * DM voice room (see src/lib/dmCall.ts): blind-broker token authorized by the
@@ -1557,12 +1564,15 @@ function DmVoiceRoom({
   placeBar,
   placeStage,
   stageOpen,
+  exiting,
 }: {
   ctx: DmVoiceContext;
   onLeave: () => void;
   placeBar: PlaceBar;
   placeStage: PlaceStage;
   stageOpen: boolean;
+  /** The call is leaving; the room disconnects when the exit animation ends. */
+  exiting: boolean;
 }) {
   const { user } = useCurrentUser();
   const navigate = useNavigate();
@@ -1648,6 +1658,27 @@ function DmVoiceRoom({
       clearTimeout(timer);
       room.off(RoomEvent.ParticipantDisconnected, onParticipantDisconnected);
       room.off(RoomEvent.ParticipantConnected, onParticipantConnected);
+    };
+  }, [e2ee.room, onLeave]);
+
+  // Hang-up in-band too: the "end" wrap needs a relay socket, which may be stalled.
+  useEffect(() => {
+    const room = e2ee.room;
+    if (!exiting || !room || room.state !== ConnectionState.Connected) return;
+    void room.localParticipant
+      .publishData(new TextEncoder().encode("hangup"), { reliable: true, topic: DM_HANGUP_TOPIC })
+      .catch(() => undefined);
+  }, [e2ee.room, exiting]);
+
+  useEffect(() => {
+    const room = e2ee.room;
+    if (!room) return;
+    const onData = (_payload: Uint8Array, participant?: RemoteParticipant, _kind?: unknown, topic?: string) => {
+      if (topic === DM_HANGUP_TOPIC && participant) onLeave();
+    };
+    room.on(RoomEvent.DataReceived, onData);
+    return () => {
+      room.off(RoomEvent.DataReceived, onData);
     };
   }, [e2ee.room, onLeave]);
 
@@ -1775,6 +1806,7 @@ export default function PersistentVoiceRoom({
         placeBar={placeBar}
         placeStage={placeStage}
         stageOpen={stageOpen}
+        exiting={exiting}
       />
     );
   }
