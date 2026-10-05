@@ -94,6 +94,7 @@ import { keepCallAudioRunning } from "@/lib/voiceAudioContext";
 import { DetectedSpeakersContext, useDetectedSpeakers, useSpeakers } from "@/hooks/useSpeakers";
 import { useListShowing } from "@/contexts/PaneCoveredContext";
 import { ignorePrivateCandidatesFrom } from "@/lib/privateIceCandidates";
+import { getPushToTalkPreferences } from "@/lib/pushToTalk";
 import { isRecoverableDisconnect, rejoinRoom, trackMicIntent } from "@/lib/voiceRejoin";
 import { cn } from "@/lib/utils";
 import { bytesToBase64 } from "@/lib/fileBytes";
@@ -105,6 +106,7 @@ import {
 import {
   cancelDesktopHevcScreenShareFrames,
   desktopHevcScreenShareCapability,
+  isDesktop,
   startDesktopHevcScreenShare,
   stopDesktopHevcScreenShare,
   subscribeDesktopHevcScreenShareStatus,
@@ -401,6 +403,34 @@ function AutoRejoin({
   return null;
 }
 
+/**
+ * Publishes the mic once, on the first connect. On Connected, not SignalConnected,
+ * so it lands after LiveKitRoom applies `audio={false}`; rejoins follow trackMicIntent.
+ */
+function UnmuteOnJoin() {
+  const room = useRoomContext();
+  useEffect(() => {
+    // Push to talk owns the mic and starts it muted.
+    if (isDesktop() && getPushToTalkPreferences().enabled) return;
+    let done = false;
+    const unmute = () => {
+      if (done) return;
+      done = true;
+      void (async () => {
+        if (!room.canPlaybackAudio) await room.startAudio().catch(() => {});
+        await room.localParticipant.setMicrophoneEnabled(true);
+      })().catch((err) => console.warn("voice: could not unmute on join", err));
+    };
+    if (room.state === ConnectionState.Connected) unmute();
+    else room.once(RoomEvent.Connected, unmute);
+    return () => {
+      done = true;
+      room.off(RoomEvent.Connected, unmute);
+    };
+  }, [room]);
+  return null;
+}
+
 function CallAudioKeeper() {
   const room = useRoomContext();
   useEffect(() => keepCallAudioRunning(room), [room]);
@@ -609,6 +639,7 @@ function VoiceRoomShell({
   stageOpen,
   label,
   scopeRelayUrl,
+  joinUnmuted = false,
 }: {
   serverUrl: string;
   token: string;
@@ -621,6 +652,8 @@ function VoiceRoomShell({
   stageOpen: boolean;
   label: React.ReactNode;
   scopeRelayUrl?: string;
+  /** 1:1 calls: a call answered is a call spoken in, so join with the mic live. */
+  joinUnmuted?: boolean;
 }) {
   const [rejoining, setRejoining] = useState(false);
   // Before connect: the mode has to be on before the playback streams open (callMicHold.ts).
@@ -656,7 +689,7 @@ function VoiceRoomShell({
       token={token}
       room={room}
       connect
-      // Join muted: the mic button publishes and handles the permission prompt explicitly.
+      // Join muted: the mic button (or UnmuteOnJoin) publishes after connect.
       audio={false}
       video={false}
       options={options}
@@ -669,6 +702,7 @@ function VoiceRoomShell({
         onRejoiningChange={setRejoining}
         onGiveUp={onDisconnected}
       />
+      {joinUnmuted && <UnmuteOnJoin />}
       <ScreenShareWatchProvider>
       <CallAudioRenderer />
       <CallAudioKeeper />
@@ -1688,6 +1722,7 @@ function DmVoiceRoom({
         placeStage={placeStage}
         stageOpen={stageOpen}
         label={label}
+        joinUnmuted
       />
     </VoiceIdentityContext.Provider>
   );
