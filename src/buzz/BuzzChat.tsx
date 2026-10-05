@@ -894,17 +894,12 @@ export function BuzzChat({
       >
         <div
           className={cn(
-            "absolute inset-0 bg-background transition-opacity duration-200 ease-out thread:hidden",
-            threadRoot ? "opacity-100" : "opacity-0",
-          )}
-        />
-        <div
-          className={cn(
             "relative h-full flex w-full transition-transform duration-200 ease-out",
             threadRoot ? "translate-x-0" : "translate-x-full",
             threadExpanded ? "thread:w-full" : "thread:w-[23rem]",
           )}
         >
+          <div aria-hidden className="absolute inset-0 -z-10 bg-background thread:hidden" />
           {lastThreadRoot && (
             <ThreadPanel
               root={lastThreadRoot}

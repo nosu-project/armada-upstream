@@ -652,17 +652,12 @@ function MeshMemberPanel({
     >
       <div
         className={cn(
-          "absolute inset-0 bg-background transition-opacity duration-200 ease-out sidebar:hidden",
-          open ? "opacity-100" : "opacity-0",
-        )}
-      />
-      <div
-        className={cn(
           "relative h-full flex w-full sidebar:w-[16.5rem] transition-transform duration-200 ease-out",
           open ? "translate-x-0" : "translate-x-full",
           visible ? "sidebar:translate-x-0" : "sidebar:translate-x-full",
         )}
       >
+        <div aria-hidden className="absolute inset-0 -z-10 bg-background sidebar:hidden" />
         <aside className="flex flex-col h-full w-full sidebar:w-[16.5rem] mx-2 mt-3 mb-2 clip-corner-lg bg-chrome overflow-hidden">
           <div className="flex items-center justify-between px-4 h-12 shrink-0 sidebar:hidden">
             <span className="text-sm font-semibold">Nearby</span>

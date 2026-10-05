@@ -629,17 +629,12 @@ export function GroupPage() {
           >
             <div
               className={cn(
-                "absolute inset-0 bg-background transition-opacity duration-200 ease-out sidebar:hidden",
-                membersOpen ? "opacity-100" : "opacity-0",
-              )}
-            />
-            <div
-              className={cn(
                 "relative h-full flex w-full sidebar:w-[16.5rem] transition-transform duration-200 ease-out",
                 membersOpen ? "translate-x-0" : "translate-x-full",
                 membersVisible ? "sidebar:translate-x-0" : "sidebar:translate-x-full",
               )}
             >
+              <div aria-hidden className="absolute inset-0 -z-10 bg-background sidebar:hidden" />
               <MemberList
                 admins={mergedAdmins}
                 members={details?.members ?? []}
