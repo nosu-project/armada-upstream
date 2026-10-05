@@ -538,7 +538,7 @@ export const ChannelRow = memo(function ChannelRow({
                 aria-label={occupied ? "Join call" : "Start call"}
                 title={occupied ? "Join call" : "Start call"}
                 className={cn(
-                  "shrink-0 flex items-center justify-center size-7 mr-1 rounded transition-opacity",
+                  "shrink-0 flex items-center justify-center size-7 mr-2 clip-corner transition-opacity",
                   "opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100",
                   // No hover on touch: hidden unless a call is live.
                   !occupied && "touch:hidden",
