@@ -128,7 +128,7 @@ function GifThumbnail({ gif, onClick, isFavorite, onToggleFavorite }: { gif: Gif
         'absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/60 to-transparent',
         'px-2 py-1.5 opacity-0 group-hover:opacity-100 transition-opacity duration-150',
       )}>
-        <span className="text-[10px] text-white line-clamp-1 font-medium">
+        <span className="text-3xs text-white line-clamp-1 font-medium">
           {gif.title}
         </span>
       </div>
@@ -216,7 +216,7 @@ export function GifPicker({ onSelect }: GifPickerProps) {
           Favorites
           {favoriteCount > 0 && (
             <span className={cn(
-              'text-[10px] rounded-full px-1.5',
+              'text-3xs rounded-full px-1.5',
               activeTab === 'favorites' ? 'bg-primary-foreground/20' : 'bg-muted',
             )}>
               {favoriteCount}
@@ -246,7 +246,7 @@ export function GifPicker({ onSelect }: GifPickerProps) {
                   <X className="size-3.5" />
                 </button>
               ) : (
-                <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[10px] text-muted-foreground/50 pointer-events-none select-none">
+                <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-3xs text-muted-foreground/50 pointer-events-none select-none">
                   Powered by {providerName}
                 </span>
               )}
@@ -254,7 +254,7 @@ export function GifPicker({ onSelect }: GifPickerProps) {
           </div>
 
           <div className="px-3 pb-1.5">
-            <span className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">
+            <span className="text-2xs font-medium text-muted-foreground uppercase tracking-wider">
               {isSearching ? 'Results' : 'Trending'}
             </span>
           </div>
@@ -297,7 +297,7 @@ export function GifPicker({ onSelect }: GifPickerProps) {
       {activeTab === 'favorites' && (
         <>
           <div className="px-3 pt-1 pb-1.5">
-            <span className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">
+            <span className="text-2xs font-medium text-muted-foreground uppercase tracking-wider">
               {favoriteCount > 0 ? `${favoriteCount} favorite${favoriteCount === 1 ? '' : 's'}` : 'No favorites yet'}
             </span>
           </div>

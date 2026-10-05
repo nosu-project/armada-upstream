@@ -181,7 +181,7 @@ function ProfilePreviewBody({
         </div>
 
         <div className="flex items-center gap-1.5 min-w-0">
-          <div className="font-bold text-[15px] truncate">
+          <div className="font-bold text-chat truncate">
             {author.data?.event
               ? <EmojifiedText tags={author.data.event.tags}>{displayName}</EmojifiedText>
               : displayName}
@@ -197,7 +197,7 @@ function ProfilePreviewBody({
                 key={role.id}
                 title={role.name}
                 className={cn(
-                  "inline-flex max-w-full items-center rounded-full px-1.5 py-0.5 text-[10px] font-medium",
+                  "inline-flex max-w-full items-center rounded-full px-1.5 py-0.5 text-3xs font-medium",
                   !role.color && "bg-muted text-muted-foreground",
                 )}
                 style={

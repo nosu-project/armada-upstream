@@ -39,7 +39,7 @@ export function ChannelCategoryHeading({
       aria-expanded={!collapsed}
       // Touch grows the tap target to 44px without moving the text.
       className={cn(
-        "flex w-full items-center gap-1 px-2 pt-3 pb-0.5 touch:pt-4 touch:pb-2.5 text-left text-[11px] font-semibold uppercase tracking-wider transition-colors",
+        "flex w-full items-center gap-1 px-2 pt-3 pb-0.5 touch:pt-4 touch:pb-2.5 text-left text-2xs font-semibold uppercase tracking-wider transition-colors",
         highlight ? "text-primary" : "text-muted-foreground/80 hover:text-foreground",
       )}
     >

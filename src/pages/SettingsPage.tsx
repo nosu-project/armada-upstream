@@ -489,23 +489,21 @@ export function SettingsPage({
           <>
             <SettingsRow>
               <p className="text-xs text-muted-foreground leading-snug">
-                The relays where Armada keeps and looks up your account data:
-                your profile, follow list, emoji packs, and the other personal
-                lists that follow you between devices.
+                Where Armada keeps your profile, follows, emoji packs and other
+                account data.
               </p>
             </SettingsRow>
             <SettingsRow
               label="Use app relays"
-              description="Read and write your account data on the app relays below. Leave this on unless you really know you want it off."
+              description="Keep account data on the relays below."
             >
               <Switch checked={config.useAppRelays} onCheckedChange={setUseAppRelays} />
             </SettingsRow>
             {!config.useAppRelays && !(config.useUserRelays && userRelayUrls.length > 0) && (
               <SettingsRow>
                 <p className="text-sm text-destructive leading-snug">
-                  App relays are off and you have no personal relays (NIP-65).
-                  Your profile, follow lists, and emoji packs won't load or sync
-                  until you configure an app or personal account-data relay.
+                  No account relays. Your profile and lists won't load or sync
+                  until you add one.
                 </p>
               </SettingsRow>
             )}
@@ -519,10 +517,9 @@ export function SettingsPage({
             </SettingsRow>
             <SettingsRow>
               <p className="text-xs text-muted-foreground leading-snug">
-                Broadcast relays. Your profile and other public account data are
-                also published here so other Nostr apps can find them. Armada
-                never reads from these, so removing one costs you nothing but
-                reach. Your communities and messages are never sent here.
+                Broadcast relays. Your public profile is also published here
+                for other Nostr apps. Armada never reads from them, and never
+                sends messages here.
               </p>
             </SettingsRow>
             <SettingsRow>
@@ -535,7 +532,7 @@ export function SettingsPage({
             </SettingsRow>
             <SettingsRow
               label="Use my own relays (NIP-65)"
-              description="Also read and write profiles and lists on the relays from your published NIP-65 relay list, on top of the app relays above."
+              description="Also use the relays in your NIP-65 relay list."
             >
               <Switch checked={config.useUserRelays} onCheckedChange={setUseUserRelays} />
             </SettingsRow>
@@ -544,8 +541,8 @@ export function SettingsPage({
                 stack
                 label={userRelayUrls.length > 0 ? "Edit my signed relay list" : "Find or publish my relay list"}
                 description={userRelayUrls.length > 0
-                  ? "Changes replace your NIP-65 list only after you press Save and approve the signature."
-                  : "Look for your signed NIP-65 list using one bootstrap relay. If none exists, Armada can publish that relay only after you approve the signature."}
+                  ? "Changes apply when you save and sign."
+                  : "Look up your NIP-65 list from one relay, or publish one."}
               >
                 <RelayBootstrapForm />
               </SettingsRow>
@@ -553,7 +550,7 @@ export function SettingsPage({
             {user && (
               <SettingsRow
                 label="Automatic settings sync"
-                description="Automatically send private Armada setting changes and the encrypted DM discovery index, and apply changes from your other clients. This switch affects only this device; Sync now still works when it is off."
+                description="Sync private settings and DM list with your other devices. Applies to this device only."
               >
                 <Switch
                   checked={config.automaticSettingsSync !== false}
@@ -569,19 +566,10 @@ export function SettingsPage({
                   <>
                     {portableSetup.isConfigured
                       ? portableSetup.isAutomatic
-                        ? "Community and server lists stay synchronized, and private settings plus the DM roster sync automatically. Sync now also repairs every NIP-65 write relay immediately."
-                        : "Private settings and DM-roster auto-sync are off on this device; community and server lists still synchronize when changed. Sync now repairs all portable state immediately."
-                      : config.automaticSettingsSync !== false
-                        ? "Press once to copy your signed lists, encrypted settings, community recovery state, invite authority, and DM roster to every NIP-65 write relay. Later private setting changes will sync automatically."
-                        : "Press once to copy your signed lists and encrypted recovery state. Future private Armada setting changes remain on this device until you press Sync now or enable automatic sync."}
-                    <span className="mt-2 block">
-                      Pull latest setup reads those records back from your NIP-65 relays, including
-                      communities and DM conversations. It publishes nothing.
-                    </span>
-                    <span className="mt-2 block">
-                      Device hardware, audio processing, notification permission, Bluetooth, and
-                      wallet secrets stay on this device.
-                    </span>
+                        ? "Your setup syncs automatically. Sync now pushes it to every relay again."
+                        : "Communities and servers sync; private settings wait for Sync now."
+                      : "Copy your lists, settings and communities to your NIP-65 relays."}
+                    {" "}Device, audio and wallet settings stay here.
                   </>
                 )}
               >
@@ -659,10 +647,8 @@ export function SettingsPage({
           <>
             <SettingsRow>
               <p className="text-xs text-muted-foreground leading-snug">
-                Where a community you create lives. Everyone in it reads and
-                posts here, so pick relays that will let your members post. You
-                can change the set for a single community when you create it,
-                and afterwards from the community's own settings.
+                Default relays for communities you create. Each community can
+                override them in its own settings.
               </p>
             </SettingsRow>
             <SettingsRow>
@@ -700,7 +686,7 @@ export function SettingsPage({
           <>
             <SettingsRow
               label="Turn off direct messages"
-              description="Stop this account from listening for direct messages at all. No standing inbox subscription is held, so unsolicited DMs never reach you and cost no bandwidth. Your stored conversations and DM relay list are left untouched; turn this back off to resume. Synced across your devices."
+              description="Stop receiving DMs on all your devices. Existing conversations are kept."
             >
               <Switch checked={config.dmsDisabled} onCheckedChange={setDmsDisabled} />
             </SettingsRow>
@@ -709,14 +695,13 @@ export function SettingsPage({
               <>
                 <SettingsRow
                   label="Use app DM relays"
-                  description="Send and receive DMs on your general app relays and the additional synchronized app DM relays below."
+                  description="Use your app relays and the DM relays below."
                 >
                   <Switch checked={config.useAppDmRelays} onCheckedChange={setUseAppDmRelays} />
                 </SettingsRow>
                 <SettingsRow
                   stack
                   label="Additional app DM relays"
-                  description="The client-provided DM relays used alongside your general app relays. This synchronized list replaces Armada's built-in DM address."
                 >
                   <RelayListEditor
                     relays={config.appDmRelays}
@@ -728,7 +713,7 @@ export function SettingsPage({
                 </SettingsRow>
                 <SettingsRow
                   label="Use my own DM relays"
-                  description="Also send and receive DMs on your own relays (listed below)."
+                  description="Also use your own DM relays below."
                 >
                   <Switch checked={config.useOwnDmRelays} onCheckedChange={setUseOwnDmRelays} />
                 </SettingsRow>
@@ -742,19 +727,19 @@ export function SettingsPage({
                 </SettingsRow>
                 <SettingsRow
                   label="Message requests"
-                  description="Show DMs from people you don't follow and haven't written to in a separate Requests list. Turn off to hide them from your inbox entirely."
+                  description="Show DMs from strangers under Requests. Off hides them."
                 >
                   <Switch checked={config.showDmRequests} onCheckedChange={setShowDmRequests} />
                 </SettingsRow>
                 <SettingsRow
                   label="Recent DMs in the rail"
-                  description="Show your newest unread conversations as a strip at the top of the far-left rail. Turn off to keep only the DMs you've pinned there. Doesn't affect your DM list."
+                  description="Show unread DMs at the top of the server rail."
                 >
                   <Switch checked={config.showRecentRailDms} onCheckedChange={setShowRecentRailDms} />
                 </SettingsRow>
                 <SettingsRow
                   label="Typing indicators"
-                  description="Show when the other person is typing, and let them see when you are. Sends a small encrypted signal every few seconds while you type, so your relays can tell the conversation is active right now."
+                  description="Share and see typing status in DMs."
                 >
                   <Switch checked={config.dmTypingIndicators} onCheckedChange={setDmTypingIndicators} />
                 </SettingsRow>
@@ -768,8 +753,8 @@ export function SettingsPage({
                 ) : (
                   <SettingsRow>
                     <p className="text-sm text-destructive">
-                      No DM relays selected. You can't send or receive direct
-                      messages. Turn on at least one option above.
+                      No DM relays. Turn on an option above to send and
+                      receive DMs.
                     </p>
                   </SettingsRow>
                 )}
@@ -785,7 +770,7 @@ export function SettingsPage({
           <>
             <SettingsRow
               label="Use app media servers"
-              description="Upload files to the synchronized app Blossom servers in addition to your own."
+              description="Also upload to the app media servers."
             >
               <Switch
                 checked={config.useAppBlossomServers}
@@ -795,7 +780,6 @@ export function SettingsPage({
             <SettingsRow
               stack
               label="App media servers"
-              description="This synchronized list replaces the media-server addresses shipped with the app."
             >
               <BlossomServerListEditor
                 servers={config.appBlossomServers}
@@ -814,7 +798,7 @@ export function SettingsPage({
             <SettingsRow
               stack
               label="Preferred media server"
-              description="Uploads link to this server's copy when it accepts the file, and fall back to the others when it doesn't. Leave empty to use whichever server answers first."
+              description="Links point here when it accepts the file."
             >
               <PreferredBlossomServerField
                 value={config.preferredBlossomServer}
@@ -826,8 +810,7 @@ export function SettingsPage({
               && config.blossomServerMetadata.servers.length === 0 && (
               <SettingsRow>
                 <p className="text-sm text-destructive">
-                  No media servers selected. File uploads are unavailable until you add a
-                  personal server or turn app media servers back on.
+                  No media servers. Add one to upload files.
                 </p>
               </SettingsRow>
             )}
@@ -852,7 +835,7 @@ export function SettingsPage({
             {Capacitor.getPlatform() === "android" && (
               <SettingsRow
                 label="Back leaves the app"
-                description="Going back from the channel list leaves Armada. Off, back returns through the chats you visited before."
+                description="Off, back steps through recent chats."
               >
                 <Switch
                   checked={config.androidBackLeavesApp}
@@ -866,7 +849,7 @@ export function SettingsPage({
         return (
           <SettingsRow
             label="Clean up links"
-            description="Remove tracking parameters like YouTube's ?si=, utm_ tags and ad click IDs from links you send and receive. Links still go to the same page."
+            description="Strip tracking parameters like utm_ and ?si= from links."
           >
             <Switch
               checked={config.stripTrackingParams}
@@ -881,15 +864,13 @@ export function SettingsPage({
               label="Show all content"
               description={
                 <>
-                  Show every community, emoji pack and theme posted to your relays, by
-                  anyone, instead of only picks from the curated list and people you follow.
+                  Show everything posted to your relays, not just curated picks and
+                  people you follow.
                   {config.discoverAllContent && (
                     <span className="mt-1 flex items-start gap-1.5 text-destructive">
                       <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
                       <span>
-                        Nothing here is filtered or moderated. Expect spam, scams and content you
-                        may find offensive, in names and images as well as descriptions. People
-                        you've muted stay hidden.
+                        Unmoderated. Expect spam and offensive content.
                       </span>
                     </span>
                   )}
@@ -1022,7 +1003,7 @@ export function SettingsPage({
           )}
           {navGroups.map((group) => (
             <section key={group.heading} data-settings-group className="space-y-1.5">
-              <h2 className="px-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+              <h2 className="px-1 text-2xs font-semibold uppercase tracking-wider text-muted-foreground">
                 {group.heading}
               </h2>
               <div className="space-y-1.5">
@@ -1105,7 +1086,7 @@ export function SettingsPage({
             <div className="h-px flex-1 bg-gradient-to-l from-transparent via-primary/20 to-primary/30" />
           </div>
 
-          <div className="flex items-center justify-center gap-1.5 text-[11px] text-muted-foreground/50 select-none pt-1 pb-2">
+          <div className="flex items-center justify-center gap-1.5 text-2xs text-muted-foreground/50 select-none pt-1 pb-2">
             <Link to="/changelog" className="flex items-center gap-1 hover:text-muted-foreground transition-colors">
               <ScrollText className="size-3" />
               v{import.meta.env.VERSION}{import.meta.env.COMMIT_TAG ? "" : "+"} ({new Date(import.meta.env.BUILD_DATE).toLocaleDateString()})

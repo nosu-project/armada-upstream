@@ -145,7 +145,7 @@ function BuzzChatMessage({
         lastReplyAt={threadInfo.lastReplyAt}
         nameBadge={
           isAgent ? (
-            <span className="inline-flex items-center gap-0.5 rounded-full bg-primary/15 px-1.5 py-px text-[10px] font-medium text-primary align-middle">
+            <span className="inline-flex items-center gap-0.5 rounded-full bg-primary/15 px-1.5 py-px text-3xs font-medium text-primary align-middle">
               <BotIcon className="size-2.5" aria-hidden />
               Agent
             </span>
@@ -301,7 +301,7 @@ function BuzzForumPost({ event, transport, votes, onVote, isAgent }: BuzzForumPo
           <div className="mb-1 flex items-center gap-1.5 text-xs text-muted-foreground">
             <Avatar shape={getAvatarShape(metadata)} className="size-4 shrink-0">
               <AvatarImage src={metadata?.picture} imeta={author.data?.imeta?.picture} alt={displayName} />
-              <AvatarFallback className="bg-primary/20 text-primary text-[8px] font-semibold">
+              <AvatarFallback className="bg-primary/20 text-primary text-monogram font-semibold">
                 {displayName[0]?.toUpperCase()}
               </AvatarFallback>
             </Avatar>
@@ -309,7 +309,7 @@ function BuzzForumPost({ event, transport, votes, onVote, isAgent }: BuzzForumPo
               <DisplayName pubkey={event.pubkey} name={displayName} />
             </span>
             {isAgent && (
-              <span className="inline-flex items-center gap-0.5 rounded-full bg-primary/15 px-1.5 py-px text-[10px] font-medium text-primary">
+              <span className="inline-flex items-center gap-0.5 rounded-full bg-primary/15 px-1.5 py-px text-3xs font-medium text-primary">
                 <BotIcon className="size-2.5" aria-hidden />
                 Agent
               </span>
@@ -815,7 +815,7 @@ export function BuzzChat({
               </div>
             ) : (
               <>
-                <p className="px-2 pb-1 text-[11px] uppercase tracking-wide text-muted-foreground/80">
+                <p className="px-2 pb-1 text-2xs uppercase tracking-wide text-muted-foreground/80">
                   {searchResults.length} result{searchResults.length === 1 ? "" : "s"}
                 </p>
                 {[...searchResults]
@@ -834,7 +834,6 @@ export function BuzzChat({
               <div className="flex flex-col items-center justify-center py-16 text-center">
                 <Hash className="size-10 text-muted-foreground/40 mb-3" />
                 <p className="text-sm text-muted-foreground">No messages yet</p>
-                <p className="text-xs text-muted-foreground/60 mt-1">Be the first to say something!</p>
               </div>
             }
             renderMessage={(msg, continuation) => renderRow(msg, continuation)}

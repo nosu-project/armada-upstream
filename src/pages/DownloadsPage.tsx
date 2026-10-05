@@ -121,7 +121,7 @@ function CommandLine({ command }: { command: string }) {
 
   return (
     <div className="flex items-center gap-1 clip-corner-lg bg-background/60 pl-2.5 pr-1">
-      <code className="min-w-0 flex-1 overflow-x-auto whitespace-pre py-1.5 font-mono text-[11px] leading-relaxed text-muted-foreground">
+      <code className="min-w-0 flex-1 overflow-x-auto whitespace-pre py-1.5 font-mono text-2xs leading-relaxed text-muted-foreground">
         <span aria-hidden="true" className="select-none text-[hsl(var(--accent2)/0.75)]">$ </span>
         {command}
       </code>
@@ -188,13 +188,13 @@ function TargetCard({ platform, artifacts, version, channel, featured }: {
         <Icon className={`size-5 shrink-0 ${featured ? "text-primary" : "text-muted-foreground"}`} />
         <h2 className="font-mono font-bold lowercase tracking-tight leading-tight">{platform.name}</h2>
         {featured && (
-          <span className="font-mono text-[10px] lowercase tracking-wide text-primary/80">your platform</span>
+          <span className="font-mono text-3xs lowercase tracking-wide text-primary/80">your platform</span>
         )}
         {artifacts.length > 0 && version && (
           <span className="ml-auto flex items-center gap-1.5 shrink-0">
             {/* Only shown when nothing stable was ever tagged (`featuredRelease` prefers stable). */}
             {channel && channel !== "main" && (
-              <span className="font-mono text-[10px] lowercase tracking-wide text-primary/80">{channel}</span>
+              <span className="font-mono text-3xs lowercase tracking-wide text-primary/80">{channel}</span>
             )}
             <span className="font-mono text-xs text-muted-foreground">{version}</span>
           </span>
@@ -280,7 +280,7 @@ function OlderRelease({ release }: { release: Release }) {
       <summary className="flex cursor-pointer items-center gap-2 font-mono text-sm text-muted-foreground marker:content-none hover:text-foreground">
         <span className="font-bold">{release.version}</span>
         {release.channel !== "main" && (
-          <span className="font-mono text-[10px] lowercase tracking-wide text-primary/70">{release.channel}</span>
+          <span className="font-mono text-3xs lowercase tracking-wide text-primary/70">{release.channel}</span>
         )}
         <span className="ml-auto text-xs opacity-70">
           {new Date(release.createdAt * 1000).toLocaleDateString()}

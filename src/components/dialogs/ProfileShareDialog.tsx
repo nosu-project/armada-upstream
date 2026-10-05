@@ -130,7 +130,7 @@ export function ProfileShareDialog({ open, onOpenChange }: ProfileShareDialogPro
               <div className="flex gap-2">
                 <Button className="flex-1 clip-corner-lg" onClick={copy}>
                   {copied
-                    ? <><Check className="size-4 mr-2" /> Copied!</>
+                    ? <><Check className="size-4 mr-2" /> Copied</>
                     : <><Copy className="size-4 mr-2" /> Copy link</>}
                 </Button>
                 {showShare && (

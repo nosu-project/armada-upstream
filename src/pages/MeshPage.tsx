@@ -505,13 +505,13 @@ function MemberRow({
       )}
     >
       <span
-        className="size-6 shrink-0 rounded-full flex items-center justify-center text-[11px] font-semibold"
+        className="size-6 shrink-0 rounded-full flex items-center justify-center text-2xs font-semibold"
         style={{ backgroundColor: `${identity.color}33`, color: identity.color }}
       >
         {identity.name.slice(0, 1).toUpperCase() || "?"}
       </span>
       <span className="truncate flex-1" style={{ color: identity.color }}>{identity.name}</span>
-      <span className="shrink-0 text-[10px] text-muted-foreground/60">#{identity.suffix}</span>
+      <span className="shrink-0 text-3xs text-muted-foreground/60">#{identity.suffix}</span>
     </button>
   );
 }
@@ -567,7 +567,7 @@ function ChatHeader({
       )}
       <h1 className="font-semibold truncate min-w-0" style={dmIdentity ? { color: dmIdentity.color } : undefined}>{title}</h1>
       {dmIdentity && (
-        <span className="text-[11px] text-muted-foreground/60 shrink-0">#{dmIdentity.suffix}</span>
+        <span className="text-2xs text-muted-foreground/60 shrink-0">#{dmIdentity.suffix}</span>
       )}
       <span className="flex-1" />
       {!isDm && (

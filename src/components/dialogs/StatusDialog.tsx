@@ -24,7 +24,7 @@ interface StatusDialogProps {
   onOpenChange: (open: boolean) => void;
 }
 
-const PRESETS = ["👋 Available", "🎧 Focusing", "🌴 Away", "💤 Sleeping", "🍕 Lunch"];
+const PRESETS = ["Available", "Focusing", "Away", "Sleeping", "At lunch"];
 
 const MAX_LEN = 140;
 

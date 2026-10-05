@@ -165,7 +165,7 @@ function ServerMiniIcon({ url }: { url: string }) {
       {icon ? (
         <img src={icon} alt="" draggable={false} className="size-full object-cover" />
       ) : (
-        <span className="text-[9px] font-semibold leading-none text-secondary-foreground">{initial}</span>
+        <span className="text-monogram font-semibold leading-none text-secondary-foreground">{initial}</span>
       )}
       <MiniUnreadDot mention={anyMention} unread={anyUnread} />
     </span>
@@ -186,7 +186,7 @@ function Concord2MiniIcon({ communityId, name }: { communityId: string; name: st
       {iconUrl ? (
         <img src={iconUrl} alt="" draggable={false} className="size-full object-cover" />
       ) : (
-        <span className="text-[9px] font-semibold leading-none">{initial}</span>
+        <span className="text-monogram font-semibold leading-none">{initial}</span>
       )}
       <MiniUnreadDot
         mention={Object.values(byChannel).some((u) => u.mention)}
@@ -210,7 +210,7 @@ function DmMiniIcon({ pubkey }: { pubkey: string }) {
       ) : (
         <Avatar shape={getAvatarShape(metadata)} className="size-full">
           <AvatarImage src={metadata?.picture} imeta={author.data?.imeta?.picture} alt="" draggable={false} />
-          <AvatarFallback className="bg-primary/20 text-[9px] font-semibold leading-none text-primary">
+          <AvatarFallback className="bg-primary/20 text-monogram font-semibold leading-none text-primary">
             {name.trim().charAt(0).toUpperCase() || "?"}
           </AvatarFallback>
         </Avatar>
@@ -527,7 +527,7 @@ const ServerButton = memo(function ServerButton({
         )}
         {!isActive && anyMention ? (
           <span
-            className="absolute -top-1 -right-1 z-10 flex min-w-4 h-4 px-1 items-center justify-center rounded-full bg-primary text-primary-foreground text-[10px] font-bold leading-none ring-2 ring-background"
+            className="absolute -top-1 -right-1 z-10 flex min-w-4 h-4 px-1 items-center justify-center rounded-full bg-primary text-primary-foreground text-3xs font-bold leading-none ring-2 ring-background"
             aria-label="You were mentioned"
           >
             @
@@ -760,7 +760,7 @@ const Concord2Button = memo(function Concord2Button({
                   ) : null}
                   {!isActive && anyMention ? (
                     <span
-                      className="absolute -top-1 -right-1 z-10 flex min-w-4 h-4 px-1 items-center justify-center rounded-full bg-primary text-primary-foreground text-[10px] font-bold leading-none ring-2 ring-background"
+                      className="absolute -top-1 -right-1 z-10 flex min-w-4 h-4 px-1 items-center justify-center rounded-full bg-primary text-primary-foreground text-3xs font-bold leading-none ring-2 ring-background"
                       aria-label="You were mentioned"
                     >
                       @
@@ -912,7 +912,7 @@ const DmButton = memo(function DmButton({
                       )}
                       {!isActive && displayedUnreadCount > 0 ? (
                         <span
-                          className="absolute -top-1 -right-1 z-10 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-bold leading-none text-primary-foreground ring-2 ring-background"
+                          className="absolute -top-1 -right-1 z-10 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-3xs font-bold leading-none text-primary-foreground ring-2 ring-background"
                           aria-label={`${displayedUnreadCount} unread ${displayedUnreadCount === 1 ? "message" : "messages"}`}
                         >
                           {displayedUnreadCount > 99 ? "99+" : displayedUnreadCount}
@@ -1012,7 +1012,7 @@ const RecentDmButton = memo(function RecentDmButton({
                       )}
                       {!isActive && item.unreadCount > 0 && (
                         <span
-                          className="absolute -top-1 -right-1 z-10 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-bold leading-none text-primary-foreground ring-2 ring-background"
+                          className="absolute -top-1 -right-1 z-10 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-3xs font-bold leading-none text-primary-foreground ring-2 ring-background"
                           aria-label={`${item.unreadCount} unread ${item.unreadCount === 1 ? "message" : "messages"}`}
                         >
                           {item.unreadCount > 99 ? "99+" : item.unreadCount}
@@ -1148,7 +1148,7 @@ function RailFolder({
                   </span>
                   {anyMention ? (
                     <span
-                      className="absolute -top-1 -right-1 z-10 flex min-w-4 h-4 px-1 items-center justify-center rounded-full bg-primary text-primary-foreground text-[10px] font-bold leading-none ring-2 ring-background"
+                      className="absolute -top-1 -right-1 z-10 flex min-w-4 h-4 px-1 items-center justify-center rounded-full bg-primary text-primary-foreground text-3xs font-bold leading-none ring-2 ring-background"
                       aria-label="You were mentioned"
                     >
                       @
@@ -1894,7 +1894,7 @@ function ServerRailInner({
                   </span>
                   {inviteUnread > 0 && (
                     <span
-                      className="absolute -top-1 -right-1 z-10 flex min-w-4 h-4 px-1 items-center justify-center rounded-full bg-primary text-primary-foreground text-[10px] font-bold leading-none ring-2 ring-background group-aria-[current=page]:hidden"
+                      className="absolute -top-1 -right-1 z-10 flex min-w-4 h-4 px-1 items-center justify-center rounded-full bg-primary text-primary-foreground text-3xs font-bold leading-none ring-2 ring-background group-aria-[current=page]:hidden"
                       aria-label={`${inviteUnread} new invite${inviteUnread === 1 ? "" : "s"}`}
                     >
                       {inviteUnread}

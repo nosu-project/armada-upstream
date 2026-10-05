@@ -55,7 +55,7 @@ function PersonAvatar({ pubkey, size = "size-7" }: { pubkey: string; size?: stri
       <TooltipTrigger asChild>
         <Avatar className={cn(size, "border border-border/60")}>
           <AvatarImage src={picture} imeta={author.data?.imeta?.picture} alt={name} />
-          <AvatarFallback className="text-[10px]">{name.slice(0, 2).toUpperCase()}</AvatarFallback>
+          <AvatarFallback className="text-3xs">{name.slice(0, 2).toUpperCase()}</AvatarFallback>
         </Avatar>
       </TooltipTrigger>
       <TooltipContent>
@@ -77,7 +77,7 @@ function PeopleStack({ pubkeys }: { pubkeys: string[] }) {
         </span>
       ))}
       {remaining > 0 && (
-        <span className="relative z-0 flex h-6 min-w-6 items-center justify-center rounded-full bg-muted px-1 text-[10px] font-semibold text-muted-foreground ring-2 ring-card">
+        <span className="relative z-0 flex h-6 min-w-6 items-center justify-center rounded-full bg-muted px-1 text-3xs font-semibold text-muted-foreground ring-2 ring-card">
           +{remaining}
         </span>
       )}
@@ -140,7 +140,7 @@ function monthLabels(weeks: Date[][]) {
 function ContributionLegend() {
   return (
     <div className="flex items-center gap-1.5">
-      <span className="text-[10px] text-muted-foreground">Less</span>
+      <span className="text-3xs text-muted-foreground">Less</span>
       {LEVEL_CLASSES.map((levelClass, level) => (
         <Tooltip key={levelClass}>
           <TooltipTrigger asChild>
@@ -149,7 +149,7 @@ function ContributionLegend() {
           <TooltipContent>{LEVEL_LABELS[level]}</TooltipContent>
         </Tooltip>
       ))}
-      <span className="text-[10px] text-muted-foreground">More</span>
+      <span className="text-3xs text-muted-foreground">More</span>
     </div>
   );
 }
@@ -165,7 +165,7 @@ function ContributionGraph({ data }: { data: Record<string, number> }) {
       <div className="grid gap-1" style={{ gridTemplateColumns }}>
         {labels.map((label, index) => (
           <span
-            className="overflow-visible whitespace-nowrap text-[10px] font-medium text-muted-foreground"
+            className="overflow-visible whitespace-nowrap text-3xs font-medium text-muted-foreground"
             // biome-ignore lint/suspicious/noArrayIndexKey: fixed-size grid
             key={index}
           >
@@ -225,7 +225,7 @@ const STATUS_STYLES: Record<ProjectWorkItem["status"], string> = {
 
 function StatusChip({ status }: { status: ProjectWorkItem["status"] }) {
   return (
-    <span className={cn("shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium capitalize", STATUS_STYLES[status])}>
+    <span className={cn("shrink-0 rounded-full px-2 py-0.5 text-3xs font-medium capitalize", STATUS_STYLES[status])}>
       {status}
     </span>
   );
@@ -270,14 +270,14 @@ function WorkItemRow({ item, repoName, onOpen, onLabelClick }: { item: ProjectWo
                 key={label}
                 onClick={onLabelClick ? (e) => { e.stopPropagation(); onLabelClick(label); } : undefined}
                 className={cn(
-                  "rounded-full border border-border/60 px-1.5 py-px text-[10px]",
+                  "rounded-full border border-border/60 px-1.5 py-px text-3xs",
                   onLabelClick && "cursor-pointer transition-colors hover:border-primary/50 hover:text-foreground",
                 )}
               >
                 {label}
               </span>
             ))}
-            {labels.length > 3 && <span className="text-[10px]">+{labels.length - 3}</span>}
+            {labels.length > 3 && <span className="text-3xs">+{labels.length - 3}</span>}
           </div>
         </div>
       </div>

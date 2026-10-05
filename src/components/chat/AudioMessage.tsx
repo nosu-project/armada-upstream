@@ -246,7 +246,7 @@ export function AudioMessage({
         })}
       </div>
 
-      <span className="text-[11px] text-muted-foreground tabular-nums shrink-0">
+      <span className="text-2xs text-muted-foreground tabular-nums shrink-0">
         {formatTime(isPlaying || currentTime > 0 ? currentTime : mediaDuration)}
       </span>
     </>

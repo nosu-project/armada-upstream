@@ -255,7 +255,7 @@ const ConversationRow = memo(function ConversationRow({
           />
           <div className="min-w-0 flex-1 space-y-0.5">
             <div className="flex items-center gap-1.5 min-w-0">
-              <div className={cn("text-[15px] truncate", unread ? "font-semibold text-foreground" : "font-medium")}>
+              <div className={cn("text-chat truncate", unread ? "font-semibold text-foreground" : "font-medium")}>
                 {q ? (
                   <Highlight text={name} query={query} emojiTags={emojiTags} />
                 ) : noteToSelf || group ? (
@@ -282,7 +282,7 @@ const ConversationRow = memo(function ConversationRow({
             )}
             {/* Positive assertion only: no label means no membership data, not "nothing shared". */}
             {request && sharedCommunity && (
-              <div className="flex items-center gap-1 text-[11px] text-muted-foreground/80">
+              <div className="flex items-center gap-1 text-2xs text-muted-foreground/80">
                 <Users className="size-3 shrink-0" aria-hidden />
                 <span className="truncate">Also in {sharedCommunity}</span>
               </div>
@@ -444,7 +444,7 @@ function DmLegacyBadge() {
       <PopoverTrigger asChild>
         <button
           type="button"
-          className="inline-flex items-center gap-0.5 rounded-full bg-muted/60 px-1.5 py-0.5 text-[10px] font-medium leading-none text-muted-foreground/80 hover:text-foreground shrink-0 select-none"
+          className="inline-flex items-center gap-0.5 rounded-full bg-muted/60 px-1.5 py-0.5 text-3xs font-medium leading-none text-muted-foreground/80 hover:text-foreground shrink-0 select-none"
           aria-label="Older, less private encryption. Tap for details."
         >
           <Lock className="size-2.5" aria-hidden />
@@ -503,7 +503,7 @@ function DmTimerNotice({ author, seconds, self, name }: { author: string; second
   return (
     <div className="flex items-center justify-center gap-1.5 px-4 py-1.5 select-none" role="status">
       <Timer className="size-3.5 shrink-0 text-muted-foreground/70" aria-hidden />
-      <span className="text-[11px] text-muted-foreground/80 text-center">
+      <span className="text-2xs text-muted-foreground/80 text-center">
         {disappearingNotice(seconds, author === self, name)}
       </span>
     </div>
@@ -1153,7 +1153,7 @@ const Conversation = memo(function Conversation({
             </div>
           ) : (
             <>
-              <p className="px-2 pb-1 text-[11px] uppercase tracking-wide text-muted-foreground/80">
+              <p className="px-2 pb-1 text-2xs uppercase tracking-wide text-muted-foreground/80">
                 {searchResults.length} result{searchResults.length === 1 ? "" : "s"}
               </p>
               {searchResults.map((msg) => (
@@ -1331,7 +1331,7 @@ const Conversation = memo(function Conversation({
             }}
           >
             <div className="flex flex-col items-center gap-2 text-center">
-              <div className="flex size-12 items-center justify-center clip-corner-lg bg-amber-500/15 text-amber-500">
+              <div className="flex size-12 items-center justify-center clip-corner-lg bg-warning/15 text-warning">
                 <PhoneOff className="size-6" />
               </div>
               <h2 className="chrome-dialog-title font-mono font-bold lowercase tracking-tight text-foreground">
@@ -1507,7 +1507,7 @@ function RecipientChip({ pubkey, onRemove }: { pubkey: string; onRemove: () => v
     <span className="inline-flex max-w-full items-center gap-1 rounded-full bg-secondary py-0.5 pl-0.5 pr-1.5 text-sm">
       <Avatar shape={getAvatarShape(author.data?.metadata)} className="size-5 shrink-0">
         <AvatarImage src={sanitizeUrl(author.data?.metadata?.picture)} imeta={author.data?.imeta?.picture} alt={name} />
-        <AvatarFallback className="bg-primary/20 text-primary text-[9px]">
+        <AvatarFallback className="bg-primary/20 text-primary text-monogram">
           {name[0]?.toUpperCase()}
         </AvatarFallback>
       </Avatar>
@@ -1779,7 +1779,7 @@ function ConversationSectionHeader({
   return (
     <div
       className={cn(
-        "px-2.5 pt-3 pb-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground",
+        "px-2.5 pt-3 pb-1 text-2xs font-semibold uppercase tracking-wider text-muted-foreground",
         className,
       )}
     >
@@ -1849,7 +1849,7 @@ function RequestsEntryRow({ count, onClick }: { count: number; onClick: () => vo
         <Inbox className="size-5" aria-hidden />
       </span>
       <div className="min-w-0 flex-1 space-y-0.5">
-        <div className="text-[15px] font-medium truncate">Message requests</div>
+        <div className="text-chat font-medium truncate">Message requests</div>
         <div className="text-sm text-muted-foreground truncate">
           {count} {count === 1 ? "person you don't follow" : "people you don't follow"}
         </div>

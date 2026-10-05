@@ -177,7 +177,7 @@ function ProfileRow({
           </div>
           <BotPill metadata={metadata} />
         </div>
-        <div className="truncate font-mono text-[11px] text-muted-foreground">{identifier}</div>
+        <div className="truncate font-mono text-2xs text-muted-foreground">{identifier}</div>
       </div>
 
       {isBusy && <Loader2 className="size-4 shrink-0 animate-spin text-muted-foreground" />}

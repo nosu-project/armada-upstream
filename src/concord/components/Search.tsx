@@ -55,7 +55,7 @@ function AuthorChip({ pubkey, onRemove }: { pubkey: string; onRemove: () => void
     <span className="inline-flex items-center gap-1 rounded-full bg-primary/15 py-0.5 pl-1 pr-1.5 text-xs text-foreground">
       <Avatar className="size-4">
         <AvatarImage src={author.data?.metadata?.picture} imeta={author.data?.imeta?.picture} />
-        <AvatarFallback className="text-[8px]">{(name || pubkey).slice(0, 2)}</AvatarFallback>
+        <AvatarFallback className="text-monogram">{(name || pubkey).slice(0, 2)}</AvatarFallback>
       </Avatar>
       <span className="max-w-28 truncate">
         {name ? <DisplayName pubkey={pubkey} name={name} /> : pubkey.slice(0, 8)}
@@ -92,7 +92,7 @@ function AuthorOption({
     >
       <Avatar className="size-6">
         <AvatarImage src={author.data?.metadata?.picture} imeta={author.data?.imeta?.picture} />
-        <AvatarFallback className="text-[9px]">{(name || pubkey).slice(0, 2)}</AvatarFallback>
+        <AvatarFallback className="text-monogram">{(name || pubkey).slice(0, 2)}</AvatarFallback>
       </Avatar>
       <span className="min-w-0 flex-1 truncate">
         {name ? <DisplayName pubkey={pubkey} name={name} /> : pubkey.slice(0, 12)}
@@ -184,7 +184,7 @@ function ChannelFacet({
           </label>
         ))}
       </div>
-      <p className="text-[11px] text-muted-foreground">
+      <p className="text-2xs text-muted-foreground">
         {selected.length === 0 ? "Searching all channels" : `${selected.length} selected`}
       </p>
     </div>
@@ -333,7 +333,7 @@ export function SearchResultsView({
 
   return (
     <div className="flex flex-col px-2 py-2">
-      <p className="px-3 pb-1 text-[11px] uppercase tracking-wide text-muted-foreground/80">
+      <p className="px-3 pb-1 text-2xs uppercase tracking-wide text-muted-foreground/80">
         {results.length} result{results.length === 1 ? "" : "s"}
       </p>
       {results.map((msg) => {

@@ -69,12 +69,12 @@ function MeshProfilePreviewBody({
           </Avatar>
         </div>
 
-        <div className="font-bold text-[15px] truncate inline-flex items-baseline gap-1 max-w-full">
+        <div className="font-bold text-chat truncate inline-flex items-baseline gap-1 max-w-full">
           <span className="truncate" style={color ? { color } : undefined}>
             {name}
           </span>
           {suffix && (
-            <span className="text-[11px] font-normal text-muted-foreground/70 shrink-0">
+            <span className="text-2xs font-normal text-muted-foreground/70 shrink-0">
               #{suffix}
             </span>
           )}

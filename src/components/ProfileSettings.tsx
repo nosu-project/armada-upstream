@@ -358,7 +358,7 @@ function FieldRow({
                   )}
                 </div>
                 {mismatchWarning && (
-                  <p className="flex items-start gap-1.5 text-xs text-amber-600 dark:text-amber-500 mt-1 leading-snug">
+                  <p className="flex items-start gap-1.5 text-xs text-warning mt-1 leading-snug">
                     <AlertTriangle className="size-3.5 shrink-0 mt-0.5" />
                     <span>{mismatchWarning}</span>
                   </p>

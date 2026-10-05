@@ -1889,7 +1889,7 @@ function LightningInvoice({ invoice }: { invoice: string }) {
         await webln!.sendPayment(invoice);
       }
       setPaid(true);
-      toast({ title: "Invoice paid ⚡" });
+      toast({ title: "Invoice paid" });
     } catch (err) {
       toast({
         title: "Payment failed",
@@ -1919,7 +1919,7 @@ function LightningInvoice({ invoice }: { invoice: string }) {
         <span className="truncate font-mono">
           {amountSats !== null ? `${formatSats(amountSats)} sats` : invoice.slice(0, 24) + "…"}
         </span>
-        <span className="shrink-0">{copied ? "Copied!" : "Copy"}</span>
+        <span className="shrink-0">{copied ? "Copied" : "Copy"}</span>
       </button>
       {canPay && (
         <button

@@ -300,7 +300,7 @@ export function BotCommandComposer({
         <span>with</span>
         <Avatar className="size-4 shrink-0">
           <AvatarImage src={profiles[bot]?.picture} imeta={profiles[bot]?.pictureImeta} alt="" />
-          <AvatarFallback className="text-[8px]">
+          <AvatarFallback className="text-monogram">
             {displayName(bot, profiles).slice(0, 2).toUpperCase()}
           </AvatarFallback>
         </Avatar>
@@ -331,7 +331,7 @@ export function BotCommandComposer({
               arg.type === "string" && i === args.length - 1 && "flex-1 min-w-[10rem]",
             )}
           >
-            <span className="shrink-0 font-mono text-[10px] uppercase tracking-wide text-muted-foreground">
+            <span className="shrink-0 font-mono text-3xs uppercase tracking-wide text-muted-foreground">
               {arg.name}
               {arg.required && <span className="text-destructive">*</span>}
             </span>
@@ -426,7 +426,7 @@ export function BotCommandComposer({
                     {arg.type === "user" && (
                       <Avatar className="size-4 shrink-0">
                         <AvatarImage src={option.picture} imeta={option.pictureImeta} alt="" />
-                        <AvatarFallback className="text-[8px]">
+                        <AvatarFallback className="text-monogram">
                           {option.label.slice(0, 2).toUpperCase()}
                         </AvatarFallback>
                       </Avatar>

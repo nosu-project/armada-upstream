@@ -353,7 +353,7 @@ const ConcordChatMessage = memo(function ConcordChatMessage({
   const heading = useMemo(
     () =>
       title ? (
-        <div className="mb-0.5 flex items-start gap-1.5 text-[15px] font-semibold leading-snug">
+        <div className="mb-0.5 flex items-start gap-1.5 text-chat font-semibold leading-snug">
           <MessageSquareText className="mt-1 size-3.5 shrink-0 text-muted-foreground" aria-hidden />
           <span className="min-w-0 break-words">{title}</span>
         </div>
@@ -532,7 +532,7 @@ export const ChannelRow = memo(function ChannelRow({
               {inCall && <Headphones className={cn("size-3.5 shrink-0", !active && "text-success")} />}
               {hasMention ? (
                 <span
-                  className="shrink-0 flex items-center justify-center min-w-4 h-4 px-1 rounded-full bg-primary text-primary-foreground text-[10px] font-bold leading-none"
+                  className="shrink-0 flex items-center justify-center min-w-4 h-4 px-1 rounded-full bg-primary text-primary-foreground text-3xs font-bold leading-none"
                   aria-label="You were mentioned"
                 >
                   @
@@ -928,7 +928,7 @@ function ThreadReplyAvatar({ pubkey }: { pubkey: string }) {
   return (
     <Avatar shape={getAvatarShape(metadata)} className="size-5 ring-2 ring-chrome" title={name}>
       <AvatarImage src={metadata?.picture} imeta={author.data?.imeta?.picture} alt={name} />
-      <AvatarFallback className="bg-primary/20 text-primary text-[9px] font-semibold uppercase">
+      <AvatarFallback className="bg-primary/20 text-primary text-monogram font-semibold uppercase">
         {name.slice(0, 1)}
       </AvatarFallback>
     </Avatar>
@@ -942,7 +942,7 @@ function TimerNotice({ author, seconds, self }: { author: string; seconds: numbe
   return (
     <div className="flex items-center justify-center gap-1.5 px-4 py-1.5 select-none" role="status">
       <Timer className="size-3.5 shrink-0 text-muted-foreground/70" aria-hidden />
-      <span className="text-[11px] text-muted-foreground/80 text-center">
+      <span className="text-2xs text-muted-foreground/80 text-center">
         {communityTimerNotice(seconds, author === self, name)}
       </span>
     </div>
@@ -1425,13 +1425,12 @@ export function ConcordPage() {
         try {
           if (pins.isPinned(event.id)) {
             await pins.unpin({ rumorId: event.id });
-            toast({ title: "Unpinned" });
             return;
           }
           const opened = openedById.get(event.id);
           if (!opened) throw new Error("That message isn't loaded anymore. Scroll to it and try again.");
           await pins.pin({ opened });
-          toast({ title: "Pinned", description: "Everyone in this channel can see it, now and after any key rotation." });
+          toast({ title: "Pinned" });
         } catch (e) {
           toast({ title: "Couldn't update pins", description: e instanceof Error ? e.message : undefined, variant: "destructive" });
         }
@@ -2822,7 +2821,7 @@ export function ConcordPage() {
               <span className="truncate flex-1 min-w-0">Mentions</span>
               {view !== "mentions" && hasUnreadMention ? (
                 <span
-                  className="shrink-0 flex items-center justify-center min-w-4 h-4 px-1 rounded-full bg-primary text-primary-foreground text-[10px] font-bold leading-none"
+                  className="shrink-0 flex items-center justify-center min-w-4 h-4 px-1 rounded-full bg-primary text-primary-foreground text-3xs font-bold leading-none"
                   aria-label="You have unread mentions"
                 >
                   @
@@ -2928,7 +2927,7 @@ export function ConcordPage() {
             <div
               data-ch-newzone
               className={cn(
-                "mt-2 flex items-center justify-center gap-1.5 clip-corner-lg border-2 border-dashed px-2 py-3 text-[11px] font-semibold uppercase tracking-wider transition-colors",
+                "mt-2 flex items-center justify-center gap-1.5 clip-corner-lg border-2 border-dashed px-2 py-3 text-2xs font-semibold uppercase tracking-wider transition-colors",
                 channelDrag.target?.newCategory
                   ? "border-primary bg-primary/5 text-primary"
                   : "border-primary/50 text-muted-foreground/70",
@@ -3319,7 +3318,6 @@ export function ConcordPage() {
                       void (async () => {
                         try {
                           await pins.unpin({ rumorId });
-                          toast({ title: "Unpinned" });
                         } catch (e) {
                           toast({ title: "Couldn't unpin", description: e instanceof Error ? e.message : undefined, variant: "destructive" });
                         }

@@ -22,7 +22,7 @@ function ParticipantAvatar({ pubkey, className }: { pubkey: string; className?: 
       className={cn("size-5 ring-2 ring-chrome", className)}
     >
       <AvatarImage src={metadata?.picture} imeta={author.data?.imeta?.picture} alt={name} />
-      <AvatarFallback className="bg-success/20 text-success text-[9px]">
+      <AvatarFallback className="bg-success/20 text-success text-monogram">
         {name[0]?.toUpperCase()}
       </AvatarFallback>
     </Avatar>
@@ -40,7 +40,7 @@ function ParticipantName({ pubkey }: { pubkey: string }) {
 /** The person is screen sharing; with `onWatch`, a button that tunes into the stream. */
 export function LiveBadge({ onWatch, className }: { onWatch?: () => void; className?: string }) {
   const cls = cn(
-    "shrink-0 inline-flex items-center gap-1 rounded-sm bg-destructive px-1.5 h-4 text-[10px] font-bold tracking-wide text-destructive-foreground",
+    "shrink-0 inline-flex items-center gap-1 rounded-sm bg-destructive px-1.5 h-4 text-3xs font-bold tracking-wide text-destructive-foreground",
     className,
   );
   const content = (
@@ -153,7 +153,7 @@ function VoiceParticipantRow({
         >
           <Avatar shape={getAvatarShape(metadata)} className="size-6">
             <AvatarImage src={metadata?.picture} imeta={author.data?.imeta?.picture} alt={name} />
-            <AvatarFallback className="bg-success/20 text-success text-[10px]">
+            <AvatarFallback className="bg-success/20 text-success text-3xs">
               {name[0]?.toUpperCase()}
             </AvatarFallback>
           </Avatar>
@@ -213,7 +213,7 @@ export function VoicePresence({
               <ParticipantAvatar key={pk} pubkey={pk} />
             ))}
             {overflow > 0 && (
-              <span className="flex items-center justify-center size-5 rounded-full ring-2 ring-chrome bg-success/20 text-success text-[9px] font-semibold tabular-nums">
+              <span className="flex items-center justify-center size-5 rounded-full ring-2 ring-chrome bg-success/20 text-success text-monogram font-semibold tabular-nums">
                 +{overflow}
               </span>
             )}

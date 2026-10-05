@@ -157,7 +157,7 @@ function TicketOpenedGroupRow({ entries, onOpen }: { entries: readonly Extract<G
         <Avatar className="size-10 shrink-0"><ActorAvatar pubkey={ticket.author} /></Avatar>
         <div className="min-w-0 flex-1 pr-2">
           <p className="flex flex-wrap items-baseline gap-x-1.5">
-            <ActorName pubkey={ticket.author} className="text-[15px]" />
+            <ActorName pubkey={ticket.author} className="text-chat" />
             <span className="text-xs text-muted-foreground">{action} in {repository.identifier}</span>
           </p>
           {tickets.map((opened) => <TicketSubject key={opened.id} ticket={opened} onOpen={() => onOpen(opened)} />)}
@@ -207,7 +207,7 @@ function GitCommentRow({ entry, onOpen, continuation }: { entry: Extract<GitChan
     <div className="flex items-start gap-3">
       <Avatar className="size-10 shrink-0"><ActorAvatar pubkey={comment.author} /></Avatar>
       <div className="min-w-0 flex-1 pr-2">
-        <p><ActorName pubkey={comment.author} className="text-[15px]" /></p>
+        <p><ActorName pubkey={comment.author} className="text-chat" /></p>
         <BodyPreview content={comment.content} onOpen={onOpen} />
       </div>
     </div>
@@ -245,7 +245,7 @@ function StatusGroupRow({ entries, onOpen }: { entries: readonly Extract<GitChan
 function ActorAvatar({ pubkey }: { pubkey: string }) {
   const author = useAuthor(pubkey);
   const name = useScopedDisplayName(pubkey, author.data?.metadata);
-  return <><AvatarImage src={author.data?.metadata?.picture} imeta={author.data?.imeta?.picture} alt={name} /><AvatarFallback className="text-[10px] font-semibold">{name.slice(0, 1)}</AvatarFallback></>;
+  return <><AvatarImage src={author.data?.metadata?.picture} imeta={author.data?.imeta?.picture} alt={name} /><AvatarFallback className="text-3xs font-semibold">{name.slice(0, 1)}</AvatarFallback></>;
 }
 
 /** Unknown outcomes read as neutral. */
@@ -303,7 +303,7 @@ function CIJobLog({ job }: { job: CIRunJob }) {
   return (
     <div className="mt-1.5">
       <div className="flex items-center gap-2">
-        <button type="button" onClick={toggle} className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground">
+        <button type="button" onClick={toggle} className="flex items-center gap-1 text-2xs text-muted-foreground hover:text-foreground">
           {open ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
           <ScrollText className="size-3" />
           <span>{job.result?.name || job.job}</span>
@@ -324,13 +324,13 @@ function CIJobLog({ job }: { job: CIRunJob }) {
       </div>
       {open && (
         <>
-          {error && <p className="mt-1 text-[11px] text-destructive">{error}</p>}
+          {error && <p className="mt-1 text-2xs text-destructive">{error}</p>}
           {body ? (
-            <pre className="mt-1 max-h-72 overflow-auto rounded-md border border-border bg-muted/40 p-2 text-[11px] leading-relaxed">
+            <pre className="mt-1 max-h-72 overflow-auto rounded-md border border-border bg-muted/40 p-2 text-2xs leading-relaxed">
               <code className="font-mono whitespace-pre">{body}</code>
             </pre>
           ) : (
-            !loading && !error && <p className="mt-1 text-[11px] text-muted-foreground">No log output.</p>
+            !loading && !error && <p className="mt-1 text-2xs text-muted-foreground">No log output.</p>
           )}
         </>
       )}
@@ -380,7 +380,7 @@ function CIRunLine({ run }: { run: CIRun }) {
 function CIHistoryStrip({ runs }: { runs: readonly CIRun[] }) {
   const shown = runs.slice(0, 12);
   return (
-    <p className="mt-0.5 flex flex-wrap items-center gap-1 text-[10px] text-muted-foreground/70">
+    <p className="mt-0.5 flex flex-wrap items-center gap-1 text-3xs text-muted-foreground/70">
       <span>before that</span>
       {shown.map((run) => {
         const outcome = ciRunOutcome(run);
@@ -489,7 +489,7 @@ function TicketHeader({ ticket, status, actions }: { ticket: GitTicket; status: 
   const repository = ticket.repositoryAddress?.identifier ?? "Unknown repository";
   return (
     <div className="px-3 pb-2">
-      <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+      <div className="flex items-center gap-1.5 text-2xs font-semibold uppercase tracking-wider text-muted-foreground">
         <TicketIcon ticket={ticket} />
         <span className="truncate">{ticketType(ticket)} · {repository}</span>
       </div>

@@ -171,7 +171,7 @@ export function ReplyContextLine({
       {pubkey && (
         <Avatar shape={getAvatarShape(metadata)} className="size-4 shrink-0">
           <AvatarImage src={metadata?.picture} imeta={author.data?.imeta?.picture} alt="" />
-          <AvatarFallback className="bg-primary/20 text-primary text-[8px]">
+          <AvatarFallback className="bg-primary/20 text-primary text-monogram">
             {name[0]?.toUpperCase()}
           </AvatarFallback>
         </Avatar>
@@ -228,7 +228,7 @@ function ThreadParticipantAvatar({ pubkey }: { pubkey: string }) {
   return (
     <Avatar shape={getAvatarShape(metadata)} className="size-5 ring-2 ring-background">
       <AvatarImage src={metadata?.picture} imeta={author.data?.imeta?.picture} alt={name} />
-      <AvatarFallback className="bg-primary/25 text-primary text-[9px] font-semibold">
+      <AvatarFallback className="bg-primary/25 text-primary text-monogram font-semibold">
         {name[0]?.toUpperCase()}
       </AvatarFallback>
     </Avatar>
@@ -260,7 +260,7 @@ function ThreadBadge({
           <ThreadParticipantAvatar key={pk} pubkey={pk} />
         ))}
         {overflow > 0 && (
-          <span className="flex size-5 items-center justify-center rounded-full ring-2 ring-background bg-primary/25 text-primary text-[9px] font-semibold tabular-nums">
+          <span className="flex size-5 items-center justify-center rounded-full ring-2 ring-background bg-primary/25 text-primary text-monogram font-semibold tabular-nums">
             +{overflow}
           </span>
         )}
@@ -269,7 +269,7 @@ function ThreadBadge({
         {count} {count === 1 ? "reply" : "replies"}
       </span>
       {lastReplyAt ? (
-        <span className="truncate text-[11px] text-muted-foreground">
+        <span className="truncate text-2xs text-muted-foreground">
           {shortTimeAgo(lastReplyAt)}
         </span>
       ) : null}
@@ -786,9 +786,9 @@ const ChatMessageInner = memo(function ChatMessageInner({
               }
             }}
             rows={1}
-            className="block w-full resize-none rounded-md bg-background border border-input px-2 py-1.5 text-[15px] max-h-40 overflow-y-auto focus:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            className="block w-full resize-none rounded-md bg-background border border-input px-2 py-1.5 text-chat max-h-40 overflow-y-auto focus:outline-none focus-visible:ring-1 focus-visible:ring-ring"
           />
-          <div className="flex items-center gap-2 touch:gap-4 mt-1 text-[11px] text-muted-foreground">
+          <div className="flex items-center gap-2 touch:gap-4 mt-1 text-2xs text-muted-foreground">
             <button
               type="button"
               className="font-semibold text-primary hover:underline touch:py-2"
@@ -804,7 +804,7 @@ const ChatMessageInner = memo(function ChatMessageInner({
         </div>
       ) : event.kind === KIND_POLL ? (
         <>
-          <ChatContent event={event} className="text-[15px]" highlight={highlight} everyoneMention={everyoneMention} />
+          <ChatContent event={event} className="text-chat" highlight={highlight} everyoneMention={everyoneMention} />
           {pollContext ? (
             <PollCard
               event={event}
@@ -828,7 +828,7 @@ const ChatMessageInner = memo(function ChatMessageInner({
         ) : null
       ) : invocation ? (
         // Arguments are omitted: they were for the bot, whose reply reports the outcome.
-        <div className="text-[15px] italic text-muted-foreground">
+        <div className="text-chat italic text-muted-foreground">
           <span className="font-semibold not-italic text-primary">
             <DisplayName pubkey={identityOverride ? undefined : event.pubkey} name={identityOverride?.name} />
           </span>{" "}
@@ -851,7 +851,7 @@ const ChatMessageInner = memo(function ChatMessageInner({
           )}
         </div>
       ) : isMeAction(event) ? (
-        <div className="text-[15px] italic text-muted-foreground">
+        <div className="text-chat italic text-muted-foreground">
           <span className="font-semibold not-italic text-primary">
             <DisplayName pubkey={identityOverride ? undefined : event.pubkey} name={identityOverride?.name} />
           </span>{" "}
@@ -865,7 +865,7 @@ const ChatMessageInner = memo(function ChatMessageInner({
           />
         </div>
       ) : (
-        <ChatContent event={event} className="text-[15px]" highlight={highlight} everyoneMention={everyoneMention} />
+        <ChatContent event={event} className="text-chat" highlight={highlight} everyoneMention={everyoneMention} />
       )}
     </>
   );
@@ -896,7 +896,7 @@ const ChatMessageInner = memo(function ChatMessageInner({
         />
       )}
       {isFailed && (
-        <div className="flex items-center gap-2 touch:gap-4 mt-1 text-[11px] text-destructive">
+        <div className="flex items-center gap-2 touch:gap-4 mt-1 text-2xs text-destructive">
           <AlertCircle className="size-3.5 shrink-0" />
           <span>Failed to send.</span>
           {onRetry && (

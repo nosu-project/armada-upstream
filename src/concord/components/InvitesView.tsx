@@ -217,7 +217,7 @@ export function InvitesView({ community }: { community: Community }) {
                   <Input
                     readOnly
                     value={e.url}
-                    className="min-w-0 font-mono text-[0.65rem]"
+                    className="min-w-0 font-mono text-3xs"
                     onFocus={(ev) => ev.currentTarget.select()}
                   />
                   <Button
@@ -255,7 +255,7 @@ export function InvitesView({ community }: { community: Community }) {
                     {revoking === e.url ? <Loader2 className="size-3.5 animate-spin" /> : "Revoke"}
                   </Button>
                 </div>
-                <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-muted-foreground">
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-2xs text-muted-foreground">
                   <span
                     className="tabular-nums"
                     title="The community epoch this link's keys belong to. It advances each time the community rekeys."
@@ -274,7 +274,7 @@ export function InvitesView({ community }: { community: Community }) {
                   )}
                 </div>
                 {behind && (
-                  <div className="flex items-start gap-1.5 rounded bg-amber-500/10 px-2 py-1.5 text-[11px] text-amber-700 dark:text-amber-400">
+                  <div className="flex items-start gap-1.5 rounded bg-warning/10 px-2 py-1.5 text-2xs text-warning">
                     <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />
                     <span>
                       This link is on epoch {servedEpoch}, but the community has since moved to epoch{" "}
@@ -290,7 +290,7 @@ export function InvitesView({ community }: { community: Community }) {
           </ul>
         )}
         {orphanCount > 0 && (
-          <div className="flex items-start gap-1.5 rounded-md bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
+          <div className="flex items-start gap-1.5 rounded-md bg-warning/10 px-3 py-2 text-xs text-warning">
             <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />
             <span>
               The community registry lists {orphanCount} more invite link
@@ -453,7 +453,7 @@ function RegistryRow({
     <li className="flex items-center gap-2.5 rounded-md bg-foreground/5 px-3 py-2 text-sm">
       <Avatar className="size-6 shrink-0">
         <AvatarImage src={author.data?.metadata?.picture} imeta={author.data?.imeta?.picture} alt={name} />
-        <AvatarFallback className="bg-primary/20 text-[10px] text-primary">
+        <AvatarFallback className="bg-primary/20 text-3xs text-primary">
           {name[0]?.toUpperCase() ?? "?"}
         </AvatarFallback>
       </Avatar>
@@ -461,12 +461,12 @@ function RegistryRow({
         <DisplayName pubkey={creator} name={name} />
       </span>
       {isOwner && (
-        <Badge variant="secondary" className="px-1.5 py-0 text-[10px]">
+        <Badge variant="secondary" className="px-1.5 py-0 text-3xs">
           Owner
         </Badge>
       )}
       {mine && (
-        <Badge variant="outline" className="px-1.5 py-0 text-[10px]">
+        <Badge variant="outline" className="px-1.5 py-0 text-3xs">
           You
         </Badge>
       )}
@@ -613,7 +613,7 @@ function ListingRow({
     <li className="flex items-center gap-2.5 rounded-md bg-foreground/5 px-3 py-2 text-sm">
       <Avatar className="size-6 shrink-0">
         <AvatarImage src={profile.data?.metadata?.picture} imeta={profile.data?.imeta?.picture} alt={name} />
-        <AvatarFallback className="bg-primary/20 text-[10px] text-primary">
+        <AvatarFallback className="bg-primary/20 text-3xs text-primary">
           {name[0]?.toUpperCase() ?? "?"}
         </AvatarFallback>
       </Avatar>
@@ -621,7 +621,7 @@ function ListingRow({
         <p className="truncate font-medium">
           <DisplayName pubkey={author} name={name} />
         </p>
-        <p className="truncate text-[11px] text-muted-foreground">
+        <p className="truncate text-2xs text-muted-foreground">
           Posted {new Date(postedAt * 1000).toLocaleDateString()}
           {linkCreator && linkCreator !== author && (
             <>

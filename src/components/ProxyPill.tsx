@@ -27,7 +27,7 @@ export function ProxyPill({ proxy, className }: ProxyPillProps) {
           type="button"
           title={`Bridged from ${proxy.label}`}
           className={cn(
-            'shrink-0 inline-flex max-w-[10rem] items-center rounded-full px-1.5 py-0.5 text-[10px] font-medium focus:outline-none focus-visible:ring-1 focus-visible:ring-ring',
+            'shrink-0 inline-flex max-w-[10rem] items-center rounded-full px-1.5 py-0.5 text-3xs font-medium focus:outline-none focus-visible:ring-1 focus-visible:ring-ring',
             brand ?? 'bg-muted-foreground/15 text-muted-foreground',
             className,
           )}

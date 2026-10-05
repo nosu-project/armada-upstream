@@ -393,7 +393,7 @@ export function CommunityListingCard({
             ) : (
               <p className="font-semibold truncate leading-tight">{name}</p>
             )}
-            <p className="text-[11px] leading-snug text-muted-foreground">
+            <p className="text-2xs leading-snug text-muted-foreground">
               <ShieldCheck className="mr-1 inline size-3 align-[-0.125em]" />
               {stats.map((stat, i) => (
                 <Fragment key={stat.key}>
@@ -416,7 +416,7 @@ export function CommunityListingCard({
           >
             <Avatar shape={getAvatarShape(metadata)} className="size-4 shrink-0">
               <AvatarImage src={metadata?.picture} imeta={author.data?.imeta?.picture} alt={displayName} />
-              <AvatarFallback className="bg-primary/20 text-primary text-[8px]">
+              <AvatarFallback className="bg-primary/20 text-primary text-monogram">
                 {displayName[0]?.toUpperCase()}
               </AvatarFallback>
             </Avatar>

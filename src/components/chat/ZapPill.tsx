@@ -28,7 +28,7 @@ function ZapperRow({ zap }: { zap: ZapEntry }) {
     <div className="flex items-start gap-2.5 px-3 py-1.5">
       <Avatar shape={getAvatarShape(metadata)} className="size-5 shrink-0 mt-0.5">
         <AvatarImage src={metadata?.picture} imeta={author.data?.imeta?.picture} alt={displayName} />
-        <AvatarFallback className="bg-amber-500/20 text-amber-500 text-[9px]">
+        <AvatarFallback className="bg-amber-500/20 text-amber-500 text-monogram">
           {displayName[0]?.toUpperCase()}
         </AvatarFallback>
       </Avatar>
@@ -43,7 +43,7 @@ function ZapperRow({ zap }: { zap: ZapEntry }) {
           <RailIcon rail={zap.rail} />
         </div>
         {zap.comment && (
-          <p className="text-[11px] text-muted-foreground break-words">{zap.comment}</p>
+          <p className="text-2xs text-muted-foreground break-words">{zap.comment}</p>
         )}
       </div>
     </div>

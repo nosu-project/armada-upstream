@@ -97,7 +97,7 @@ export function ServerProfileDialog({ relayUrl, open, onOpenChange }: ServerProf
         </div>
 
         <div className="mt-6">
-          <div className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground/70 mb-2">
+          <div className="text-2xs font-medium uppercase tracking-wider text-muted-foreground/70 mb-2">
             Preview
           </div>
           <div className="clip-corner-lg bg-background/40 p-3">
@@ -111,21 +111,21 @@ export function ServerProfileDialog({ relayUrl, open, onOpenChange }: ServerProf
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2 flex-wrap">
                   <span
-                    className="text-[15px] font-semibold text-primary truncate"
+                    className="text-chat font-semibold text-primary truncate"
                     style={previewColor ? { color: previewColor } : undefined}
                   >
                     {/* Emojify like a real message row, or shortcode nicknames preview wrong. */}
                     <DisplayName pubkey={user?.pubkey} name={previewName} />
                   </span>
                   {label.trim() && (
-                    <Badge variant="secondary" className="text-[10px] font-medium">
+                    <Badge variant="secondary" className="text-3xs font-medium">
                       {label.trim()}
                     </Badge>
                   )}
-                  <span className="text-[11px] text-muted-foreground/70">just now</span>
+                  <span className="text-2xs text-muted-foreground/70">just now</span>
                 </div>
                 <p className="text-sm text-foreground/90 mt-0.5">
-                  Hey everyone, glad to be here 👋
+                  Hey everyone, glad to be here.
                 </p>
               </div>
             </div>

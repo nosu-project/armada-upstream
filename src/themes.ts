@@ -58,6 +58,8 @@ export interface ThemeTokens {
   destructiveForeground: string;
   success: string;
   successForeground: string;
+  warning: string;
+  warningForeground: string;
   border: string;
   input: string;
   ring: string;

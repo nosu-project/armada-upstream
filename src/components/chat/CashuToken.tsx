@@ -86,7 +86,7 @@ function CashuTokenCard({
           </p>
 
           <div className="space-y-0.5">
-            <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+            <p className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground">
               Mint
             </p>
             <p className="text-sm break-all" title={info.mint || undefined}>
@@ -95,7 +95,7 @@ function CashuTokenCard({
           </div>
 
           <div className="space-y-0.5">
-            <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+            <p className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground">
               Token
             </p>
             <button
@@ -104,7 +104,7 @@ function CashuTokenCard({
               onClick={copy}
               title="Copy token"
             >
-              {copied ? "Copied!" : token}
+              {copied ? "Copied" : token}
             </button>
           </div>
         </PopoverContent>
@@ -134,7 +134,7 @@ function CashuTokenCard({
           disabled={spent}
           title={spent ? undefined : "Copy the token to redeem it in an ecash wallet"}
         >
-          {spent ? "Already redeemed" : copied ? "Copied!" : "Copy token"}
+          {spent ? "Already redeemed" : copied ? "Copied" : "Copy token"}
         </button>
       </div>
     </div>

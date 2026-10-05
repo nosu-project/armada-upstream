@@ -118,7 +118,7 @@ function TxRow({ tx, btcPrice }: { tx: import("@/lib/bitcoin").Transaction; btcP
     <div className="flex items-center justify-between py-2.5">
       <div>
         <p className="text-xs font-medium">{isReceive ? "Received" : "Sent"}</p>
-        <p className="text-[11px] text-muted-foreground">{formatTxDate(tx.timestamp)}</p>
+        <p className="text-2xs text-muted-foreground">{formatTxDate(tx.timestamp)}</p>
       </div>
       <div className="text-right">
         <p className={`text-xs font-medium ${isReceive ? "text-green-600" : "text-red-600"}`}>

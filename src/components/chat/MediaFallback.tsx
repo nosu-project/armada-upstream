@@ -57,7 +57,7 @@ export function MediaFallback({
           aria-label={`Decrypt ${label.toLowerCase()} anyway`}
         >
           <Lock className="size-5" />
-          <span className="text-[10px]">{formatBytes(oversized)}</span>
+          <span className="text-3xs">{formatBytes(oversized)}</span>
         </button>
       );
     }
@@ -98,7 +98,7 @@ export function MediaFallback({
         aria-label={`Retry loading ${label.toLowerCase()}`}
       >
         <ImageOff className="size-5" />
-        <span className="text-[10px]">Retry</span>
+        <span className="text-3xs">Retry</span>
       </button>
     );
   }

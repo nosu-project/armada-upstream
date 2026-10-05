@@ -112,6 +112,8 @@
       "--destructive-foreground": dark ? "0 0% 95%" : "210 40% 98%",
       "--success": dark ? "142 60% 35%" : "142 72% 29%",
       "--success-foreground": "138 60% 94%",
+      "--warning": dark ? "43 96% 56%" : "32 95% 36%",
+      "--warning-foreground": dark ? "26 83% 14%" : "48 100% 96%",
       "--border": border,
       "--input": border,
       "--ring": primary,

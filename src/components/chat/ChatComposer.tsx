@@ -1694,7 +1694,6 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
       resetComposeState();
       onSent?.();
       noteSent();
-      toast({ title: "Poll published!" });
     } catch {
       toast({ title: "Error", description: "Failed to publish poll.", variant: "destructive" });
     }
@@ -2147,7 +2146,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                     dir="auto"
                     className={cn(
                       "pointer-events-none select-none absolute inset-x-0 top-0 truncate px-1.5 py-2 touch:py-3 text-muted-foreground",
-                      isDocument ? "text-[15px] leading-relaxed" : "leading-5 text-base md:text-sm",
+                      isDocument ? "text-chat leading-relaxed" : "leading-5 text-base md:text-sm",
                     )}
                   >
                     {placeholderText}
@@ -2178,7 +2177,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                   className={cn(
                     "block w-full resize-none bg-transparent border-0 outline-none px-1.5 py-2 touch:py-3 disabled:opacity-50 overflow-y-auto align-middle",
                     isDocument
-                      ? "text-[15px] leading-relaxed"
+                      ? "text-chat leading-relaxed"
                       : "leading-5 text-base md:text-sm max-h-40",
                   )}
                 />
@@ -2549,7 +2548,7 @@ function ReplyBanner({ event, onCancel }: { event: NostrRumor; onCancel?: () => 
         <span className="sr-only sm:not-sr-only sm:shrink-0">Replying to</span>
         <Avatar shape={getAvatarShape(metadata)} className="size-5 shrink-0">
           <AvatarImage src={metadata?.picture} imeta={author.data?.imeta?.picture} alt="" />
-          <AvatarFallback className="bg-primary/20 text-primary text-[9px]">
+          <AvatarFallback className="bg-primary/20 text-primary text-monogram">
             {displayName[0]?.toUpperCase()}
           </AvatarFallback>
         </Avatar>
@@ -2618,7 +2617,7 @@ function QuoteBannerBody({ event }: { event: NostrRumor }) {
       <span className="shrink-0">Quoting</span>
       <Avatar shape={getAvatarShape(metadata)} className="size-5 shrink-0">
         <AvatarImage src={metadata?.picture} imeta={author.data?.imeta?.picture} alt="" />
-        <AvatarFallback className="bg-primary/20 text-primary text-[9px]">
+        <AvatarFallback className="bg-primary/20 text-primary text-monogram">
           {displayName[0]?.toUpperCase()}
         </AvatarFallback>
       </Avatar>

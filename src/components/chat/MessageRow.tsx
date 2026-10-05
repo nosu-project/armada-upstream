@@ -55,7 +55,7 @@ function ExpirationClock({ createdAt, expiresAt }: { createdAt: number; expiresA
   const label = formatTimeLeft(expiresAt, now);
   return (
     <span
-      className="inline-flex items-center gap-0.5 shrink-0 text-[10px] text-muted-foreground/60 tabular-nums"
+      className="inline-flex items-center gap-0.5 shrink-0 text-3xs text-muted-foreground/60 tabular-nums"
       title={`Disappears in ${label}`}
       role="img"
       aria-label={`Disappearing message, ${label} left`}
@@ -217,7 +217,7 @@ export const MessageRow = memo(function MessageRow({
       {/* Relative so the toolbar anchors to the message, not the preview. */}
       <div className="flex items-start gap-3 relative">
       {continuation ? (
-        <span className="shrink-0 w-10 self-stretch flex items-start justify-end pr-0.5 pt-0.5 text-[10px] leading-none text-muted-foreground/60 opacity-0 group-hover:opacity-100 transition-opacity tabular-nums select-none">
+        <span className="shrink-0 w-10 self-stretch flex items-start justify-end pr-0.5 pt-0.5 text-3xs leading-none text-muted-foreground/60 opacity-0 group-hover:opacity-100 transition-opacity tabular-nums select-none">
           {shortClockTime(createdAt)}
         </span>
       ) : identityOverride ? (
@@ -262,12 +262,12 @@ export const MessageRow = memo(function MessageRow({
                 >
                   <button
                     type="button"
-                    className="text-[15px] font-semibold text-primary truncate min-w-0 inline-flex items-baseline gap-1 hover:underline focus:outline-none"
+                    className="text-chat font-semibold text-primary truncate min-w-0 inline-flex items-baseline gap-1 hover:underline focus:outline-none"
                     style={color ? { color } : undefined}
                   >
                     <span className="truncate">{displayName}</span>
                     {suffix && (
-                      <span className="text-[11px] font-normal text-muted-foreground/70 shrink-0 no-underline">
+                      <span className="text-2xs font-normal text-muted-foreground/70 shrink-0 no-underline">
                         #{suffix}
                       </span>
                     )}
@@ -275,12 +275,12 @@ export const MessageRow = memo(function MessageRow({
                 </MeshProfilePreviewCard>
               ) : (
                 <span
-                  className="text-[15px] font-semibold text-primary truncate min-w-0 inline-flex items-baseline gap-1"
+                  className="text-chat font-semibold text-primary truncate min-w-0 inline-flex items-baseline gap-1"
                   style={color ? { color } : undefined}
                 >
                   <span className="truncate">{displayName}</span>
                   {suffix && (
-                    <span className="text-[11px] font-normal text-muted-foreground/70 shrink-0">
+                    <span className="text-2xs font-normal text-muted-foreground/70 shrink-0">
                       #{suffix}
                     </span>
                   )}
@@ -290,7 +290,7 @@ export const MessageRow = memo(function MessageRow({
               <ProfilePreviewCard pubkey={pubkey}>
                 <button
                   type="button"
-                  className="text-[15px] font-semibold text-primary truncate min-w-0 hover:underline focus:outline-none"
+                  className="text-chat font-semibold text-primary truncate min-w-0 hover:underline focus:outline-none"
                   style={color ? { color } : undefined}
                 >
                   <DisplayName pubkey={pubkey} name={displayName} tags={author.data?.event?.tags ?? NO_TAGS} />
@@ -301,15 +301,15 @@ export const MessageRow = memo(function MessageRow({
             <ProxyPill proxy={proxy} />
             {nameBadge}
             {label && (
-              <Badge variant="secondary" className="text-[10px] font-medium shrink min-w-0 max-w-[35%]">
+              <Badge variant="secondary" className="text-3xs font-medium shrink min-w-0 max-w-[35%]">
                 <span className="truncate">{label}</span>
               </Badge>
             )}
-            <span className="text-[11px] text-muted-foreground/70 shrink-0">
+            <span className="text-2xs text-muted-foreground/70 shrink-0">
               {shortTimeAgo(createdAt)}
             </span>
             {edited && (
-              <span className="text-[10px] text-muted-foreground/60 shrink-0" title="Edited">(edited)</span>
+              <span className="text-3xs text-muted-foreground/60 shrink-0" title="Edited">(edited)</span>
             )}
             {expiresAt !== undefined && <ExpirationClock createdAt={createdAt} expiresAt={expiresAt} />}
           </div>
@@ -329,7 +329,7 @@ export const MessageRow = memo(function MessageRow({
         {continuation && edited && (
           // Continuation rows have no header, so (edited) trails the body in normal flow.
           <div className="mt-0.5 flex items-center gap-2 leading-none">
-            <span className="text-[10px] text-muted-foreground/60 shrink-0" title="Edited">(edited)</span>
+            <span className="text-3xs text-muted-foreground/60 shrink-0" title="Edited">(edited)</span>
           </div>
         )}
         {afterBody}

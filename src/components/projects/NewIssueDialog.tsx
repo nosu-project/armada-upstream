@@ -134,7 +134,7 @@ export function NewIssueDialog({ repos, items, onCreate }: {
                     disabled={sending || (!active && labels.length >= MAX_GIT_LABELS)}
                     onClick={() => toggleLabel(label)}
                     className={cn(
-                      "rounded-full border px-2 py-0.5 text-[11px] transition-colors disabled:opacity-40",
+                      "rounded-full border px-2 py-0.5 text-2xs transition-colors disabled:opacity-40",
                       active
                         ? "border-primary/60 bg-primary/15 text-foreground"
                         : "border-border/60 text-muted-foreground hover:border-primary/40 hover:text-foreground",
@@ -151,7 +151,7 @@ export function NewIssueDialog({ repos, items, onCreate }: {
                   aria-pressed
                   disabled={sending}
                   onClick={() => toggleLabel(label)}
-                  className="flex items-center gap-1 rounded-full border border-primary/60 bg-primary/15 px-2 py-0.5 text-[11px] text-foreground"
+                  className="flex items-center gap-1 rounded-full border border-primary/60 bg-primary/15 px-2 py-0.5 text-2xs text-foreground"
                 >
                   {label}
                   <X className="size-2.5" />
@@ -182,7 +182,7 @@ export function NewIssueDialog({ repos, items, onCreate }: {
                     }
                   }}
                   onBlur={commitLabelDraft}
-                  className="min-w-0 rounded-full border border-primary/60 bg-transparent px-2 py-0.5 text-[11px] text-foreground outline-none placeholder:text-muted-foreground/60 focus-visible:ring-1 focus-visible:ring-ring"
+                  className="min-w-0 rounded-full border border-primary/60 bg-transparent px-2 py-0.5 text-2xs text-foreground outline-none placeholder:text-muted-foreground/60 focus-visible:ring-1 focus-visible:ring-ring"
                 />
               ) : labels.length < MAX_GIT_LABELS && (
                 <button
@@ -198,7 +198,7 @@ export function NewIssueDialog({ repos, items, onCreate }: {
             </div>
           </div>
           <div className="flex items-center justify-between gap-1.5">
-            <p className="min-w-0 truncate text-[10px] text-muted-foreground">Public: issues are visible outside this community.</p>
+            <p className="min-w-0 truncate text-3xs text-muted-foreground">Public: issues are visible outside this community.</p>
             <div className="flex shrink-0 items-center gap-1.5">
             <input
               ref={fileInput}

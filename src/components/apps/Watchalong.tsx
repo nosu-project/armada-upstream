@@ -391,7 +391,7 @@ export function Watchalong({ sync }: { sync: AppSync }) {
 
       {hasQueue && (
         <div className="clip-corner-lg bg-chrome p-1.5">
-          <div className="flex items-center gap-1.5 px-2 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground/80">
+          <div className="flex items-center gap-1.5 px-2 py-1.5 text-2xs font-semibold uppercase tracking-wide text-muted-foreground/80">
             <ListVideo className="size-3.5" />
             Up next · {snap.queue.length}
           </div>
@@ -583,8 +583,8 @@ function QueueRow({
           )}
         </div>
         <div className="min-w-0">
-          <p className={cn("truncate text-[12px]", isCurrent ? "font-semibold text-foreground" : "font-medium")}>{title}</p>
-          <p className="truncate text-[11px] text-muted-foreground">
+          <p className={cn("truncate text-xs", isCurrent ? "font-semibold text-foreground" : "font-medium")}>{title}</p>
+          <p className="truncate text-2xs text-muted-foreground">
             {isCurrent ? (
               "Now playing"
             ) : adderName ? (

@@ -56,7 +56,7 @@ export function RolePickerItems({
             {role.name}
           </span>
           {role.channelName && (
-            <span className="ml-2 shrink-0 text-[11px] text-muted-foreground truncate max-w-24"># {role.channelName}</span>
+            <span className="ml-2 shrink-0 text-2xs text-muted-foreground truncate max-w-24"># {role.channelName}</span>
           )}
         </CheckboxItem>
       ))}

@@ -189,7 +189,6 @@ function RolesBody({ community }: { community: Community }) {
         await saveRole({ role: { ...role, position } });
         done++;
       }
-      toast({ title: "Order updated" });
     } catch (e) {
       const why = e instanceof Error ? e.message : "Couldn't reorder roles.";
       // A half-applied swap can leave peers the tie-break renders in the original
@@ -501,7 +500,7 @@ function RolesBody({ community }: { community: Community }) {
                   </span>
                   {scopedTo && (
                     <span
-                      className="inline-flex min-w-0 items-center gap-0.5 text-[11px] text-muted-foreground"
+                      className="inline-flex min-w-0 items-center gap-0.5 text-2xs text-muted-foreground"
                       title={
                         scopedTo.isPrivate
                           ? `Access role: holders can read #${scopedTo.name}`
@@ -515,7 +514,7 @@ function RolesBody({ community }: { community: Community }) {
                     </span>
                   )}
                   <span
-                    className="inline-flex shrink-0 items-center gap-0.5 text-[11px] tabular-nums text-muted-foreground"
+                    className="inline-flex shrink-0 items-center gap-0.5 text-2xs tabular-nums text-muted-foreground"
                     title={`${holderCounts.get(r.roleId) ?? 0} member${(holderCounts.get(r.roleId) ?? 0) === 1 ? "" : "s"} hold this role`}
                   >
                     <Users className="size-3" aria-hidden />
@@ -707,7 +706,7 @@ export function RoleEditor({
         {selectedChannel && (
           // CORD-04 defines Role `scope` but never applies it (§3/§5), so bits are
           // community-wide; staff bits also mail the `control_root`.
-          <p className="rounded-md bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
+          <p className="rounded-md bg-warning/10 px-3 py-2 text-xs text-warning">
             These bits are <span className="font-medium">community-wide</span>, not limited to
             #{selectedChannel.name}. The protocol has no channel-limited permissions. Ticking one
             of Manage roles, Manage channels, Manage community, Ban, Create invites or Pin messages

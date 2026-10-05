@@ -70,7 +70,7 @@ export function DmAvatar({
         <DmAvatarCell
           pubkey={peer}
           anonymous={anonymous}
-          fallbackClassName={sizePx >= 40 ? "text-base" : "text-[10px]"}
+          fallbackClassName={sizePx >= 40 ? "text-base" : "text-3xs"}
         />
       </div>
     );
@@ -95,7 +95,7 @@ export function DmAvatar({
             pubkey={peer}
             tile
             anonymous={anonymous}
-            fallbackClassName={sizePx >= 40 ? "text-[10px]" : "text-[7px]"}
+            fallbackClassName={sizePx >= 40 ? "text-3xs" : "text-monogram"}
           />
         </div>
       ))}

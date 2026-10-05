@@ -288,7 +288,7 @@ function ParticipantVolumeRow({ participant }: { participant: Participant }) {
       <div className="flex items-center gap-2 mb-1.5">
         <Avatar shape={getAvatarShape(metadata)} className="size-5 shrink-0">
           <AvatarImage src={metadata?.picture} imeta={author.data?.imeta?.picture} alt={name} />
-          <AvatarFallback className="bg-success/20 text-success text-[9px]">
+          <AvatarFallback className="bg-success/20 text-success text-monogram">
             {name[0]?.toUpperCase()}
           </AvatarFallback>
         </Avatar>
@@ -359,8 +359,8 @@ export function InCallView({ label, onLabelClick, stacked, compact }: InCallView
   ) {
     return (
       <div className="flex items-center justify-center gap-2 px-3 py-2 min-h-12">
-        <Loader2 className="size-4 animate-spin text-amber-500" />
-        <span className="flex-1 min-w-0 truncate text-sm text-amber-500">Reconnecting…</span>
+        <Loader2 className="size-4 animate-spin text-warning" />
+        <span className="flex-1 min-w-0 truncate text-sm text-warning">Reconnecting…</span>
         <LeaveButton />
       </div>
     );
@@ -402,7 +402,7 @@ export function InCallView({ label, onLabelClick, stacked, compact }: InCallView
           onClick={toggleStage}
           aria-label={stageLabel}
           aria-pressed={stageVisible}
-          className="shrink-0 flex items-center gap-1.5 rounded-md bg-foreground/10 px-2 py-1 touch:px-3 touch:py-2 text-[11px] font-medium text-foreground hover:bg-foreground/20"
+          className="shrink-0 flex items-center gap-1.5 rounded-md bg-foreground/10 px-2 py-1 touch:px-3 touch:py-2 text-2xs font-medium text-foreground hover:bg-foreground/20"
         >
           <Video className="size-3.5" />
           <span className="tabular-nums">{participantCount}</span>

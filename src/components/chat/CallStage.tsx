@@ -540,7 +540,7 @@ const StageReactionFloater = memo(function StageReactionFloater({
       <span className="flex items-center gap-1 rounded-full bg-black/70 pl-0.5 pr-2 py-0.5 text-xs text-white shadow shrink-0 max-w-56">
         <Avatar className="size-4 shrink-0">
           <AvatarImage src={metadata?.picture} imeta={author.data?.imeta?.picture} alt="" />
-          <AvatarFallback className="bg-primary/30 text-primary text-[9px]">
+          <AvatarFallback className="bg-primary/30 text-primary text-monogram">
             {displayName[0]?.toUpperCase()}
           </AvatarFallback>
         </Avatar>
@@ -1095,7 +1095,7 @@ function ShareSelector({
   const stop = (e: React.SyntheticEvent) => e.stopPropagation();
   return (
     <div
-      className="absolute top-1.5 left-1.5 flex items-center gap-1 rounded-md bg-black/70 px-1 py-0.5 text-[11px] text-white"
+      className="absolute top-1.5 left-1.5 flex items-center gap-1 rounded-md bg-black/70 px-1 py-0.5 text-2xs text-white"
       // Don't let clicks reach the tile's focus toggle.
       onPointerDown={stop}
       onClick={stop}
@@ -1211,7 +1211,7 @@ function CallStatus({ calling, since }: { calling: boolean; since: number }) {
     connectionState === ConnectionState.Reconnecting ||
     (rejoining && connectionState !== ConnectionState.Connected)
   ) {
-    return <span className="text-amber-500">Reconnecting…</span>;
+    return <span className="text-warning">Reconnecting…</span>;
   }
   if (connectionState === ConnectionState.Connecting) return <span>Connecting…</span>;
   if (calling) return <span>Calling…</span>;

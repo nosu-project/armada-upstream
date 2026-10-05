@@ -145,7 +145,7 @@ function overlayHsl(baseHsl: string, overlayHslStr: string, alpha: number): stri
 
 /**
  * Derive all Tailwind theme tokens from 3 core HSL strings. The Tailwind
- * "accent" token mirrors "primary"; "success" stays a fixed green.
+ * "accent" token mirrors "primary"; "success" and "warning" stay a fixed green and amber.
  */
 export function deriveTokensFromCore(
   background: string,
@@ -177,6 +177,10 @@ export function deriveTokensFromCore(
 
   const success = dark ? "142 60% 35%" : "142 72% 29%";
   const successFg = "138 60% 94%";
+
+  // Dark amber on light themes so warning text keeps its contrast on white.
+  const warning = dark ? "43 96% 56%" : "32 95% 36%";
+  const warningFg = dark ? "26 83% 14%" : "48 100% 96%";
 
   // Phosphor-cyan counter-accent, fixed so it stays cold against warm primaries.
   const accent2 = dark ? "180 90% 55%" : "190 85% 40%";
@@ -219,6 +223,8 @@ export function deriveTokensFromCore(
     destructiveForeground: destructiveFg,
     success,
     successForeground: successFg,
+    warning,
+    warningForeground: warningFg,
     border,
     input,
     ring: primary,
