@@ -12,7 +12,7 @@ export function JsonBlock({ json, className }: { json: string; className?: strin
 
   return (
     <div className={cn("relative min-w-0", className)}>
-      <pre className="max-h-[60vh] overflow-auto rounded-md bg-muted p-3 pr-14 text-xs leading-relaxed">
+      <pre className="max-h-[60vh] overflow-auto clip-corner-lg bg-background/40 p-3 pr-14 font-mono text-xs leading-relaxed">
         {json}
       </pre>
       <button
@@ -30,7 +30,7 @@ export function JsonBlock({ json, className }: { json: string; className?: strin
           );
         }}
         className={cn(
-          "absolute right-2 top-2 inline-flex size-8 touch:size-11 items-center justify-center rounded-md bg-background/80 backdrop-blur-sm transition-colors hover:bg-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+          "absolute right-2 top-2 inline-flex size-8 touch:size-11 items-center justify-center clip-corner bg-chrome transition-colors hover:bg-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
           copied ? "text-primary" : "text-muted-foreground hover:text-foreground",
         )}
       >

@@ -2,7 +2,7 @@ import { CircleDot, Loader2, Paperclip, Plus, X } from "lucide-react";
 import { useCallback, useMemo, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { ChromeDialogContent, ChromeDialogHeader, Dialog, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
@@ -81,21 +81,16 @@ export function NewIssueDialog({ repos, items, onCreate }: {
           New issue
         </Button>
       </DialogTrigger>
-      <DialogContent
-        className="sm:max-w-md"
+      <ChromeDialogContent
+        title="New issue"
         onEscapeKeyDown={(event) => {
           if (!addingLabel) return;
           event.preventDefault();
           cancelLabelDraft();
         }}
       >
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <CircleDot className="size-4 text-orange-500" />
-            New issue
-          </DialogTitle>
-        </DialogHeader>
-        <div className="space-y-3">
+        <ChromeDialogHeader icon={CircleDot} title="new issue" />
+        <div className="mt-6 space-y-3">
           {repos.length > 1 && (
             <Select value={selected} onValueChange={setRepoCoord}>
               <SelectTrigger aria-label="Repository">
@@ -220,13 +215,13 @@ export function NewIssueDialog({ repos, items, onCreate }: {
             >
               {isUploading ? <Loader2 className="size-4 animate-spin" /> : <Paperclip className="size-4" />}
             </Button>
-            <Button size="sm" disabled={sending || isUploading || !subject.trim()} onClick={submit}>
+            <Button size="sm" className="clip-corner-lg" disabled={sending || isUploading || !subject.trim()} onClick={submit}>
               {sending ? <Loader2 className="size-4 animate-spin" /> : "Open issue"}
             </Button>
             </div>
           </div>
         </div>
-      </DialogContent>
+      </ChromeDialogContent>
     </Dialog>
   );
 }

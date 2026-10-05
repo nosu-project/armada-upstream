@@ -2,6 +2,7 @@ import {
   ArrowLeft,
   Check,
   Folder,
+  GitBranch,
   Globe,
   GripVertical,
   Hash,
@@ -31,7 +32,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { DiscordBridgeSection } from "@/components/ImportFromDiscord";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { ChromeDialogContent, ChromeDialogHeader, Dialog } from "@/components/ui/dialog";
 import { OwnerAvatar, OwnerSlashRepo, RepositoryPicker, type PickedRepository } from "@/components/projects/RepositoryPicker";
 import { Input } from "@/components/ui/input";
 import { PillTabs, type PillTab } from "@/components/ui/pill-tabs";
@@ -621,30 +622,26 @@ function ConnectRepositoryDialog({ open, onOpenChange, channels, connectedCoordi
 
   return (
     <Dialog open={open} onOpenChange={(next) => !connecting && onOpenChange(next)}>
-      <DialogContent className="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-1.5">
-            {picked && (
-              <Button variant="ghost" size="icon" className="-ml-1.5 size-7" aria-label="Back" disabled={connecting} onClick={() => setPicked(null)}>
-                <ArrowLeft className="size-4" />
-              </Button>
-            )}
-            {picked ? "Choose a channel" : "Connect a repository"}
-          </DialogTitle>
-        </DialogHeader>
+      <ChromeDialogContent title={picked ? "Choose a channel" : "Connect a repository"} contentClassName="grid gap-4">
+        {picked && (
+          <Button variant="ghost" size="icon" className="absolute left-3 top-3 size-8 touch:size-11" aria-label="Back" disabled={connecting} onClick={() => setPicked(null)}>
+            <ArrowLeft className="size-4" />
+          </Button>
+        )}
+        <ChromeDialogHeader icon={GitBranch} title={picked ? "choose a channel" : "connect a repository"} className="mb-2" />
 
         {!picked ? (
           <RepositoryPicker connectedCoordinates={connectedCoordinates} onSelect={setPicked} />
         ) : (
           <div className="min-w-0 space-y-3">
-            <div className="flex min-w-0 items-center gap-2.5 clip-corner-lg border border-border/60 bg-card p-2.5">
+            <div className="flex min-w-0 items-center gap-2.5 clip-corner-lg bg-background/40 p-2.5">
               <OwnerAvatar pubkey={picked.owner} />
               <span className="min-w-0 flex-1">
                 <OwnerSlashRepo owner={picked.owner} name={picked.displayName} />
                 <span className="block truncate text-xs text-muted-foreground">Pick the channel its activity should appear in.</span>
               </span>
             </div>
-            <div className="max-h-56 space-y-0.5 overflow-y-auto rounded-lg bg-secondary/40 p-1">
+            <div className="max-h-56 space-y-0.5 overflow-y-auto clip-corner-lg bg-background/40 p-1">
               {channels.map((channel) => {
                 const pending = pendingChannelId === channel.idHex;
                 const taken = pending ? undefined : repositoryByChannel.get(channel.idHex);
@@ -680,7 +677,7 @@ function ConnectRepositoryDialog({ open, onOpenChange, channels, connectedCoordi
             {error && <p role="alert" className="text-xs text-destructive">{error}</p>}
           </div>
         )}
-      </DialogContent>
+      </ChromeDialogContent>
     </Dialog>
   );
 }

@@ -14,13 +14,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { ChromeDialogContent, ChromeDialogHeader, Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { useControlFold } from "@/concord/hooks/useControlPlane";
 import { useCommunityDiscoverListings, useUnlistAnnouncements } from "@/concord/hooks/useDiscoverListings";
@@ -422,15 +416,14 @@ function LinkDetailsDialog({
 
   return (
     <Dialog open={entry !== null} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="max-w-2xl">
-        <DialogHeader>
-          <DialogTitle>Invite link details</DialogTitle>
-          <DialogDescription>
-            The stored record for this link. Secrets are redacted.
-          </DialogDescription>
-        </DialogHeader>
-        <JsonBlock json={json} />
-      </DialogContent>
+      <ChromeDialogContent title="Invite link details" className="sm:max-w-2xl">
+        <ChromeDialogHeader
+          icon={Braces}
+          title="invite link details"
+          description="The stored record for this link. Secrets are redacted."
+        />
+        <JsonBlock json={json} className="mt-5" />
+      </ChromeDialogContent>
     </Dialog>
   );
 }

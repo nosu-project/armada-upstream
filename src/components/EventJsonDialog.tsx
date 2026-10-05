@@ -1,13 +1,8 @@
+import { Braces } from "lucide-react";
 import { useMemo } from "react";
 
 import { JsonBlock } from "@/components/JsonBlock";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { ChromeDialogContent, ChromeDialogHeader, Dialog } from "@/components/ui/dialog";
 
 interface EventJsonDialogProps {
   open: boolean;
@@ -23,13 +18,10 @@ export function EventJsonDialog({ open, onOpenChange, source, description }: Eve
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl">
-        <DialogHeader>
-          <DialogTitle>Event JSON</DialogTitle>
-          <DialogDescription>{description}</DialogDescription>
-        </DialogHeader>
-        <JsonBlock json={json} />
-      </DialogContent>
+      <ChromeDialogContent title="Event JSON" className="sm:max-w-2xl">
+        <ChromeDialogHeader icon={Braces} title="event json" description={description} />
+        <JsonBlock json={json} className="mt-5" />
+      </ChromeDialogContent>
     </Dialog>
   );
 }

@@ -2,7 +2,7 @@ import { Blocks, EyeOff, Eye, FileIcon, Loader2, Music, Paperclip, Pencil, Play,
 import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { ChromeDialogContent, ChromeDialogFooter, ChromeDialogHeader, Dialog } from "@/components/ui/dialog";
 import { FallbackImage } from "@/components/ui/FallbackImage";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
@@ -427,13 +427,14 @@ function AttachmentEditDialog({
 
   return (
     <Dialog open={!!item} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle className="truncate pr-6">{item?.label ?? "Attachment"}</DialogTitle>
-          <DialogDescription>Describe it for people who can't see it, or hide it behind a spoiler.</DialogDescription>
-        </DialogHeader>
+      <ChromeDialogContent title={item?.label ?? "Attachment"}>
+        <ChromeDialogHeader
+          icon={Paperclip}
+          title={<span className="block max-w-full truncate px-6 normal-case">{item?.label ?? "attachment"}</span>}
+          description="Describe it for people who can't see it, or hide it behind a spoiler."
+        />
         {item && (
-          <div className="space-y-4">
+          <div className="mt-6 space-y-4">
             {previewable && (
               <button
                 type="button"
@@ -441,7 +442,7 @@ function AttachmentEditDialog({
                   onClose();
                   onPreview(item.url);
                 }}
-                className="relative mx-auto block aspect-square w-40 cursor-zoom-in overflow-hidden rounded-lg bg-secondary/50"
+                className="relative mx-auto block aspect-square w-40 cursor-zoom-in overflow-hidden clip-corner-lg bg-background/40"
                 aria-label={`Preview ${item.label}`}
               >
                 <CardPreview item={item} />
@@ -469,7 +470,7 @@ function AttachmentEditDialog({
             )}
           </div>
         )}
-        <DialogFooter className="flex-row gap-2 sm:justify-between">
+        <ChromeDialogFooter>
           <Button
             type="button"
             variant="ghost"
@@ -484,7 +485,6 @@ function AttachmentEditDialog({
           </Button>
           <Button
             type="button"
-            className="ml-auto sm:ml-0"
             onClick={() => {
               if (item) onSave(item.url, { alt: alt.trim(), spoiler });
               onClose();
@@ -492,8 +492,8 @@ function AttachmentEditDialog({
           >
             Save
           </Button>
-        </DialogFooter>
-      </DialogContent>
+        </ChromeDialogFooter>
+      </ChromeDialogContent>
     </Dialog>
   );
 }

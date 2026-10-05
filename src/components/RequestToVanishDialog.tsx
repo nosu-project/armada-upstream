@@ -79,13 +79,13 @@ export function RequestToVanishDialog({ open, onOpenChange }: RequestToVanishDia
 
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>
-      <AlertDialogContent className="max-w-[400px] rounded-2xl p-6 gap-0 border-destructive/40">
-        <div className="mb-4">
-          <AlertDialogTitle className="text-base font-bold flex items-center gap-2">
-            <AlertTriangle className="size-5 text-destructive shrink-0" />
-            Delete Account
-          </AlertDialogTitle>
-          <AlertDialogDescription className="text-sm text-muted-foreground mt-1">
+      <AlertDialogContent className="gap-0">
+        <div className="mb-5 flex flex-col items-center gap-2 text-center">
+          <div className="flex size-12 items-center justify-center clip-corner-lg bg-destructive/15 text-destructive">
+            <AlertTriangle className="size-6" />
+          </div>
+          <AlertDialogTitle>delete account</AlertDialogTitle>
+          <AlertDialogDescription>
             This will <span className="font-semibold text-destructive">permanently delete your data</span>. Check each box to confirm you understand what will be removed:
           </AlertDialogDescription>
         </div>
@@ -113,7 +113,7 @@ export function RequestToVanishDialog({ open, onOpenChange }: RequestToVanishDia
 
         <div className="flex gap-3">
           <Button
-            variant="outline"
+            variant="secondary"
             className="flex-1"
             onClick={() => onOpenChange(false)}
             disabled={isPending}
@@ -128,7 +128,7 @@ export function RequestToVanishDialog({ open, onOpenChange }: RequestToVanishDia
             {isPending ? (
               <>
                 <Loader2 className="size-3.5 animate-spin" />
-                Deleting...
+                Deleting…
               </>
             ) : (
               'Delete Account'

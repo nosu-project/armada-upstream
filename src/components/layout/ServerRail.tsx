@@ -1,4 +1,4 @@
-import { Bell, Bluetooth, CheckCheck, Compass, FolderOpen, Headphones, Lock, LogOut, MailPlus, MessageSquare, PanelLeftDashed, Plus, Settings, Trash2 } from "lucide-react";
+import { Bell, Bluetooth, CheckCheck, Compass, Folder, FolderOpen, Headphones, Lock, LogOut, MailPlus, MessageSquare, PanelLeftDashed, Plus, Settings, Trash2 } from "lucide-react";
 import { nip19 } from "nostr-tools";
 import { memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -17,14 +17,7 @@ import {
   ContextMenuItem,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { ChromeDialogContent, ChromeDialogFooter, ChromeDialogHeader, Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { MAX_RAIL_RECENT_DMS } from "@/contexts/AppContext";
@@ -2049,30 +2042,32 @@ function ServerRailInner({
       <AddDialog open={addOpen} onOpenChange={setAddOpen} />
 
       <Dialog open={renameId !== null} onOpenChange={(open) => !open && setRenameId(null)}>
-        <DialogContent className="sm:max-w-sm">
-          <DialogHeader>
-            <DialogTitle>Rename folder</DialogTitle>
-            <DialogDescription>Name this group of communities.</DialogDescription>
-          </DialogHeader>
+        <ChromeDialogContent title="Rename folder" className="sm:max-w-sm">
+          <ChromeDialogHeader icon={Folder} title="rename folder" description="Name this group of communities." />
           <form
             onSubmit={(e) => {
               e.preventDefault();
               submitRename();
             }}
-            className="space-y-4"
+            className="mt-6"
           >
             <Input
               value={renameValue}
               onChange={(e) => setRenameValue(e.target.value)}
               placeholder="Folder name"
+              aria-label="Folder name"
               autoFocus
               maxLength={64}
+              className="bg-background/40 border-transparent"
             />
-            <DialogFooter>
+            <ChromeDialogFooter>
+              <Button type="button" variant="ghost" onClick={() => setRenameId(null)}>
+                Cancel
+              </Button>
               <Button type="submit">Save</Button>
-            </DialogFooter>
+            </ChromeDialogFooter>
           </form>
-        </DialogContent>
+        </ChromeDialogContent>
       </Dialog>
 
       {dragSource && (draggedItem || draggedFolder) && (
