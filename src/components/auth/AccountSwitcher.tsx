@@ -140,7 +140,7 @@ export function AccountSwitcher({ onAddAccountClick }: AccountSwitcherProps) {
           <ChevronDown className='w-4 h-4 text-muted-foreground' />
         </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent className='w-60 p-2 clip-corner-lg border-none shadow-xl animate-scale-in'>
+      <DropdownMenuContent className='w-60 p-2 animate-scale-in'>
         <DropdownMenuItem
           onClick={() => settings.show('profile')}
           className={cn(
