@@ -18,7 +18,6 @@ import { useToast } from "@/hooks/useToast";
 import { effectiveDmRelays } from "@/contexts/AppContext";
 import { DmCallContext, type DmCallState } from "@/contexts/DmCallContext";
 import { inviteDeliveryRelays, recipientInboxRelays } from "@/concord/lib/inviteRelays";
-import { STOCK_RELAYS } from "@/concord/lib/invite";
 import { ownAvServers } from "@/concord/hooks/useVoice";
 import { canonicalOrigin, probeAvBroker } from "@/concord/lib/voice";
 import { registerBeforeAccountExit } from "@/lib/beforeAccountExit";
@@ -53,6 +52,7 @@ import {
   wrapDmSealEphemeral,
   type Dm17Signer,
 } from "@/lib/nip17/protocol";
+import { RESCUE_RELAYS } from "@/lib/platform";
 
 import type { DmVoiceContext } from "@/contexts/CallContext";
 import type { NostrEvent } from "@nostrify/nostrify";
@@ -178,7 +178,7 @@ export function DmCallProvider({ children }: { children: React.ReactNode }) {
   // the stock set. Tightly gated so private-floor users never REQ their `#p` publicly.
   const scanRelays = useMemo(() => {
     if (myRelays.length === 0) return [];
-    const stockFloor = !config.useAppDmRelays && publishedRelays.length === 0 ? STOCK_RELAYS : [];
+    const stockFloor = !config.useAppDmRelays && publishedRelays.length === 0 ? RESCUE_RELAYS : [];
     return [...new Set([...myRelays, ...stockFloor])];
   }, [myRelays, config.useAppDmRelays, publishedRelays]);
   const scanRelaysRef = useRef(scanRelays);

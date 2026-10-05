@@ -1,7 +1,7 @@
 import { createContext } from "react";
 
 import { APP_BLOSSOM_SERVERS, PREFERRED_BLOSSOM_SERVER } from "@/lib/blossom";
-import { APP_RELAYS, BROADCAST_RELAYS, COMMUNITY_RELAYS, DM_RELAYS, normalizeRelayUrl, SEARCH_RELAYS } from "@/lib/platform";
+import { APP_RELAYS, BROADCAST_RELAYS, COMMUNITY_RELAYS, normalizeRelayUrl } from "@/lib/platform";
 import { DEFAULT_PUSH_PREFS, type PushPrefs } from "@/lib/pushPrefs";
 import { getPreferredVoiceServer } from "@/lib/voiceDevices";
 
@@ -85,12 +85,11 @@ export interface AppConfig {
   /**
    * Home relays a NEW Concord community is minted on (create-dialog default).
    * Seeded from COMMUNITY_RELAYS (the CORD stock set unless a deployment
-   * names its own); emptied → falls back to the stock set. Separate from
-   * `appRelays` (account traffic) and from the frozen protocol uses of
-   * `STOCK_RELAYS` (fragment codec, vault rescue floor, invite fallbacks).
+   * names its own `RELAYS`); emptied → falls back to `RESCUE_RELAYS`. Separate
+   * from `appRelays` (account traffic).
    */
   communityRelays: string[];
-  /** NIP-50 search relays (seeded from SEARCH_RELAYS); empty falls back to app relays. */
+  /** NIP-50 search relays (seeded from APP_RELAYS); empty falls back to app relays. */
   searchRelays: string[];
   /** Host for starting empty Concord/DM voice calls; an account preference synced via NIP-78. */
   preferredVoiceServer: string;
@@ -115,8 +114,8 @@ export interface AppConfig {
   /** Whether app DM relays are in the DM set (default on); combines with `useOwnDmRelays` — see `effectiveDmRelays`. */
   useAppDmRelays: boolean;
   /**
-   * Additional app DM relays, seeded from `DM_RELAYS`; kept in settings so a
-   * restored setup replaces the seed. `appRelays` stay in the set for NIP-04.
+   * Additional app DM relays, empty for a fresh config; kept in settings so a
+   * restored setup replaces it. `appRelays` stay in the set for NIP-04.
    */
   appDmRelays: string[];
   /** Whether the user's own `dmRelays` are in the DM set (default off). */
@@ -395,14 +394,14 @@ export const defaultConfig: AppConfig = {
   appRelays: [...APP_RELAYS],
   broadcastRelays: [...BROADCAST_RELAYS],
   communityRelays: [...COMMUNITY_RELAYS],
-  searchRelays: [...SEARCH_RELAYS],
+  searchRelays: [...APP_RELAYS],
   preferredVoiceServer: getPreferredVoiceServer(),
   automaticSettingsSync: true,
   useAppRelays: true,
   useUserRelays: false,
   relayMetadata: { relays: [], updatedAt: 0 },
   useAppDmRelays: true,
-  appDmRelays: [...DM_RELAYS],
+  appDmRelays: [],
   useOwnDmRelays: false,
   dmRelays: [],
   blossomServerMetadata: { servers: [], updatedAt: 0 },

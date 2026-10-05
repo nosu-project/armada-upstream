@@ -20,7 +20,7 @@ import {
   type PersistedInviteList,
 } from "@/concord/hooks/useInvites";
 import { KIND_COMMUNITY_LIST_FRAG, KIND_INVITE_LIST } from "@/concord/lib/kinds";
-import { mergeInviteLists, STOCK_RELAYS, type InviteList } from "@/concord/lib/invite";
+import { mergeInviteLists, type InviteList } from "@/concord/lib/invite";
 import { useAppContext } from "@/hooks/useAppContext";
 import {
   KIND_BLOSSOM_SERVERS,
@@ -51,7 +51,7 @@ import {
   queryExplicitRelaysWithStatus,
   uniqueRelayUrls,
 } from "@/lib/nip65";
-import { APP_NAME, RELAY_LIST_DISCOVERY_RELAYS } from "@/lib/platform";
+import { APP_NAME, RELAY_LIST_DISCOVERY_RELAYS, RESCUE_RELAYS } from "@/lib/platform";
 import {
   KIND_SEARCH_RELAYS,
   readSearchRelayList,
@@ -157,11 +157,11 @@ export async function fetchPortableWireState(
       ],
       signal,
     ),
-    // Creator Invite Lists are also written to the CORD stock rescue set; read 13303 there so a
+    // Creator Invite Lists are also written to the rescue set; read 13303 there so a
     // revocation only held there joins the merge.
     queryExplicitRelaysWithStatus(
       nostr,
-      STOCK_RELAYS,
+      RESCUE_RELAYS,
       [{ kinds: [KIND_INVITE_LIST], authors: [user.pubkey] }],
       signal,
     ),

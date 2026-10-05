@@ -73,7 +73,7 @@ import { useUpdateUserGroupList } from "@/hooks/useUserGroupList";
 import { isDesktop } from "@/lib/desktop";
 import { APP_BLOSSOM_SERVERS } from "@/lib/blossom";
 import { effectiveDmRelays } from "@/contexts/AppContext";
-import { APP_RELAYS, BROADCAST_RELAYS, COMMUNITY_RELAYS, DM_RELAYS, SEARCH_RELAYS } from "@/lib/platform";
+import { APP_RELAYS, BROADCAST_RELAYS, COMMUNITY_RELAYS } from "@/lib/platform";
 import {
   getAudioProcessing,
   setAudioProcessing,
@@ -674,7 +674,7 @@ export function SettingsPage({
               <RelayListEditor
                 relays={config.searchRelays}
                 onChange={setSearchRelays}
-                onReset={() => setSearchRelays([...SEARCH_RELAYS])}
+                onReset={() => setSearchRelays([...APP_RELAYS])}
                 emptyText="No search relays. Search uses your app relays."
               />
             </SettingsRow>
@@ -706,7 +706,7 @@ export function SettingsPage({
                   <RelayListEditor
                     relays={config.appDmRelays}
                     onChange={setAppDmRelays}
-                    onReset={() => setAppDmRelays([...DM_RELAYS])}
+                    onReset={() => setAppDmRelays([])}
                     emptyText="No additional app DM relays. Legacy DMs still use your general app relays."
                     placeholder="wss://dm-relay.example.com"
                   />

@@ -9,7 +9,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { RELAY_DICTIONARY } from "@/concord/lib/stockRelays";
 import { isDesktop } from "@/lib/desktop";
 import { ANDROID_STORES } from "@/lib/downloads";
-import { isNativeRuntime, relayToHttpUrl } from "@/lib/platform";
+import { DEPLOYMENT_RELAYS, isNativeRuntime, relayToHttpUrl } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 
 import { AsciiSea } from "./AsciiSea";
@@ -21,8 +21,13 @@ import { SailingSea } from "./SailingSea";
 
 /** Signed-out landing page: hero over the {@link AsciiSea}, then pitch, quiz and closer. */
 
-/** Display order only; dictionary ids (and STOCK_RELAYS' order) are CORD-05 wire format. */
-const LANDING_RELAYS: string[] = [3, 1, 4, 2].map((i) => RELAY_DICTIONARY[i]);
+/**
+ * The deployment's own relays, else the stock set in display order only;
+ * dictionary ids (and STOCK_RELAYS' order) are CORD-05 wire format.
+ */
+const LANDING_RELAYS: string[] = DEPLOYMENT_RELAYS.length > 0
+  ? DEPLOYMENT_RELAYS
+  : [3, 1, 4, 2].map((i) => RELAY_DICTIONARY[i]);
 
 const CLOSER_SHOT = ["raid-crew"];
 const CLOSER_LABEL = "a gaming community's #general, with reactions, an inline reply and a thread";

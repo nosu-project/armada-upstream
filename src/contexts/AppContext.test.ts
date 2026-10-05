@@ -7,15 +7,15 @@ import {
   effectiveDmRelays,
   selfStateRelays,
 } from "@/contexts/AppContext";
-import { BROADCAST_RELAYS, DM_RELAYS } from "@/lib/platform";
+import { BROADCAST_RELAYS } from "@/lib/platform";
 
 describe("portable network configuration", () => {
   it("enables automatic settings sync only as a fresh device-local default", () => {
     expect(defaultConfig.automaticSettingsSync).toBe(true);
   });
 
-  it("seeds app DM relays from the build only for a fresh config", () => {
-    expect(defaultConfig.appDmRelays).toEqual(DM_RELAYS);
+  it("starts a fresh config with no additional app DM relays", () => {
+    expect(defaultConfig.appDmRelays).toEqual([]);
   });
 
   it("uses synchronized app DM relays instead of adding build defaults back", () => {

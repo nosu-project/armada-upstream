@@ -13,20 +13,10 @@ export const CONFIG_NAMES = [
   "APP_NAME",
   "APP_ID",
   "PUBLIC_WEB_ORIGIN",
-  "APP_RELAYS",
-  // Comma-separated write-only relays: published to, never read from.
-  "BROADCAST_RELAYS",
-  "SEARCH_RELAYS",
-  // Comma-separated default home relays for new Concord communities. Unset/empty = the CORD stock set.
-  "COMMUNITY_RELAYS",
-  // Comma-separated NIP-65 indexers used only for bounded login discovery.
-  "NIP65_DISCOVERY_RELAYS",
-  // NIP-34 repository directory relay. Empty = no directory search.
-  "GIT_DISCOVERY_RELAY",
-  "DM_RELAYS",
-  "APP_BLOSSOM_SERVERS",
-  // Blossom server whose URL uploads embed when it takes the blob; the rest become fallbacks. Empty = first to answer.
-  "PREFERRED_BLOSSOM_SERVER",
+  // Comma-separated: the deployment's relays, every relay default at once. Unset = Armada's public relays.
+  "RELAYS",
+  // Comma-separated Blossom servers, the first preferred for uploads. Unset = Armada's public servers.
+  "BLOSSOM_SERVERS",
   "CONCORD_AV_SERVERS",
   // Discover's curated author list: an naddr, npub/hex pubkey, or empty/"none". Unset = Armada's follow pack.
   "DISCOVER_CURATION",
@@ -55,8 +45,6 @@ export const CONFIG_NAMES = [
   "RELEASE_REPO_ID",
   // Comma-separated hex pubkeys whose kind-30622 releases are trusted. Unset = Armada's release signer.
   "RELEASE_AUTHORS",
-  // Comma-separated relays `/downloads` reads releases from. Unset = the repository's own relays.
-  "RELEASE_RELAYS",
 ] as const;
 
 export type ConfigName = (typeof CONFIG_NAMES)[number];

@@ -6,8 +6,8 @@
  */
 
 import { KIND_DM_RELAYS, parseDmRelays } from "@/hooks/useDmRelayList";
-import { STOCK_RELAYS } from "@/concord/lib/invite";
 import { capRelays } from "@/concord/lib/types";
+import { RESCUE_RELAYS } from "@/lib/platform";
 
 import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
 
@@ -52,5 +52,5 @@ export async function recipientInboxRelays(nostr: NostrQuery, recipient: string)
  * stock set. Callers must handle a `null` inbox first. Returns a fresh array.
  */
 export function inviteDeliveryRelays(inboxRelays: string[]): string[] {
-  return inboxRelays.length > 0 ? [...inboxRelays] : [...STOCK_RELAYS];
+  return inboxRelays.length > 0 ? [...inboxRelays] : [...RESCUE_RELAYS];
 }

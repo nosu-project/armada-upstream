@@ -40,7 +40,7 @@ time; it talks to relays and voice brokers over runtime-configurable URLs.
   bunker/nostrconnect. Your identity is portable across devices.
 - **App relays** — configurable general-purpose relays for non-community traffic
   (profiles, lists). Defaults to `relay.ditto.pub` + `relay.dreamith.to`;
-  editable in Settings and at build time (`APP_RELAYS`).
+  editable in Settings and at build time (`RELAYS`).
 - **Voice** — WebRTC audio via LiveKit, E2E-encrypted client-side under
   per-sender keys.
 
@@ -68,7 +68,7 @@ defines `window.ENV`, and a string there takes precedence over the built-in
 value (an empty string included, so a setting can be turned off).
 
 ```js
-window.ENV = { APP_RELAYS: "wss://relay.example.com", CONCORD_AV_SERVERS: "" };
+window.ENV = { RELAYS: "wss://relay.example.com", CONCORD_AV_SERVERS: "" };
 ```
 
 The script must be external — the Content Security Policy admits no inline
@@ -85,45 +85,27 @@ in `index.html`, which link-preview crawlers read without running scripts.
   integration, it is embedded in the compiled client bundle; keeping it in a
   secret keeps it out of source/history, not out of browser developer tools.
   Configure any available platform restrictions in KLIPY's partner panel.
-- `APP_RELAYS` — default app relays for non-community traffic — profiles
-  (kind 0), group lists (kind 10009) — in the style of Ditto's app relays
-  (default `wss://relay.ditto.pub,wss://relay.dreamith.to`); users can edit the
-  list in Settings, including removing all of them for air-gapped use.
-- `BROADCAST_RELAYS` — write-only relays (default `wss://relay.primal.net`).
-  Everything the general relay pool publishes — the profile, the user's personal
-  lists — is sent here in addition to the app relays, so other Nostr clients
-  that index these relays can find it; nothing is ever read from them, and
-  community, group and direct-message traffic never routes here. User-editable
-  in Settings, and turned off along with the app relays. Set it empty to publish
-  nowhere but the app relays.
-- `SEARCH_RELAYS` — relays used for NIP-50 full-text search (profile /
-  mention autocomplete); `search` filters route only to these (default
-  `wss://relay.ditto.pub,wss://relay.dreamith.to`). User-editable in Settings;
-  when empty, search falls back to the app relays.
-- `COMMUNITY_RELAYS` — the relays a new Concord community is created on
-  (default: the CORD stock set, `wss://jskitty.com/nostr`,
-  `wss://asia.vectorapp.io/nostr`, `wss://relay.ditto.pub` and
-  `wss://relay.dreamith.to`). A community holds at most five. User-editable in
-  Settings, and changeable per community when it's created. Empty means the
-  stock set.
-- `NIP65_DISCOVERY_RELAYS` — comma-separated public NIP-65 indexes queried
-  once after login to locate the user's signed kind-10002 read/write relay list
-  (default `wss://purplepag.es,wss://user.kindpag.es,wss://relay.nos.social`).
-  These are discovery-only: they never enter the general pool or receive normal
-  account traffic. Set it empty to use only the app relays and user-entered
-  bootstrap hints for discovery.
-- `APP_BLOSSOM_SERVERS` — comma-separated default Blossom media servers
-  (BUD-03) uploads fall back to, in the style of `APP_RELAYS` (default
-  `https://blossom.ditto.pub/,https://blossom.dreamith.to/,https://blossom.primal.net/`).
-  User-editable in Settings, and can be turned off entirely with the "Use app
-  media servers" toggle.
-- `PREFERRED_BLOSSOM_SERVER` — a Blossom server whose URL uploads embed
-  whenever it accepts the file. It is tried first, and is retried once if it
-  fails for any reason other than refusing the file. Only if it can't take the
-  file does an upload fall back to the first other server to answer. Every
-  other server already holding the blob is listed as a NIP-94 `fallback`.
-  Empty by default, which means whichever server answers first. Seeds the
-  "Preferred media server" setting.
+- `RELAYS` — comma-separated: the deployment's own relays, the one relay
+  setting. Unset, Armada uses its public relays: `wss://relay.ditto.pub` and
+  `wss://relay.dreamith.to` for account data and search, the CORD stock set
+  (`wss://jskitty.com/nostr`, `wss://asia.vectorapp.io/nostr` and those two)
+  for new communities and for the backup copies of a user's community and
+  invite lists, and three helpers: `wss://relay.primal.net` as a write-only
+  broadcast relay, public NIP-65 indexes (`wss://purplepag.es`,
+  `wss://user.kindpag.es`, `wss://relay.nos.social`) to find a user's relay
+  list at login, and `wss://index.ngit.dev` for git repository search. Set,
+  these relays are all of it: account data, search, new communities, desktop
+  releases and the backups go to them, and the helpers are off, so the client
+  dials no other relay of its own accord. The stock set stays part of the
+  invite-link format either way. Users can still edit each list in Settings.
+- `BLOSSOM_SERVERS` — comma-separated Blossom media servers (BUD-03),
+  most trusted first. The first is preferred: uploads embed its URL whenever
+  it accepts the file, it is retried once if it fails for any reason other
+  than refusing the file, and every other server holding the blob is listed
+  as a NIP-94 `fallback`. Unset, Armada uses
+  `https://blossom.ditto.pub/,https://blossom.dreamith.to/,https://blossom.primal.net/`
+  with no preference (whichever answers first). User-editable in Settings, and
+  can be turned off entirely with the "Use app media servers" toggle.
 - `CONCORD_AV_SERVERS` — fallback Concord voice (CORD-07) token brokers
   (default `https://armada.buzz`).
 - `BRIDGE_PORTAL_URL` — origin of a Discord bridge portal
