@@ -1,4 +1,5 @@
 import {
+  AudioPresets,
   VideoPreset,
   type ScreenShareCaptureOptions,
   type TrackPublishOptions,
@@ -183,12 +184,28 @@ export function rememberScreenShareQuality(value: ScreenShareQuality): ScreenSha
   return quality;
 }
 
+/**
+ * Music-grade capture: no speech AGC/noise suppression, and stereo requested
+ * explicitly, since LiveKit picks Opus stereo from the track's channelCount.
+ * restrictOwnAudio (Chrome 141+) keeps call playback out; Chrome reads it only
+ * inside the audio constraint.
+ */
+function screenShareAudioCaptureOptions(): MediaTrackConstraints {
+  return {
+    restrictOwnAudio: true,
+    autoGainControl: false,
+    noiseSuppression: false,
+    channelCount: 2,
+    sampleRate: 48_000,
+  };
+}
+
 /** Capture options used for the first share through LiveKit. */
 export function screenShareCaptureOptions(quality: ScreenShareQuality): ScreenShareCaptureOptions {
   const normalized = normalizeScreenShareQuality(quality);
   const resolution = resolutionOption(normalized.resolution);
   return {
-    audio: normalized.captureAudio,
+    audio: normalized.captureAudio ? screenShareAudioCaptureOptions() : false,
     contentHint: "detail",
     resolution: {
       width: resolution.width,
@@ -214,11 +231,22 @@ export function screenShareDisplayMediaOptions(
 ): DisplayMediaStreamOptions {
   const captureAudio = normalizeScreenShareQuality(quality).captureAudio;
   return {
-    // restrictOwnAudio (Chrome 141+) keeps call playback out of captured audio;
-    // it must be nested in the audio constraint. The LiveKit initial-capture path
-    // re-adds it via installScreenShareAudioRestriction().
-    audio: captureAudio ? { restrictOwnAudio: true } : false,
+    audio: captureAudio ? screenShareAudioCaptureOptions() : false,
     video: screenShareVideoConstraints(quality),
+  };
+}
+
+/**
+ * Share audio's own Opus settings, not the room's mic-tuned publishDefaults:
+ * DTX/RED suit speech gaps, not continuous system audio. forceStereo covers a
+ * capture surface that ignores channelCount.
+ */
+export function screenShareAudioPublishOptions(): TrackPublishOptions {
+  return {
+    audioPreset: AudioPresets.musicHighQualityStereo,
+    forceStereo: true,
+    dtx: false,
+    red: false,
   };
 }
 
@@ -247,6 +275,7 @@ export function screenSharePublishOptions(quality: ScreenShareQuality): TrackPub
           ),
         ]
       : [],
+    ...screenShareAudioPublishOptions(),
   };
 }
 

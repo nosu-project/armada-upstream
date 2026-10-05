@@ -1,4 +1,4 @@
-import { Track, type LocalParticipant, type RemoteVideoTrack } from "livekit-client";
+import { AudioPresets, Track, type LocalParticipant, type RemoteVideoTrack } from "livekit-client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -94,8 +94,13 @@ describe("switchPublishedScreenShare", () => {
       async () => mediaStream(video, audio),
     );
 
+    // The share's own Opus settings, not the room's mic-tuned defaults.
     expect(participant.publishTrack).toHaveBeenCalledWith(audio, {
       source: Track.Source.ScreenShareAudio,
+      audioPreset: AudioPresets.musicHighQualityStereo,
+      forceStereo: true,
+      dtx: false,
+      red: false,
     });
     expect(audio.stop).not.toHaveBeenCalled();
   });

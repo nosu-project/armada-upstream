@@ -114,7 +114,11 @@ import {
   type DesktopHevcScreenShareCapability,
   type DesktopHevcScreenShareStatus,
 } from "@/lib/desktop";
-import { SCREEN_SHARE_RESOLUTIONS, type ScreenShareQuality } from "@/lib/screenShareQuality";
+import {
+  SCREEN_SHARE_RESOLUTIONS,
+  screenShareAudioPublishOptions,
+  type ScreenShareQuality,
+} from "@/lib/screenShareQuality";
 import { nip19 } from "nostr-tools";
 
 /** Reports live speakers (as pubkeys) to call context. Unverified identities are skipped. */
@@ -1373,6 +1377,7 @@ function ConcordVoiceRoom({
       const audio = stream.getAudioTracks()[0];
       if (audio) {
         const publication = await room.localParticipant.publishTrack(audio, {
+          ...screenShareAudioPublishOptions(),
           source: Track.Source.ScreenShareAudio,
         });
         if (!current()) {

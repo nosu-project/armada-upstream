@@ -11,6 +11,7 @@ import {
 import {
   getScreenShareQuality,
   normalizeScreenShareQuality,
+  screenShareAudioPublishOptions,
   screenShareDisplayMediaOptions,
   screenSharePublishOptions,
   screenShareVideoConstraints,
@@ -555,6 +556,7 @@ export async function switchPublishedScreenShare(
       audioAdopted = true;
     } else if (replacementAudio) {
       await participant.publishTrack(replacementAudio, {
+        ...screenShareAudioPublishOptions(),
         source: Track.Source.ScreenShareAudio,
       });
       audioAdopted = true;
