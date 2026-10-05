@@ -69,7 +69,7 @@ export function ZapPill({
         <button
           type="button"
           className={cn(
-            "flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-sm leading-none transition-colors",
+            "flex items-center gap-1.5 rounded-full border px-2.5 py-1 touch:px-3.5 touch:py-2.5 text-sm leading-none transition-colors",
             tally.mine
               ? "border-amber-500 bg-amber-500/20 text-amber-500"
               : "border-amber-500/40 bg-amber-500/10 text-amber-500 hover:border-amber-500/70 hover:bg-amber-500/20",
