@@ -254,18 +254,21 @@ export async function queryChannelPageBefore(
   );
   const rows = fetched.filter((ev) => !opts.skip.has(ev.id));
   const rowIds = rows.map((ev) => ev.id);
+  // Keyed by `#e` alone, channel checked here: with `#channel` beside it the
+  // IndexedDB planner walks the one-value tag, i.e. the whole channel, per page.
+  const inChannel = (ev: { tags: string[][] }) => ev.tags.some(([n, v]) => n === "channel" && v === channelIdHex);
   const side = rowIds.length
-    ? await store.query(
-        [{ kinds: CHAT_SIDE_KINDS, "#channel": [channelIdHex], "#e": rowIds, limit: rowIds.length * SIDE_EVENT_FACTOR }],
+    ? (await store.query(
+        [{ kinds: CHAT_SIDE_KINDS, "#e": rowIds, limit: rowIds.length * SIDE_EVENT_FACTOR }],
         { signal: opts.signal },
-      )
+      )).filter(inChannel)
     : [];
   const retractable = side.filter((ev) => ev.kind !== KIND_DELETE).map((ev) => ev.id);
   const retractions = retractable.length
-    ? await store.query(
-        [{ kinds: [KIND_DELETE], "#channel": [channelIdHex], "#e": retractable, limit: retractable.length }],
+    ? (await store.query(
+        [{ kinds: [KIND_DELETE], "#e": retractable, limit: retractable.length }],
         { signal: opts.signal },
-      )
+      )).filter(inChannel)
     : [];
   const events = notExpired([...rows, ...side, ...retractions]).map((ev) => storedToOpenedChat(ev, channelIdHex));
   return { events, full: fetched.length >= want };

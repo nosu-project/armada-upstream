@@ -283,6 +283,29 @@
 
 @layer utilities {
   /*
+   * A timeline row the browser may skip laying out while offscreen: a long
+   * scroll-back keeps thousands of rows mounted, and every page then forced a
+   * layout of all of them. Skippable only once `data-settled` (MessageTimeline),
+   * i.e. after one real layout recorded its size: an estimated row resizes as it
+   * scrolls into view and shifts what the reader is looking at. `auto` implies
+   * paint containment, which clips at the padding box, so the row reaches up
+   * over the one above for the hover toolbar (MessageRow, `-top-3`); that reach
+   * passes pointers through to the row above.
+   */
+  .timeline-row {
+    contain-intrinsic-size: auto 4rem;
+    padding-top: 0.75rem;
+    margin-top: -0.75rem;
+    pointer-events: none;
+  }
+  .timeline-row[data-settled] {
+    content-visibility: auto;
+  }
+  .timeline-row > * {
+    pointer-events: auto;
+  }
+
+  /*
    * Always-visible, styled, grabbable scrollbar for primary scroll regions
    * (chat message lists, thread panels). Reserves a stable gutter so the bar
    * doesn't overlay content or vanish (macOS overlay scrollbars otherwise hide

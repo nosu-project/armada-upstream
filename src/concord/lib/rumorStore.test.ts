@@ -195,6 +195,11 @@ describe("concord rumor store", () => {
         channel,
       ),
     );
+    // Another room's reaction naming m1 never decorates this one.
+    const other = makeChannel();
+    const stray = chatRumor(other.idHex, bob, KIND_REACTION, "🧊", 12_000_000, [["e", m1.id]]);
+    writeRumors(CID, await openChatBatch([await wrapChat(stray, other.channel, bob)], other.channel));
+    await eventually(() => queryChannelRumors(CID, other.idHex, { limit: 100 }), (r) => r.length === 1);
     await eventually(() => queryChannelRumors(CID, idHex, { limit: 100 }), (r) => r.length === all.length);
 
     // m3 shares m2's second and is already loaded: it is skipped, m2 is not.

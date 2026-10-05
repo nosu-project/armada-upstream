@@ -86,6 +86,7 @@ import { useWireScopes } from "@/wire/useWireScopes";
 import { dmThreadScope, emitWireScopes } from "@/wire/bus";
 import { dm17NotifyCandidates, feedNotifyCandidates } from "@/wire/notify";
 import type { SendStatus } from "@/hooks/useSendStatusMap";
+import { shareByRumorId } from "@/lib/shareRows";
 import type { NostrEvent, NostrFilter, NostrSigner } from "@nostrify/nostrify";
 
 const SYNC_MIN_INTERVAL_MS = 30_000;
@@ -794,6 +795,8 @@ export function useDm17Thread(
 
   const query = useQuery<OpenedDm[]>({
     queryKey,
+    // Keyed: older pages shift every index (see shareRows).
+    structuralSharing: shareByRumorId,
     // Store read: no retry ladder holding the skeleton over on-disk rumors. See storeQuery.
     ...STORE_READ,
     enabled: queryEnabled,
