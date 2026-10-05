@@ -971,9 +971,9 @@ const ChatMessageInner = memo(function ChatMessageInner({
         onCloseAutoFocus={keepActionFocus}
         collisionPadding={contextMenu.open ? getComposerCollisionPadding(composerBoundsRef) : undefined}
       >
-        {withImageActions(imageActions, menuActions).map((action) => (
+        {withImageActions(imageActions, menuActions).map((action, i) => (
           <div key={action.id}>
-            {action.groupStart && <DropdownMenuSeparator />}
+            {action.groupStart && i > 0 && <DropdownMenuSeparator />}
             <DropdownMenuItem
               className={action.destructive ? "text-destructive focus:text-destructive" : undefined}
               onSelect={action.onSelect}

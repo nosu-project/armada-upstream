@@ -34,9 +34,9 @@ export function MessageOverflowMenu({ actions }: { actions: MessageActionItem[] 
         <TooltipContent>More actions</TooltipContent>
       </Tooltip>
       <DropdownMenuContent align="end" className="w-52">
-        {actions.map((action) => (
+        {actions.map((action, i) => (
           <div key={action.id}>
-            {action.groupStart && <DropdownMenuSeparator />}
+            {action.groupStart && i > 0 && <DropdownMenuSeparator />}
             <DropdownMenuItem
               className={action.destructive ? "text-destructive focus:text-destructive" : undefined}
               onSelect={action.onSelect}
