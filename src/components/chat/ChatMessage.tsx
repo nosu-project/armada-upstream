@@ -465,7 +465,8 @@ const ChatMessageInner = memo(function ChatMessageInner({
   // Latched so closing still animates.
   const [sheetBuilt, setSheetBuilt] = useState(false);
   if (sheetOpen && !sheetBuilt) setSheetBuilt(true);
-  // Image actions staged by a long-press/right-click on an image; cleared on close.
+  // Image actions staged by a long-press/right-click on an image. Reset when the
+  // next menu opens, not on close, so the closing menu keeps its rows.
   const [imageActions, setImageActions] = useState<MessageActionItem[] | null>(null);
 
   const [jsonOpen, setJsonOpen] = useState(false);
@@ -475,11 +476,7 @@ const ChatMessageInner = memo(function ChatMessageInner({
   const [reportOpen, setReportOpen] = useState(false);
   // Built on first right-click (see useLazyContextMenu).
   const clearImageActions = useCallback(() => setImageActions(null), []);
-  const contextMenu = useLazyContextMenu(
-    useCallback((open: boolean) => {
-      if (!open) setImageActions(null);
-    }, []),
-  );
+  const contextMenu = useLazyContextMenu();
   const chatScope = useChatScope();
   const reportTo = reportDestination(chatScope);
   // Mesh/proxied identities aren't Nostr pubkeys.
@@ -519,7 +516,6 @@ const ChatMessageInner = memo(function ChatMessageInner({
 
   const handleSheetOpenChange = useCallback((open: boolean) => {
     setSheetOpen(open);
-    if (!open) setImageActions(null);
     if (!open && active) onToggleActive?.(event.id);
   }, [active, onToggleActive, event.id]);
 

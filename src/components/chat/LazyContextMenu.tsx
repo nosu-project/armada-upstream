@@ -17,16 +17,9 @@ export interface LazyContextMenu {
  * of the row anchored at the pointer: a per-row ContextMenu would mount a Popper
  * per row plus a second render pass.
  */
-export function useLazyContextMenu(onOpenChange?: (open: boolean) => void): LazyContextMenu {
+export function useLazyContextMenu(): LazyContextMenu {
   const [point, setPoint] = useState<{ x: number; y: number } | null>(null);
-  const [open, setOpenState] = useState(false);
-  const onOpenChangeRef = useRef(onOpenChange);
-  onOpenChangeRef.current = onOpenChange;
-
-  const setOpen = useCallback((next: boolean) => {
-    setOpenState(next);
-    onOpenChangeRef.current?.(next);
-  }, []);
+  const [open, setOpen] = useState(false);
 
   const onContextMenu = useCallback(
     (event: React.MouseEvent) => {
@@ -55,6 +48,9 @@ export function LazyContextMenuContent({
   children: ReactNode;
 }) {
   const { point, open, setOpen } = menu;
+  // Held through the exit animation: dropping it repositions the closing menu, which jumps.
+  const paddingRef = useRef(collisionPadding);
+  if (open) paddingRef.current = collisionPadding;
   if (!point) return null;
   return createPortal(
     <DropdownMenu open={open} onOpenChange={setOpen}>
@@ -69,7 +65,7 @@ export function LazyContextMenuContent({
         side="right"
         align="start"
         sideOffset={2}
-        collisionPadding={collisionPadding}
+        collisionPadding={paddingRef.current}
         // Inert while closing: Radix items focus on pointermove and would steal focus
         // from where the action put it.
         className={cn("data-[state=closed]:pointer-events-none", className)}
