@@ -1430,6 +1430,7 @@ function CallHero({
   wide: boolean;
 }) {
   const theater = variant === "theater";
+  const boxRef = useRef<HTMLDivElement>(null);
   const controlSize = theater ? "rounded-lg size-14 touch:size-14" : "size-10 touch:size-11";
   const controls = (
     <div className={cn("flex flex-wrap items-center justify-center", theater ? "gap-4" : "gap-2.5")}>
@@ -1525,7 +1526,7 @@ function CallHero({
 
   if (theater) {
     return (
-      <div className="relative flex h-full w-full flex-col overflow-hidden bg-chrome-deep">
+      <div ref={boxRef} className="relative flex h-full w-full flex-col overflow-hidden bg-chrome-deep">
         {backdrop}
         {theaterToggle}
         <div className="relative flex flex-1 flex-col items-center justify-center gap-8 px-6 overflow-y-auto">
@@ -1535,6 +1536,7 @@ function CallHero({
         <div className="relative flex justify-center px-4 pt-4 pb-[max(2rem,var(--safe-area-inset-bottom,env(safe-area-inset-bottom,0px)))]">
           {controls}
         </div>
+        <StageReactions containerRef={boxRef} />
       </div>
     );
   }
@@ -1549,6 +1551,7 @@ function CallHero({
       )}
     >
       <div
+        ref={boxRef}
         role="region"
         aria-label="Call"
         className="relative clip-corner-lg overflow-hidden bg-chrome-deep shadow-lg"
@@ -1560,6 +1563,7 @@ function CallHero({
           {title}
           {controls}
         </div>
+        <StageReactions containerRef={boxRef} />
       </div>
     </div>
   );
