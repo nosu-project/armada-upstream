@@ -230,8 +230,8 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
    * On socket reopen (#45), reset NIP-42 state (NRelay1 carries stale auth
    * across reconnects) and ack our raw stream AUTHs from `OK` frames.
    * Also retransmits NRelay1's pending EVENTs: it re-issues subs on reconnect
-   * but not unacked EVENTs, so a write into a half-open socket was lost (60s
-   * hang for NIP-46). Duplicates are idempotent.
+   * but not unacked EVENTs, so a write into a half-open socket would be lost
+   * (a 60s hang for NIP-46). Duplicates are idempotent.
    */
   const watchSocketReopen = (relay: NRelay1, url: string) => {
     const internals = relay as unknown as {
@@ -451,7 +451,7 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
           return routed;
         }
         // Servers see pool-wide REQs only when the filter concerns them
-        // (poolReqTargets); fanning to all servers multiplied every event per relay.
+        // (poolReqTargets); fanning to all servers would multiply every event per relay.
         const targets = poolReqTargets(
           filters,
           poolGeneralRelaysRef.current,
@@ -593,7 +593,7 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
   }, []);
 
   // Memoized: `useNostr()` is the most-read context, so a fresh literal
-  // re-rendered nearly everything. Bound functions (see `detachableClient`)
+  // re-renders nearly everything. Bound functions (see `detachableClient`)
   // so consumers can lift methods off `nostr` without losing `this`.
   const nostrValue = useMemo(
     () => {

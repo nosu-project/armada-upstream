@@ -559,7 +559,7 @@ const StageReactionFloater = memo(function StageReactionFloater({
 function StageReactions({ containerRef }: { containerRef: React.RefObject<HTMLElement | null> }) {
   const { reactions } = useCallSignals();
   // A ref, not state, so a new reaction gets its spawn in THIS render (state
-  // skipped its pop-in frame). The cached object keeps the floater memo intact.
+  // would skip its pop-in frame). The cached object keeps the floater memo intact.
   const spawns = useRef(new Map<string, ReactionSpawn>());
 
   // Drop aged-out spawns so the map stays bounded.
@@ -617,7 +617,7 @@ function VideoTile({
     ? "bottom-[calc(4rem+var(--safe-area-inset-bottom,env(safe-area-inset-bottom,0px)))]"
     : undefined;
   // Avatar unless there's a LIVE track: turning video off mutes the track
-  // before the publication clears, which rendered a black tile.
+  // before the publication clears, which would render a black tile.
   const hasVideo = Boolean(trackRef.publication?.track) && !trackRef.publication?.isMuted;
   const isLocal = participant.isLocal;
   const { streamingPubkeys } = useVoiceActivity();

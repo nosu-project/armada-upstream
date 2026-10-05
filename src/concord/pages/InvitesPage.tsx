@@ -161,7 +161,6 @@ function StatPopover({
   icon: LucideIcon;
   label: string;
   hint?: string;
-  /** Panel width. */
   width: string;
   className?: string;
   children: React.ReactNode;

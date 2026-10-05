@@ -1,23 +1,17 @@
 /**
- * Background notifications as `NappSubscription`s — the one shape both of
- * Armada's closed-app push paths speak.
+ * Background notifications as `NappSubscription`s — the one shape both
+ * closed-app push paths speak. They differ ONLY in the hand-over:
  *
- * There are two ways to be woken while Armada is closed in a browser-like
- * runtime, and they differ ONLY in how the subscriptions are handed over:
- *
- *   - Inside Tenna, Armada is an nsite and `window.napp.push` exists
- *     (tenna/NAPP.md). `set()` goes to the host, which holds the relays itself
- *     (Android) or hands the filters to a push service (iOS).
+ *   - Inside Tenna (Armada as an nsite), `window.napp.push.set()` goes to the
+ *     host (tenna/NAPP.md), which holds the relays itself (Android) or hands
+ *     the filters to a push service (iOS).
  *   - In a browser, the same list goes to a nostr-push2 gateway (`nostrPush2.ts`)
- *     together with a Web Push endpoint.
+ *     with a Web Push endpoint.
  *
- * Either way the service worker receives the same `napp.push.payload` in a
- * `push` event — the event itself, or its id and where to fetch it — and
- * `src/sw/worker.ts` presents it through one code path. Nothing here knows which
- * transport it is feeding beyond the limits it must pack into.
- *
- * The watch set itself is `buildPushSubscriptions` (`pushSubscriptions.ts`),
- * shared with the native paths; this module only reshapes it.
+ * Either way the service worker gets the same `napp.push.payload` (the event,
+ * or its id and where to fetch it) and `src/sw/worker.ts` presents it through
+ * one path. This module only reshapes `buildPushSubscriptions`'s watch set
+ * (shared with the native paths) into each transport's limits.
  */
 
 import type { NostrEvent, NostrFilter } from "@nostrify/types";
@@ -119,8 +113,7 @@ export type PushWatch = Pick<PushSubscriptionSpec, "id" | "relays" | "filter">;
  * `set` REPLACES, so handing over a snapshot whose group list has not loaded
  * yet would silently unsubscribe every group. A plane that is not ready keeps
  * whatever was last handed over for it, alongside anything new; a ready plane
- * is exactly what the snapshot says. This is the prune rule the per-record
- * gateway enforced, restated for a transport that only takes whole lists.
+ * is exactly what the snapshot says.
  */
 export function carryForwardWatches(
   current: PushWatch[],

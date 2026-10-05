@@ -103,7 +103,7 @@ export function useBotManifests(
     queryFn: async ({ signal }) => {
       const asked = new Set(members);
       // Merge the local cache (what the Bot pill reads) with the network, asking
-      // the network only about uncached members — re-sweeping every kind 0 was the
+      // the network only about uncached members — re-sweeping every kind 0 would be the
       // largest network cost of reading a channel.
       const store = await eventStore;
       const cached = (await store.query([{ kinds: [0], authors: members }])) as NostrEvent[];

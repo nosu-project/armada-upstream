@@ -55,7 +55,6 @@ export function capRelays(relays: string[], cap = MAX_COMMUNITY_RELAYS): string[
   return out;
 }
 
-/** Byte length of a string as UTF-8. */
 export function utf8Len(s: string): number {
   return new TextEncoder().encode(s).length;
 }

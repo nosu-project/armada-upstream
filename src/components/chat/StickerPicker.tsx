@@ -43,7 +43,6 @@ export function StickerPicker({ customEmojis, onSelect, height = 350, autoFocus 
 
   return (
     <div className="flex flex-col" style={{ height }}>
-      {/* Search input */}
       <div className="px-3 pt-3 pb-2 shrink-0">
         <div className="relative">
           <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-4 text-muted-foreground pointer-events-none" />
@@ -66,7 +65,6 @@ export function StickerPicker({ customEmojis, onSelect, height = 350, autoFocus 
         </div>
       </div>
 
-      {/* Results */}
       <ScrollArea className="flex-1 min-h-0">
         {filtered.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">

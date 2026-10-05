@@ -110,7 +110,7 @@ export function demandProfiles(pubkeys: string[], context: ProfileSyncContext): 
 /**
  * Backoff before re-asking an empty pubkey: geometric, capped at
  * {@link MISS_RETRY_MAX_MS}. Demand lives as long as a mounted row, so a flat
- * retry meant a REQ per minute forever per profile-less author. New hint
+ * retry would mean a REQ per minute forever per profile-less author. New hint
  * relays still re-ask misses immediately.
  */
 export function _missRetryDelayMs(attempts: number): number {
@@ -245,7 +245,7 @@ async function runProfileSync(signal: AbortSignal): Promise<void> {
   }
 
   // Keep and stamp what arrived even if torn down (re-fetching after scroll
-  // cost megabytes of kind 0s on phones).
+  // costs megabytes of kind 0s on phones).
   await Promise.all(
     [...newest.values()].map((ev) => store.event(ev).catch(() => undefined)),
   );

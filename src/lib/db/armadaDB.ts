@@ -28,7 +28,6 @@ export const ARMADA_TENANTS = {
   /** Concord wraps parked by the native service for WebView decryption. */
   c2Park: "c2park",
   /**
-  /**
    * Native service handoff queue awaiting wire ingest; drained by `WireSync`.
    * Mirrors `ArmadaDb.TENANT_SERVICE_QUEUE` in Kotlin.
    */

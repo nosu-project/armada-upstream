@@ -471,7 +471,7 @@ const ChatMessageInner = memo(function ChatMessageInner({
   );
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [sheetOpen, setSheetOpen] = useState(false);
-  // Built on first long-press, not per row (it was the heaviest per-row mount).
+  // Built on first long-press, not per row (it is the heaviest per-row mount).
   // Latched so closing still animates.
   const [sheetBuilt, setSheetBuilt] = useState(false);
   if (sheetOpen && !sheetBuilt) setSheetBuilt(true);
@@ -1042,5 +1042,5 @@ const ChatMessageInner = memo(function ChatMessageInner({
   );
 });
 
-/** Exported directly: a wrapper re-ran for every row on every timeline render. */
+/** Exported directly: a wrapper would re-run for every row on every timeline render. */
 export const ChatMessage = ChatMessageInner;

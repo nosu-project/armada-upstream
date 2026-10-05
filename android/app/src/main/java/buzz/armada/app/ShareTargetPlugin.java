@@ -65,8 +65,8 @@ public class ShareTargetPlugin extends Plugin {
      * conversation shortcuts too (for the Android 11+ conversation-space
      * notification look) but deliberately does not set this: its trigger is an
      * INCOMING message, which is the wrong signal for "where do I share to" —
-     * it suggested whichever rooms happened to notify rather than the ones the
-     * user writes in. Ranking suggestions is `useShareShortcuts`'s job, and
+     * it would suggest whichever rooms happened to notify rather than the ones
+     * the user writes in. Ranking suggestions is `useShareShortcuts`'s job, and
      * this plugin is the single writer of the share-target set.
      */
     static final String CATEGORY_SHARE_TARGET = "buzz.armada.app.category.SHARE_TARGET";
@@ -78,12 +78,9 @@ public class ShareTargetPlugin extends Plugin {
      * Rank floor for the notification service's conversation shortcuts.
      *
      * <p>Rank ASCENDS — 0 is best — and {@code pushDynamicShortcut} evicts the
-     * lowest-ranked shortcut when the per-activity list is full. The service
-     * used to set no rank at all, so every notified room landed at the default
-     * rank 0 and evicted the ranked share targets below it: over a day of
-     * notifications the suggestion list was guaranteed to decay into whichever
-     * rooms had most recently pushed, which is exactly the "random communities
-     * instead of my pinned DMs" this band exists to prevent.
+     * lowest-ranked shortcut when the per-activity list is full. Unranked
+     * notification shortcuts would sit at rank 0 and evict the share targets,
+     * decaying the suggestions into whichever rooms most recently pushed.
      *
      * <p>Share targets occupy 0..n-1; the service starts here, so an eviction
      * always takes a notification shortcut before a suggestion. That is the
@@ -200,12 +197,10 @@ public class ShareTargetPlugin extends Plugin {
      * How many share suggestions JS should send, given the device's real
      * shortcut budget. Returns {@code {max}}.
      *
-     * <p>The publisher used to assume 8. The actual per-activity cap is a
-     * device property — commonly 15, but 5 on plenty of OEM builds — and
-     * publishing past it silently evicts, which with the old rank collision
-     * meant the survivors were arbitrary. Reserving
+     * <p>The per-activity cap is a device property — commonly 15, but 5 on
+     * plenty of OEM builds — and publishing past it silently evicts. Reserves
      * {@link #SERVICE_RESERVED_SLOTS} for the notification service, but never
-     * dropping below four, since four is roughly what a sheet displays anyway.
+     * drops below four, roughly what a sheet displays anyway.
      */
     @PluginMethod
     public void getMaxShortcuts(PluginCall call) {

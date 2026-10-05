@@ -158,7 +158,7 @@ export function useChannelGitActivity(
     return received;
   }, [eventStore, normalized, nostr, queryClient, queryKey]);
   // Coalesce the wire's invalidations: a pull rings once per BATCH, and re-running
-  // the queryFn each time (67 `main` queries on one switch) starved the chat read.
+  // the queryFn each time (67 `main` queries on one switch) starves the chat read.
   const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => {
     if (refreshTimerRef.current !== null) clearTimeout(refreshTimerRef.current);

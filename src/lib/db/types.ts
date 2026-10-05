@@ -92,8 +92,8 @@ export interface ArmadaKVListOptions {
  *  - {@link TERM_NAMESPACES_RESERVED} namespaces are directives, not terms.
  *
  * Bound to the TENANT, not per write, because the Android service and iOS
- * extension write `dm17:<self>` through their own engines (`TermPolicy.kt`,
- * `TermPolicy.swift`) and must be covered automatically.
+ * extension write `dm17:<self>` through their own engines (`TermPolicies.kt`,
+ * `TermPolicies.swift`) and must be covered automatically.
  */
 export type TermPolicy = (rumor: NostrRumor, tenantId: string) => string[];
 

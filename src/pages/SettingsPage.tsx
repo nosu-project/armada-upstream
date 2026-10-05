@@ -268,45 +268,39 @@ export function SettingsPage({
     updateConfig((current) => ({ ...current, useAppDmRelays: value }));
   };
 
-  /** Toggle this client's use of the user's own DM relays. Local-only. */
   const setUseOwnDmRelays = (value: boolean) => {
     updateConfig((current) => ({ ...current, useOwnDmRelays: value }));
   };
 
-  /** Toggle app relays in the general pool (off is a foot-gun). Local-only. */
+  /** Off is a foot-gun: with no other relays the pool is empty. */
   const setUseAppRelays = (value: boolean) => {
     updateConfig((current) => ({ ...current, useAppRelays: value }));
   };
 
-  /** Toggle this client's use of the user's NIP-65 relays. Local-only (`relayMetadata` is a read-only mirror). */
+  /** Publishes nothing: `relayMetadata` is a read-only mirror of kind 10002. */
   const setUseUserRelays = (value: boolean) => {
     updateConfig((current) => ({ ...current, useUserRelays: value }));
   };
 
-  /** Toggle DM typing indicators (off by default). Local-only. */
   const setDmTypingIndicators = (value: boolean) => {
     updateConfig((current) => ({ ...current, dmTypingIndicators: value }));
   };
 
-  /**
-   * Disable DMs entirely: every standing DM subscription gets an empty relay
-   * set. Local-only; deletes no conversations.
-   */
+  /** Empties every DM subscription's relay set; deletes no conversations and keeps the 10050. */
   const setDmsDisabled = (value: boolean) => {
     updateConfig((current) => ({ ...current, dmsDisabled: value }));
   };
 
-  /** Toggle the unknown-sender DM request tier. Local-only; drops nothing. */
+  /** Display only: hiding the request tier drops no messages. */
   const setShowDmRequests = (value: boolean) => {
     updateConfig((current) => ({ ...current, showDmRequests: value }));
   };
 
-  /** Toggle the rail's automatic recent-unread-DM strip. Local-only. */
   const setShowRecentRailDms = (value: boolean) => {
     updateConfig((current) => ({ ...current, showRecentRailDms: value }));
   };
 
-  /** Toggle bypassing Discover's curated allow-list (foot-gun). Local-only. */
+  /** Bypasses Discover's curated allow-list (a foot-gun). */
   const setDiscoverAllContent = (value: boolean) => {
     updateConfig((current) => ({ ...current, discoverAllContent: value }));
   };
@@ -340,7 +334,6 @@ export function SettingsPage({
     updateConfig((current) => ({ ...current, useAppBlossomServers: value }));
   };
 
-  /** Toggle tracking-parameter stripping (send and render). Synced. */
   const setStripTrackingParams = (value: boolean) => {
     updateConfig((current) => ({ ...current, stripTrackingParams: value }));
   };

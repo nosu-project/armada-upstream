@@ -10,7 +10,7 @@ export interface EmojiMartCustomCategory {
 /**
  * Reconcile emoji-mart's module-global `Data.originalCategories` with the
  * custom categories for a new Picker: emoji-mart only fills it on the FIRST
- * init, so packs added mid-session never got a section. Guarded in case a
+ * init, so packs added mid-session would get no section. Guarded in case a
  * future emoji-mart drops the field.
  */
 export function syncEmojiMartCategories(categories: EmojiMartCustomCategory[]): void {

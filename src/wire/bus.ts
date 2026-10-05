@@ -1,5 +1,5 @@
 /**
- * The wire's change-notification bus: ingested events land in IndexedDB first,
+ * The wire's change-notification bus: ingested events land in ArmadaDB first,
  * then the bus tells hooks WHICH conversation changed so they re-read the
  * store (stores are the source of truth; the bus is a doorbell). Scopes:
  *   - `nip29:<groupId>`        — a NIP-29 group timeline

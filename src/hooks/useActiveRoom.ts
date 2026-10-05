@@ -29,7 +29,7 @@ export function useActiveRoom(...roomKeys: Array<string | string[] | undefined>)
   const covered = usePageCovered();
 
   // Unmount-only cleanup, separate with `[]` deps: clearing on every `sig` change
-  // briefly left no active keys and let notifications through.
+  // would briefly leave no active keys and let notifications through.
   useEffect(() => {
     return () => {
       setWebActiveRooms([]);

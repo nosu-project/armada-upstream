@@ -56,24 +56,6 @@ import {
 import type { DmVoiceContext } from "@/contexts/CallContext";
 import type { NostrEvent } from "@nostrify/nostrify";
 
-/**
- * DM call signaling (wire scheme in `src/lib/dmCall.ts`).
- *
- * - Incoming offers ring only for KNOWN DM peers (`useKnownDmPeers`, muted
- *   excluded): the author controls name/avatar, so strangers must not be able
- *   to ring the phone. Their offers are dropped silently.
- * - Receipts ("ringing"/"busy") are auto-signed, so only nsec logins send them
- *   (never NIP-07/NIP-46, which may prompt), deduped per call id and rate-limited per peer.
- * - Busy is sent only from a DM call; a voice channel isn't busy, since "busy"
- *   would end the ring on all our other devices.
- * - Collisions (both dialing) settle via `dmCallCollisionWinner`: the loser
- *   joins the winner's room; the winner falls back to the loser's call if no
- *   answer/ringing arrives within {@link DM_CALL_COLLISION_FALLBACK_MS}.
- * - "end" is both cancel and hangup, so a 1:1 call ends when either leaves.
- *
- * Must be mounted inside CallProvider and the router (Android Answer deep-links
- * `/dm/<peer>?call=<id>`; the URL names a call and authorizes nothing).
- */
 /** Minimum gap between two receipts to one peer, so a burst of offers can't farm signatures. */
 const RECEIPT_PEER_INTERVAL_MS = 3_000;
 const RECEIPT_MEMORY = 256;
@@ -104,6 +86,24 @@ function rememberOwnCallId(ids: Set<string>, callId: string): void {
   }
 }
 
+/**
+ * DM call signaling (wire scheme in `src/lib/dmCall.ts`).
+ *
+ * - Incoming offers ring only for KNOWN DM peers (`useKnownDmPeers`, muted
+ *   excluded): the author controls name/avatar, so strangers must not be able
+ *   to ring the phone. Their offers are dropped silently.
+ * - Receipts ("ringing"/"busy") are auto-signed, so only nsec logins send them
+ *   (never NIP-07/NIP-46, which may prompt), deduped per call id and rate-limited per peer.
+ * - Busy is sent only from a DM call; a voice channel isn't busy, since "busy"
+ *   would end the ring on all our other devices.
+ * - Collisions (both dialing) settle via `dmCallCollisionWinner`: the loser
+ *   joins the winner's room; the winner falls back to the loser's call if no
+ *   answer/ringing arrives within {@link DM_CALL_COLLISION_FALLBACK_MS}.
+ * - "end" is both cancel and hangup, so a 1:1 call ends when either leaves.
+ *
+ * Must be mounted inside CallProvider and the router (Android Answer deep-links
+ * `/dm/<peer>?call=<id>`; the URL names a call and authorizes nothing).
+ */
 export function DmCallProvider({ children }: { children: React.ReactNode }) {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();

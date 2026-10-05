@@ -58,8 +58,6 @@ import {
 } from "@/lib/webPushSupport";
 
 /**
- * useNostrPush
- *
  * Closed-app notifications for the web build, over whichever of two
  * transports this page has:
  *
@@ -67,14 +65,10 @@ import {
  *     The host holds the subscriptions and wakes the worker itself.
  *   - Web Push through a nostr-push2 gateway (`nostrPush2.ts`) everywhere else.
  *
- * Both take the same `NappSubscription[]` and both deliver the same
- * `napp.push.payload` to `sw.js`, which presents it through one code path. So
- * the only thing that differs here is the {@link PushTarget}: everything else —
- * the watch set, the worker's sealed decrypt config, the kill switch, the
- * account-exit ordering — is shared.
- *
- * The watch set is `usePushWatchSet`, the same one the Android service and the
- * iOS APNs controller use. Exposes the shared `UsePushNotificationsReturn`.
+ * Both take the same `NappSubscription[]` and deliver the same
+ * `napp.push.payload` to `sw.js`, so only the {@link PushTarget} differs: the
+ * watch set (`usePushWatchSet`, shared with Android and iOS), the sealed decrypt
+ * config, the kill switch and the account-exit ordering are shared.
  */
 
 /**
@@ -442,14 +436,10 @@ export function useNostrPush(): UsePushNotificationsReturn {
     queueSwConfig,
   ]);
 
-  // Keep the service worker's push config current — the DM policy + known set,
-  // the decrypt key for nsec logins, and the per-channel Concord stream keys.
-  // Cleared whenever push is off or logged out, so no key lingers past a
-  // session that can use it.
-  //
-  // Display data is deliberately NOT sealed here. The worker reads names,
-  // avatars, community icons and channel titles out of ArmadaDB at push time
-  // (`pushRuntime.ts`).
+  // Keep the service worker's push config current (DM policy + known set, nsec decrypt
+  // key, per-channel Concord stream keys); cleared whenever push is off or logged out so
+  // no key outlives its session. Display data is deliberately NOT sealed: the worker
+  // reads it from ArmadaDB at push time (`pushRuntime.ts`).
   useEffect(() => {
     // Clear only in states that MEAN no session should hold a key: logged out,
     // unsupported runtime, or the user's push intent turned off. `enabled` is

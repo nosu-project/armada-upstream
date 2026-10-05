@@ -213,7 +213,6 @@ export function forgetOutgoing(rumorId: string): void {
   else bump();
 }
 
-/** The user discarded it. */
 export const discardOutgoing = forgetOutgoing;
 
 /**

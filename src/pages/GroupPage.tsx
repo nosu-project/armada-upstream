@@ -285,8 +285,9 @@ export function GroupPage() {
     );
   }, [relayUrl, groupId, updateConfig]);
 
-  // Visiting deliberately does NOT add the server to the rail: passive mounts
-  // (notifications, restores, back-nav) silently undid removals. The rail is
+  // Visiting deliberately does NOT add the server to the rail or publish an
+  // `add-server`: passive mounts (notifications, restores, back-nav) would undo
+  // removals and race cold pools into rebuilding lists from empty. The rail is
   // exactly the 10009 list, changed only by explicit action.
 
   const group = details?.group;
@@ -309,8 +310,6 @@ export function GroupPage() {
   // Membership is TRI-STATE: while unresolved, show a skeleton instead of the
   // join prompt (which would flash at real members).
   const membershipPending = Boolean(user) && !isMember && (isLoading || membershipLoading);
-  // Deliberately NO automatic `add-server` publish: an auto-sync here fired
-  // on passive visits and raced cold pools into rebuilding lists from empty.
 
   if (!relayUrl || !groupId) {
     return <Navigate to="/" replace />;

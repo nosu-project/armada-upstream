@@ -279,7 +279,7 @@ export const PLAUSIBLE_ENDPOINT: string = (config("PLAUSIBLE_ENDPOINT") ?? "").t
 /**
  * nostr-push gateway: `NOSTR_PUSH_PUBKEY` (npub or hex, `#p`-tagged on
  * kind-25742 RPCs) and `NOSTR_PUSH_RELAYS` (rendezvous relays). Both empty
- * ⇒ no web push.
+ * ⇒ no iOS APNs push.
  */
 function decodePushPubkey(raw: string): string | undefined {
   const value = raw.trim();
@@ -309,19 +309,12 @@ export function nostrPushConfigured(): boolean {
 }
 
 /**
- * nostr-push2, the gateway browser Web Push goes through (`nostrPush2.ts`).
- * The legacy `NOSTR_PUSH_*` pair above now serves only the iOS app's APNs
- * path, which still speaks the older protocol.
- *
- * Neither value is a secret — both end up in the bundle either way — so the
- * public service is the default, and a build variable only overrides it:
- *
- * - `NOSTR_PUSH2_PUBKEY` — the service's pubkey (npub or hex).
- * - `NOSTR_PUSH2_RELAYS` — relays its kind-25742 RPC is carried over
- *   (comma-separated). They must be relays the service itself reads.
- *
- * An empty variable counts as unset, since CI passes an unprovisioned secret
- * as the empty string. Inside Tenna, `window.napp.push` needs neither.
+ * nostr-push2, the gateway browser Web Push goes through (`nostrPush2.ts`);
+ * the legacy `NOSTR_PUSH_*` pair above serves only iOS APNs. Neither value is
+ * secret, so the public service is the default and `NOSTR_PUSH2_PUBKEY` (npub
+ * or hex) / `NOSTR_PUSH2_RELAYS` (relays the service itself reads) override it.
+ * Empty counts as unset: CI passes an unprovisioned secret as "". Inside
+ * Tenna, `window.napp.push` needs neither.
  */
 const DEFAULT_NOSTR_PUSH2_PUBKEY = "4c812266b5b8039b4bd98cf2e6c77dcbcae5ea9d9f7d591933c7e4e9b6e174c7";
 const DEFAULT_NOSTR_PUSH2_RELAYS = "wss://relay.ditto.pub,wss://relay.dreamith.to";

@@ -3,7 +3,7 @@ import { createContext } from "react";
 /**
  * The ACTIVE call's live activity sets, split out of {@link CallContextType}
  * because they change several times a second; merged, every `useCall()` consumer
- * re-rendered per frame. Setters stay on `CallContext` (reference-stable).
+ * would re-render per frame. Setters stay on `CallContext` (reference-stable).
  */
 export interface VoiceActivityContextType {
   /** Pubkeys speaking in the ACTIVE call (unverified Concord identities excluded). Empty when not in a call. */

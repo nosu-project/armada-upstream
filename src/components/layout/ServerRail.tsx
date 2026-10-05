@@ -545,7 +545,7 @@ const ServerButton = memo(function ServerButton({
   const triggerClass = "group relative flex items-center justify-center shrink-0 touch-none";
 
   const dragClass = cn(
-    // No grab cursor on hover: it suggested HTML5 dragging and confused people.
+    // No grab cursor on hover: it suggests HTML5 dragging.
     dragging && "cursor-grabbing",
     // Lock touch-action mid-reorder so the browser can't steal the gesture as a pan.
     reordering && "touch-none",
@@ -1222,8 +1222,8 @@ function useSideBySideLayout(): boolean {
 
 // Drill-down rail persistence: rendered ONCE by MainLayout's shell rail into
 // this detached container, and each page's `<ServerRail />` slot ADOPTS the
-// DOM node on mount. Rebuilding the rail on every section switch made the
-// first tap after a switch feel dead; moving a DOM node is invisible to React.
+// DOM node on mount. Rebuilding the rail on every section switch would make
+// the first tap after a switch feel dead; moving a DOM node is invisible to React.
 let railPortalNode: HTMLDivElement | null = null;
 function getRailPortalNode(): HTMLDivElement {
   if (!railPortalNode) {

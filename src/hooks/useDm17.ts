@@ -318,14 +318,14 @@ async function openAndStore(ctx: SyncCtx, wraps: NostrEvent[], interactive: bool
   return true;
 }
 
+let liveDm17Pass: Promise<"consumed" | "empty" | "deferred"> | undefined;
+
 /**
  * Decrypt wraps the wire already buffered from its live sub — no relay round trip.
  * "empty" (nothing buffered) is the only result that should trigger a forced fetch;
  * "deferred" re-buffers for a later retry. Concurrent callers coalesce because the drain
  * is destructive. Interactive surfaces only.
  */
-let liveDm17Pass: Promise<"consumed" | "empty" | "deferred"> | undefined;
-
 export async function openLiveDm17Wraps(
   ctx: SyncCtx,
   opts?: { interactive?: boolean },
@@ -407,11 +407,6 @@ export async function syncDm17Inbox(ctx: SyncCtx, opts?: SyncOpts): Promise<bool
   }
 }
 
-/**
- * Per-relay query results. Not `group(relays).query`: NPool aborts the fan-out 300ms
- * after the first EOSE, cutting off auth-gated relays mid NIP-42 handshake. `NRelay1.query`
- * retries after AUTH, bounded only by `signal`.
- */
 export interface Dm17RelayPage {
   url: string;
   events: NostrEvent[];
@@ -424,6 +419,11 @@ export interface Dm17RelayQueryResult {
   failed: string[];
 }
 
+/**
+ * Per-relay query results. Not `group(relays).query`: NPool aborts the fan-out 300ms
+ * after the first EOSE, cutting off auth-gated relays mid NIP-42 handshake. `NRelay1.query`
+ * retries after AUTH, bounded only by `signal`.
+ */
 export async function queryWrapsPerRelay(
   nostr: NostrPool,
   relays: string[],
@@ -771,8 +771,8 @@ export function useDm17Thread(
 
   // Single source for whether NIP-17 can contribute rows (skeleton gate + query).
   const queryEnabled = !!self && peers.length > 0 && support;
-  // Which key's snapshot prewarm has settled. Readiness is derived at render time — a
-  // flag stored from an effect lagged one render and let the kind-4 half paint alone.
+  // Which key's snapshot prewarm has settled. Derived at render time: a flag set from an
+  // effect lags one render and lets the kind-4 half paint alone.
   const prewarmKey = useMemo(() => JSON.stringify(queryKey), [queryKey]);
   const [prewarmSettledKey, setPrewarmSettledKey] = useState<string | null>(null);
 
@@ -950,7 +950,7 @@ export function useDm17Thread(
   }, []);
 
   // Retire confirmed optimistic rows only once the store query contains them; dropping at
-  // publish time blinked the row until the debounced repaint.
+  // publish time blinks the row until the debounced repaint.
   useEffect(() => {
     const rows = query.data;
     if (!rows || rows.length === 0) return;
@@ -991,7 +991,6 @@ export function useDm17Thread(
       // The NIP-40 deadline is copied onto the seal and repeated on the wrap for relays.
       const expiresAt = expirationOf(rumor.tags);
 
-      // Sequential seals: NIP-07 extensions reject concurrent signEvent calls.
       const outgoing: Array<{ wrap: NostrEvent; targets: string[] }> = [];
       for (const recipient of recipients) {
         const seal = await sealDmRumor(rumor, recipient, signer);

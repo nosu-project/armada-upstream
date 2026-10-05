@@ -477,7 +477,7 @@ export function setControlRoot(
 /**
  * Rehydrate a {@link Community} from an entry, verifying the owner commitment
  * (fails closed). `extraRelays` must NOT be app/platform relays: a relay with no
- * Concord wraps answers instantly empty and starves the real ones (issue #19).
+ * Concord wraps answers instantly empty and starves the real ones.
  */
 export function rehydrateCommunity(entry: CommunityListEntry, extraRelays: string[] = []): Community | undefined {
   const jm = entry.current;

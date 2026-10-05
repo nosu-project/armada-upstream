@@ -51,7 +51,6 @@ export function RequestToVanishDialog({ open, onOpenChange }: RequestToVanishDia
     setChecked(new Set());
   }, []);
 
-  // Reset when dialog closes.
   useEffect(() => {
     if (!open) resetState();
   }, [open, resetState]);
@@ -81,7 +80,6 @@ export function RequestToVanishDialog({ open, onOpenChange }: RequestToVanishDia
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>
       <AlertDialogContent className="max-w-[400px] rounded-2xl p-6 gap-0 border-destructive/40">
-        {/* Title */}
         <div className="mb-4">
           <AlertDialogTitle className="text-base font-bold flex items-center gap-2">
             <AlertTriangle className="size-5 text-destructive shrink-0" />
@@ -92,7 +90,6 @@ export function RequestToVanishDialog({ open, onOpenChange }: RequestToVanishDia
           </AlertDialogDescription>
         </div>
 
-        {/* Checkbox list */}
         <div className="space-y-3 mb-5">
           {DELETION_ITEMS.map((item) => (
             <label
@@ -109,13 +106,11 @@ export function RequestToVanishDialog({ open, onOpenChange }: RequestToVanishDia
           ))}
         </div>
 
-        {/* Warning */}
         <p className="text-xs text-muted-foreground leading-relaxed mb-5">
           This action is <span className="font-semibold text-destructive">irreversible</span>.
           Your account cannot be recovered after deletion. You will be logged out immediately.
         </p>
 
-        {/* Actions */}
         <div className="flex gap-3">
           <Button
             variant="outline"

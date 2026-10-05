@@ -31,15 +31,10 @@ const BUNDLE_ETAG = "etag";
 /**
  * The shell version that was running when the active bundle was downloaded.
  *
- * A downloaded bundle should win over the one baked into the shell only while
- * it is at least as new as that shipped copy. The bundle carries no version of
- * its own (it is content addressed), but the shell that fetched it does, and a
- * downloaded bundle can only be newer than a given shell's shipped bundle if it
- * was fetched by that shell or a later one. Recording the shell version at
- * download time is what lets a later shell — one whose `flatpak update` (or
- * AppImage/NSIS self-update) just brought a newer shipped bundle — recognize a
- * stale download and fall back to its own, rather than serving month-old web
- * assets under a freshly upgraded shell.
+ * A download can only be newer than a shell's shipped bundle if that shell or
+ * a later one fetched it, so this lets an upgraded shell (`flatpak update`,
+ * AppImage/NSIS self-update) recognize a stale download and serve its own
+ * shipped copy instead.
  */
 const BUNDLE_SHELL_VERSION = "shell-version";
 /**
@@ -110,7 +105,7 @@ function bundleVersion(distRoot) {
  * the download (or the download predates version stamping), the shipped bundle
  * that arrived WITH this shell is at least as new, so it is served instead and
  * the updater re-pulls whatever the site now has. Without a `shellVersion` the
- * pointer is honoured unconditionally, which is the old behaviour.
+ * pointer is honoured unconditionally.
  */
 function resolveDistRoot({ bundlesDir, shippedDist, shellVersion }) {
   const shipped = { root: shippedDist, id: null, source: "shipped" };
@@ -137,14 +132,10 @@ function resolveDistRoot({ bundlesDir, shippedDist, shellVersion }) {
 
   const current = versionOrdinal(shellVersion);
 
-  // Authoritative freshness check, ahead of the stamp below: a downloaded
-  // bundle whose OWN version is older than the running shell is never served,
-  // however recently it was fetched. The stamp records WHEN a download was made
-  // (the shell running at the time), not WHAT it contains, so a shell that has
-  // run ahead of the site re-fetches the site's older bundle and re-stamps it
-  // as its own — the stamp then wrongly clears it. Comparing the bundle's own
-  // version against the shell closes that: an upgrade that outran the web
-  // deploy keeps serving the shipped copy until the site actually catches up.
+  // Authoritative, ahead of the stamp below: a bundle whose OWN version is
+  // older than the running shell is never served. The stamp records WHEN a
+  // download was made, not WHAT it contains, so a shell that outran the web
+  // deploy would re-stamp the site's older bundle as its own.
   if (current !== null) {
     const downloaded = versionOrdinal(bundleVersion(root));
     if (downloaded !== null && downloaded < current) return shipped;

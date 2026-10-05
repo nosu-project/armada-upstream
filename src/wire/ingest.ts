@@ -66,7 +66,7 @@ function tagValue(ev: NostrEvent, name: string): string | undefined {
 /**
  * Plaintext events ingested this session. Quiet-rotation overlap and relay
  * fan-out re-deliver the same events (72–93% duplicates measured), and each
- * copy cost a store round-trip plus a scope emission driving re-renders.
+ * copy costs a store round-trip plus a scope emission driving re-renders.
  * Bounded; may only suppress writes the store would reject anyway (see
  * {@link plainSeenKey}).
  */

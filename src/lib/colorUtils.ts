@@ -144,12 +144,8 @@ function overlayHsl(baseHsl: string, overlayHslStr: string, alpha: number): stri
 }
 
 /**
- * Derive all Tailwind theme tokens from 3 core colors. The Tailwind
+ * Derive all Tailwind theme tokens from 3 core HSL strings. The Tailwind
  * "accent" token mirrors "primary"; "success" stays a fixed green.
- *
- * @param background - Background HSL string
- * @param text       - Text/foreground HSL string
- * @param primary    - Primary accent HSL string (also used as Tailwind accent)
  */
 export function deriveTokensFromCore(
   background: string,
@@ -186,8 +182,8 @@ export function deriveTokensFromCore(
   const accent2 = dark ? "180 90% 55%" : "190 85% 40%";
 
   // Chrome planes (top bar, rails, sidebars). Dark: composite black/30, /40 and
-  // white/10 over the background (pixel-identical to the original look).
-  // Light: a black overlay looks muddy, so darken with a boosted theme hue.
+  // white/10 over the background. Light: a black overlay looks muddy, so darken
+  // with a boosted theme hue.
   let chrome: string;
   let chromeDeep: string;
   let chromeDivider: string;

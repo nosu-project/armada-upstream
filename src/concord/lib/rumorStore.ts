@@ -372,7 +372,6 @@ interface FirstSeenSnapshot {
 const firstSeenPending = new Map<string, Map<string, number>>();
 
 /**
-/**
  * {@link queryChannelFirstSeen} behind a persisted, merge-only snapshot: later reads
  * scan only past the watermark plus `firstSeenPending`. First-seen only moves earlier.
  */
@@ -743,7 +742,6 @@ function writeStored(
 }
 
 /**
-/**
  * Persist opened events for one plane (chat uses {@link writeRumors}). Resolves
  * to whether it committed; never rejects.
  *
@@ -781,7 +779,7 @@ export function writeOpened(
  * Persist opened chat rumors, then (after commit) ring `c2:<channel>` on the wire
  * bus so every live timeline re-reads, even if the triggering query was aborted.
  * Resolves to whether it committed — parked-wrap drains only delete a wrap once
- * stored (issue #19). Never rejects.
+ * stored. Never rejects.
  */
 export function writeRumors(
   communityIdHex: string,
@@ -883,7 +881,7 @@ export async function sweepExpiredCommunityRumors(
 // Pending raw-wrap holding store. The native background service can't decrypt
 // Concord wraps, so it parks them in a separate tenant; WebView plane hooks
 // {@link peekPendingWraps}, decrypt, and {@link ackPendingWraps} only what decoded.
-// A wrap is never deleted before its rumor is stored (issue #19); stragglers are
+// A wrap is never deleted before its rumor is stored; stragglers are
 // age-pruned. Indexed by author (stream address).
 //
 // The tenant stores rumors (no `sig`), so signatures are kept in KV and reattached

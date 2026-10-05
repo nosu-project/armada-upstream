@@ -282,8 +282,7 @@ class SqliteArmadaDb(
      * The path for a rumor that can't be staged into its burst's batch (see
      * [needsOwnStatement]), which is every replaceable, addressable or deletion
      * rumor and nothing else. Those are a small minority of a sync and each has
-     * to see the rows before it, so they keep the row-per-statement shape every
-     * write used to have.
+     * to see the rows before it, so they keep the row-per-statement shape.
      *
      * Folding the rowid lookup into the INSERT with `RETURNING` would make this
      * one statement rather than two, and measured 2.7× SLOWER: an INSERT that
@@ -330,7 +329,7 @@ class SqliteArmadaDb(
      * be handed the same one; the bucket spans tenants, since the rowid is
      * global.
      *
-     * [batch] is what keeps that true now that a burst's rows are written
+     * [batch] is what keeps that true while a burst's rows are written
      * together: rowids reserved but not yet inserted are invisible to the
      * lookup, so two rumors sharing a `created_at` in one burst would both be
      * handed the same one. It is consulted for exactly as long as the

@@ -77,7 +77,6 @@ export function ImageCropDialog({ open, imageSrc, aspect, title = 'Crop Image', 
           <DialogTitle className="text-base">{title}</DialogTitle>
         </DialogHeader>
 
-        {/* Cropper area */}
         <div className="relative bg-black" style={{ height: 320 }}>
           <Cropper
             image={imageSrc}
@@ -94,7 +93,6 @@ export function ImageCropDialog({ open, imageSrc, aspect, title = 'Crop Image', 
           />
         </div>
 
-        {/* Controls */}
         <div className="px-5 py-4 space-y-3 border-t">
           <div className="flex items-center gap-3">
             <ZoomOut className="size-4 text-muted-foreground shrink-0" />

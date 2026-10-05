@@ -321,16 +321,16 @@ export async function publishSignedPortableRecords(
   return { records: uniqueEvents.length, rejectedDeliveries };
 }
 
-/**
- * Phase one of a NIP-65 edit: mirror all portable state to the proposed write set. A divergent
- * creator-invite list needs explicit Setup Sync first.
- */
 export interface PortableMirrorResult {
   records: number;
   /** Stable iff every expected replaceable/addressable head is unchanged. */
   fingerprint: string;
 }
 
+/**
+ * Phase one of a NIP-65 edit: mirror all portable state to the proposed write set. A divergent
+ * creator-invite list needs explicit Setup Sync first.
+ */
 export async function mirrorPortableStateBeforeRelayChange(
   nostr: PortableNostr,
   user: NonNullable<ReturnType<typeof useCurrentUser>["user"]>,

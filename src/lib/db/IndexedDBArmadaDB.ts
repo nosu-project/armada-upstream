@@ -340,7 +340,7 @@ class IndexedDBRumorStore implements NRumorStore {
   /**
    * Wait for the term backfill only for reads that may hit the term index.
    * Must gate on any `search`, not `ParsedFilter.terms`: `distinct:` reads the
-   * index without a term of its own (the Kotlin/Swift ports got this wrong).
+   * index without a term of its own.
    */
   private async awaitTerms(filters: NostrFilter[]): Promise<void> {
     if (!this.backfill) return;

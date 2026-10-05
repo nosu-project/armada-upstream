@@ -56,7 +56,6 @@ export function useBitcoinSigner() {
       if (cancelled) return;
       if (probe()) clearInterval(interval);
     }, 250);
-    // Stop polling after 3 s.
     const stop = setTimeout(() => clearInterval(interval), 3000);
     return () => { cancelled = true; clearInterval(interval); clearTimeout(stop); };
   }, [loginType]);

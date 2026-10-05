@@ -1,7 +1,6 @@
 import { createContext } from "react";
 
 export interface MutedPubkeysResult {
-  /** The set of pubkeys the user has muted. */
   mutedPubkeys: Set<string>;
   /**
    * Whether the mute set is settled enough to filter on (false only during a cold

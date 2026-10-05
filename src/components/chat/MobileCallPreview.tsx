@@ -96,7 +96,7 @@ function loadWidth(): number {
   } catch {
     // ignore
   }
-  return 260; // sensible default (~old "medium")
+  return 260;
 }
 
 function loadPos(): Point | null {

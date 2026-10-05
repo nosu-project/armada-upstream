@@ -197,10 +197,10 @@ import { shortTimeAgo } from "@/lib/formatTime";
 import { authorsByRecency, threadSummary } from "@/components/chat/transport";
 import type { ChatMsg, MessageCalendar, MessagePoll, MessageReactions, MessageZaps, OnchainZapAnnouncement, SendStatus, ZapPayment } from "@/components/chat/transport";
 
-/** Stable empty replies array so a thread-less row keeps a constant prop. */
 /** How long a channel must stay open before it becomes the remembered one. */
 const LAST_CHANNEL_SETTLE_MS = 1500;
 
+/** Stable empty replies array so a thread-less row keeps a constant prop. */
 const EMPTY_REPLIES: ChatMsg[] = [];
 
 /** Shared empty feed, so a chat-presented channel keeps a stable reference. */
@@ -493,7 +493,6 @@ export const ChannelRow = memo(function ChannelRow({
 
   const hasUnread = Boolean(unread);
   const hasMention = Boolean(unread?.mention);
-  // A forum row offers no call UI.
   const callable = channel.view !== "forum";
   const occupied = callable && participants.length > 0;
   // A live call swaps the row's glyph for a speaker.
@@ -968,7 +967,7 @@ export function ConcordPage() {
   const routePane = route?.pane;
   const { user } = useCurrentUser();
   // Stable across navigations: it's passed to every message row, and
-  // `useNavigate`'s per-location identity re-rendered them all on each switch.
+  // `useNavigate` changes identity per location.
   const navigateTo = useStableNavigate();
   const isTouchDevice = useIsTouch();
   // Covered by Settings: read stamps below wait until it closes.
@@ -1001,7 +1000,6 @@ export function ConcordPage() {
   // private channels.
   const showChannelSkeleton = useDelayedFlag(!community || !folded || channels.length === 0);
 
-  // Categories derive from visible channels only (see channelCategory.ts).
   /**
    * Optimistic arrangement from a drop the fold hasn't confirmed yet (one signed
    * edition per moved channel), re-sorted like `channelsView`. Dropped when the
@@ -1021,6 +1019,7 @@ export function ConcordPage() {
     }
   }, [channels, pendingArrangement]);
 
+  // Categories derive from visible channels only (see channelCategory.ts).
   const { uncategorized: uncategorizedChannels, categories: channelCategories } = useMemo(
     () => groupChannelsByCategory(arrangedChannels, (c) => c.category),
     [arrangedChannels],
@@ -1066,7 +1065,6 @@ export function ConcordPage() {
     [community?.idHex, updateConfig],
   );
 
-  // Per-channel unread badges from the local rumor cache.
   const gitAttachmentsByChannel = useMemo(() => new Map(channels.map((candidate) => [
     candidate.idHex,
     channelGitRepositoryAttachments(folded?.channels.get(candidate.idHex)?.metadata ?? { name: candidate.name, private: candidate.isPrivate }),
@@ -1076,7 +1074,8 @@ export function ConcordPage() {
     () => [...gitAttachmentsByChannel.values()].some((list) => list.some((attachment) => attachment.detachedAt === undefined)),
     [gitAttachmentsByChannel],
   );
-  // `active`: the open community is the one mount that resolves moderation over the network.
+  // Per-channel unread badges from the local rumor cache. `active`: the open
+  // community is the one mount that resolves moderation over the network.
   const { byChannel: unreadByChannel, markRead: markChannelRead } = useConcordUnread(community, channels, communityGitActivity.byChannel, true);
 
   // "Mark all as read" (stamps are monotonic, so read channels no-op).
@@ -1087,7 +1086,7 @@ export function ConcordPage() {
   }, [unreadByChannel, markChannelRead]);
 
   // "@ Mentions" from the local cache, with its OWN read state so opening the tab
-  // clears it (issue #53).
+  // clears it.
   const {
     mentions,
     isLoading: mentionsLoading,
@@ -1381,7 +1380,8 @@ export function ConcordPage() {
     isAuthorizedIn(folded.roster, user.pubkey, ownerHex, channel.idHex, Permissions.MANAGE_MESSAGES),
   );
   // Dissolved, `excluded` (rotated out) and `stranded` communities stay readable
-  // but write-dead; folded into `canWrite` to freeze every write path.
+  // but write-dead; folded into `canWrite` to freeze every write path. Dissolved
+  // offers a local "Remove": the owner can't edit members' self-encrypted lists.
   const { data: dissolved } = useDissolved(community);
   const canWrite = Boolean(user && channel && !dissolved && !excluded && !stranded);
 
@@ -1447,7 +1447,7 @@ export function ConcordPage() {
   );
   const gitActivity = useChannelGitActivity(channel?.idHex, gitAttachments);
   const mixedEntries = useMemo(() => mergeChannelTimeline(baseTransport.messages, gitActivity.activities, timerEntries), [baseTransport.messages, gitActivity.activities, timerEntries]);
-  // Memoized: rebuilding per render allocated the full timeline.
+  // Memoized: rebuilding it allocates the full timeline.
   const dividerEntries = useMemo(
     () =>
       mixedEntries.map((entry) => ({
@@ -1606,11 +1606,6 @@ export function ConcordPage() {
     [setChannelCategory],
   );
 
-  /**
-   * Re-file every channel in a category (rename / ungroup). Sequential so a
-   * rate-limited relay doesn't drop some; each is its own entity, so partial
-   * failure is safe. Renaming onto an existing name merges.
-   */
   /** The column the drag pans by hand on touch (rows are `touch-action: none`). */
   const channelScrollRef = useRef<HTMLElement | null>(null);
 
@@ -1685,6 +1680,11 @@ export function ConcordPage() {
     ? (renderedChannels.find((c) => c.idHex === channelDrag.sourceIdHex) ?? null)
     : null;
 
+  /**
+   * Re-file every channel in a category (rename / ungroup). Sequential so a
+   * rate-limited relay doesn't drop some; each is its own entity, so partial
+   * failure is safe. Renaming onto an existing name merges.
+   */
   const refileCategory = useCallback(
     async (members: readonly Channel[], category: string | undefined) => {
       let moved = 0;
@@ -2390,11 +2390,6 @@ export function ConcordPage() {
 
   const publishTyping = useTypingPublisher(community, channel);
   const typingPubkeys = useTyping(community, channel);
-
-
-  // A dissolved community stays viewable read-only (`canWrite` false) with a
-  // "Remove" button: the owner can't edit members' self-encrypted lists, so
-  // removal is a local per-member action.
 
   if (!communityId) return <Navigate to="/" replace />;
   // Render NOTHING of the community to a non-member; placed before all of it.

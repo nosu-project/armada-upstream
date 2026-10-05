@@ -744,12 +744,9 @@ export function MessageTimeline({
     [],
   );
 
-  /**
-   * Extend while the slice doesn't fill the scroller (e.g. a folded flood), since
-   * there's no scroll gesture to trigger it. One step per commit.
-   */
-  // Measured in the next frame: reading `scrollHeight` in the effect forced an
-  // extra layout.
+  // Extend while the slice doesn't fill the scroller (e.g. a folded flood), since
+  // there's no scroll gesture to trigger it. One step per commit. Measured in the
+  // next frame: reading `scrollHeight` in the effect would force an extra layout.
   useEffect(() => {
     if (!listVisible || paused) return;
     const frame = requestAnimationFrame(() => {

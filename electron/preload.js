@@ -1,6 +1,6 @@
 // Preload bridge for the Armada desktop app.
 //
-// Runs in an isolated context with Node access and exposes a tiny, explicit API
+// Runs in the sandboxed, context-isolated preload world and exposes an explicit API
 // to the web app on window.armadaDesktop. The web build feature-detects this
 // object: when absent (a normal browser) it no-ops; when present it lights up
 // desktop-only behavior (unread badge, native screen-share picker).
@@ -50,7 +50,6 @@ ipcRenderer.on("armada:pick-screen-source", async (_event, requestId) => {
 });
 
 contextBridge.exposeInMainWorld("armadaDesktop", {
-  /** True so the web app can detect it's running inside the desktop shell. */
   isDesktop: true,
 
   /** Report the current unread/mention count for the tray + OS badge. */
@@ -85,11 +84,9 @@ contextBridge.exposeInMainWorld("armadaDesktop", {
   restartForWebUpdate: () => ipcRenderer.send("armada:web-update-restart"),
 
   /**
-   * Report the App Links host (PUBLIC_WEB_ORIGIN's hostname) at boot, so
-   * the shell can recognize a link to our own public host — a copied message or
-   * invite link clicked inside the app — and route it inward instead of out to
-   * the system browser. The main process has no other way to know it: the build
-   * bakes in no origin.
+   * Report the App Links host (PUBLIC_WEB_ORIGIN's hostname) at boot, so the
+   * shell routes links to our own public host inward instead of to the browser.
+   * The build bakes in no origin, so the main process has no other way to know.
    */
   registerDeepLinkHost: (host) =>
     ipcRenderer.send("armada:register-deep-link-host", host),

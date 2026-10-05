@@ -30,7 +30,7 @@ export function useNotificationNavigation(): void {
   const locationRef = useRef(location);
   locationRef.current = location;
 
-  // Between navigate() and the router COMMIT: signalling on return lifted the native crest gate
+  // Between navigate() and the router COMMIT: signalling on return would lift the native crest gate
   // onto the previous view, so the signal waits for the location change.
   const gatePending = useRef(false);
   useEffect(() => {

@@ -10,11 +10,10 @@ import java.util.Map;
 /**
  * Durable kind-0 profile cache for {@link NotificationRelayService}.
  *
- * The service's old profile cache was an in-memory map: every service restart
- * (Doze, OEM battery killers, reboots, START_STICKY relaunches) re-broadcast a
- * one-shot kind-0 REQ to EVERY relay for EVERY author that triggered a
- * notification, and a profile-less author re-broadcast on every message (a
- * null resolution was never recorded). This store fixes both:
+ * Durable so a service restart (Doze, OEM battery killers, reboots,
+ * START_STICKY relaunches) doesn't re-broadcast a kind-0 REQ to every relay
+ * for every author, and a profile-less author doesn't re-broadcast on every
+ * message:
  *
  *   - Positive entries persist (SharedPreferences JSON), newest kind-0
  *     {@code created_at} wins, so a profile is fetched once and reused across

@@ -96,7 +96,6 @@ export interface SilentPaymentAddress {
   version: number;
   /** Receiver's scan pubkey (33-byte compressed); the ECDH multiplicand. */
   scanPubKey: Uint8Array;
-  /**
   /** Receiver's spend pubkey (33-byte compressed); `B_m` if labelled, equivalent for senders. */
   spendPubKey: Uint8Array;
 }

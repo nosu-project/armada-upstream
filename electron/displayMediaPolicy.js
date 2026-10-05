@@ -16,15 +16,14 @@ function displayMediaHandlerOptions(platform = process.platform) {
 // loopback (AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK, mode
 // EXCLUDE_TARGET_PROCESS_TREE) that captures everything the OS is playing
 // EXCEPT this app's own audio service — i.e. system audio minus the call.
-// Plain "loopback" is the whole render mix, call included, which is why a
-// sharer on Windows echoed every other participant back to them.
+// Plain "loopback" is the whole render mix, call included, so a Windows
+// sharer would echo every other participant back to them.
 //
-// This is how Vesktop fixed the same bug (Vencord/Vesktop#1294): grant the
-// device directly from the main process. It does not depend on the renderer's
-// `restrictOwnAudio` constraint reaching this handler (Electron only maps that
-// to this device from 43.4.0, and only when Chromium populates the request),
-// so it cannot silently degrade to the echoing mix the way the constraint
-// path did.
+// So grant the device directly from the main process, as Vesktop does
+// (Vencord/Vesktop#1294), rather than relying on the renderer's
+// `restrictOwnAudio` constraint reaching this handler: Electron maps that to
+// this device only from 43.4.0, and only when Chromium populates the request,
+// so the constraint path can silently degrade to the echoing mix.
 //
 // The floor is the OS: process loopback needs the Windows 10 2004 audio stack
 // (build 19041 — OBS's Application Audio Capture has the same floor; Microsoft

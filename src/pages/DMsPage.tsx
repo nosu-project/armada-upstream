@@ -1310,7 +1310,7 @@ const Conversation = memo(function Conversation({
         />
       )}
 
-      {/* Built on first open; closed, it still ran every render. */}
+      {/* Built on first open: mounted closed, it would run every render. */}
       <MountWhenOpened open={callWarnOpen}>
         <Dialog open={callWarnOpen} onOpenChange={setCallWarnOpen}>
           <ChromeDialogContent
@@ -1584,7 +1584,6 @@ function NewDMPane({
       onCancel();
       return;
     }
-    // Backspace on an empty field removes the last chip.
     if (e.key === "Backspace" && group && query === "" && chosen.length > 0) {
       e.preventDefault();
       setChosen((prev) => prev.slice(0, -1));
@@ -2341,7 +2340,7 @@ export function DMsPage() {
       return;
     }
     // Drop the slid-out thread at IDLE (bounded by a timeout): its unmount is a
-    // big synchronous commit that stuttered at the end of the settle transition.
+    // big synchronous commit that would stutter the end of the settle transition.
     let idleId: number | undefined;
     const timer = setTimeout(() => {
       if (typeof requestIdleCallback === "function") {

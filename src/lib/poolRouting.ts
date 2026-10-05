@@ -1,6 +1,6 @@
 /**
  * Where a pool-wide REQ goes. Generic filters target only the GENERAL relays
- * (app + platform + NIP-65); fanning to every joined server delivered each
+ * (app + platform + NIP-65); fanning to every joined server would deliver each
  * event once per relay. The full pool is used when the general set is empty
  * (air-gapped), a filter has no `kinds` (ids/tag lookups may live anywhere),
  * or it asks for {@link FULL_POOL_KINDS} (kind 10009 may only be on a server).

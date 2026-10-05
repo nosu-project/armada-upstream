@@ -49,7 +49,7 @@ export interface AppConfig {
   /** Custom theme colors, used when `theme === "custom"`. */
   customTheme?: ThemeConfig;
   // Deliberately NO `addedRelays`: the kind 10009 event is the single source of
-  // truth (a synced copy resurrected removed servers).
+  // truth (a synced copy would resurrect removed servers).
   /**
    * The community rail's layout: ordered items (relay URLs, `c2:` / `dm:` keys) and
    * folders; unlisted items append via `mergeLayout`. The only field of the
@@ -300,13 +300,11 @@ export interface AppContextType {
   updateConfig: (updater: (current: AppConfig) => AppConfig) => void;
 }
 
-/**
- * AppConfig fields per encrypted NIP-78 settings document (see
- * `lib/settingsDocs.ts`, `docs/settings-documents.md`). Unbounded or churny fields
- * get their own document. Synced by NO document: mesh flags (per-device service),
- * per-device UI/navigation state, and local mirrors of canonical list events
- * (10007 / 10050 / 10002 / 10063).
- */
+// AppConfig fields per encrypted NIP-78 settings document (see
+// `lib/settingsDocs.ts`, `docs/settings-documents.md`). Unbounded or churny fields
+// get their own document. Synced by NO document: mesh flags (per-device service),
+// per-device UI/navigation state, and local mirrors of canonical list events
+// (10007 / 10050 / 10002 / 10063).
 
 /** `${APP_ID}/metadata` — bounded preferences, written when a user changes one. */
 export const METADATA_CONFIG_KEYS = [
@@ -415,7 +413,7 @@ export const defaultConfig: AppConfig = {
   mutedCommunities: [],
   mutedChannels: [],
   notifLevels: {},
-  // Account defaults must be pure (an origin-global mirror leaked between accounts).
+  // Account defaults must be pure: an origin-global mirror would leak between accounts.
   pushPrefs: { ...DEFAULT_PUSH_PREFS },
   dmProtocol: {},
   dmTypingIndicators: true,

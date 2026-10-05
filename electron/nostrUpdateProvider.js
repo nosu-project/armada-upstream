@@ -20,13 +20,9 @@
  */
 
 // `electron-updater` is a dependency of `electron/`, not of the repo root, so
-// it is present only in the packaged app — where this provider is actually
-// instantiated — and absent from the root `npm ci` that the test run and the
-// web build use. Its `Provider` base is exercised only at runtime inside that
-// app; the two pure functions this module is imported for (`updateInfoFrom`,
-// `resolveFiles`) never reach it. So, like the lazy `updateFeed.cjs` require in
-// getLatestVersion, tolerate its absence at load with a stand-in base, keeping
-// `require()` of this module working for tests and the build.
+// it is absent from the root `npm ci` the tests and web build use. The pure
+// functions tests import never reach `Provider`, so tolerate its absence at
+// load with a stand-in base.
 let Provider;
 try {
   ({ Provider } = require("electron-updater"));
@@ -47,13 +43,10 @@ function updateInfoFrom(update) {
   //
   // `sha2` rather than `sha512` because sha256 is what we have and what the
   // event publishes. electron-updater runs a `sha2` value through
-  // `DigestTransform(…, "sha256", "hex")`, so the download is fully verified.
-  // sha256 is not the weaker choice here: it is the same SHA-2 family, its
-  // 128-bit collision resistance is far beyond what a content address needs,
-  // and on any CPU with SHA-NI or ARMv8 crypto extensions it is the FASTER of
-  // the two. The library's sha512 default is a 2016-era software-speed call,
-  // and `sha2` is only marked deprecated because it once cross-checked a
-  // Bintray response header. Don't "modernize" this by publishing a sha512.
+  // `DigestTransform(…, "sha256", "hex")`, so the download is fully verified,
+  // and sha256 is ample for a content address (and faster with SHA-NI/ARMv8
+  // crypto). `sha2` is deprecated only for an old Bintray header check. Don't
+  // "modernize" this by publishing a sha512.
   //
   // The one thing given up: `DownloadedUpdateHelper` revalidates an
   // already-downloaded file by recomputing sha512, so a pending download is

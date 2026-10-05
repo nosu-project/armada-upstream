@@ -56,7 +56,7 @@ const TIMEOUT_MS = 6000;
 
 /**
  * Grace for slower relays after the first answers; the pool's 300ms EOSE cut
- * off slower relays holding most listings.
+ * drops slower relays holding most listings.
  */
 const RELAY_GRACE_MS = 2500;
 
@@ -219,7 +219,7 @@ async function fetchDiscoverPage(
 export function useDiscoverRelays(): string[] {
   const { config } = useAppContext();
   const { user } = useCurrentUser();
-  // `?.`: partial configs (test doubles of AppContext) may lack relay metadata.
+  // Partial configs (test doubles of AppContext) may lack relay metadata.
   const metadata = config.relayMetadata;
   const own = useMemo(() => {
     if (!user || !metadata) return [];
