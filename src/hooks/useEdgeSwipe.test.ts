@@ -18,6 +18,7 @@ afterEach(() => {
 });
 
 import { useEdgeSwipe } from "@/hooks/useEdgeSwipe";
+import { usePressDrag } from "@/hooks/usePressDrag";
 
 // ─── Mock pointer events (jsdom has no PointerEvent) ─────────────────────
 
@@ -386,5 +387,43 @@ describe("useEdgeSwipe", () => {
     act(() => h.onPointerUp(mockPointerEvent({ x: 200, y: 0, timeStamp: 60, currentTarget: el })));
 
     expect(onCommit).toHaveBeenCalledOnce();
+  });
+
+  it("stands down for a touch the rail's hand-panner claimed as a scroll", () => {
+    const onCommit = vi.fn();
+    const { result } = renderHook(() => useEdgeSwipe({ onCommit, direction: "close" }));
+    const rail = renderHook(() =>
+      usePressDrag<string>({
+        containerRef: { current: document.createElement("div") },
+        onPickup: vi.fn(),
+        onAim: vi.fn(),
+        onDrop: vi.fn(),
+        onAbort: vi.fn(),
+      }),
+    );
+    const el = makeEl(400);
+    const windowMove = (x: number, y: number) =>
+      window.dispatchEvent(
+        Object.assign(new Event("pointermove"), { pointerId: 1, pointerType: "touch", clientX: x, clientY: y }),
+      );
+
+    // A thumb arc: as much sideways as up, which the swipe alone would claim.
+    const h = result.current.handlers;
+    act(() => {
+      rail.result.current.begin("row-a")(
+        Object.assign(new Event("pointerdown"), { pointerId: 1, pointerType: "touch", button: 0, clientX: 40, clientY: 300 }) as unknown as PointerEvent,
+      );
+      h.onPointerDown(mockPointerEvent({ x: 40, y: 300, timeStamp: 0, currentTarget: el }));
+    });
+    act(() => {
+      windowMove(28, 288);
+      h.onPointerMove(mockPointerEvent({ x: 28, y: 288, timeStamp: 10, currentTarget: el }));
+    });
+    act(() => h.onPointerMove(mockPointerEvent({ x: 0, y: 260, timeStamp: 20, currentTarget: el })));
+    act(() => h.onPointerUp(mockPointerEvent({ x: 0, y: 260, timeStamp: 20, currentTarget: el })));
+
+    expect(result.current.dragging).toBe(false);
+    expect(onCommit).not.toHaveBeenCalled();
+    act(() => void window.dispatchEvent(Object.assign(new Event("pointerup"), { pointerId: 1 })));
   });
 });

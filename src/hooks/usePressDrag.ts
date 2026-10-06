@@ -9,6 +9,11 @@ const MOVE_PICKUP_PX = 5;
 /** Past this much movement, a touch that started on an entry is a scroll. */
 const SCROLL_SLOP_PX = 10;
 /**
+ * Past the scroll slop, a touch is a scroll unless horizontal travel beats vertical by this much:
+ * a thumb's arc starts diagonal, so the browser's 45° split loses vertical scrolls.
+ */
+const HORIZONTAL_YIELD_RATIO = 1.5;
+/**
  * A pickup that never travels past this from the origin is a held tap: no drop, and the click
  * must still navigate.
  */
@@ -26,6 +31,17 @@ const FLING_MAX_VELOCITY = 8;
 /** Exponential decay time constant (ms); coast distance is velocity × this. */
 const FLING_DECAY_MS = 325;
 const FLING_STOP_VELOCITY = 0.02;
+
+/**
+ * Touches the hand-panner has claimed as a scroll. Entries are `touch-action: none`, so the
+ * browser never arbitrates scroll against a horizontal pane swipe there; this is how the swipe
+ * (`useEdgeSwipe`) learns it lost.
+ */
+const handScrolling = new Set<number>();
+
+export function isHandScrolling(pointerId: number): boolean {
+  return handScrolling.has(pointerId);
+}
 
 export interface PressDragOptions<T> {
   /** Owned by the caller and populated by `attachContainer`. */
@@ -184,6 +200,8 @@ export function usePressDrag<T>({
       let lastX = startX;
       let lastY = startY;
       let manualScroll = false;
+      // A mostly-horizontal touch, left to the pane swipe.
+      let yielded = false;
       let lastScrollY = startY;
       let scrollSamples: { t: number; y: number }[] = [];
       // Across the whole gesture, including the hold; a pickup that never moved far is a held tap.
@@ -227,7 +245,8 @@ export function usePressDrag<T>({
         if (timer.current) clearTimeout(timer.current);
         timer.current = null;
         stopAutoScroll();
-        window.removeEventListener("pointermove", onMove);
+        handScrolling.delete(pointerId);
+        window.removeEventListener("pointermove", onMove, true);
         window.removeEventListener("pointerup", onUp);
         window.removeEventListener("pointercancel", onCancel);
         window.removeEventListener("contextmenu", onContextMenu, true);
@@ -247,6 +266,7 @@ export function usePressDrag<T>({
           everMovedFar = true;
         }
         if (active.current === null) {
+          if (yielded) return;
           lastX = ev.clientX;
           lastY = ev.clientY;
           // Entries are `touch-action: none`, so pan the container by hand.
@@ -271,7 +291,12 @@ export function usePressDrag<T>({
             // Early touch movement is a scroll; hand the rest to the manual panner.
             if (timer.current) clearTimeout(timer.current);
             timer.current = null;
+            if (Math.abs(ev.clientX - startX) > Math.abs(ev.clientY - startY) * HORIZONTAL_YIELD_RATIO) {
+              yielded = true;
+              return;
+            }
             manualScroll = true;
+            handScrolling.add(pointerId);
             lastScrollY = ev.clientY;
             scrollSamples = [{ t: performance.now(), y: ev.clientY }];
           }
@@ -326,7 +351,8 @@ export function usePressDrag<T>({
         handlers.current.onAbort();
       };
 
-      window.addEventListener("pointermove", onMove, { passive: false });
+      // Capture, so the scroll/swipe decision lands before React's handlers see the same move.
+      window.addEventListener("pointermove", onMove, { passive: false, capture: true });
       window.addEventListener("pointerup", onUp);
       window.addEventListener("pointercancel", onCancel);
       window.addEventListener("contextmenu", onContextMenu, true);

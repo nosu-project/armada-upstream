@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { isHandScrolling } from "@/hooks/usePressDrag";
 import { onAppStateChange } from "@/lib/appStateEvents";
 
 /** Min horizontal travel (px) before we claim the gesture from the scroller. */
@@ -142,6 +143,10 @@ export function useEdgeSwipe({
       const dy = e.clientY - startY.current;
 
       if (!claimed.current) {
+        if (isHandScrolling(e.pointerId)) {
+          rejected.current = true;
+          return;
+        }
         // Require dy to dominate by 1.5x: under `touch-action: pan-y` the first event we see may
         // already carry some dy from a slight arc.
         if (Math.abs(dy) > Math.abs(dx) * 1.5 && Math.abs(dy) > CLAIM_THRESHOLD) {

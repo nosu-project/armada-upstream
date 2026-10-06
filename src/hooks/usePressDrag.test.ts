@@ -2,7 +2,7 @@
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { usePressDrag } from "./usePressDrag";
+import { isHandScrolling, usePressDrag } from "./usePressDrag";
 
 /**
  * jsdom has no PointerEvent, so pointer events are plain Events carrying the
@@ -186,6 +186,43 @@ describe("usePressDrag", () => {
 
     expect(calls.onPickup).not.toHaveBeenCalled();
     expect(container.scrollTop).toBe(120);
+  });
+
+  it("scrolls a thumb's diagonal arc and claims it from the pane swipe", () => {
+    const container = document.createElement("div");
+    container.scrollTop = 100;
+    const { result } = setup(container);
+
+    act(() => {
+      result.current.begin("row-a")(pointer("pointerdown", { pointerType: "touch", clientX: 30, clientY: 200 }));
+      // 10px sideways for 12px up: past the browser's 45° but still a scroll here.
+      window.dispatchEvent(pointer("pointermove", { pointerType: "touch", clientX: 20, clientY: 188 }));
+    });
+    expect(isHandScrolling(1)).toBe(true);
+
+    act(() => void window.dispatchEvent(pointer("pointermove", { pointerType: "touch", clientX: 15, clientY: 168 })));
+    expect(container.scrollTop).toBe(120);
+
+    act(() => void window.dispatchEvent(pointer("pointerup", { pointerType: "touch" })));
+    expect(isHandScrolling(1)).toBe(false);
+  });
+
+  it("leaves a mostly-horizontal touch alone: no scroll, no pickup", () => {
+    const container = document.createElement("div");
+    container.scrollTop = 100;
+    const { result, calls } = setup(container);
+
+    act(() => {
+      result.current.begin("row-a")(pointer("pointerdown", { pointerType: "touch", clientX: 50, clientY: 200 }));
+      window.dispatchEvent(pointer("pointermove", { pointerType: "touch", clientX: 35, clientY: 195 }));
+      window.dispatchEvent(pointer("pointermove", { pointerType: "touch", clientX: 10, clientY: 170 }));
+      vi.advanceTimersByTime(300);
+    });
+
+    expect(isHandScrolling(1)).toBe(false);
+    expect(container.scrollTop).toBe(100);
+    expect(calls.onPickup).not.toHaveBeenCalled();
+    act(() => void window.dispatchEvent(pointer("pointerup", { pointerType: "touch" })));
   });
 
   describe("the hand-panned scroll's fling", () => {
