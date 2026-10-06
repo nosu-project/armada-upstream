@@ -342,17 +342,42 @@ class NativeKV implements ArmadaKV {
   /** One `kvOps` crossing for a burst, settling each op against its result. */
   private async crossing(ops: PendingKvOp[]): Promise<void> {
     let results: Array<string | null | Array<{ key: string; value: string }>>;
-    try {
-      const wire = ops.map((op) => {
-        if (op.op === "get" || op.op === "delete") return { op: op.op, key: op.key };
-        if (op.op === "set") return { op: op.op, key: op.key, value: op.value };
+    // A key read more than once in a burst crosses once: boot mounts dozens of
+    // readers of the same fold at once, and each copy is re-serialized on the
+    // way back (measured: one 107 KB fold sent 28 times in a single crossing).
+    // A write to the key ends the sharing, so later reads still see it.
+    const wire: object[] = [];
+    const slot: number[] = [];
+    const readAt = new Map<string, number>();
+    for (const op of ops) {
+      if (op.op === "get") {
+        const shared = readAt.get(op.key);
+        if (shared !== undefined) {
+          slot.push(shared);
+          continue;
+        }
+        readAt.set(op.key, wire.length);
+        slot.push(wire.length);
+        wire.push({ op: op.op, key: op.key });
+        continue;
+      }
+      slot.push(wire.length);
+      if (op.op === "delete") {
+        readAt.delete(op.key);
+        wire.push({ op: op.op, key: op.key });
+      } else if (op.op === "set") {
+        readAt.delete(op.key);
+        wire.push({ op: op.op, key: op.key, value: op.value });
+      } else {
         const { resolve: _resolve, ...listOp } = op;
-        return listOp;
-      });
+        wire.push(listOp);
+      }
+    }
+    try {
       const response = await perfTime(
         "kv.ops",
         () => this.bridge.kvOps({ ops: JSON.stringify(wire) }),
-        () => ops.length,
+        () => wire.length,
         "ops",
       );
       results = JSON.parse(response.results) as typeof results;
@@ -368,10 +393,11 @@ class NativeKV implements ArmadaKV {
 
     for (const [i, op] of ops.entries()) {
       if (op.op === "get") {
-        const value = results[i];
+        const value = results[slot[i]!];
         op.resolve(typeof value === "string" ? parseStored(value) : undefined);
       } else if (op.op === "list") {
-        const entries = Array.isArray(results[i]) ? (results[i] as Array<{ key: string; value: string }>) : [];
+        const result = results[slot[i]!];
+        const entries = Array.isArray(result) ? (result as Array<{ key: string; value: string }>) : [];
         op.resolve(entries.map(({ key, value }) => ({ key, value: parseStored(value) })));
       } else {
         op.resolve();

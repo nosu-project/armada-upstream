@@ -211,7 +211,11 @@ struct ParsedFilter {
 
             if !required.isEmpty || !negated.isEmpty {
                 keywords = SearchKeywords(required: required, negated: negated)
-                query = Self.toFtsQuery(required: required, negated: negated)
+                // The index holds only its content kinds; any other kind (or
+                // none named) is matched in memory instead.
+                if let kinds, kinds.allSatisfy(ArmadaDbSchema.contentIndexedKinds.contains) {
+                    query = Self.toFtsQuery(required: required, negated: negated)
+                }
             } else if terms.isEmpty, collapse == nil,
                 !search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             {
@@ -352,8 +356,10 @@ struct ParsedFilter {
         return ([terms] + exclusions).joined(separator: " ")
     }
 
+    /// A quoted FTS5 phrase matched as a prefix, so a word being typed already
+    /// finds itself.
     private static func phrase(_ keyword: String) -> String {
-        "\"\(keyword.replacingOccurrences(of: "\"", with: "\"\""))\""
+        "\"\(keyword.replacingOccurrences(of: "\"", with: "\"\""))\"*"
     }
 }
 

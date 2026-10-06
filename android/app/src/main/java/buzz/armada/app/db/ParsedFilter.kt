@@ -207,7 +207,11 @@ internal class ParsedFilter(filter: JSONObject) {
 
             if (required.isNotEmpty() || negated.isNotEmpty()) {
                 keywords = SearchKeywords(required, negated)
-                query = toFtsQuery(required, negated)
+                // The index holds only its content kinds; any other kind (or
+                // none named) is matched in memory instead.
+                if (kinds?.all { it in ArmadaDbSchema.CONTENT_INDEXED_KINDS } == true) {
+                    query = toFtsQuery(required, negated)
+                }
             } else if (terms.isEmpty() && collapse == null && search.isNotBlank()) {
                 // The caller asked for something, and every part of it was
                 // consumed by the parse: an extension nobody implements
@@ -343,7 +347,8 @@ internal class ParsedFilter(filter: JSONObject) {
             return (listOf(terms) + exclusions).joinToString(" ")
         }
 
-        fun phrase(keyword: String): String = "\"${keyword.replace("\"", "\"\"")}\""
+        /** A quoted FTS5 phrase matched as a prefix, so a word being typed already finds itself. */
+        fun phrase(keyword: String): String = "\"${keyword.replace("\"", "\"\"")}\"*"
     }
 }
 

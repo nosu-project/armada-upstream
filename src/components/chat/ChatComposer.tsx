@@ -1664,10 +1664,13 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     );
   }, [canModerate, onSlashAction, resetComposeState, toast, publishMessage, slashCapabilities]);
 
+  // Read through a ref: `executeSlash` follows the draft, and the menu is re-rendered per keystroke otherwise.
+  const executeSlashRef = useRef(executeSlash);
+  executeSlashRef.current = executeSlash;
   const runSlashFromMenu = useCallback((command: SlashCommand) => {
     const parsed = parseSlashCommand(textareaRef.current?.value ?? "");
-    void executeSlash(command, parsed?.command === command ? parsed.arg : "");
-  }, [executeSlash]);
+    void executeSlashRef.current(command, parsed?.command === command ? parsed.arg : "");
+  }, []);
 
   /**
    * Room: carries a `["bot", <pubkey>]` routing tag. 1:1 DM: plain content, no tag.
@@ -1678,17 +1681,19 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     await publishMessage(text, invocationTags(bot, { dm: botDmPeer !== undefined }));
   }, [publishMessage, rememberBotCommand, botDmPeer]);
 
+  const sendInvocationRef = useRef(sendInvocation);
+  sendInvocationRef.current = sendInvocation;
   const runBotFromMenu = useCallback((entry: BotCommandEntry) => {
     armedBotRef.current = entry.bot;
     // Nothing to fill in, so picking it IS the send.
     if (entry.command.args.length === 0) {
       setContent("");
-      void sendInvocation(entry.bot, entry.command.name, `/${entry.command.name}`);
+      void sendInvocationRef.current(entry.bot, entry.command.name, `/${entry.command.name}`);
       return;
     }
     setContent("");
     setBotCommand(entry);
-  }, [sendInvocation]);
+  }, []);
 
   /** Seed the draft with a command; the picker watches for that shape and opens itself. */
   const startCommand = useCallback((name: string) => {

@@ -100,18 +100,27 @@ const MAX_DIVERGENT_EDITIONS = 32;
 const FRAGMENT_QUERY_CHUNK = 64;
 const LIST_IO_TIMEOUT_MS = 8_000;
 const LIST_REPAIR_REFETCH_MS = 60_000;
+const LIST_REPAIR_MAX_MS = 60 * 60_000;
 
 /**
- * When each account's reconcile last published. The reconcile re-runs whenever
- * its own publish echoes back on the self-sync stream, so a relay that keeps
- * reading as stale would otherwise drive it at network speed (measured: ~85
- * full-list editions a minute, for as long as the tab stayed open).
+ * Each account's last reconcile publish and how many have gone out in a row
+ * without the wire reading back converged. The reconcile re-runs whenever its
+ * own publish echoes back on the self-sync stream, so a relay that keeps reading
+ * as stale would otherwise drive it at network speed; and a fixed minute still
+ * re-sent the whole list to every self relay — and every device subscribed to
+ * them — once a minute for as long as the app stayed open.
  */
-const lastReconcilePublishAt = new Map<string, number>();
+const reconcilePublishes = new Map<string, { at: number; streak: number }>();
+
+/** How long after its last publish an account's still-stale reconcile waits. */
+function reconcileSpacingMs(pubkey: string | undefined): number {
+  const streak = pubkey ? reconcilePublishes.get(pubkey)?.streak ?? 0 : 0;
+  return Math.min(LIST_REPAIR_REFETCH_MS * 2 ** Math.max(0, streak - 1), LIST_REPAIR_MAX_MS);
+}
 
 /** Test seam. */
 export function _resetReconcilePublishClock(): void {
-  lastReconcilePublishAt.clear();
+  reconcilePublishes.clear();
 }
 
 /** Shared by the mutation and the reconcile's am-I-racing-a-mutation check. */
@@ -927,8 +936,9 @@ export async function syncCommunityList(
       const rebuilt = fragment(merged);
       const nowSec = Math.floor(Date.now() / 1000);
       const newestEdition = Math.max(0, ...set.createdAt.values());
-      const lastPublish = lastReconcilePublishAt.get(user.pubkey) ?? 0;
+      const lastPublish = reconcilePublishes.get(user.pubkey)?.at ?? 0;
       const stale = relayWireDiffers(rebuilt, read.readFragsByRelay, read.answered);
+      if (!stale) reconcilePublishes.delete(user.pubkey);
       if (stale && newestEdition >= nowSec) {
         // An edition dated now or later is already out. Ditto-family relays hide
         // future-dated events from queries, so one reads as missing there, and
@@ -936,13 +946,14 @@ export async function syncCommunityList(
         // ahead: a loop that feeds itself. Wait for the clock instead.
         next.repairPending = true;
         logSync("list2", `reconcile: newest edition is ${newestEdition - nowSec}s ahead of the clock — not republishing yet`);
-      } else if (stale && Date.now() - lastPublish < LIST_REPAIR_REFETCH_MS) {
+      } else if (stale && Date.now() - lastPublish < reconcileSpacingMs(user.pubkey)) {
         next.repairPending = true;
-        logSync("list2", "reconcile: published under a minute ago — waiting for the next repair poll");
+        logSync("list2", "reconcile: published recently — waiting for the next repair poll");
       } else if (stale) {
         // EVENT acceptance doesn't prove the head is query-visible yet; keep polling.
         next.repairPending = true;
-        lastReconcilePublishAt.set(user.pubkey, Date.now());
+        const streak = (reconcilePublishes.get(user.pubkey)?.streak ?? 0) + 1;
+        reconcilePublishes.set(user.pubkey, { at: Date.now(), streak });
         logSync("list2", "reconcile: the union or a relay-local copy is stale — publishing it");
         const newest = await publishFragments(
           nostr,
@@ -1035,7 +1046,7 @@ export function useCommunityList() {
     // Keep retrying while a relay that missed the source read is outstanding (the
     // subscription can't detect an EMPTY returning relay).
     refetchInterval: (query) => query.state.data?.repairPending
-      ? LIST_REPAIR_REFETCH_MS
+      ? reconcileSpacingMs(user?.pubkey)
       : false,
     queryFn: async ({ signal }) => {
       let cached: NostrRumor[] = [];

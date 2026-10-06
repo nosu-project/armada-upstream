@@ -1,5 +1,5 @@
 import { Blocks, EyeOff, Eye, FileIcon, Loader2, Music, Paperclip, Pencil, Play, Trash2, X } from "lucide-react";
-import { useState } from "react";
+import { memo, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { ChromeDialogContent, ChromeDialogFooter, ChromeDialogHeader, Dialog } from "@/components/ui/dialog";
@@ -62,7 +62,8 @@ interface AttachmentTrayProps {
  * Attachments staged above the composer. The spoiler toggle is always visible
  * on image/video cards: it's needed BEFORE sending, so it can't hide behind hover.
  */
-export function AttachmentTray({ items, isTouch, onPreview, onRemove, onCancel, onUpdate }: AttachmentTrayProps) {
+// Memoized: every prop is stable while the user types, and the composer re-renders per keystroke.
+export const AttachmentTray = memo(function AttachmentTray({ items, isTouch, onPreview, onRemove, onCancel, onUpdate }: AttachmentTrayProps) {
   const [editing, setEditing] = useState<string | null>(null);
   const editingItem = items.find((i): i is TrayAttachment => i.kind === "attachment" && i.url === editing);
 
@@ -99,7 +100,7 @@ export function AttachmentTray({ items, isTouch, onPreview, onRemove, onCancel, 
       />
     </>
   );
-}
+});
 
 /** A bare thumbnail, Signal-style: no caption (documents name themselves inside). */
 const cardClass = "group/att relative size-24 shrink-0 md:size-28";

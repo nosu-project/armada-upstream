@@ -38,6 +38,7 @@ needs no Armada-specific server at all: any NIP-29 relay serves it.
 | `src/`       | React 19 + Vite web client (Tailwind + shadcn/ui + Nostrify)    |
 | `src/concord/` | The Concord protocol implementation (CORD-01..07): stream, control, chat, invites, rekey, voice, crypto derivations |
 | `src/sw/`    | The Web Push service worker, in TypeScript: `worker.ts` (event handling), `pushRuntime.ts` (open/store/present), `sw.ts` (entry). The `serviceWorker()` plugin in `vite.config.ts` bundles it to one classic `/sw.js` in `vite build` and serves it from the dev server |
+| `src/npanel/` | The link-preview script an npanel gateway runs for crawlers: profiles (`/npub1…`, `/nprofile1…`, `/name@domain`, `/domain`) and Concord invites, each with a drawn Armada card. Built to `/.well-known/npanel/preview.js` by the `npanelPreview()` plugin in `vite.config.ts`. An invite's community is sealed under the link's `#fragment`, which never reaches a server, so its card is the same for every invite |
 | `src/lib/db/` | ArmadaDB — the one local storage interface (tenants of rumors + a KV), its IndexedDB adapter, the Android bridge adapter, and the migrations |
 | `android/`   | Capacitor Android project (signed APK/AAB built in CI)          |
 | `crates/webxdc-rt/` | Rust: the iroh-gossip transport for Mini App multiplayer, compiled to wasm. The only Rust in the repo |

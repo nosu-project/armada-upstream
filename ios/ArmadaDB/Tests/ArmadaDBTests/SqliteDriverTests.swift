@@ -110,7 +110,7 @@ final class SqliteEngineTests: XCTestCase {
             INSERT INTO rumors (seq, tenant, id, kind, pubkey, created_at, tags, content)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            [4096, 1, "abc", 1, "deadbeef", 4, "[]", "Ship it: naïve CAFÉ notes"]
+            [4096, 1, "abc", 9, "deadbeef", 4, "[]", "Ship it: naïve CAFÉ notes"]
         )
 
         // unicode61 with remove_diacritics 2 case-folds and strips accents.

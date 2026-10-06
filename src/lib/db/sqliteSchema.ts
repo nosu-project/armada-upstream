@@ -117,6 +117,16 @@ export const ARMADA_DB_SCHEMA: readonly string[] = [
 ];
 
 /**
+ * The only kinds the NIP-50 content index holds: chat (9), NIP-17 messages and
+ * files (14, 15), polls (1068) and comments (1111) — what a person reads and
+ * searches. Everything else stored is ciphertext (wraps, settings, lists) or
+ * data no search reads, and indexing it was most of what a write cost. A
+ * `search` that may reach any other kind is matched in memory instead
+ * (`ParsedFilter.searchQuery`). The Kotlin and Swift schemas carry the same set.
+ */
+export const CONTENT_INDEXED_KINDS: readonly number[] = [9, 14, 15, 1068, 1111];
+
+/**
  * NIP-50 search index (unless constructed with `search: false`). Separate from
  * the token index to tokenize prose differently (`unicode61`: case- and
  * accent-insensitive). Maintained by triggers so no writer (incl. the Android
@@ -132,9 +142,11 @@ export const ARMADA_DB_FTS_SCHEMA: readonly string[] = [
   )`,
   `INSERT INTO rumors_fts (rumors_fts, rank) VALUES ('automerge', 2)`,
   // Rumors are only inserted or deleted, never updated.
-  `CREATE TRIGGER IF NOT EXISTS rumors_fts_insert AFTER INSERT ON rumors BEGIN
+  `CREATE TRIGGER IF NOT EXISTS rumors_fts_insert AFTER INSERT ON rumors
+    WHEN new.kind IN (${CONTENT_INDEXED_KINDS.join(", ")}) BEGIN
     INSERT INTO rumors_fts (rowid, content) VALUES (new.seq, new.content);
   END`,
+  // Unconditional: rows indexed before the kind restriction leave with their rumors.
   `CREATE TRIGGER IF NOT EXISTS rumors_fts_delete AFTER DELETE ON rumors BEGIN
     DELETE FROM rumors_fts WHERE rowid = old.seq;
   END`,
