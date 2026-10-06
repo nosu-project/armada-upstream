@@ -698,7 +698,7 @@ jobs:
           # everywhere else. It is a Play Console action (App content), not
           # anything this workflow can send, so say so rather than leaving the
           # next reader to diff this job against a working one.
-          if [ "$supply_rc" -ne 0 ] && grep -qi "you must let us know\|declaration\|app content" "$out"; then
+          if [ "$supply_rc" -ne 0 ] && grep -qi "you must let us know\|required to tell Google Play\|declaration\|app content" "$out"; then
             echo "Google rejected the COMMIT, not the upload: the Play Console is" >&2
             echo "waiting on an App content declaration. Answer it at" >&2
             echo "Play Console > buzz.armada.app > Policy > App content, then" >&2
@@ -805,7 +805,7 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           set -eu
-          : "${NSYTE_BUNKER:?NSYTE_BUNKER is not set; ask the ngit-ci operator to provision it for this repo's #ALIAS.}"
+          : "${NSYTE_BUNKER:?NSYTE_BUNKER is not set; ask the ngit-ci operator to provision it for this repository.}"
           umask 077
           printf '%s' "$NSYTE_BUNKER" > "$RUNNER_TEMP/nbunksec"
           # The checkout's remote is the coordinator's clone, so name the
