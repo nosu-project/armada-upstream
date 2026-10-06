@@ -4,6 +4,32 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.64.5] - 2026-10-06
+
+A text size slider in Appearance settings, Copy link on links, and Jump to
+message from search results. The server rail is wider and easier to scroll on
+touch, Android back closes overlays instead of leaving the page, call audio is
+cleaner in mono, and searching message history is faster.
+
+### Added
+- A Text size slider in Settings → Appearance, saved per device
+- Copy link in the message menu when right-clicking a link
+- Jump to message in search result menus
+- Link previews for profile and community invite links show Armada-branded cards
+
+### Changed
+- The server rail is wider on touch, scrolls when dragged from between or diagonally across entries, and taps land reliably after a fling
+- Android back closes Settings, the profile overlay, wizards, the new-post pane, the mesh roster and search bars instead of leaving the page beneath
+- Noise suppression runs in mono and the microphone is sent as mono audio, keeping the chosen microphone when audio processing is toggled
+- Android call sounds open as voice-call audio, and the incoming-call notification is dismissed when you answer, decline or join from the app
+- Searching direct message and community history is faster, and typing in the composer does less work
+- The Servers section is gone from Settings; servers are added and left from the server rail
+
+### Fixed
+- Notification settings are ready immediately for new accounts and no longer stay unavailable when one relay is slow to answer
+- Long-pressing inside a menu or popup no longer also long-presses the message behind it
+- Community list backups retry less aggressively while a relay is out of date
+
 ## [0.64.4] - 2026-10-05
 
 The cut-corner look now covers the whole client: popovers, menus, dialogs,
