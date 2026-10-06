@@ -88,14 +88,34 @@ export function getEmojiMaskUrl(emoji: string): string {
 }
 
 function renderEmojiMask(emoji: string): string {
+  const mask = drawEmojiMask(emoji, (width, height) => {
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    return canvas;
+  });
+  return mask ? mask.toDataURL('image/png') : '';
+}
+
+type MaskCanvas = HTMLCanvasElement | OffscreenCanvas;
+type MaskContext = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
+
+/**
+ * The mask itself, on canvases from `createCanvas` — an `OffscreenCanvas`
+ * works too, which is how the npanel link-preview script (`src/npanel/`) cuts
+ * avatars the same way. `null` when the glyph draws nothing.
+ */
+export function drawEmojiMask<C extends MaskCanvas>(
+  emoji: string,
+  createCanvas: (width: number, height: number) => C,
+  out = 256,
+): C | null {
   // The bounding-box scan is quadratic in size; 256px is enough for the mask.
   const fontSize = 256;
   const scratch = fontSize * 1.5;               // 384 – generous room
-  const c1 = document.createElement('canvas');
-  c1.width = scratch;
-  c1.height = scratch;
-  const ctx1 = c1.getContext('2d', { willReadFrequently: true });
-  if (!ctx1) return '';
+  const c1 = createCanvas(scratch, scratch);
+  const ctx1 = c1.getContext('2d', { willReadFrequently: true }) as MaskContext | null;
+  if (!ctx1) return null;
 
   ctx1.textAlign = 'center';
   ctx1.textBaseline = 'middle';
@@ -116,7 +136,7 @@ function renderEmojiMask(emoji: string): string {
       }
     }
   }
-  if (r < l || b < t) return '';                 // nothing drawn
+  if (r < l || b < t) return null;               // nothing drawn
 
   let cropW = r - l + 1;
   let cropH = b - t + 1;
@@ -134,12 +154,9 @@ function renderEmojiMask(emoji: string): string {
   if (t < 0) t = 0;
   if (l < 0) l = 0;
 
-  const out = 256;
-  const c2 = document.createElement('canvas');
-  c2.width = out;
-  c2.height = out;
-  const ctx2 = c2.getContext('2d');
-  if (!ctx2) return '';
+  const c2 = createCanvas(out, out);
+  const ctx2 = c2.getContext('2d') as MaskContext | null;
+  if (!ctx2) return null;
 
   ctx2.drawImage(c1, l, t, cropW, cropH, 0, 0, out, out);
 
@@ -152,5 +169,5 @@ function renderEmojiMask(emoji: string): string {
   }
   ctx2.putImageData(img, 0, 0);
 
-  return c2.toDataURL('image/png');
+  return c2;
 }

@@ -203,6 +203,63 @@ function serviceWorker(): Plugin {
 }
 
 /**
+ * Builds `src/npanel/preview.ts` to `/.well-known/npanel/preview.js`: the
+ * script an npanel gateway runs to give crawlers link previews of profiles and
+ * invites. One self-contained ES module, since npanel's scripts import nothing.
+ */
+function npanelPreview(): Plugin {
+  const entry = path.resolve(import.meta.dirname, "src/npanel/preview.ts");
+  let outDir = path.resolve(import.meta.dirname, "dist");
+  let mode = "production";
+  let logLevel: InlineConfig["logLevel"];
+  let isBuild = false;
+
+  return {
+    name: "armada-npanel-preview",
+    configResolved(config) {
+      outDir = path.resolve(config.root, config.build.outDir);
+      mode = config.mode;
+      logLevel = config.logLevel;
+      isBuild = config.command === "build";
+    },
+    async closeBundle() {
+      if (!isBuild) return;
+      await build({
+        configFile: false,
+        root: import.meta.dirname,
+        mode,
+        logLevel,
+        publicDir: false,
+        plugins: [buildConfigPlugin()],
+        resolve: {
+          alias: { "@": path.resolve(import.meta.dirname, "./src") },
+          // npanel's sandbox has no DOM, like a worker.
+          conditions: ["worker", "module", "import", "default"],
+        },
+        build: {
+          target: "es2022",
+          outDir,
+          emptyOutDir: false,
+          copyPublicDir: false,
+          // Half of what QuickJS parses on every preview.
+          minify: true,
+          rolldownOptions: {
+            // A package is only what's used of it: a barrel's other modules
+            // would otherwise run on every preview.
+            treeshake: { moduleSideEffects: (id: string) => !id.includes("/node_modules/") },
+          },
+          lib: {
+            entry,
+            formats: ["es"],
+            fileName: () => ".well-known/npanel/preview.js",
+          },
+        },
+      });
+    },
+  };
+}
+
+/**
  * Worker ceiling for the suite. Vitest defaults to one worker per core and
  * then adds its own process on top, so the whole machine stalls for the length
  * of a run. Two cores held back is enough to keep it usable.
@@ -322,7 +379,7 @@ export default defineConfig({
       ignored: [...BUILD_ARTIFACT_EXCLUDES, "**/electron/.dev-profile/**"],
     },
   },
-  plugins: [react(), buildConfigPlugin(), buildStamp(), serveChangelog(), serviceWorker()],
+  plugins: [react(), buildConfigPlugin(), buildStamp(), serveChangelog(), serviceWorker(), npanelPreview()],
   optimizeDeps: {
     // Pin the dep-scanner's entry points to the real HTML entries. Left to its
     // default the scanner GLOBS `**/*.html` from the project root, and that
