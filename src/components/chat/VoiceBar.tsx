@@ -107,7 +107,9 @@ function DeviceSelectGroup({
         {label}
       </DropdownMenuLabel>
       {devices.map((device, index) => {
-        const active = device.deviceId === activeDeviceId;
+        // LiveKit records the system default as "" when, under webAudioMix, it
+        // can't map "default" to a concrete device.
+        const active = device.deviceId === (activeDeviceId || "default");
         return (
           <DropdownMenuItem
             key={device.deviceId}

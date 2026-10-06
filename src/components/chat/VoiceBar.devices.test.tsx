@@ -173,6 +173,20 @@ describe("call device menu", () => {
     expect(await screen.findByText("Camera 1")).toBeTruthy();
   });
 
+  it("checks Default when LiveKit reports the system default as an empty id", async () => {
+    // Under webAudioMix, LiveKit records "" when it can't map "default" to a device.
+    picker.devices = [
+      { deviceId: "default", kind: "audioinput", label: "Default" },
+      { deviceId: "mic-1", kind: "audioinput", label: "USB Mic" },
+    ] as MediaDeviceInfo[];
+    openMenu();
+    const checkOf = (label: string) =>
+      screen.getByText(label).closest("[role='menuitem']")?.querySelector("svg")?.getAttribute("class");
+    expect(await screen.findByText("USB Mic")).toBeTruthy();
+    expect(checkOf("Default")).toContain("opacity-100");
+    expect(checkOf("USB Mic")).toContain("opacity-0");
+  });
+
   it("only remembers a mic pick, leaving the live switch to VoiceDeviceSync", async () => {
     picker.devices = [{ deviceId: "mic-1", kind: "audioinput", label: "USB Mic" }] as MediaDeviceInfo[];
     openMenu();
