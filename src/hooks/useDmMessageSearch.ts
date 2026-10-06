@@ -38,7 +38,9 @@ export function useDmMessageSearch(
       return;
     }
     let cancelled = false;
-    void searchDm17Rumors(self, query, { limit: 500 }).then((rumors) => {
+    // A whole-history read; the next keystroke abandons this one.
+    const abort = new AbortController();
+    void searchDm17Rumors(self, query, { limit: 500, signal: abort.signal }).then((rumors) => {
       if (cancelled) return;
       const byPeer = new Map<string, DmMessageMatch>();
       for (const r of rumors) {
@@ -49,9 +51,10 @@ export function useDmMessageSearch(
         }
       }
       setDm17Matches(byPeer);
-    });
+    }, () => {});
     return () => {
       cancelled = true;
+      abort.abort();
     };
   }, [needle, query, self]);
 

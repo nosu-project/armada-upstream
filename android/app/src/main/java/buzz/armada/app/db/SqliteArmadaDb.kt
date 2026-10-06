@@ -123,8 +123,28 @@ class SqliteArmadaDb(
     fun migrate() {
         lock.withLock {
             val schema = if (search) ArmadaDbSchema.BASE + ArmadaDbSchema.SEARCH else ArmadaDbSchema.BASE
+            val apply = { for (statement in schema) db.run(statement.collapseWhitespace()) }
 
-            for (statement in schema) db.run(statement.collapseWhitespace())
+            // A file from before the content index was limited to
+            // CONTENT_INDEXED_KINDS has an insert trigger without a WHEN. Swapped
+            // in one transaction so no writer on another connection lands
+            // between the drop and the create; what it already indexed stays
+            // and leaves with its rumors.
+            val insertTrigger = if (search) {
+                db.query(
+                    "SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = 'rumors_fts_insert'",
+                ) { it.text(0) }.firstOrNull()
+            } else {
+                null
+            }
+            if (insertTrigger != null && !LEGACY_TRIGGER_WHEN.containsMatchIn(insertTrigger)) {
+                transaction {
+                    db.run("DROP TRIGGER rumors_fts_insert")
+                    apply()
+                }
+            } else {
+                apply()
+            }
 
             db.run("PRAGMA user_version = ${ArmadaDbSchema.VERSION}")
         }
@@ -1675,6 +1695,8 @@ class SqliteArmadaDb(
     )
 
     companion object {
+        private val LEGACY_TRIGGER_WHEN = Regex("\\bWHEN\\b", RegexOption.IGNORE_CASE)
+
         /** Bits of the rowid reserved for the per-second sequence number. */
         private const val SEQ_BITS = 20
 

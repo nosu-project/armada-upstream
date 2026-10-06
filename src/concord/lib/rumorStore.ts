@@ -40,6 +40,7 @@ import { resolveMs, type OpenedEvent, type OpenedWireEvent } from "@/concord/lib
 import { messageMatchesMedia, type SearchMedia } from "@/concord/lib/search";
 import { emitWireScopes } from "@/wire/bus";
 import { ARMADA_TENANTS, getArmadaDB } from "@/lib/db/armadaDB";
+import { literalSearch } from "@/lib/db/ParsedFilter";
 import type { NRumorStore } from "@/lib/db/types";
 import type { NostrRumor } from "@/lib/nostrRumor";
 import type { OpenedChat } from "@/concord/lib/chat";
@@ -54,6 +55,27 @@ const TAG_CHANNEL = "channel";
  */
 function rumorStore(communityIdHex: string): NRumorStore {
   return getArmadaDB().tenant(communityTenant(communityIdHex));
+}
+
+/**
+ * Each community's stored control plane, shared by every reader until the next
+ * write to its tenant. Boot folds, gates and seeds all read the whole plane, and
+ * on Android each read re-serialized it across the bridge (measured: 91 reads,
+ * 4.4 MB, for 40 communities). Bumped on every write and removal here, which
+ * every row reaches through, including the service's (via the drain's ingest).
+ */
+const controlPlaneMemo = new Map<string, { rev: number; rows: Promise<NostrRumor[]> }>();
+const tenantRev = new Map<string, number>();
+
+function touchTenant(communityIdHex: string): void {
+  tenantRev.set(communityIdHex, (tenantRev.get(communityIdHex) ?? 0) + 1);
+  controlPlaneMemo.delete(communityIdHex);
+}
+
+/** Forget the shared plane reads on logout: they are decrypted community state. */
+export function clearRumorStoreMemory(): void {
+  controlPlaneMemo.clear();
+  tenantRev.clear();
 }
 
 /** The ArmadaDB tenant id holding a community's opened events. */
@@ -571,15 +593,16 @@ export async function queryMentionRumors(
 const SEARCHABLE_KINDS = [9, 1068, 1111];
 
 /**
- * Max rumors scanned per search: there's no content index, so text/media
- * search scans newest-first (`#channel` and `authors` narrow via the index).
+ * Max matches read per search. Text is matched by the store, so this bounds
+ * matches, not history; a media-only search still scans newest-first.
  */
 const SEARCH_SCAN_LIMIT = 5000;
 
 /**
  * Search cached message rumors, newest-first up to `limit`. Purely local (E2EE,
- * so the store is the only corpus). `#channel`/`authors` go to the index; `query`
- * (case-insensitive substring) and `media` are applied in memory.
+ * so the store is the only corpus). `#channel`, `authors` and the typed words go
+ * to the store (see `searchDm17Rumors` for how words match); `media` is applied
+ * in memory.
  */
 export async function searchRumors(
   communityIdHex: string,
@@ -593,21 +616,23 @@ export async function searchRumors(
   },
 ): Promise<OpenedChat[]> {
   if (channelIdsHex.length === 0) return [];
+  const search = literalSearch(opts.query);
+  if (opts.query.trim() && !search) return [];
   const filter: {
     kinds: number[];
     "#channel": string[];
     authors?: string[];
+    search?: string;
     limit: number;
   } = { kinds: SEARCHABLE_KINDS, "#channel": channelIdsHex, limit: SEARCH_SCAN_LIMIT };
   if (opts.authors && opts.authors.length > 0) filter.authors = opts.authors;
+  if (search) filter.search = search;
 
   const events = notExpired(await rumorStore(communityIdHex).query([filter], { signal: opts.signal }));
-  const q = opts.query.trim().toLowerCase();
   const media = opts.media ?? "all";
 
   const out: OpenedChat[] = [];
   for (const ev of events) {
-    if (q && !ev.content.toLowerCase().includes(q)) continue;
     if (!messageMatchesMedia(ev.content, ev.tags, media)) continue;
     const idHex = ev.tags.find((t) => t[0] === "channel")?.[1] ?? "";
     out.push(storedToOpenedChat(ev, idHex));
@@ -627,6 +652,24 @@ export async function queryPlane(
   opts?: { limit?: number; signal?: AbortSignal },
 ): Promise<OpenedEvent[]> {
   const filter: { kinds: number[]; limit?: number } = { kinds: PLANE_RULES[plane].kinds };
+  if (plane === "control" && opts?.limit === undefined) {
+    const rev = tenantRev.get(communityIdHex) ?? 0;
+    let memo = controlPlaneMemo.get(communityIdHex);
+    if (!memo || memo.rev !== rev) {
+      // Never handed a signal: one reader's abort must not fail the others.
+      const rows = rumorStore(communityIdHex).query([filter]);
+      memo = { rev, rows };
+      controlPlaneMemo.set(communityIdHex, memo);
+      const held = memo;
+      rows.catch(() => {
+        if (controlPlaneMemo.get(communityIdHex) === held) controlPlaneMemo.delete(communityIdHex);
+      });
+    }
+    const events = await memo.rows;
+    opts?.signal?.throwIfAborted();
+    // Fresh objects per reader; the shared rows themselves are never handed out.
+    return events.map(storedToOpened);
+  }
   if (opts?.limit !== undefined) filter.limit = opts.limit;
   const events = await rumorStore(communityIdHex).query([filter], { signal: opts?.signal });
   return events.map(storedToOpened);
@@ -717,6 +760,7 @@ function writeStored(
   snapshot = true,
 ): Promise<boolean> {
   if (opened.length === 0 || !communityIdHex) return Promise.resolve(true);
+  touchTenant(communityIdHex);
   const db = getArmadaDB();
   const s = db.tenant(communityTenant(communityIdHex));
   const writes: Promise<unknown>[] = [];
@@ -739,9 +783,11 @@ function writeStored(
   if (plane === "control" && snapshot) {
     writes.push(noteControlSnapshot(communityIdHex, opened));
   }
+  // Again once settled: a read issued during the write memoized the rows before it.
   return Promise.all(writes)
     .then(() => true)
-    .catch(() => false);
+    .catch(() => false)
+    .finally(() => touchTenant(communityIdHex));
 }
 
 /**
@@ -820,7 +866,11 @@ export function writeRumors(
 /** Delete our own rows by rumor id (a discarded send that never reached a relay). */
 export async function removeRumors(communityIdHex: string, rumorIds: string[]): Promise<void> {
   if (rumorIds.length === 0) return;
-  await rumorStore(communityIdHex).remove([{ ids: rumorIds }]);
+  try {
+    await rumorStore(communityIdHex).remove([{ ids: rumorIds }]);
+  } finally {
+    touchTenant(communityIdHex);
+  }
 }
 
 // Expiry sweep (CORD-08 §3)
@@ -863,7 +913,11 @@ export async function sweepExpiredCommunityRumors(
 
     const expired = events.filter((ev) => isExpired(ev.tags, now));
     if (expired.length > 0) {
-      await s.remove([{ ids: expired.map((ev) => ev.id) }], { signal: opts.signal });
+      try {
+        await s.remove([{ ids: expired.map((ev) => ev.id) }], { signal: opts.signal });
+      } finally {
+        touchTenant(communityIdHex);
+      }
       removed += expired.length;
       for (const ev of expired) {
         const idHex = ev.tags.find((t) => t[0] === "channel")?.[1];

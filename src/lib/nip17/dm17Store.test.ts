@@ -208,6 +208,34 @@ describe("dm17Store", () => {
     expect(matches.map((match) => match.rumorId)).toEqual([wanted.rumorId]);
   });
 
+  it("finds a match however many newer messages there are", async () => {
+    const viewer = getPublicKey(generateSecretKey());
+    const friend = getPublicKey(generateSecretKey());
+    const said = (content: string): OpenedDm => {
+      const createdAt = ++clock;
+      const rumor = buildDmRumor({ kind: KIND_DM_CHAT, content, tags: dmChatTags([viewer]), pubkey: friend, createdAt });
+      return {
+        rumorId: rumor.id,
+        author: friend,
+        kind: KIND_DM_CHAT,
+        content,
+        tags: rumor.tags,
+        createdAt,
+        peers: [friend],
+        wrapId: `wrap-${rumor.id.slice(0, 8)}`,
+      };
+    };
+    const old = said("the fathometer reading");
+    await writeDm17Rumors(viewer, [old, ...Array.from({ length: 40 }, (_, i) => said(`filler ${i}`))]);
+
+    // `scan` bounds matches read, not how far back the history goes.
+    const matches = await searchDm17Rumors(viewer, "Fathom", { scan: 10 });
+    expect(matches.map((match) => match.rumorId)).toEqual([old.rumorId]);
+    // Typed operators are words, not a negation or a term lookup.
+    expect(await searchDm17Rumors(viewer, "-fathometer")).toHaveLength(1);
+    expect(await searchDm17Rumors(viewer, "conv:fathometer")).toEqual([]);
+  });
+
   it("rings the inbox and each affected thread after a durable write", async () => {
     const scopedSelf = getPublicKey(generateSecretKey());
     const scopedAlice = getPublicKey(generateSecretKey());

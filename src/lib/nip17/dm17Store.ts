@@ -13,6 +13,7 @@
 import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
 
 import { getArmadaDB } from "@/lib/db/armadaDB";
+import { literalSearch } from "@/lib/db/ParsedFilter";
 import { tenantOptsFor } from "@/lib/db/termPolicies";
 import type { NRumorStore } from "@/lib/db/types";
 import { readFolded, writeFolded } from "@/lib/foldedCache";
@@ -369,8 +370,10 @@ export async function queryDm17Conversations(
 const EXPIRED_RETRY = 8;
 
 /**
- * Local case-insensitive substring search over decrypted chat/file rumors
- * (never prompts the signer). Newest-first, capped at `limit`.
+ * Local search over decrypted chat/file rumors (never prompts the signer):
+ * every typed word must appear, case- and accent-insensitively as a word prefix
+ * where the store has a content index, as a substring where it doesn't. Covers
+ * the whole history; `scan` caps the matches read. Newest-first, capped at `limit`.
  */
 export async function searchDm17Rumors(
   self: string,
@@ -383,10 +386,10 @@ export async function searchDm17Rumors(
     allowedConversationKeys?: ReadonlySet<string>;
   } = {},
 ): Promise<OpenedDm[]> {
-  const needle = query.trim().toLowerCase();
-  if (!needle) return [];
+  const search = literalSearch(query);
+  if (!search) return [];
   const events = await dm17Store(self).query(
-    [{ kinds: [KIND_DM_CHAT, KIND_DM_FILE], limit: opts.scan ?? 2000 }],
+    [{ kinds: [KIND_DM_CHAT, KIND_DM_FILE], search, limit: opts.scan ?? 2000 }],
     { signal: opts.signal },
   );
   const matches = events
@@ -396,8 +399,7 @@ export async function searchDm17Rumors(
       (o) =>
         o.peers.length > 0 &&
         (!opts.allowedConversationKeys ||
-          opts.allowedConversationKeys.has(dmConvKey(o.peers))) &&
-        o.content.toLowerCase().includes(needle),
+          opts.allowedConversationKeys.has(dmConvKey(o.peers))),
     )
     .sort((a, b) => b.createdAt - a.createdAt);
   return matches.slice(0, opts.limit ?? 200);

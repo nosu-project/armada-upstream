@@ -233,8 +233,25 @@ export class SqliteArmadaDB implements ArmadaDB {
       ? [...ARMADA_DB_SCHEMA, ...ARMADA_DB_FTS_SCHEMA]
       : ARMADA_DB_SCHEMA;
 
-    for (const statement of schema) {
-      await this.run(statement.trim().replace(/\s+/g, " "));
+    // A file from before the content index was limited to CONTENT_INDEXED_KINDS
+    // has an insert trigger without a WHEN. Swapped in one transaction so no
+    // writer on another connection lands between the drop and the create; what
+    // it already indexed stays and leaves with its rumors.
+    const [insertTrigger] = this.search
+      ? await this.all(`SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = 'rumors_fts_insert'`)
+      : [];
+    const apply = async (): Promise<void> => {
+      for (const statement of schema) {
+        await this.run(statement.trim().replace(/\s+/g, " "));
+      }
+    };
+    if (insertTrigger && !/\bWHEN\b/i.test(String(insertTrigger.sql))) {
+      await this.transaction(async () => {
+        await this.run(`DROP TRIGGER rumors_fts_insert`);
+        await apply();
+      });
+    } else {
+      await apply();
     }
 
     await this.run(`PRAGMA user_version = ${ARMADA_DB_VERSION}`);

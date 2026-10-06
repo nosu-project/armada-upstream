@@ -215,6 +215,54 @@ describe("syncCommunityList — reconcile", () => {
     expect(published.filter((p) => p.url === stale)).toHaveLength(1);
   });
 
+  it("doubles the spacing between reconciles a relay never confirms, and resets once converged", async () => {
+    const { syncCommunityList } = await import("./useCommunityList");
+    const list: CommunityList = { entries: [entry("aa", "Joined")], tombstones: [] };
+    const [frag] = fragment(structuredClone(list));
+    const old = fragEvent(frag, 0, 1_722_000_000);
+    h.readFolded.mockImplementation(async (key: string) =>
+      key.startsWith("concord2-list:") ? { event: null, list: structuredClone(list) } : undefined,
+    );
+    const self = "wss://self.example.com";
+    const stale = "wss://stale.example.com";
+    const copies: Record<string, NostrRumor[]> = { [self]: [old] };
+    for (const url of STOCK_RELAYS) copies[url] = [old];
+    const { nostr, published } = perRelayNostr(copies, []);
+    let blind = true;
+    const relay = {
+      ...nostr,
+      relay: (url: string) => url === stale && blind
+        ? { query: async () => [] as NostrRumor[], event: async (event: NostrRumor) => { published.push({ url, event }); } }
+        : nostr.relay(url),
+    };
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const start = Date.now();
+    const sentToStaleAt: number[] = [];
+    try {
+      // One sync a minute for 30 minutes.
+      for (let minute = 0; minute <= 30; minute++) {
+        vi.setSystemTime(start + minute * 60_000);
+        const before = published.filter((p) => p.url === stale).length;
+        await syncCommunityList(relay, user, new QueryClient(), undefined, [self, stale]);
+        if (published.filter((p) => p.url === stale).length > before) sentToStaleAt.push(minute);
+      }
+      expect(sentToStaleAt).toEqual([0, 1, 3, 7, 15]);
+
+      // The relay starts holding what it is sent: the wire converges and the next
+      // stale read is answered at once.
+      blind = false;
+      vi.setSystemTime(start + 31 * 60_000);
+      await syncCommunityList(relay, user, new QueryClient(), undefined, [self, stale]);
+      blind = true;
+      const before = published.filter((p) => p.url === stale).length;
+      vi.setSystemTime(start + 32 * 60_000);
+      await syncCommunityList(relay, user, new QueryClient(), undefined, [self, stale]);
+      expect(published.filter((p) => p.url === stale).length).toBe(before + 1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("never signs an update when every explicit community-list source fails", async () => {
     const { updateCommunityList } = await import("./useCommunityList");
     const signEvent = vi.fn(user.signer.signEvent.bind(user.signer));

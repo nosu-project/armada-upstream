@@ -176,6 +176,15 @@ enum ArmadaDbSchema {
         """,
     ]
 
+    /// The only kinds the NIP-50 content index holds: chat (9), NIP-17
+    /// messages and files (14, 15), polls (1068) and comments (1111) — what a
+    /// person reads and searches. Everything else stored is ciphertext (wraps,
+    /// settings, lists) or data no search reads, and indexing it was most of what
+    /// a write cost. A `search` that may reach any other kind is matched in
+    /// memory (`ParsedFilter.searchQuery`). Must equal `CONTENT_INDEXED_KINDS`
+    /// in `sqliteSchema.ts` and `ArmadaDbSchema.kt`.
+    static let contentIndexedKinds: [Int] = [9, 14, 15, 1068, 1111]
+
     /// The NIP-50 search index, installed on top of `base`.
     ///
     /// Its content is a column of the rumor row, so it is maintained entirely
@@ -196,10 +205,13 @@ enum ArmadaDbSchema {
         // Rumors are only ever inserted or deleted, never updated, so those are
         // the only two triggers needed.
         """
-        CREATE TRIGGER IF NOT EXISTS rumors_fts_insert AFTER INSERT ON rumors BEGIN
+        CREATE TRIGGER IF NOT EXISTS rumors_fts_insert AFTER INSERT ON rumors
+            WHEN new.kind IN (\(contentIndexedKinds.map(String.init).joined(separator: ", "))) BEGIN
             INSERT INTO rumors_fts (rowid, content) VALUES (new.seq, new.content);
         END
         """,
+        // Unconditional: rows indexed before the kind restriction leave with
+        // their rumors.
         """
         CREATE TRIGGER IF NOT EXISTS rumors_fts_delete AFTER DELETE ON rumors BEGIN
             DELETE FROM rumors_fts WHERE rowid = old.seq;

@@ -470,65 +470,90 @@ final class ArmadaDbTests: XCTestCase {
 
     // MARK: - NIP-50 search
 
-    func testSearchMatchesWholeWordsCaseAndAccentInsensitively() throws {
-        let db = try open()
-        try db.event(tenant: "t", rumor: try rumor(id: "a", content: "The quick brown fox"))
-        try db.event(tenant: "t", rumor: try rumor(id: "b", content: "CAFÉ society"))
+    /// A chat kind, so these exercise the content index rather than the
+    /// in-memory match.
+    private func chat(id: String, tags: [[String]] = [], content: String) throws -> Rumor {
+        try rumor(id: id, kind: 9, tags: tags, content: content)
+    }
 
-        XCTAssertEqual(
-            try db.query(tenant: "t", filters: filters(#"{"search":"BROWN"}"#)).map { $0.id },
-            ["a"]
-        )
-        XCTAssertEqual(
-            try db.query(tenant: "t", filters: filters(#"{"search":"cafe"}"#)).map { $0.id },
-            ["b"]
-        )
-        // Whole words, not substrings.
-        XCTAssertEqual(
-            try db.query(tenant: "t", filters: filters(#"{"search":"brow"}"#)).map { $0.id },
-            []
-        )
+    private func search(_ db: SqliteArmadaDb, _ tenant: String, _ json: String) throws -> [String] {
+        try db.query(tenant: tenant, filters: filters(#"{"kinds":[9],"# + json + "}")).map { $0.id }
+    }
+
+    func testSearchMatchesWordPrefixesCaseAndAccentInsensitively() throws {
+        let db = try open()
+        try db.event(tenant: "t", rumor: try chat(id: "a", content: "The quick brown fox"))
+        try db.event(tenant: "t", rumor: try chat(id: "b", content: "CAFÉ society"))
+
+        XCTAssertEqual(try search(db, "t", #""search":"BROWN""#), ["a"])
+        XCTAssertEqual(try search(db, "t", #""search":"cafe""#), ["b"])
+        // A word being typed finds itself; the middle of a word does not.
+        XCTAssertEqual(try search(db, "t", #""search":"brow""#), ["a"])
+        XCTAssertEqual(try search(db, "t", #""search":"rown""#), [])
     }
 
     func testSearchAndsKeywordsAndHonoursNegation() throws {
         let db = try open()
-        try db.event(tenant: "t", rumor: try rumor(id: "a", content: "red boat"))
-        try db.event(tenant: "t", rumor: try rumor(id: "b", content: "red anchor"))
+        try db.event(tenant: "t", rumor: try chat(id: "a", content: "red boat"))
+        try db.event(tenant: "t", rumor: try chat(id: "b", content: "red anchor"))
 
-        XCTAssertEqual(
-            try db.query(tenant: "t", filters: filters(#"{"search":"red -anchor"}"#)).map {
-                $0.id
-            },
-            ["a"]
-        )
-        XCTAssertEqual(
-            try db.query(tenant: "t", filters: filters(#"{"search":"red sail"}"#)).map { $0.id },
-            []
-        )
+        XCTAssertEqual(try search(db, "t", #""search":"red -anchor""#), ["a"])
+        XCTAssertEqual(try search(db, "t", #""search":"red sail""#), [])
     }
 
     func testSearchIntersectsWithATagDrivenScanAndIsTenantScoped() throws {
         let db = try open()
-        try db.event(
-            tenant: "a",
-            rumor: try rumor(id: "hit", tags: [["channel", "c1"]], content: "red boat")
-        )
-        try db.event(
-            tenant: "a",
-            rumor: try rumor(id: "miss", tags: [["channel", "c1"]], content: "blue boat")
-        )
-        try db.event(tenant: "b", rumor: try rumor(id: "other", content: "red boat"))
+        try db.event(tenant: "a", rumor: try chat(id: "hit", tags: [["channel", "c1"]], content: "red boat"))
+        try db.event(tenant: "a", rumor: try chat(id: "miss", tags: [["channel", "c1"]], content: "blue boat"))
+        try db.event(tenant: "b", rumor: try chat(id: "other", content: "red boat"))
 
-        XCTAssertEqual(
-            try db.query(
-                tenant: "a", filters: filters(##"{"#channel":["c1"],"search":"red"}"##)
-            ).map { $0.id },
-            ["hit"]
+        XCTAssertEqual(try search(db, "a", ##""#channel":["c1"],"search":"red""##), ["hit"])
+        XCTAssertEqual(try search(db, "b", #""search":"red""#), ["other"])
+    }
+
+    func testOnlyTheContentKindsAreIndexedAndTheRestAreMatchedInMemory() throws {
+        let db = try open()
+        try db.event(tenant: "t", rumor: try chat(id: "message", content: "harbour lights"))
+        try db.event(
+            tenant: "t",
+            rumor: try rumor(id: "setting", kind: 30078, tags: [["d", "x"]], content: "harbour lights")
         )
+
+        XCTAssertEqual(try rowCount("rumors_fts"), 1)
+        XCTAssertEqual(try search(db, "t", #""search":"harbour""#), ["message"])
+        // A kind the index doesn't hold is still found, by substring.
         XCTAssertEqual(
-            try db.query(tenant: "b", filters: filters(#"{"search":"red"}"#)).map { $0.id },
-            ["other"]
+            try db.query(tenant: "t", filters: filters(#"{"kinds":[30078],"search":"arbou"}"#)).map { $0.id },
+            ["setting"]
         )
+        XCTAssertEqual(try db.query(tenant: "t", filters: filters(#"{"search":"harbour"}"#)).count, 2)
+    }
+
+    func testAnExistingFilesContentIndexIsLimitedOnOpenAndOldEntriesLeaveWithTheirRumors() throws {
+        let db = try open()
+        let recording = try XCTUnwrap(driver)
+        // The insert trigger every file carried before the kind restriction.
+        try recording.run("DROP TRIGGER rumors_fts_insert")
+        try recording.run(
+            "CREATE TRIGGER rumors_fts_insert AFTER INSERT ON rumors BEGIN "
+                + "INSERT INTO rumors_fts (rowid, content) VALUES (new.seq, new.content); END"
+        )
+        try db.event(
+            tenant: "t", rumor: try rumor(id: "v1", createdAt: 100, kind: 30078, tags: [["d", "x"]])
+        )
+        XCTAssertEqual(try rowCount("rumors_fts"), 1)
+
+        let reopened = try SqliteArmadaDb(db: recording)
+        let trigger = try recording.query(
+            "SELECT sql FROM sqlite_master WHERE name = 'rumors_fts_insert'"
+        ) { $0.text(0) }
+        XCTAssertTrue(try XCTUnwrap(trigger.first).contains("WHEN new.kind IN (9, 14, 15, 1068, 1111)"))
+        XCTAssertEqual(try rowCount("rumors_fts"), 1)
+
+        try reopened.event(
+            tenant: "t", rumor: try rumor(id: "v2", createdAt: 200, kind: 30078, tags: [["d", "x"]])
+        )
+        XCTAssertEqual(try rowCount("rumors_fts"), 0)
     }
 
     func testASearchParsingToNoKeywordsFailsClosed() throws {
@@ -549,28 +574,19 @@ final class ArmadaDbTests: XCTestCase {
 
     func testSearchStillWorksWithTheContentIndexOff() throws {
         let db = try open(search: false)
-        try db.event(tenant: "t", rumor: try rumor(id: "a", content: "The quick brown fox"))
+        try db.event(tenant: "t", rumor: try chat(id: "a", content: "The quick brown fox"))
 
-        XCTAssertEqual(
-            try db.query(tenant: "t", filters: filters(#"{"search":"brown"}"#)).map { $0.id },
-            ["a"]
-        )
+        XCTAssertEqual(try search(db, "t", #""search":"brown""#), ["a"])
         // Without the index it is a substring match, matching IndexedDB.
-        XCTAssertEqual(
-            try db.query(tenant: "t", filters: filters(#"{"search":"brow"}"#)).map { $0.id },
-            ["a"]
-        )
+        XCTAssertEqual(try search(db, "t", #""search":"rown""#), ["a"])
     }
 
     func testARemovedRumorDisappearsFromTheSearchIndex() throws {
         let db = try open()
-        try db.event(tenant: "t", rumor: try rumor(id: "a", content: "findable"))
+        try db.event(tenant: "t", rumor: try chat(id: "a", content: "findable"))
         try db.remove(tenant: "t", filters: filters(#"{"ids":["a"]}"#))
 
-        XCTAssertEqual(
-            try db.query(tenant: "t", filters: filters(#"{"search":"findable"}"#)).map { $0.id },
-            []
-        )
+        XCTAssertEqual(try search(db, "t", #""search":"findable""#), [])
     }
 
     // MARK: - Query plans
@@ -815,13 +831,13 @@ final class ArmadaDbTests: XCTestCase {
 
     func testANulInASearchFallsBackToTheInMemoryMatch() throws {
         let db = try open()
-        try db.event(tenant: "t", rumor: try rumor(id: "a", content: "hello"))
+        try db.event(tenant: "t", rumor: try chat(id: "a", content: "hello"))
 
         // FTS5's query parser is NUL-terminated, so such a keyword can't be put
         // to the index at all; it is matched in memory instead, where it matches
         // nothing rather than quietly searching for "hel".
         XCTAssertEqual(
-            try db.query(tenant: "t", filters: [["search": "hel\u{0}lo"]]).map { $0.id }, []
+            try db.query(tenant: "t", filters: [["kinds": [9], "search": "hel\u{0}lo"]]).map { $0.id }, []
         )
     }
 

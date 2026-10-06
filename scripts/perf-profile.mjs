@@ -54,7 +54,8 @@
  * cores — compare runs against each other, not against a phone.
  *
  * Output: `perf-reports/<scenario>.json` (full reports) and a summary on
- * stdout.
+ * stdout. `ARMADA_PERF_PUBLISH_LOG=1` also prints each swallowed publish with
+ * its time and relay, to see a republish loop's cadence.
  */
 import { spawn, spawnSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
@@ -222,6 +223,7 @@ await cdp.send("Performance.enable");
  * its cost) exactly as it is in the field. Reads pass through untouched.
  */
 const swallowed = {};
+const harnessStart = Date.now();
 /**
  * Once set, every REQ is answered as an empty relay (like `.invalid` below):
  * `live-switch --offline` measures switching against what is already on disk,
@@ -249,6 +251,9 @@ await page.routeWebSocket(/^wss?:\/\//, (ws) => {
         const d = event.tags?.find((t) => t[0] === "d")?.[1];
         const key = d === undefined ? String(event.kind) : `${event.kind}:${d}`;
         swallowed[key] = (swallowed[key] ?? 0) + 1;
+        if (process.env.ARMADA_PERF_PUBLISH_LOG) {
+          console.log(`  publish +${((Date.now() - harnessStart) / 1000).toFixed(1)}s ${key} → ${new URL(ws.url()).host}`);
+        }
         ws.send(JSON.stringify(["OK", event.id, true, ""]));
         return;
       } catch {

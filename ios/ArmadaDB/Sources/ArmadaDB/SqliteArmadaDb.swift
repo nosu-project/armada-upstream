@@ -172,8 +172,27 @@ public final class SqliteArmadaDb {
 
         let schema =
             search ? ArmadaDbSchema.base + ArmadaDbSchema.search : ArmadaDbSchema.base
+        let apply = { for statement in schema { try self.db.run(statement.collapsedWhitespace) } }
 
-        for statement in schema { try db.run(statement.collapsedWhitespace) }
+        // A file from before the content index was limited to
+        // `contentIndexedKinds` has an insert trigger without a WHEN. Swapped in
+        // one transaction so no writer on another connection (the notification
+        // extension) lands between the drop and the create; what it already
+        // indexed stays and leaves with its rumors.
+        let insertTrigger = search
+            ? try db.query(
+                "SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = 'rumors_fts_insert'"
+            ) { $0.text(0) }.first
+            : nil
+        if let insertTrigger,
+           insertTrigger.range(of: #"\bWHEN\b"#, options: [.regularExpression, .caseInsensitive]) == nil {
+            try transaction {
+                try db.run("DROP TRIGGER rumors_fts_insert")
+                try apply()
+            }
+        } else {
+            try apply()
+        }
 
         try db.run("PRAGMA user_version = \(ArmadaDbSchema.version)")
     }
