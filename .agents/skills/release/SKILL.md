@@ -198,10 +198,11 @@ After pushing, tell the user:
 - The new version number
 - A brief summary of what was released
 - That CI will build and publish the artifacts: ngit-ci results and artifacts
-  appear on gitworkshop.dev against the tagged commit, the Android APK is
-  published to Zapstore, the AAB is published to Google Play (skipped if the
-  Play service-account secret isn't provisioned), and every installer is named
-  by a kind-30622 release event, which is what `/downloads` reads
+  appear on gitworkshop.dev against the tagged commit, the AAB is published to
+  Google Play (skipped if the Play service-account secret isn't provisioned),
+  and every installer is named by a kind-30622 release event, which is what
+  `/downloads` reads, and by a NIP-82 release of `buzz.armada.app`, which is
+  what Zapstore reads
 - That the **macOS** `.dmg` and the GitLab Release/package links would come from
   the GitLab mirror pipeline, but we do NOT push to GitLab — the maintainer
   handles GitLab manually, if at all
@@ -218,7 +219,7 @@ per job. Results/artifacts publish to Nostr and show on gitworkshop.dev.
 binds one checkout into every job container, so unchained jobs would run in
 parallel over the same working tree, and `android` and `desktop` each build a
 web bundle with different env. `android` goes LAST and is `if: always()`: it
-publishes to Zapstore and Google Play, which can reject for reasons unrelated
+publishes to Google Play, which can reject for reasons unrelated
 to the artifacts, and `if: always()` rescues only the job carrying it — not
 the jobs downstream — so when it ran first a Play rejection skipped the desktop
 build and shipped a release with no desktop installers.
@@ -228,27 +229,30 @@ build and shipped a release with no desktop installers.
    wine), and ad-hoc-signed macOS `.zip`s per arch, all staged into
    `.release-artifacts/` for the release event. Nothing is signed or deployed
    over SSH; there is no separate `publish` job any more.
-2. **android** — signed Android APK + AAB, then Zapstore publish
-   and Google Play publish, all in ONE job. `setup-node`/`setup-java`/`setup-android`, decode the JKS
+2. **android** — signed Android APK + AAB, then the Google Play publish, all
+   in ONE job. `setup-node`/`setup-java`/`setup-android`, decode the JKS
    from `ANDROID_KEYSTORE_BASE64`, migrate to PKCS12,
    `versionCode = major*1_000_000 + minor*1_000 + patch` (from the tag), build web assets,
    `cap sync android`, then `assembleRelease bundleRelease`; the signed APK/AAB
-   are uploaded to Blossom, then (same job, no cross-job artifact hand-off)
-   `setup-go` + `zsp` sign with the NIP-46 bunker and upload the APK to
-   Zapstore, then `setup-ruby` + `fastlane supply` upload the AAB to Google
+   are uploaded to Blossom, the APK is staged into `.release-artifacts/`, then
+   (same job, no cross-job artifact hand-off) `fastlane supply` uploads the AAB
+   to Google
    Play (production track) with the changelog summary as the "What's new" text
    (extracted from CHANGELOG.md by `scripts/extract-release-notes.mjs
    --summary`, keyed to the tag-derived versionCode). The Play publish is
    skipped when `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON` isn't provisioned.
    Build and publish share one job on purpose: act's local artifact
-   server round-trips a multi-file wildcard upload back as a 3-byte stub, so a
-   separate `publish-zapstore` job used to receive an empty APK and fail.
+   server round-trips a multi-file wildcard upload back as a 3-byte stub.
 3. **release** — publishes the kind-30622 NIP-34 release event naming every
    artifact by hash (`docs/releases.md`), uploading to Blossom only the blobs
    ngit-ci's own artifact channel dropped. `needs: [android, desktop]`, so it is
    the single writer of an addressable event that has no compare-and-swap. npkg
    (`pkg.soapbox.pub`) then reads that event and rebuilds the apt/flatpak/fdroid
-   repositories from the `.deb`/`.flatpak`/`.apk` it names.
+   repositories from the `.deb`/`.flatpak`/`.apk` it names. It then runs
+   `ngit release publish` with `.ngit/release.yaml`, publishing the same eight
+   files as a NIP-82 release of `buzz.armada.app` (kinds 32267/30063/3063,
+   also sent to the Zapstore relay). That one is all-or-nothing: a missing
+   artifact fails it while the kind-30622 event still goes out.
 
 `deploy-nsite.yml` is a separate workflow on a separate trigger: it publishes
 the web client to Blossom + relays as the nsite `armada` on **pushes to `main`
@@ -274,7 +278,7 @@ Kept during the migration. Also runs on tags matching `/^v\d+\.\d+\.\d+$/`:
 5. **release** — creates the GitLab Release with download links for the APK,
    AAB, and the Linux/Windows desktop installers.
 
-### Required secrets (Android signing + Zapstore)
+### Required secrets (Android signing + release events)
 
 The same secret values feed both CI systems, provisioned in two places:
 
@@ -292,7 +296,7 @@ secrets notes.
 | `ANDROID_KEYSTORE_BASE64` | base64 of the JKS upload keystore (single line) |
 | `KEYSTORE_PASSWORD` | keystore store password |
 | `KEY_PASSWORD` | key password (**must equal** the store password — CI migrates JKS→PKCS12, which uses one password) |
-| `ZAPSTORE_BUNKER_URL` | `bunker://` URL of the NIP-46 signer. Signs **both** the Zapstore publish and the kind-30622 release event. |
+| `ZAPSTORE_BUNKER_URL` | `bunker://` URL of the NIP-46 signer that signs the kind-30622 release event (the name predates that). |
 | `ZAPSTORE_CLIENT_KEY` | the client secret key that bunker session was established with (hex or nsec). Both halves are needed: the URL's one-time `secret=` is long spent, and this is the key the bunker actually authorized. |
 
 Optional (Google Play publish on tags, ngit-ci `release.yml`):
@@ -301,11 +305,11 @@ Optional (Google Play publish on tags, ngit-ci `release.yml`):
 |----------|------|
 | `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON` | base64 (one line) of the Play Console service-account JSON key with release permission on `buzz.armada.app`. Unprovisioned → the Play publish is skipped, not failed. |
 
-Required (nsite deploy on push to `main`, ngit-ci `deploy-nsite.yml`):
+Required (nsite deploy on push to `main`, ngit-ci `deploy-nsite.yml`; and the NIP-82 release, `release.yml`):
 
 | Variable | What |
 |----------|------|
-| `NSYTE_BUNKER` | `nbunksec1...` NIP-46 session for nsyte. The signing pubkey **is** the site address. Unprovisioned → the job fails rather than skipping, since nothing else publishes the client. |
+| `NSYTE_BUNKER` | `nbunksec1...` NIP-46 session on the Soapbox key. The signing pubkey **is** the site address, and it owns `buzz.armada.app`, so it also signs the NIP-82 release (`.ngit/release.yaml`'s `pubkey` refuses any other key before uploading). Unprovisioned → the job fails rather than skipping, since nothing else publishes the client. |
 
 Optional (GitLab mirror / macOS):
 

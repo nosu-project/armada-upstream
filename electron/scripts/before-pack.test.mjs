@@ -77,6 +77,10 @@ describe("desktop package staging guard", () => {
 // require graph (plus scripts forked by path) from the entry points and checks
 // each edge against the list.
 describe("the packaged file list", () => {
+  // Self-contained vite bundles, gitignored and absent from a fresh checkout:
+  // they must be packaged, but have no relative requires to walk.
+  const GENERATED = new Set(["db.cjs", "updateFeed.cjs"]);
+
   it("names every shell module reachable from main.js and preload.js", () => {
     const config = parseYaml(fs.readFileSync(path.join(SHELL_DIR, "electron-builder.yml"), "utf8"));
     const packaged = new Set(config.files.filter((entry) => !entry.startsWith("!")));
@@ -88,6 +92,7 @@ describe("the packaged file list", () => {
       if (seen.has(file)) continue;
       seen.add(file);
       if (!packaged.has(file)) missing.push(file);
+      if (GENERATED.has(file)) continue;
       const source = fs.readFileSync(path.join(SHELL_DIR, file), "utf8");
       for (const match of source.matchAll(/require\(\s*["']\.\/([^"']+)["']\s*\)/g)) {
         const target = match[1];
