@@ -5,6 +5,26 @@ import { describe, expect, it, vi } from "vitest";
 
 import { SettingsOverlayContext, type SettingsOverlay } from "@/lib/settingsOverlay";
 
+// The back listener is installed once per module, so this is never cleared.
+const backListeners: Array<() => void> = [];
+const minimizeApp = vi.fn(() => Promise.resolve());
+
+vi.mock("@capacitor/core", async (orig) => {
+  const actual = await orig<typeof import("@capacitor/core")>();
+  return {
+    ...actual,
+    Capacitor: { ...actual.Capacitor, isNativePlatform: () => true, getPlatform: () => "android" },
+  };
+});
+vi.mock("@capacitor/app", () => ({
+  App: {
+    addListener: (event: string, fn: () => void) => {
+      if (event === "backButton") backListeners.push(fn);
+      return Promise.resolve({ remove: () => undefined });
+    },
+    minimizeApp: () => minimizeApp(),
+  },
+}));
 vi.mock("@/components/layout/ServerRail", () => ({ ServerRail: () => <nav aria-label="Server rail" /> }));
 vi.mock("@/components/CallProvider", () => ({
   CallProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
@@ -30,8 +50,18 @@ vi.mock("@/pages/SettingsPage", () => ({
 }));
 
 import { MainLayout } from "@/components/layout/MainLayout";
+import { leaveApp, useAndroidBack } from "@/hooks/useAndroidBack";
 
 let setOpen!: (open: boolean) => void;
+
+/** A root screen that leaves the app on back, as a revealed SwipeReveal list does. */
+function RootScreen() {
+  useAndroidBack(() => {
+    leaveApp();
+    return true;
+  });
+  return <textarea aria-label="composer" />;
+}
 
 function Harness() {
   const [open, setOpenState] = useState(false);
@@ -47,7 +77,7 @@ function Harness() {
       <MemoryRouter initialEntries={["/chat"]}>
         <Routes>
           <Route element={<MainLayout />}>
-            <Route path="/chat" element={<textarea aria-label="composer" />} />
+            <Route path="/chat" element={<RootScreen />} />
           </Route>
         </Routes>
       </MemoryRouter>
@@ -77,6 +107,24 @@ describe("MainLayout settings overlay", () => {
     await screen.findByRole("dialog", { name: "Settings" });
     fireEvent.keyDown(window, { key: "Escape" });
     expect(screen.queryByRole("dialog", { name: "Settings" })).not.toBeInTheDocument();
+  });
+
+  it("closes on Android back instead of leaving the app from the page beneath", async () => {
+    minimizeApp.mockClear();
+    render(<Harness />);
+    await act(async () => setOpen(true));
+    await screen.findByRole("dialog", { name: "Settings" });
+
+    act(() => {
+      for (const fn of backListeners) fn();
+    });
+    expect(screen.queryByRole("dialog", { name: "Settings" })).not.toBeInTheDocument();
+    expect(minimizeApp).not.toHaveBeenCalled();
+
+    act(() => {
+      for (const fn of backListeners) fn();
+    });
+    expect(minimizeApp).toHaveBeenCalledTimes(1);
   });
 
   it("leaves Escape to a dialog stacked on it, and to a handler that took it", async () => {
