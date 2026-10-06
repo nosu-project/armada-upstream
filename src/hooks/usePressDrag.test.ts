@@ -188,106 +188,41 @@ describe("usePressDrag", () => {
     expect(container.scrollTop).toBe(120);
   });
 
-  it("scrolls a thumb's diagonal arc and claims it from the pane swipe", () => {
+  it("claims a diagonal touch as a scroll until release", () => {
     const container = document.createElement("div");
     container.scrollTop = 100;
     const { result } = setup(container);
 
     act(() => {
       result.current.begin("row-a")(pointer("pointerdown", { pointerType: "touch", clientX: 30, clientY: 200 }));
-      // 10px sideways for 12px up: past the browser's 45° but still a scroll here.
-      window.dispatchEvent(pointer("pointermove", { pointerType: "touch", clientX: 20, clientY: 188 }));
+      window.dispatchEvent(pointer("pointermove", { pointerType: "touch", clientX: 18, clientY: 194 }));
     });
     expect(isHandScrolling(1)).toBe(true);
 
-    act(() => void window.dispatchEvent(pointer("pointermove", { pointerType: "touch", clientX: 15, clientY: 168 })));
+    act(() => void window.dispatchEvent(pointer("pointermove", { pointerType: "touch", clientX: 10, clientY: 174 })));
     expect(container.scrollTop).toBe(120);
 
     act(() => void window.dispatchEvent(pointer("pointerup", { pointerType: "touch" })));
     expect(isHandScrolling(1)).toBe(false);
   });
 
-  it("leaves a mostly-horizontal touch alone: no scroll, no pickup", () => {
+  it("panFrom scrolls a touch and never picks it up", () => {
     const container = document.createElement("div");
     container.scrollTop = 100;
     const { result, calls } = setup(container);
+    const touch = (type: string, y: number) => pointer(type, { pointerType: "touch", clientY: y });
 
     act(() => {
-      result.current.begin("row-a")(pointer("pointerdown", { pointerType: "touch", clientX: 50, clientY: 200 }));
-      window.dispatchEvent(pointer("pointermove", { pointerType: "touch", clientX: 35, clientY: 195 }));
-      window.dispatchEvent(pointer("pointermove", { pointerType: "touch", clientX: 10, clientY: 170 }));
+      result.current.panFrom(touch("pointerdown", 200));
+      window.dispatchEvent(touch("pointermove", 220));
+      window.dispatchEvent(touch("pointermove", 240));
       vi.advanceTimersByTime(300);
     });
-
-    expect(isHandScrolling(1)).toBe(false);
-    expect(container.scrollTop).toBe(100);
+    expect(container.scrollTop).toBe(80);
     expect(calls.onPickup).not.toHaveBeenCalled();
-    act(() => void window.dispatchEvent(pointer("pointerup", { pointerType: "touch" })));
-  });
+    act(() => void window.dispatchEvent(touch("pointerup", 240)));
 
-  describe("panFromContainer", () => {
-    function rail(panFromContainer: boolean) {
-      const container = document.createElement("div");
-      const gap = document.createElement("div");
-      const entry = document.createElement("button");
-      container.append(gap, entry);
-      document.body.append(container);
-      container.scrollTop = 100;
-      const calls = { onPickup: vi.fn(), onAim: vi.fn(), onDrop: vi.fn(), onAbort: vi.fn() };
-      const containerRef = { current: null as HTMLElement | null };
-      const { result } = renderHook(() => usePressDrag<string>({ containerRef, panFromContainer, ...calls }));
-      act(() => result.current.attachContainer(container));
-      return { container, gap, entry, calls, result };
-    }
-    const touch = (type: string, y: number) => pointer(type, { pointerType: "touch", clientY: y });
-    afterEach(() => void (document.body.innerHTML = ""));
-
-    it("hand-pans a touch that starts between entries, and never picks it up", () => {
-      const { container, gap, calls } = rail(true);
-      act(() => {
-        gap.dispatchEvent(touch("pointerdown", 200));
-        window.dispatchEvent(touch("pointermove", 180));
-        window.dispatchEvent(touch("pointermove", 160));
-        vi.advanceTimersByTime(300);
-      });
-      expect(container.scrollTop).toBe(120);
-      expect(calls.onPickup).not.toHaveBeenCalled();
-      act(() => void window.dispatchEvent(touch("pointerup", 160)));
-    });
-
-    it("pans an entry's touch once, not again from the container", () => {
-      const { container, entry, result } = rail(true);
-      entry.addEventListener("pointerdown", (e) => result.current.begin("row-a")(e as PointerEvent));
-      act(() => {
-        entry.dispatchEvent(touch("pointerdown", 200));
-        window.dispatchEvent(touch("pointermove", 180));
-        window.dispatchEvent(touch("pointermove", 160));
-      });
-      expect(container.scrollTop).toBe(120);
-      act(() => void window.dispatchEvent(touch("pointerup", 160)));
-    });
-
-    it("panFrom hand-pans a touch that starts outside the container", () => {
-      const { container, result } = rail(false);
-      act(() => {
-        result.current.panFrom(touch("pointerdown", 200));
-        window.dispatchEvent(touch("pointermove", 220));
-        window.dispatchEvent(touch("pointermove", 240));
-      });
-      expect(container.scrollTop).toBe(80);
-      act(() => void window.dispatchEvent(touch("pointerup", 240)));
-      expect(result.current.panFrom(pointer("pointerdown"))).toBe(false);
-    });
-
-    it("leaves gaps to the browser when off", () => {
-      const { container, gap } = rail(false);
-      act(() => {
-        gap.dispatchEvent(touch("pointerdown", 200));
-        window.dispatchEvent(touch("pointermove", 180));
-        window.dispatchEvent(touch("pointermove", 160));
-      });
-      expect(container.scrollTop).toBe(100);
-    });
+    expect(result.current.panFrom(pointer("pointerdown"))).toBe(false);
   });
 
   describe("the hand-panned scroll's fling", () => {
@@ -374,7 +309,7 @@ describe("usePressDrag", () => {
       const container = scrollable();
       const { result } = setup(container);
       act(() => swipeUp(result.current.begin("row-a")));
-      // Released at 2 px/ms: by 1s it is under 0.1 px/ms, still coasting but reading as stopped.
+      // Still coasting, below the catch speed.
       act(() => void vi.advanceTimersByTime(1000));
 
       act(() => {
@@ -435,7 +370,6 @@ describe("usePressDrag", () => {
       container.remove();
     });
 
-    // Chromium starts an invisible fling from an uncancelled fast lift, which eats the next tap.
     it("cancels touchmove while hand-panning, on the container and on a pan surface", () => {
       const container = document.createElement("div");
       const surface = document.createElement("div");

@@ -407,7 +407,6 @@ describe("useEdgeSwipe", () => {
         Object.assign(new Event("pointermove"), { pointerId: 1, pointerType: "touch", clientX: x, clientY: y }),
       );
 
-    // A thumb arc: as much sideways as up, which the swipe alone would claim.
     const h = result.current.handlers;
     act(() => {
       rail.result.current.begin("row-a")(

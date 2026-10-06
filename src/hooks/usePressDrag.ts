@@ -9,11 +9,6 @@ const MOVE_PICKUP_PX = 5;
 /** Past this much movement, a touch that started on an entry is a scroll. */
 const SCROLL_SLOP_PX = 10;
 /**
- * Past the scroll slop, a touch is a scroll unless horizontal travel beats vertical by this much:
- * a thumb's arc starts diagonal, so the browser's 45° split loses vertical scrolls.
- */
-const HORIZONTAL_YIELD_RATIO = 1.5;
-/**
  * A pickup that never travels past this from the origin is a held tap: no drop, and the click
  * must still navigate.
  */
@@ -31,17 +26,10 @@ const FLING_MAX_VELOCITY = 8;
 /** Exponential decay time constant (ms); coast distance is velocity × this. */
 const FLING_DECAY_MS = 325;
 const FLING_STOP_VELOCITY = 0.02;
-/**
- * A tap that stops a fling moving at least this fast (px/ms, ~5px a frame) is swallowed. A slower
- * coast reads as stopped, so its tap stops it and still clicks.
- */
+/** px/ms; a tap that stops a slower fling still clicks. */
 const FLING_CATCH_VELOCITY = 0.3;
 
-/**
- * Touches the hand-panner has claimed as a scroll. Entries are `touch-action: none`, so the
- * browser never arbitrates scroll against a horizontal pane swipe there; this is how the swipe
- * (`useEdgeSwipe`) learns it lost.
- */
+/** Touches hand-panned as a scroll, for `useEdgeSwipe` (MeshPage's rail is inside its pane). */
 const handScrolling = new Set<number>();
 
 export function isHandScrolling(pointerId: number): boolean {
@@ -68,11 +56,6 @@ export interface PressDragOptions<T> {
    * handle, which has nothing else to do with a moving finger.
    */
   pickupOnMove?: "mouse" | "all";
-  /**
-   * Hand-pan a touch that starts between entries too, so the whole container scrolls one way.
-   * The container must then be `touch-action: none`, or the browser pans it as well.
-   */
-  panFromContainer?: boolean;
 }
 
 /**
@@ -94,7 +77,6 @@ export function usePressDrag<T>({
   onAbort,
   onContainerScroll,
   pickupOnMove = "mouse",
-  panFromContainer = false,
 }: PressDragOptions<T>) {
   const [source, setSource] = useState<T | null>(null);
   /** Read inside listeners where state would be stale. */
@@ -109,19 +91,17 @@ export function usePressDrag<T>({
   const handlers = useRef({ onPickup, onAim, onDrop, onAbort, onContainerScroll });
   handlers.current = { onPickup, onAim, onDrop, onAbort, onContainerScroll };
 
-  /** Set while a press is being hand-panned as a scroll. */
   const panning = useRef(false);
 
-  // Also cancelled while hand-panning: Chromium otherwise starts an invisible fling from a fast
-  // lift even under `touch-action: none`, and swallows the next tap (within ~2s) as cancelling it.
+  // Also while panning: from an uncancelled fast lift Chromium starts an invisible fling, even
+  // under `touch-action: none`, and drops the next tap as its cancel.
   const onTouchMove = useCallback((ev: TouchEvent) => {
     if ((active.current !== null || panning.current) && ev.cancelable) ev.preventDefault();
   }, []);
 
-  /** Current fling speed, so a stop can tell a visible coast from its tail. */
   const flingVelocity = useRef(0);
 
-  /** Returns whether the fling stopped was still visibly moving. */
+  /** True if the fling was still visibly moving. */
   const stopFling = useCallback(() => {
     if (flingRaf.current === null) return false;
     cancelAnimationFrame(flingRaf.current);
@@ -180,20 +160,6 @@ export function usePressDrag<T>({
     window.addEventListener("pointercancel", release);
   }, [stopFling]);
 
-  /** The pointer an entry's `begin` already took, so the container doesn't press it twice. */
-  const pressedPointer = useRef<number | null>(null);
-  // Ref: `press` is declared below and the container listener is bound once.
-  const pressRef = useRef<(from: T | null, e: PointerEvent) => void>(() => {});
-  const panFromContainerRef = useRef(panFromContainer);
-  panFromContainerRef.current = panFromContainer;
-
-  // Bubble phase, after any entry's `begin`: a touch between entries is a scroll-only press.
-  const onContainerPointerDownBubble = useCallback((e: PointerEvent) => {
-    if (!panFromContainerRef.current || e.pointerType !== "touch") return;
-    if (pressedPointer.current === e.pointerId) return;
-    pressRef.current(null, e);
-  }, []);
-
   /**
    * Callback ref: the container may mount after the hook (behind a loading gate), and an effect
    * reading a null ref would silently leave the canceller off.
@@ -202,17 +168,15 @@ export function usePressDrag<T>({
     (el: HTMLElement | null) => {
       containerRef.current?.removeEventListener("touchmove", onTouchMove);
       containerRef.current?.removeEventListener("pointerdown", onContainerPointerDown, true);
-      containerRef.current?.removeEventListener("pointerdown", onContainerPointerDownBubble);
       if (containerRef.current !== el) stopFling();
       containerRef.current = el;
       el?.addEventListener("touchmove", onTouchMove, { passive: false });
       el?.addEventListener("pointerdown", onContainerPointerDown, true);
-      el?.addEventListener("pointerdown", onContainerPointerDownBubble);
     },
-    [containerRef, onTouchMove, onContainerPointerDown, onContainerPointerDownBubble, stopFling],
+    [containerRef, onTouchMove, onContainerPointerDown, stopFling],
   );
 
-  /** Callback ref for a surface feeding {@link panFrom}: it needs the same permanent canceller. */
+  /** For a {@link panFrom} surface outside the container. */
   const panSurface = useRef<HTMLElement | null>(null);
   const attachPanSurface = useCallback(
     (el: HTMLElement | null) => {
@@ -234,7 +198,7 @@ export function usePressDrag<T>({
     };
   }, [dragging]);
 
-  /** `from` null: a scroll-only press, which never picks up. */
+  /** `from` null: scroll only. */
   const press = useCallback(
     (from: T | null, e: PointerEvent) => {
       // Only left mouse / touch / pen.
@@ -242,7 +206,6 @@ export function usePressDrag<T>({
       // Normally already caught by the container's own listener.
       stopFling();
       const pointerId = e.pointerId;
-      pressedPointer.current = pointerId;
       const isMouse = e.pointerType === "mouse";
       const movePicks = from !== null && (isMouse || pickupOnMove === "all");
       const startX = e.clientX;
@@ -251,8 +214,6 @@ export function usePressDrag<T>({
       let lastX = startX;
       let lastY = startY;
       let manualScroll = false;
-      // A mostly-horizontal touch, left to the pane swipe.
-      let yielded = false;
       let lastScrollY = startY;
       let scrollSamples: { t: number; y: number }[] = [];
       // Across the whole gesture, including the hold; a pickup that never moved far is a held tap.
@@ -318,7 +279,6 @@ export function usePressDrag<T>({
           everMovedFar = true;
         }
         if (active.current === null) {
-          if (yielded) return;
           lastX = ev.clientX;
           lastY = ev.clientY;
           // Entries are `touch-action: none`, so pan the container by hand.
@@ -343,10 +303,6 @@ export function usePressDrag<T>({
             // Early touch movement is a scroll; hand the rest to the manual panner.
             if (timer.current) clearTimeout(timer.current);
             timer.current = null;
-            if (Math.abs(ev.clientX - startX) > Math.abs(ev.clientY - startY) * HORIZONTAL_YIELD_RATIO) {
-              yielded = true;
-              return;
-            }
             manualScroll = true;
             panning.current = true;
             handScrolling.add(pointerId);
@@ -404,7 +360,7 @@ export function usePressDrag<T>({
         handlers.current.onAbort();
       };
 
-      // Capture, so the scroll/swipe decision lands before React's handlers see the same move.
+      // Capture: claim the scroll before `useEdgeSwipe` sees the same move.
       window.addEventListener("pointermove", onMove, { passive: false, capture: true });
       window.addEventListener("pointerup", onUp);
       window.addEventListener("pointercancel", onCancel);
@@ -426,14 +382,10 @@ export function usePressDrag<T>({
     },
     [containerRef, fling, stopFling, pickupOnMove],
   );
-  pressRef.current = press;
 
   const begin = useCallback((from: T) => (e: PointerEvent) => press(from, e), [press]);
 
-  /**
-   * Hand-pan the container from a touch that starts outside it (a reach zone beside it).
-   * Returns whether the touch caught a fling, so its tap shouldn't act.
-   */
+  /** Scroll-only press from a `touch-action: none` surface off any entry; true if it caught a fling. */
   const panFrom = useCallback(
     (e: PointerEvent) => {
       if (e.pointerType !== "touch") return false;

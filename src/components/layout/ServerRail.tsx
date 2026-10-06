@@ -1535,7 +1535,6 @@ function ServerRailInner({
       persistLayout(next);
     },
     onAbort: endDrag,
-    panFromContainer: true,
   });
 
   const playFlip = flip.play;
@@ -1660,7 +1659,6 @@ function ServerRailInner({
   const rail = (
     <div
       className={cn(
-        // Wider on touch: a thumb lands on the rail's right edge and past it.
         "flex flex-col items-center w-[60px] touch:w-[72px] sidebar:w-[72px] shrink-0 overflow-hidden bg-chrome-deep select-none",
         className,
       )}
@@ -1670,6 +1668,10 @@ function ServerRailInner({
         aria-label="Servers"
         // Suppress native HTML5 drag, which hijacks the custom reorder gesture.
         onDragStart={(e) => e.preventDefault()}
+        // Entries start their own press.
+        onPointerDown={(e) => {
+          if (!(e.target as Element).closest("[data-rail-anchor]")) railDrag.panFrom(e.nativeEvent);
+        }}
         className={cn(
           // `overflow-x-clip` is required: `overflow-y-auto` alone computes overflow-x
           // to `auto`, giving a horizontal scrollbar in the narrow rail.
@@ -1677,7 +1679,6 @@ function ServerRailInner({
           "overflow-y-auto overflow-x-clip [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
           "pt-[calc(0.75rem+var(--safe-area-inset-top,env(safe-area-inset-top,0px)))]",
           "relative pb-2",
-          // Gaps between entries are hand-panned like the entries (panFromContainer).
           "touch:touch-none",
           reordering && "overflow-hidden",
         )}
@@ -2093,7 +2094,7 @@ function ServerRailInner({
   );
 
   if (!reachZone) return rail;
-  // Outside the rail's overflow clip, so the zone can extend past its edge.
+  // Outside the rail's overflow clip.
   return (
     <div className="relative flex shrink-0">
       {rail}
@@ -2102,10 +2103,7 @@ function ServerRailInner({
   );
 }
 
-/**
- * Extends the rail's scroll surface over the list beside it: a thumb reaching up-left lands
- * short of the rail. Swipes here pan the rail; a tap goes to whatever is underneath.
- */
+/** Extends the rail's touch area over the list: swipes scroll the rail, taps reach what's beneath. */
 function RailReachZone({
   panFrom,
   attach,
@@ -2113,7 +2111,6 @@ function RailReachZone({
   panFrom: (e: PointerEvent) => boolean;
   attach: (el: HTMLElement | null) => void;
 }) {
-  // The tap that stops a fling must not also open what's underneath.
   const caughtFling = useRef(false);
   return (
     <div
