@@ -38,6 +38,7 @@ import { BlossomServerListEditor } from "@/components/BlossomServerListEditor";
 import { PreferredBlossomServerField } from "@/components/PreferredBlossomServerField";
 import { AccountStandingDialog } from "@/components/settings/AccountStandingDialog";
 import { EmojiPackSettings } from "@/components/settings/EmojiPackSettings";
+import { FontScaleSettings } from "@/components/settings/FontScaleSettings";
 import { ProfileSettings } from "@/components/ProfileSettings";
 import { NotificationSettings } from "@/components/NotificationSettings";
 import { RelayListEditor } from "@/components/RelayListEditor";
@@ -426,9 +427,12 @@ export function SettingsPage({
         );
       case "appearance":
         return (
-          <SettingsRow>
-            <ThemeSelector />
-          </SettingsRow>
+          <>
+            <FontScaleSettings />
+            <SettingsRow>
+              <ThemeSelector />
+            </SettingsRow>
+          </>
         );
       case "desktop":
         return <DesktopSettings />;

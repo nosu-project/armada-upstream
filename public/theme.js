@@ -177,4 +177,10 @@
 
   var meta = document.querySelector('meta[name="theme-color"]');
   if (meta) meta.setAttribute("content", "rgb(" + rgb[0] + "," + rgb[1] + "," + rgb[2] + ")");
+
+  // Text size; see src/lib/fontScale.ts, the key's only writer.
+  try {
+    var scale = Number(localStorage.getItem("armada:font-scale"));
+    if (scale) root.style.setProperty("--font-scale", String(scale / 100));
+  } catch (e) { /* storage blocked */ }
 })();
