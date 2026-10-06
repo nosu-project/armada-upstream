@@ -48,6 +48,7 @@ import { getAvatarShape } from "@/lib/avatarShape";
 import {
   audioDeviceLabel,
   getAudioProcessing,
+  micCaptureConstraints,
   platformRoutesCallAudio,
   rememberVoiceDevice,
   setAudioProcessing,
@@ -183,13 +184,12 @@ export function DeviceMenu({ className }: { className?: string }) {
           if ("rnnoise" in patch) {
             void syncRnnoise(track, next.rnnoise);
           } else {
-            // restartTrack drops any active processor, so re-apply RNNoise.
+            // restartTrack drops any active processor, so re-apply RNNoise. The
+            // options replace the track's constraints wholesale, so carry the
+            // mono capture and the device in use.
+            const { deviceId } = track.constraints;
             void track
-              .restartTrack({
-                noiseSuppression: next.noiseSuppression,
-                echoCancellation: next.echoCancellation,
-                autoGainControl: next.autoGainControl,
-              })
+              .restartTrack({ ...micCaptureConstraints(next), ...(deviceId ? { deviceId } : {}) })
               .then(() => syncRnnoise(track, next.rnnoise))
               .catch((err) => console.warn("failed to apply audio processing", err));
           }

@@ -443,11 +443,18 @@ function CallAudioKeeper() {
   return null;
 }
 
-/** `musicHighQuality` (96 kbps) mono, with RED + DTX asserted explicitly in case defaults change. */
+/**
+ * `musicHighQuality` (96 kbps) mono, with RED + DTX asserted explicitly in case
+ * defaults change. `forceStereo: false` because LiveKit otherwise negotiates
+ * stereo from the published track's channelCount, which a processor's output or
+ * a device ignoring the mono constraint can report as 2; screen-share audio
+ * passes its own `forceStereo: true`.
+ */
 const audioPublishDefaults = {
   audioPreset: AudioPresets.musicHighQuality,
   red: true,
   dtx: true,
+  forceStereo: false,
 } as const;
 
 /**
