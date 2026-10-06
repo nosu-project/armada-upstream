@@ -22,7 +22,7 @@ import { ownAvServers } from "@/concord/hooks/useVoice";
 import { canonicalOrigin, probeAvBroker } from "@/concord/lib/voice";
 import { registerBeforeAccountExit } from "@/lib/beforeAccountExit";
 import { signerNeedsApproval } from "@/lib/bulkDecryptGate";
-import { consumeNativeCallAnswer, setNativeCallPeer } from "@/lib/nativeNotifications";
+import { consumeNativeCallAnswer, dismissNativeCallRing, setNativeCallPeer } from "@/lib/nativeNotifications";
 import {
   startIncomingRing,
   startRingback,
@@ -453,6 +453,7 @@ export function DmCallProvider({ children }: { children: React.ReactNode }) {
     const offer = incomingRef.current;
     if (!offer?.secretHex || !offer.broker) return;
     clearIncoming();
+    dismissNativeCallRing(offer.callId);
     joinOffer(offer);
   }, [clearIncoming, joinOffer]);
 
@@ -460,6 +461,7 @@ export function DmCallProvider({ children }: { children: React.ReactNode }) {
     const offer = incomingRef.current;
     if (!offer) return;
     clearIncoming();
+    dismissNativeCallRing(offer.callId);
     void sendSignal("decline", offer.author, offer.callId).catch(() => undefined);
   }, [clearIncoming, sendSignal]);
 
@@ -582,6 +584,8 @@ export function DmCallProvider({ children }: { children: React.ReactNode }) {
           const pending = pendingAcceptRef.current;
           setIncoming(signal);
           startIncomingRing();
+          // On screen, this ring is the one to answer; the tray's would ring alongside it.
+          if (document.visibilityState === "visible") dismissNativeCallRing(signal.callId);
           sendReceipt("ringing", signal.author, signal.callId);
           if (incomingTimeoutRef.current) clearTimeout(incomingTimeoutRef.current);
           incomingTimeoutRef.current = setTimeout(() => {

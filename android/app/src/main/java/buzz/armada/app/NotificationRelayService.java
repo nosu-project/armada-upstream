@@ -252,6 +252,9 @@ public class NotificationRelayService extends Service {
     // roomNotifs). Null when none.
     private String ringingCallId;
     private String ringingPeer;
+    // Calls the WebView took over (dismissCallRing), newest last; handler thread only.
+    private final java.util.ArrayDeque<String> dismissedRingCallIds = new java.util.ArrayDeque<>();
+    private static final int DISMISSED_RING_MEMORY = 32;
     // One "ringing" receipt per call id and per peer per interval, as on the web.
     private final CallReceiptGate callReceiptGate = new CallReceiptGate();
 
@@ -1097,6 +1100,35 @@ public class NotificationRelayService extends Service {
     static void setCallPeer(String peer) {
         callPeer = peer != null && peer.length() == 64 ? peer : null;
         callPeerUpdatedAtElapsedMs = android.os.SystemClock.elapsedRealtime();
+        // The WebView owns a call with this peer, so a ring of theirs is over.
+        // Locally: the self-copy "answer" that also cancels it is relay-borne.
+        NotificationRelayService svc = instance;
+        String owned = callPeer;
+        if (svc != null && owned != null) svc.handler.post(() -> svc.cancelRingFrom(owned));
+    }
+
+    /**
+     * The WebView answered, declined or is ringing {@code callId} itself: stop
+     * this device's ring for it, silently, and don't post one if the offer
+     * reaches the service after the WebView.
+     */
+    static void dismissCallRing(String callId) {
+        NotificationRelayService svc = instance;
+        if (svc == null || !validHex(callId)) return;
+        svc.handler.post(() -> {
+            svc.dismissedRingCallIds.remove(callId);
+            svc.dismissedRingCallIds.addLast(callId);
+            while (svc.dismissedRingCallIds.size() > DISMISSED_RING_MEMORY) {
+                svc.dismissedRingCallIds.removeFirst();
+            }
+            svc.cancelIncomingCall(callId, /*missed=*/false);
+        });
+    }
+
+    private void cancelRingFrom(String peer) {
+        if (peer.equals(ringingPeer) && ringingCallId != null) {
+            cancelIncomingCall(ringingCallId, /*missed=*/false);
+        }
     }
 
     /**
@@ -4225,6 +4257,7 @@ public class NotificationRelayService extends Service {
             if (secret == null || secret.length() != 64) return;
             if (broker == null || !broker.startsWith("https://")) return;
             if (freshActiveRoomKeys().contains("dm:" + peer)) return;
+            if (dismissedRingCallIds.contains(callId)) return;
             // The WebView (or another device of ours) is already dialing or in
             // a call with this peer: their offer is the other half of it — two
             // people dialing each other — which the WebView settles. Ringing

@@ -9,7 +9,9 @@ import { micCaptureConstraints } from "@/lib/voiceDevices";
  * audio opens as USAGE_MEDIA (no echo-canceller reference, keys on the wrong
  * stream), and every unmute, processing toggle, headset plug or rejoin flaps
  * the mode and the route. One capture held from before connect to hang-up
- * keeps the mode on for the whole call. Android only: elsewhere the mode does
+ * keeps the mode on for the whole call. Only a stream opened after it counts,
+ * and an output stream already open with the same settings is shared, not
+ * reopened (see callSounds.ts). Android only: elsewhere the mode does
  * not exist and a muted call would show a live mic indicator.
  */
 export function shouldHoldCallMic(): boolean {

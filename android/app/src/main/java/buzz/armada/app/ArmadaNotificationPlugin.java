@@ -667,6 +667,17 @@ public class ArmadaNotificationPlugin extends Plugin {
     }
 
     /**
+     * The WebView answered, declined or is itself ringing {@code callId}: the
+     * service drops its tray ring for that call (no "Missed call") and won't
+     * post one for it later.
+     */
+    @PluginMethod
+    public void dismissCallRing(PluginCall call) {
+        NotificationRelayService.dismissCallRing(call.getString("callId", ""));
+        call.resolve();
+    }
+
+    /**
      * Cancel tray notifications for conversations the WebView reports as read.
      * Payload: {@code { markers: [{ room, ts }, …] }} where {@code room} is the
      * WebView's read-state key (`dm:<pk>` / `c2:<id>` /
