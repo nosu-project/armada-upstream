@@ -24,6 +24,7 @@ const h = vi.hoisted(() => ({
   nsec: vi.fn<(key: string) => Promise<void>>(),
   suppressNextSyncGate: vi.fn<(pubkey: string) => void>(),
   markRelayRecoveryPromptShown: vi.fn<(pubkey: string) => void>(),
+  markNotificationSettingsReady: vi.fn<(pubkey: string) => void>(),
   setOnboardingActive: vi.fn<(next: boolean) => void>(),
   user: undefined as { pubkey: string } | undefined,
 }));
@@ -54,6 +55,9 @@ vi.mock("@/hooks/useOnboarding", () => ({
 vi.mock("@/lib/relayRecoveryPrompt", () => ({
   markRelayRecoveryPromptShown: h.markRelayRecoveryPromptShown,
 }));
+vi.mock("@/lib/notificationSettingsAuthority", () => ({
+  markNotificationSettingsReady: h.markNotificationSettingsReady,
+}));
 vi.mock("@/hooks/useToast", () => ({ toast: vi.fn() }));
 vi.mock("@/lib/clipboard", () => ({
   writeClipboardText: vi.fn(async () => {}),
@@ -81,6 +85,7 @@ beforeEach(() => {
   h.nsec.mockReset();
   h.suppressNextSyncGate.mockReset();
   h.markRelayRecoveryPromptShown.mockReset();
+  h.markNotificationSettingsReady.mockReset();
   h.setOnboardingActive.mockReset();
   h.user = undefined;
 });
@@ -203,6 +208,8 @@ describe("SignupDialog account creation", () => {
     const pubkey = getPublicKey(nip19.decode(nsecArg).data as Uint8Array);
     expect(h.suppressNextSyncGate).toHaveBeenCalledWith(pubkey);
     expect(h.markRelayRecoveryPromptShown).toHaveBeenCalledWith(pubkey);
+    // A minted key has no notifications document: its defaults are the policy.
+    expect(h.markNotificationSettingsReady).toHaveBeenCalledWith(pubkey);
     // The onboarding flag is raised before login so LoginSetup can't paint over
     // the profile step.
     expect(h.setOnboardingActive).toHaveBeenCalledWith(true);

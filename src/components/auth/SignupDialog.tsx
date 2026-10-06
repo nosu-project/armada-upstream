@@ -12,6 +12,7 @@ import { useLoginActions } from '@/hooks/useLoginActions';
 import { suppressNextSyncGate } from '@/hooks/useFreshLogin';
 import { setOnboardingActive } from '@/hooks/useOnboarding';
 import { toast } from '@/hooks/useToast';
+import { markNotificationSettingsReady } from '@/lib/notificationSettingsAuthority';
 import { markRelayRecoveryPromptShown } from '@/lib/relayRecoveryPrompt';
 
 interface SignupDialogProps {
@@ -62,6 +63,7 @@ const SignupDialog: React.FC<SignupDialogProps> = ({ isOpen, onClose, onComplete
     if (identity) {
       suppressNextSyncGate(identity.pubkey);
       markRelayRecoveryPromptShown(identity.pubkey);
+      markNotificationSettingsReady(identity.pubkey);
     }
     // BEFORE login, so LoginSetup (z-[260]) never paints over the profile step (z-[255]).
     setOnboardingActive(true);
