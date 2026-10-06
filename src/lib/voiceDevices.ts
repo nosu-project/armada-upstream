@@ -62,9 +62,12 @@ export function getPreferredMicId(): string | undefined {
   return platformRoutesCallAudio() ? undefined : read(MIC_KEY);
 }
 
-/** The remembered preferred speaker (audio output) deviceId, if any. */
+/**
+ * The remembered preferred speaker (audio output) deviceId, if any. Never on
+ * Android, for the same reason as getPreferredMicId.
+ */
 export function getPreferredSpeakerId(): string | undefined {
-  return read(SPEAKER_KEY);
+  return platformRoutesCallAudio() ? undefined : read(SPEAKER_KEY);
 }
 
 /** The remembered preferred camera (video input) deviceId, if any. */
@@ -133,9 +136,9 @@ export function liveDeviceSwitch(
   kind: MediaDeviceKind,
   activeId: string | undefined,
 ): string | undefined {
+  if (platformRoutesCallAudio()) return undefined;
   let preferred: string | undefined;
   if (kind === "audioinput") {
-    if (platformRoutesCallAudio()) return undefined;
     preferred = getPreferredMicId();
   } else if (kind === "audiooutput") {
     if (!supportsSpeakerSelection()) return undefined;

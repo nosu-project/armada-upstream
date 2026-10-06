@@ -9,6 +9,7 @@ import {
   audioDeviceLabel,
   effectiveAvServers,
   getPreferredMicId,
+  getPreferredSpeakerId,
   micCaptureConstraints,
   platformRoutesCallAudio,
   rememberVoiceDevice,
@@ -184,5 +185,17 @@ describe("live device switching", () => {
 
     expect(liveDeviceSwitch("audioinput", "mic-1")).toBeUndefined();
     expect(liveDeviceSwitch("videoinput", "camera-1")).toBeUndefined();
+  });
+
+  it("leaves the speaker to the platform on Android, even a stale remembered one", () => {
+    stubSpeakerSelection();
+    rememberVoiceDevice("audiooutput", "speaker-2");
+    platform.name = "android";
+
+    expect(getPreferredSpeakerId()).toBeUndefined();
+    expect(liveDeviceSwitch("audiooutput", "speaker-1")).toBeUndefined();
+    // Not "default" either: that would override the route Android picked.
+    localStorage.clear();
+    expect(liveDeviceSwitch("audiooutput", "speaker-1")).toBeUndefined();
   });
 });
