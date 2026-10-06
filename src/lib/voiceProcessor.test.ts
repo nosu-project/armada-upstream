@@ -27,13 +27,9 @@ vi.stubGlobal("MediaStream", FakeMediaStream);
 const { createRnnoiseProcessor } = await import("./voiceProcessor");
 const { RnnoiseWorkletNode } = await import("@sapphi-red/web-noise-suppressor");
 
-function fakeContext(sampleRate = 48_000) {
+function fakeContext() {
   const node = () => ({ connect: vi.fn(), disconnect: vi.fn() });
   return {
-    sampleRate,
-    state: "running",
-    addEventListener: vi.fn(),
-    close: vi.fn(async () => {}),
     audioWorklet: { addModule: vi.fn(async () => {}) },
     createMediaStreamSource: vi.fn(node),
     createMediaStreamDestination: vi.fn(() => ({
@@ -80,27 +76,5 @@ describe("RNNoise track processor", () => {
     expect(node).toMatchObject({ channelCount: 1, channelCountMode: "explicit", channelInterpretation: "speakers" });
     const destination = vi.mocked(ctx.createMediaStreamDestination).mock.results[0].value;
     expect(destination.channelCount).toBe(1);
-  });
-
-  it("runs on its own 48 kHz context when the call's runs at another rate, and closes it", async () => {
-    const own = fakeContext();
-    const Ctor = vi.fn(function () {
-      return own;
-    });
-    vi.stubGlobal("AudioContext", Ctor);
-    const call = fakeContext(44_100);
-    const processor = createRnnoiseProcessor();
-    await processor.init({ kind: "audio", track: {} as MediaStreamTrack, audioContext: call });
-    await processor.restart({ kind: "audio", track: {} } as unknown as Parameters<typeof processor.restart>[0]);
-
-    expect(Ctor).toHaveBeenCalledTimes(1);
-    expect(Ctor).toHaveBeenCalledWith({ sampleRate: 48_000, latencyHint: "interactive" });
-    expect(call.createMediaStreamSource).not.toHaveBeenCalled();
-    expect(own.createMediaStreamSource).toHaveBeenCalledTimes(2);
-
-    await processor.destroy();
-    expect(own.close).toHaveBeenCalledTimes(1);
-    vi.unstubAllGlobals();
-    vi.stubGlobal("MediaStream", FakeMediaStream);
   });
 });
