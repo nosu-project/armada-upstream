@@ -1,4 +1,4 @@
-import { AlertCircle, Braces, Copy, EyeOff, Flag, Forward, Link, Link2, MessagesSquare, Pencil, Pin, PinOff, Reply, Trash2, User, Zap } from "lucide-react";
+import { AlertCircle, Braces, Copy, CornerDownRight, EyeOff, Flag, Forward, Link, Link2, MessagesSquare, Pencil, Pin, PinOff, Reply, Trash2, User, Zap } from "lucide-react";
 import { nip19 } from "nostr-tools";
 import { memo, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 
@@ -327,6 +327,8 @@ export interface ChatMessageProps {
   onReply?: (event: ChatMsg) => void;
   /** Forward, Signal-style: re-sent as a NEW message by the forwarder, no attribution. */
   onForward?: (event: ChatMsg) => void;
+  /** "Jump to message" for rows shown outside their timeline (search results). */
+  onJump?: () => void;
   onEdit?: (event: ChatMsg) => void;
   onEditSubmit?: (event: ChatMsg, content: string) => void;
   onEditCancel?: () => void;
@@ -392,6 +394,7 @@ const ChatMessageInner = memo(function ChatMessageInner({
   onOpenThread,
   onReply,
   onForward,
+  onJump,
   onEdit,
   onEditSubmit,
   onEditCancel,
@@ -547,6 +550,9 @@ const ChatMessageInner = memo(function ChatMessageInner({
 
   // One list drives the touch sheet, `⋯` overflow and right-click menu.
   const menuActions: MessageActionItem[] = [];
+  if (onJump) {
+    menuActions.push({ id: "jump", label: "Jump to message", icon: CornerDownRight, onSelect: onJump });
+  }
   if (canWrite && !isEditing && onReply) {
     menuActions.push({ id: "reply", label: "Reply", icon: Reply, onSelect: () => onReply(event) });
   }
