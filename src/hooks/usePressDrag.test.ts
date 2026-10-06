@@ -225,6 +225,59 @@ describe("usePressDrag", () => {
     act(() => void window.dispatchEvent(pointer("pointerup", { pointerType: "touch" })));
   });
 
+  describe("panFromContainer", () => {
+    function rail(panFromContainer: boolean) {
+      const container = document.createElement("div");
+      const gap = document.createElement("div");
+      const entry = document.createElement("button");
+      container.append(gap, entry);
+      document.body.append(container);
+      container.scrollTop = 100;
+      const calls = { onPickup: vi.fn(), onAim: vi.fn(), onDrop: vi.fn(), onAbort: vi.fn() };
+      const containerRef = { current: null as HTMLElement | null };
+      const { result } = renderHook(() => usePressDrag<string>({ containerRef, panFromContainer, ...calls }));
+      act(() => result.current.attachContainer(container));
+      return { container, gap, entry, calls, result };
+    }
+    const touch = (type: string, y: number) => pointer(type, { pointerType: "touch", clientY: y });
+    afterEach(() => void (document.body.innerHTML = ""));
+
+    it("hand-pans a touch that starts between entries, and never picks it up", () => {
+      const { container, gap, calls } = rail(true);
+      act(() => {
+        gap.dispatchEvent(touch("pointerdown", 200));
+        window.dispatchEvent(touch("pointermove", 180));
+        window.dispatchEvent(touch("pointermove", 160));
+        vi.advanceTimersByTime(300);
+      });
+      expect(container.scrollTop).toBe(120);
+      expect(calls.onPickup).not.toHaveBeenCalled();
+      act(() => void window.dispatchEvent(touch("pointerup", 160)));
+    });
+
+    it("pans an entry's touch once, not again from the container", () => {
+      const { container, entry, result } = rail(true);
+      entry.addEventListener("pointerdown", (e) => result.current.begin("row-a")(e as PointerEvent));
+      act(() => {
+        entry.dispatchEvent(touch("pointerdown", 200));
+        window.dispatchEvent(touch("pointermove", 180));
+        window.dispatchEvent(touch("pointermove", 160));
+      });
+      expect(container.scrollTop).toBe(120);
+      act(() => void window.dispatchEvent(touch("pointerup", 160)));
+    });
+
+    it("leaves gaps to the browser when off", () => {
+      const { container, gap } = rail(false);
+      act(() => {
+        gap.dispatchEvent(touch("pointerdown", 200));
+        window.dispatchEvent(touch("pointermove", 180));
+        window.dispatchEvent(touch("pointermove", 160));
+      });
+      expect(container.scrollTop).toBe(100);
+    });
+  });
+
   describe("the hand-panned scroll's fling", () => {
     /** A container jsdom will let scroll: scrollTop clamps to [0, 1000]. */
     function scrollable() {

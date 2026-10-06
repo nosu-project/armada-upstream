@@ -63,6 +63,11 @@ export interface PressDragOptions<T> {
    * handle, which has nothing else to do with a moving finger.
    */
   pickupOnMove?: "mouse" | "all";
+  /**
+   * Hand-pan a touch that starts between entries too, so the whole container scrolls one way.
+   * The container must then be `touch-action: none`, or the browser pans it as well.
+   */
+  panFromContainer?: boolean;
 }
 
 /**
@@ -84,6 +89,7 @@ export function usePressDrag<T>({
   onAbort,
   onContainerScroll,
   pickupOnMove = "mouse",
+  panFromContainer = false,
 }: PressDragOptions<T>) {
   const [source, setSource] = useState<T | null>(null);
   /** Read inside listeners where state would be stale. */
@@ -158,6 +164,20 @@ export function usePressDrag<T>({
     window.addEventListener("pointercancel", release);
   }, [stopFling]);
 
+  /** The pointer an entry's `begin` already took, so the container doesn't press it twice. */
+  const pressedPointer = useRef<number | null>(null);
+  // Ref: `press` is declared below and the container listener is bound once.
+  const pressRef = useRef<(from: T | null, e: PointerEvent) => void>(() => {});
+  const panFromContainerRef = useRef(panFromContainer);
+  panFromContainerRef.current = panFromContainer;
+
+  // Bubble phase, after any entry's `begin`: a touch between entries is a scroll-only press.
+  const onContainerPointerDownBubble = useCallback((e: PointerEvent) => {
+    if (!panFromContainerRef.current || e.pointerType !== "touch") return;
+    if (pressedPointer.current === e.pointerId) return;
+    pressRef.current(null, e);
+  }, []);
+
   /**
    * Callback ref: the container may mount after the hook (behind a loading gate), and an effect
    * reading a null ref would silently leave the canceller off.
@@ -166,12 +186,14 @@ export function usePressDrag<T>({
     (el: HTMLElement | null) => {
       containerRef.current?.removeEventListener("touchmove", onTouchMove);
       containerRef.current?.removeEventListener("pointerdown", onContainerPointerDown, true);
+      containerRef.current?.removeEventListener("pointerdown", onContainerPointerDownBubble);
       if (containerRef.current !== el) stopFling();
       containerRef.current = el;
       el?.addEventListener("touchmove", onTouchMove, { passive: false });
       el?.addEventListener("pointerdown", onContainerPointerDown, true);
+      el?.addEventListener("pointerdown", onContainerPointerDownBubble);
     },
-    [containerRef, onTouchMove, onContainerPointerDown, stopFling],
+    [containerRef, onTouchMove, onContainerPointerDown, onContainerPointerDownBubble, stopFling],
   );
 
   // Grabbing cursor only while picked up; a grab-on-hover hand confuses people.
@@ -185,15 +207,17 @@ export function usePressDrag<T>({
     };
   }, [dragging]);
 
-  const begin = useCallback(
-    (from: T) => (e: PointerEvent) => {
+  /** `from` null: a scroll-only press, which never picks up. */
+  const press = useCallback(
+    (from: T | null, e: PointerEvent) => {
       // Only left mouse / touch / pen.
       if (e.button !== 0 && e.pointerType === "mouse") return;
       // Normally already caught by the container's own listener.
       stopFling();
       const pointerId = e.pointerId;
+      pressedPointer.current = pointerId;
       const isMouse = e.pointerType === "mouse";
-      const movePicks = isMouse || pickupOnMove === "all";
+      const movePicks = from !== null && (isMouse || pickupOnMove === "all");
       const startX = e.clientX;
       const startY = e.clientY;
       // Pick up at the cursor rather than the press point.
@@ -360,7 +384,7 @@ export function usePressDrag<T>({
       function pickup() {
         if (timer.current) clearTimeout(timer.current);
         timer.current = null;
-        if (active.current !== null) return;
+        if (active.current !== null || from === null) return;
         active.current = from;
         handlers.current.onPickup(from, lastX, lastY);
         setSource(from);
@@ -369,10 +393,13 @@ export function usePressDrag<T>({
       }
 
       // A touch that became a scroll cleared the timer.
-      timer.current = setTimeout(pickup, PICKUP_MS);
+      if (from !== null) timer.current = setTimeout(pickup, PICKUP_MS);
     },
     [containerRef, fling, stopFling, pickupOnMove],
   );
+  pressRef.current = press;
+
+  const begin = useCallback((from: T) => (e: PointerEvent) => press(from, e), [press]);
 
   /** A drag just finished, or the tap only caught a fling. */
   const shouldSuppressClick = useCallback(() => didDrag.current || caughtFling.current, []);

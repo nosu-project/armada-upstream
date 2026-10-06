@@ -1535,6 +1535,7 @@ function ServerRailInner({
       persistLayout(next);
     },
     onAbort: endDrag,
+    panFromContainer: true,
   });
 
   const playFlip = flip.play;
@@ -1658,7 +1659,8 @@ function ServerRailInner({
   return (
     <div
       className={cn(
-        "flex flex-col items-center w-[60px] sidebar:w-[72px] shrink-0 overflow-hidden bg-chrome-deep select-none",
+        // Wider on touch: a thumb lands on the rail's right edge and past it.
+        "flex flex-col items-center w-[60px] touch:w-[72px] sidebar:w-[72px] shrink-0 overflow-hidden bg-chrome-deep select-none",
         className,
       )}
     >
@@ -1674,6 +1676,8 @@ function ServerRailInner({
           "overflow-y-auto overflow-x-clip [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
           "pt-[calc(0.75rem+var(--safe-area-inset-top,env(safe-area-inset-top,0px)))]",
           "relative pb-2",
+          // Gaps between entries are hand-panned like the entries (panFromContainer).
+          "touch:touch-none",
           reordering && "overflow-hidden",
         )}
       >
