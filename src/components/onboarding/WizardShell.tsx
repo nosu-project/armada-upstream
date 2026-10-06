@@ -4,6 +4,7 @@ import { ArrowLeft, X } from "lucide-react";
 import { ArmadaCrestKeyframes } from "@/components/brand/ArmadaCrest";
 import { AsciiSea } from "@/components/landing/AsciiSea";
 import { Button } from "@/components/ui/button";
+import { useAndroidBack } from "@/hooks/useAndroidBack";
 import { cn } from "@/lib/utils";
 
 /**
@@ -40,6 +41,13 @@ export function WizardShell({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
+
+  // Android back steps back, else closes. Consumed even with neither, so a busy
+  // or unabandonable step isn't left by the page beneath (or the app) taking it.
+  useAndroidBack(() => {
+    (onBack ?? onClose)?.();
+    return true;
+  }, true, "overlay");
 
   const pct = total > 0 ? ((index + 1) / total) * 100 : 100;
   return (

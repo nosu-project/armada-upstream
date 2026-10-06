@@ -44,6 +44,7 @@ import { useControlFold } from "@/concord/hooks/useControlPlane";
 import { useDecryptedImage } from "@/concord/hooks/useDecryptedImage";
 import { useSharedCommunities, type SharedCommunity } from "@/concord/hooks/useSharedCommunities";
 import { useAcceptedDms } from "@/hooks/useAcceptedDms";
+import { useAndroidBack } from "@/hooks/useAndroidBack";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useClosedDms } from "@/hooks/useClosedDms";
@@ -116,6 +117,12 @@ export function ProfileDialog({ pubkey, onClose }: { pubkey: string; onClose: ()
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [onClose]);
+
+  // Ahead of the covered page's own back handler, which would leave the app from a revealed list.
+  useAndroidBack(() => {
+    onClose();
+    return true;
+  }, true, "overlay");
 
   return (
     <>

@@ -66,6 +66,8 @@ import {
 import { ChromeDialogContent, Dialog } from "@/components/ui/dialog";
 import { MountWhenOpened } from "@/components/MountWhenOpened";
 import { useAndroidBack } from "@/hooks/useAndroidBack";
+import { useIsDesktop } from "@/hooks/useIsDesktop";
+import { useListShowing } from "@/contexts/PaneCoveredContext";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useCall } from "@/hooks/useCall";
@@ -1969,6 +1971,15 @@ export function ConversationList({
     setSearchOpen(false);
     setSearch("");
   }, []);
+
+  // Back clears the search before leaving the list, but only while the list is
+  // on screen; behind an open chat, back is the chat's.
+  const isDesktop = useIsDesktop();
+  const listShowing = useListShowing();
+  useAndroidBack(() => {
+    closeSearch();
+    return true;
+  }, searchOpen && (isDesktop || listShowing), "overlay");
 
   // Followed people with no 1:1 in the list yet, so search doubles as a way to start one.
   const followMatches = useFollowSearch(search, searchOpen && !requesting);
