@@ -9,8 +9,9 @@ This document is both the implementation reference and the upstream proposal.
 ## Why not kind 30063
 
 NIP-51 lists kind 30063 "Release artifact sets", and Armada already publishes
-one per version — `buzz.armada.app@X.Y.Z`, emitted by `zsp` from the `android`
-job. **That keeps working and is not what this is.** 30063 is Zapstore's
+one per version — `buzz.armada.app@X.Y.Z`, emitted by `ngit release publish`
+(`.ngit/release.yaml`) from the `release` job, beside this event and naming the
+same files. **That is NIP-82, and it is not what this is.** 30063 is Zapstore's
 app-distribution event: it is scoped to a *software application* (kind 32267),
 and its artifacts are `e` tags pointing at separate kind-3063 file-metadata
 events.

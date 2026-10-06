@@ -755,7 +755,8 @@ Things to know before touching it:
 ## CI: Blossom failover and mirroring
 
 The nsite deploys (`deploy-nsite.yml`, `release.yml`), the release event
-(`scripts/publish-release.mjs`) and the Zapstore publish all write to the
+(`scripts/publish-release.mjs`) and the NIP-82 release (`ngit release
+publish`, `.ngit/release.yaml`) all write to the
 Blossom servers listed in `.nsite/config.json`, and no ONE of them may be able
 to fail a run:
 
@@ -782,8 +783,9 @@ to fail a run:
 - `publish-release.mjs` probes the same list, stores each artifact on the
   first server that takes it, publishes the release, and only THEN asks the
   rest to mirror it (BUD-04 `/mirror`) under a fixed budget — so mirroring can
-  delay a release but never block one. `zsp` takes exactly one server, so the
-  Zapstore step picks the first live one at run time.
+  delay a release but never block one. `ngit release publish` runs after it,
+  so its blobs are already there; ngit needs only one confirmed copy per blob
+  and reports incomplete replication as a warning.
 
 ## Conventions
 

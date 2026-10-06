@@ -1,0 +1,97 @@
+# What `ngit release publish` publishes for a version tag: the NIP-82
+# application, release, and asset events (kinds 32267/30063/3063), which are
+# also what Zapstore reads, with the files on Blossom. Run by the `release` job
+# of .ngit/act/workflows/release.yml once both build jobs have staged their
+# files in .release-artifacts/. See https://ngit.dev/releases/manifest.
+schema: 1
+# The application zsp created and Zapstore lists, so Zapstore's installs keep
+# updating from these releases.
+application: buzz.armada.app
+# Every release of an application has to come from the key that published the
+# first, so publishing fails before anything is uploaded under another one.
+pubkey: npub10qdp2fc9ta6vraczxrcs8prqnv69fru2k6s2dj48gqjcylulmtjsg9arpj
+name: Armada
+summary: Encrypted communities with text and voice. No host required. Your keys, your fleet.
+description: |
+  Armada is a community chat app with servers, channels, and voice, where your
+  keys are your identity and no one has to run anything.
+
+  Spin up a Concord: a serverless, end-to-end encrypted community. Nothing to
+  set up, and only members can read it — not the relays that carry it. Text
+  channels, live voice rooms, and invites, all without a host.
+
+  Prefer full control? Self-host an Armada server on your own infrastructure
+  and own the whole stack: membership, moderation, and data.
+
+  Features:
+  - End-to-end encrypted communities (Concord), no server to run
+  - Voice rooms with encrypted group calls and DM calls
+  - Discord-style servers and channels, self-hostable
+  - Portable identity: sign in with your key on any device
+tags: [nostr, chat, messaging, voice, encrypted, decentralized]
+license: AGPL-3.0
+website: https://armada.buzz
+repository: nostr://npub10qdp2fc9ta6vraczxrcs8prqnv69fru2k6s2dj48gqjcylulmtjsg9arpj/relay.ngit.dev/armada
+icon: public/logo-512.png
+release_notes: CHANGELOG.md
+supported_nips:
+  - "01"  # Basic protocol: events, filters, subscriptions
+  - "05"  # DNS-based identifiers
+  - "07"  # Browser extension signing (window.nostr)
+  - "09"  # Event deletion
+  - "10"  # Text note threading
+  - "11"  # Relay information document
+  - "19"  # Bech32 identifiers (npub, nevent, naddr, nprofile)
+  - "25"  # Reactions
+  - "27"  # Text note references (nostr: URI mentions)
+  - "29"  # Relay-based groups (self-hosted servers)
+  - "42"  # Relay authentication
+  - "44"  # Versioned encryption
+  - "46"  # Nostr remote signing / bunker
+  - "51"  # Lists (personal group list, mutes)
+  - "59"  # Gift wrap (Concord sealed events)
+  - "65"  # Relay list metadata
+  - "92"  # Inline file metadata (imeta tag)
+  - "98"  # HTTP authentication (voice token endpoints)
+publication:
+  # The same servers and relays as the nsite (.nsite/config.json).
+  blossom_servers:
+    - https://blossom.ditto.pub
+    - https://blossom.dreamith.to
+    - https://blossom.primal.net
+  relays:
+    - wss://relay.ditto.pub
+    - wss://relay.dreamith.to
+    - wss://relay.primal.net
+  zapstore_relay: true
+  # The application was Android-only under zsp; the desktop builds add their
+  # platforms to it.
+  add_application_platforms: true
+# Named as the build jobs stage them. Platform ids are NIP-82's (darwin-arm64),
+# not kind 30622's (darwin-aarch64).
+assets:
+  # Package, version code, certificate and ABIs are read from the APK itself.
+  - file: .release-artifacts/Armada-v{version}.apk
+  - file: .release-artifacts/Armada-v{version}.AppImage
+    mime: application/vnd.appimage
+    platforms: [linux-x86_64]
+  - file: .release-artifacts/Armada-v{version}.deb
+    mime: application/vnd.debian.binary-package
+    platforms: [linux-x86_64]
+  - file: .release-artifacts/Armada-v{version}.flatpak
+    mime: application/vnd.flatpak
+    platforms: [linux-x86_64]
+  - file: .release-artifacts/Armada-v{version}.exe
+    mime: application/vnd.microsoft.portable-executable
+    variant: installer
+    platforms: [windows-x86_64]
+  - file: .release-artifacts/Armada-v{version}-portable.exe
+    mime: application/vnd.microsoft.portable-executable
+    variant: portable
+    platforms: [windows-x86_64]
+  - file: .release-artifacts/Armada-v{version}-mac-x64.zip
+    mime: application/zip
+    platforms: [darwin-x86_64]
+  - file: .release-artifacts/Armada-v{version}-mac-arm64.zip
+    mime: application/zip
+    platforms: [darwin-arm64]
