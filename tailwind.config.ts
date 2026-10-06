@@ -3,6 +3,9 @@ import plugin from "tailwindcss/plugin";
 import tailwindcssAnimate from "tailwindcss-animate";
 import typography from "@tailwindcss/typography";
 
+/** A length times the Text size setting (`--font-scale`, `lib/fontScale.ts`); only font sizes use it. */
+const scaled = (length: string) => `calc(${length} * var(--font-scale, 1))`;
+
 export default {
 	content: [
 		"./pages/**/*.{ts,tsx}",
@@ -39,12 +42,21 @@ export default {
 				'gutter': 'var(--gutter)',
 				'stack': 'var(--stack)',
 			},
-			// Below `xs`, for dense chat chrome; `chat` is message body text and
-			// `monogram` is avatar initials only, never reading text.
+			// Tailwind's defaults (size, line height) scaled; below `xs`, dense chat
+			// chrome. `chat` is message body text; `monogram` is avatar initials,
+			// unscaled so it fits the avatar.
 			fontSize: {
-				'chat': '15px',
-				'2xs': '11px',
-				'3xs': '10px',
+				xs: [scaled('0.75rem'), scaled('1rem')],
+				sm: [scaled('0.875rem'), scaled('1.25rem')],
+				base: [scaled('1rem'), scaled('1.5rem')],
+				lg: [scaled('1.125rem'), scaled('1.75rem')],
+				xl: [scaled('1.25rem'), scaled('1.75rem')],
+				'2xl': [scaled('1.5rem'), scaled('2rem')],
+				'3xl': [scaled('1.875rem'), scaled('2.25rem')],
+				'4xl': [scaled('2.25rem'), scaled('2.5rem')],
+				'chat': scaled('15px'),
+				'2xs': scaled('11px'),
+				'3xs': scaled('10px'),
 				'monogram': '9px',
 			},
 			fontFamily: {

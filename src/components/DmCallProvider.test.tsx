@@ -1,4 +1,4 @@
-import { act, render, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -13,7 +13,7 @@ import {
   mintDmCall,
 } from "@/lib/dmCall";
 import { startIncomingRing } from "@/lib/callSounds";
-import { consumeNativeCallAnswer } from "@/lib/nativeNotifications";
+import { consumeNativeCallAnswer, dismissNativeCallRing } from "@/lib/nativeNotifications";
 import { KIND_DM_CALL, type OpenedDm } from "@/lib/nip17/protocol";
 
 /**
@@ -103,6 +103,7 @@ vi.mock("@/lib/callSounds", () => ({
 }));
 vi.mock("@/lib/nativeNotifications", () => ({
   consumeNativeCallAnswer: vi.fn(),
+  dismissNativeCallRing: vi.fn(),
   setNativeCallPeer: vi.fn(),
 }));
 // The incoming-call overlay's identity surface pulls TanStack Query / the event
@@ -278,6 +279,41 @@ describe("DmCallProvider ring gate", () => {
     act(() => deliverDmCallRumors([makeOffer(realPeer)]));
     expect(ring).not.toHaveBeenCalled();
     expect(toastMock).not.toHaveBeenCalled();
+  });
+
+  describe("the Android tray ring", () => {
+    const dismiss = vi.mocked(dismissNativeCallRing);
+    let visibility: DocumentVisibilityState = "visible";
+    beforeEach(() => {
+      visibility = "visible";
+      vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
+    });
+    afterEach(() => vi.restoreAllMocks());
+
+    it("is dropped while this ring is on screen", () => {
+      known.peers = [realPeer];
+      renderAt("/settings");
+      act(() => deliverDmCallRumors([makeOffer(realPeer)]));
+      expect(dismiss).toHaveBeenCalledWith(callId);
+    });
+
+    it("is left ringing while the app is in the background", () => {
+      visibility = "hidden";
+      known.peers = [realPeer];
+      renderAt("/settings");
+      act(() => deliverDmCallRumors([makeOffer(realPeer)]));
+      expect(ring).toHaveBeenCalledTimes(1);
+      expect(dismiss).not.toHaveBeenCalled();
+    });
+
+    it.each(["Accept call", "Decline call"])("is dropped on %s, without waiting for the relays", (name) => {
+      visibility = "hidden";
+      known.peers = [realPeer];
+      renderAt("/settings");
+      act(() => deliverDmCallRumors([makeOffer(realPeer)]));
+      fireEvent.click(screen.getByRole("button", { name }));
+      expect(dismiss).toHaveBeenCalledWith(callId);
+    });
   });
 
   it("shows a missed-call notice for a known caller while busy", () => {

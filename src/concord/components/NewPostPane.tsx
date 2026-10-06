@@ -1,9 +1,11 @@
 import { ArrowLeft } from "lucide-react";
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useContext, useRef, useState } from "react";
 
 import { ChatComposer } from "@/components/chat/ChatComposer";
 import { Button } from "@/components/ui/button";
 import { ComposerBoundsProvider } from "@/contexts/ComposerBoundsContext";
+import { PaneCoveredContext } from "@/contexts/PaneCoveredContext";
+import { useAndroidBack } from "@/hooks/useAndroidBack";
 import { SUBJECT_MAX_BYTES, subjectBytes } from "@/concord/lib/forum";
 import { cn } from "@/lib/utils";
 
@@ -36,6 +38,14 @@ export function NewPostPane({
   const [error, setError] = useState<string | null>(null);
   const composerBoundsRef = useRef<HTMLElement | null>(null);
   const bodyRef = useRef<HTMLDivElement | null>(null);
+
+  // Mounted after the swipe-reveal's handler, so back returns to the feed first;
+  // not while the pane is swiped aside, when back belongs to the list.
+  const covered = useContext(PaneCoveredContext);
+  useAndroidBack(() => {
+    onCancel();
+    return true;
+  }, !covered);
 
   const bytes = subjectBytes(title);
   const over = bytes > SUBJECT_MAX_BYTES;

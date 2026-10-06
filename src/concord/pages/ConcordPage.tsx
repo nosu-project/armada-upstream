@@ -2077,6 +2077,13 @@ export function ConcordPage() {
     setSearchOpen(false);
     setSearchFilters(EMPTY_SEARCH_FILTERS);
   }, []);
+  const jumpFromSearch = useCallback(
+    (channelIdHex: string, message: ChatMsg) => {
+      closeSearch();
+      jumpToMention(channelIdHex, message);
+    },
+    [closeSearch, jumpToMention],
+  );
   const allChannelIds = useMemo(() => channels.map((c) => c.idHex), [channels]);
   // Community-wide search over the local rumor store; only fed while the bar is open.
   const {
@@ -3293,10 +3300,7 @@ export function ConcordPage() {
                     results={searchResults}
                     isLoading={searchLoading}
                     query={searchFilters.query}
-                    onJump={(channelIdHex, message) => {
-                      closeSearch();
-                      jumpToMention(channelIdHex, message);
-                    }}
+                    onJump={jumpFromSearch}
                   />
                 </div>
               ) : (

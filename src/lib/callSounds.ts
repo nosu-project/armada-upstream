@@ -1,6 +1,17 @@
 /** Synthesized (Web Audio) UI sounds for voice calls; no assets to ship. */
 
+import { Capacitor } from "@capacitor/core";
+
 let ctx: AudioContext | null = null;
+
+/**
+ * Android WebView contexts with the same output settings share one platform
+ * stream whose usage is fixed when it opens. An interactive ring opened before
+ * the call's mic would pin the call's audio to USAGE_MEDIA (callMicHold.ts), so
+ * UI sounds take the high-latency stream instead and the call opens its own.
+ */
+const LATENCY_HINT: AudioContextLatencyCategory | undefined =
+  Capacitor.getPlatform() === "android" ? "playback" : undefined;
 
 function audioContext(): AudioContext | null {
   try {
@@ -9,7 +20,7 @@ function audioContext(): AudioContext | null {
         window.AudioContext ??
         (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
       if (!Ctx) return null;
-      ctx = new Ctx();
+      ctx = new Ctx(LATENCY_HINT ? { latencyHint: LATENCY_HINT } : undefined);
     }
     // Browsers may suspend the context until a user gesture; resume best-effort.
     if (ctx.state === "suspended") void ctx.resume().catch(() => {});

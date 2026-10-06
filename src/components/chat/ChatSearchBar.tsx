@@ -1,8 +1,10 @@
 import { Search, X } from "lucide-react";
-import { useEffect, useRef, type ReactNode } from "react";
+import { useContext, useEffect, useRef, type ReactNode } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { PaneCoveredContext } from "@/contexts/PaneCoveredContext";
+import { useAndroidBack } from "@/hooks/useAndroidBack";
 import { cn } from "@/lib/utils";
 
 /**
@@ -31,6 +33,13 @@ export function ChatSearchBar({
   useEffect(() => {
     if (open) inputRef.current?.focus({ preventScroll: true });
   }, [open]);
+
+  // Not while the pane is swiped aside: back then belongs to the list on screen.
+  const covered = useContext(PaneCoveredContext);
+  useAndroidBack(() => {
+    onClose();
+    return true;
+  }, open && !covered, "overlay");
 
   return (
     <div

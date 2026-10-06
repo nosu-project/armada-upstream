@@ -1,4 +1,4 @@
-import { AlertCircle, Braces, Copy, EyeOff, Flag, Forward, Link, Link2, MessagesSquare, Pencil, Pin, PinOff, Reply, Trash2, User, Zap } from "lucide-react";
+import { AlertCircle, Braces, Copy, CornerDownRight, EyeOff, Flag, Forward, Link, Link2, MessagesSquare, Pencil, Pin, PinOff, Reply, Trash2, User, Zap } from "lucide-react";
 import { nip19 } from "nostr-tools";
 import { memo, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 
@@ -45,7 +45,7 @@ import { useToast } from "@/hooks/useToast";
 import { AppContext } from "@/contexts/AppContext";
 import { sendsOnEnter } from "@/lib/sendOnEnter";
 import { getComposerCollisionPadding, useComposerBoundsRef } from "@/contexts/ComposerBoundsContext";
-import { ChatImageMenuContext, withImageActions, type ChatImageMenu } from "@/contexts/ChatImageMenuContext";
+import { ChatImageMenuContext, linkActionsAt, withImageActions, type ChatImageMenu } from "@/contexts/ChatImageMenuContext";
 import { getAvatarShape } from "@/lib/avatarShape";
 import { buildEmojiMap } from "@/lib/customEmoji";
 import { writeClipboardText } from "@/lib/clipboard";
@@ -327,6 +327,8 @@ export interface ChatMessageProps {
   onReply?: (event: ChatMsg) => void;
   /** Forward, Signal-style: re-sent as a NEW message by the forwarder, no attribution. */
   onForward?: (event: ChatMsg) => void;
+  /** "Jump to message" for rows shown outside their timeline (search results). */
+  onJump?: () => void;
   onEdit?: (event: ChatMsg) => void;
   onEditSubmit?: (event: ChatMsg, content: string) => void;
   onEditCancel?: () => void;
@@ -392,6 +394,7 @@ const ChatMessageInner = memo(function ChatMessageInner({
   onOpenThread,
   onReply,
   onForward,
+  onJump,
   onEdit,
   onEditSubmit,
   onEditCancel,
@@ -475,7 +478,10 @@ const ChatMessageInner = memo(function ChatMessageInner({
   // but can't be reached privately (legacy Concord epoch), so no report.
   const [reportOpen, setReportOpen] = useState(false);
   // Built on first right-click (see useLazyContextMenu).
-  const clearImageActions = useCallback(() => setImageActions(null), []);
+  const stageLinkActions = useCallback(
+    (e: React.MouseEvent) => setImageActions(linkActionsAt(e.target)),
+    [],
+  );
   const contextMenu = useLazyContextMenu();
   const chatScope = useChatScope();
   const reportTo = reportDestination(chatScope);
@@ -544,6 +550,9 @@ const ChatMessageInner = memo(function ChatMessageInner({
 
   // One list drives the touch sheet, `⋯` overflow and right-click menu.
   const menuActions: MessageActionItem[] = [];
+  if (onJump) {
+    menuActions.push({ id: "jump", label: "Jump to message", icon: CornerDownRight, onSelect: onJump });
+  }
   if (canWrite && !isEditing && onReply) {
     menuActions.push({ id: "reply", label: "Reply", icon: Reply, onSelect: () => onReply(event) });
   }
@@ -915,9 +924,9 @@ const ChatMessageInner = memo(function ChatMessageInner({
     {isTouch ? (
       row
     ) : (
-      // Clearing in the capture phase (before an image restages) keeps a text
+      // Restaging in the capture phase (before an image restages) keeps a text
       // right-click from inheriting the last image's actions.
-      <span className="block" onContextMenuCapture={clearImageActions} onContextMenu={contextMenu.onContextMenu}>
+      <span className="block" onContextMenuCapture={stageLinkActions} onContextMenu={contextMenu.onContextMenu}>
         {row}
       </span>
     )}

@@ -1,5 +1,5 @@
 import { Check, FileText, Hash, Image as ImageIcon, Link as LinkIcon, Loader2, Lock, Search, SlidersHorizontal, Video, X } from "lucide-react";
-import { memo, useMemo, useState } from "react";
+import { memo, useCallback, useMemo, useState } from "react";
 
 import { DisplayName } from "@/components/DisplayName";
 import { ChatMessage } from "@/components/chat/ChatMessage";
@@ -258,31 +258,47 @@ export function SearchFiltersPopover({
 const SearchRow = memo(function SearchRow({
   event,
   highlight,
-  onJump,
+  channelIdHex,
+  onJumpTo,
 }: {
   event: ChatMsg;
   highlight?: string;
-  onJump?: () => void;
+  /** Absent when the channel is unknown: nowhere to jump to. */
+  channelIdHex?: string;
+  onJumpTo: (channelIdHex: string, message: ChatMsg) => void;
 }) {
   // `ChatMsg` is already signature-less, so the message IS the rumor.
   const rumor = event;
+  // Bound here rather than by the list so the row's props keep their identity.
+  const jump = useCallback(() => {
+    if (channelIdHex) onJumpTo(channelIdHex, event);
+  }, [channelIdHex, onJumpTo, event]);
+  const onJump = channelIdHex ? jump : undefined;
+  // The message's menus are portaled yet still React children, so their events
+  // bubble here; only an event from the row's own DOM jumps.
+  const onRowClick = useCallback(
+    (e: React.MouseEvent<HTMLDivElement>) => {
+      if (e.currentTarget.contains(e.target as Node)) jump();
+    },
+    [jump],
+  );
+  const onRowKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLDivElement>) => {
+      if ((e.key === "Enter" || e.key === " ") && e.currentTarget.contains(e.target as Node)) {
+        e.preventDefault();
+        jump();
+      }
+    },
+    [jump],
+  );
   // Hover tint is a clipped `::before`: clipping the wrapper would slice off
   // ChatMessage's floating toolbar.
   return (
     <div
       role={onJump ? "button" : undefined}
       tabIndex={onJump ? 0 : undefined}
-      onClick={onJump}
-      onKeyDown={
-        onJump
-          ? (e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                onJump();
-              }
-            }
-          : undefined
-      }
+      onClick={onJump ? onRowClick : undefined}
+      onKeyDown={onJump ? onRowKeyDown : undefined}
       className={cn(
         "relative isolate",
         onJump &&
@@ -290,7 +306,14 @@ const SearchRow = memo(function SearchRow({
       )}
       aria-label={onJump ? "Jump to this message" : undefined}
     >
-      <ChatMessage event={event} rumor={rumor} canWrite={false} canModerate={false} highlight={highlight} />
+      <ChatMessage
+        event={event}
+        rumor={rumor}
+        canWrite={false}
+        canModerate={false}
+        highlight={highlight}
+        onJump={onJump}
+      />
     </div>
   );
 });
@@ -348,7 +371,8 @@ export function SearchResultsView({
             <SearchRow
               event={msg}
               highlight={query}
-              onJump={ch ? () => onJump(channelIdHex, msg) : undefined}
+              channelIdHex={ch ? channelIdHex : undefined}
+              onJumpTo={onJump}
             />
           </div>
         );

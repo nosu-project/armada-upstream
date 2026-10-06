@@ -248,6 +248,22 @@ describe("useLongPress", () => {
     expect(onLongPress).not.toHaveBeenCalled();
   });
 
+  it("ignores a press inside a portal rendered from within the element", () => {
+    const onLongPress = vi.fn();
+    const { result } = renderHook(() => useLongPress(onLongPress, { allowInteractive: true }));
+    const row = document.createElement("div");
+    const overlay = document.createElement("img");
+    document.body.append(row, overlay);
+
+    const press = { ...pointer(100, 100, { target: overlay }), currentTarget: row } as React.PointerEvent;
+    act(() => result.current.onPointerDown?.(press));
+    act(() => void vi.advanceTimersByTime(LONG_PRESS_MS));
+
+    expect(onLongPress).not.toHaveBeenCalled();
+    row.remove();
+    overlay.remove();
+  });
+
   it("does nothing at all without a callback", () => {
     const { result } = renderHook(() => useLongPress(undefined));
     act(() => result.current.onPointerDown?.(pointer(100, 100)));

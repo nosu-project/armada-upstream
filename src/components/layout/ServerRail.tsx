@@ -1546,6 +1546,7 @@ function ServerRailInner({
   const dragSource = railDrag.source;
   const handleDragPointerDown = railDrag.begin;
   const draggable = items.length > 1;
+  const reachZone = !useSideBySideLayout();
 
   // The Settings footer divider only shows when content is scrolled off below.
   const [contentBelow, setContentBelow] = useState(false);
@@ -1655,10 +1656,10 @@ function ServerRailInner({
     );
   };
 
-  return (
+  const rail = (
     <div
       className={cn(
-        "flex flex-col items-center w-[60px] sidebar:w-[72px] shrink-0 overflow-hidden bg-chrome-deep select-none",
+        "flex flex-col items-center w-[60px] touch:w-[72px] sidebar:w-[72px] shrink-0 overflow-hidden bg-chrome-deep select-none",
         className,
       )}
     >
@@ -1667,6 +1668,10 @@ function ServerRailInner({
         aria-label="Servers"
         // Suppress native HTML5 drag, which hijacks the custom reorder gesture.
         onDragStart={(e) => e.preventDefault()}
+        // Entries start their own press.
+        onPointerDown={(e) => {
+          if (!(e.target as Element).closest("[data-rail-anchor]")) railDrag.panFrom(e.nativeEvent);
+        }}
         className={cn(
           // `overflow-x-clip` is required: `overflow-y-auto` alone computes overflow-x
           // to `auto`, giving a horizontal scrollbar in the narrow rail.
@@ -1674,6 +1679,7 @@ function ServerRailInner({
           "overflow-y-auto overflow-x-clip [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
           "pt-[calc(0.75rem+var(--safe-area-inset-top,env(safe-area-inset-top,0px)))]",
           "relative pb-2",
+          "touch:touch-none",
           reordering && "overflow-hidden",
         )}
       >
@@ -2085,5 +2091,45 @@ function ServerRailInner({
         <div data-rail-drag-overlay className="fixed inset-0 z-[298] cursor-grabbing" aria-hidden />
       )}
     </div>
+  );
+
+  if (!reachZone) return rail;
+  // Outside the rail's overflow clip.
+  return (
+    <div className="relative flex shrink-0">
+      {rail}
+      <RailReachZone panFrom={railDrag.panFrom} attach={railDrag.attachPanSurface} />
+    </div>
+  );
+}
+
+/** Extends the rail's touch area over the list: swipes scroll the rail, taps reach what's beneath. */
+function RailReachZone({
+  panFrom,
+  attach,
+}: {
+  panFrom: (e: PointerEvent) => boolean;
+  attach: (el: HTMLElement | null) => void;
+}) {
+  const caughtFling = useRef(false);
+  return (
+    <div
+      ref={attach}
+      aria-hidden
+      data-rail-reach
+      className="absolute inset-y-0 left-full z-20 w-10 touch-none"
+      onPointerDown={(e) => {
+        caughtFling.current = panFrom(e.nativeEvent);
+      }}
+      onClick={(e) => {
+        if (caughtFling.current) return;
+        const zone = e.currentTarget;
+        zone.style.pointerEvents = "none";
+        const below = document.elementFromPoint(e.clientX, e.clientY);
+        zone.style.pointerEvents = "";
+        if (below instanceof HTMLElement) below.click();
+      }}
+      onContextMenu={(e) => e.preventDefault()}
+    />
   );
 }

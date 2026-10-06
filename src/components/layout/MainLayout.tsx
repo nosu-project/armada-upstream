@@ -9,6 +9,7 @@ import { DirectInviteNotifier } from "@/concord/components/DirectInviteNotifier"
 import { QuickSwitcher } from "@/components/QuickSwitcher";
 import { ServerRail } from "@/components/layout/ServerRail";
 import { useRegisterAllStreamKeys } from "@/concord/hooks/useStreamAuth";
+import { useAndroidBack } from "@/hooks/useAndroidBack";
 import { useShareShortcuts } from "@/hooks/useShareShortcuts";
 import { ProfileOverlayContext } from "@/lib/profileOverlay";
 import { SettingsOverlayContext } from "@/lib/settingsOverlay";
@@ -71,6 +72,13 @@ function SettingsOverlayPanel({ onClose, children }: { onClose: () => void; chil
       }
     };
   }, []);
+
+  // Android back closes Settings, ahead of the covered page's own handler
+  // (SwipeReveal's would leave the app from a revealed list).
+  useAndroidBack(() => {
+    onCloseRef.current();
+    return true;
+  }, true, "overlay");
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {

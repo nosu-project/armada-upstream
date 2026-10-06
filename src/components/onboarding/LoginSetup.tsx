@@ -189,7 +189,8 @@ export function LoginSetup() {
       total={total}
       stepKey={step}
       zClassName="z-[260]"
-      onBack={requestBack}
+      // While confirming, back cancels the confirmation, as Escape does.
+      onBack={confirmingBack && backOutOfLogin ? () => setConfirmingBack(false) : requestBack}
     >
       {step === "notifications" && (
         <NotificationsStep

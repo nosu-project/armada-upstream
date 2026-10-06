@@ -136,6 +136,8 @@
 
   body {
     @apply bg-background text-foreground;
+    /* Unclassed text follows the Text size setting too (`lib/fontScale.ts`). */
+    font-size: calc(1rem * var(--font-scale, 1));
   }
 
   html, body, #root {

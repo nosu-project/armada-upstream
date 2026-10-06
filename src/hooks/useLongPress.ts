@@ -102,6 +102,8 @@ export function useLongPress(
   return {
     onPointerDown: (e: React.PointerEvent) => {
       if (!onLongPress || e.pointerType !== "touch") return;
+      // Portaled overlays (a lightbox) bubble here through the React tree.
+      if (e.currentTarget instanceof Node && e.target instanceof Node && !e.currentTarget.contains(e.target)) return;
       if (!allowInteractive && (e.target as HTMLElement).closest(INTERACTIVE)) return;
       fired.current = false;
       origin.current = { x: e.clientX, y: e.clientY };

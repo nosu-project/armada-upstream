@@ -5,6 +5,7 @@ import { clearRecentDecrypts } from "@/lib/AppSigner";
 import { ARMADA_DB_NAME, purgeArmadaDB } from "@/lib/db/armadaDB";
 import { resetKvCaches } from "@/lib/db/kvCache";
 import { resetDecryptConsent } from "@/lib/decryptConsent";
+import { FONT_SCALE_KEY } from "@/lib/fontScale";
 import { closeDmEphemeralSubs } from "@/lib/nip17/ephemeralInbox";
 import { clearFoldedMemory } from "@/lib/foldedCache";
 import { clearDeferredFoldMemory } from "@/concord/hooks/useDeferredFold";
@@ -28,6 +29,8 @@ const PRESERVE_LOCAL_STORAGE_KEYS = new Set<string>([
   "armada:login",
   // The next account needs to know whether the old browser endpoint was retired.
   WEB_PUSH_RETIREMENT_KEY,
+  // A device accessibility setting, not account data; the login screen needs it too.
+  FONT_SCALE_KEY,
 ]);
 
 /**

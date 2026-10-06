@@ -21,6 +21,7 @@ import { setOnboardingActive } from "@/hooks/useOnboarding";
 import { APP_CONFIG_STORAGE_KEY, seedAccountConfig } from "@/lib/activeAccount";
 import { clearPendingJoin, peekPendingJoin, type JoinLink } from "@/lib/joinLink";
 import { publishSignedEventToRelays, uniqueRelayUrls } from "@/lib/nip65";
+import { markNotificationSettingsReady } from "@/lib/notificationSettingsAuthority";
 import { markRelayRecoveryPromptShown } from "@/lib/relayRecoveryPrompt";
 import { useLoginActions } from "@/hooks/useLoginActions";
 import { toast } from "@/hooks/useToast";
@@ -117,6 +118,9 @@ export function SignupWizard({ onExit }: SignupWizardProps) {
     if (identity) {
       suppressNextSyncGate(identity.pubkey);
       markRelayRecoveryPromptShown(identity.pubkey);
+      // The skipped gate is what would prove it, but a key minted moments ago has
+      // no notifications document anywhere: the defaults are its policy.
+      markNotificationSettingsReady(identity.pubkey);
     }
 
     const homeRelays = uniqueRelayUrls(join ? join.relays : config.appRelays);

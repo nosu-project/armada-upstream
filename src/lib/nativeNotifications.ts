@@ -102,6 +102,8 @@ export interface ArmadaNotificationPlugin {
    * "Missed call" for their offers. Volatile, like {@link setActiveRooms}.
    */
   setCallPeer(options: { peer?: string }): Promise<void>;
+  /** The WebView took over `callId` (answered, declined or ringing itself): drop the tray ring. */
+  dismissCallRing(options: { callId: string }): Promise<void>;
   /**
    * The service's rolling per-room cache of raw wire events (newest last), kept
    * for the service lifetime. Room keys: `h:<groupId>`, `c2:<channelId>`, `dm`.
@@ -289,6 +291,16 @@ export function setNativeCallPeer(peer: string | null): void {
   if (Capacitor.getPlatform() !== "android") return;
   if (!Capacitor.isPluginAvailable("ArmadaNotification")) return;
   ArmadaNotification.setCallPeer({ peer: peer ?? "" }).catch(() => undefined);
+}
+
+/**
+ * Stop the service's ring for a call the WebView took over. The self-copy
+ * "answer" also stops it, but only once relays echo it back. Android only, best-effort.
+ */
+export function dismissNativeCallRing(callId: string): void {
+  if (Capacitor.getPlatform() !== "android") return;
+  if (!Capacitor.isPluginAvailable("ArmadaNotification")) return;
+  ArmadaNotification.dismissCallRing({ callId }).catch(() => undefined);
 }
 
 /** Open the battery-optimization exemption dialog. No-op outside Android. */

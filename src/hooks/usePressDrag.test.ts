@@ -2,7 +2,7 @@
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { usePressDrag } from "./usePressDrag";
+import { isHandScrolling, usePressDrag } from "./usePressDrag";
 
 /**
  * jsdom has no PointerEvent, so pointer events are plain Events carrying the
@@ -188,6 +188,43 @@ describe("usePressDrag", () => {
     expect(container.scrollTop).toBe(120);
   });
 
+  it("claims a diagonal touch as a scroll until release", () => {
+    const container = document.createElement("div");
+    container.scrollTop = 100;
+    const { result } = setup(container);
+
+    act(() => {
+      result.current.begin("row-a")(pointer("pointerdown", { pointerType: "touch", clientX: 30, clientY: 200 }));
+      window.dispatchEvent(pointer("pointermove", { pointerType: "touch", clientX: 18, clientY: 194 }));
+    });
+    expect(isHandScrolling(1)).toBe(true);
+
+    act(() => void window.dispatchEvent(pointer("pointermove", { pointerType: "touch", clientX: 10, clientY: 174 })));
+    expect(container.scrollTop).toBe(120);
+
+    act(() => void window.dispatchEvent(pointer("pointerup", { pointerType: "touch" })));
+    expect(isHandScrolling(1)).toBe(false);
+  });
+
+  it("panFrom scrolls a touch and never picks it up", () => {
+    const container = document.createElement("div");
+    container.scrollTop = 100;
+    const { result, calls } = setup(container);
+    const touch = (type: string, y: number) => pointer(type, { pointerType: "touch", clientY: y });
+
+    act(() => {
+      result.current.panFrom(touch("pointerdown", 200));
+      window.dispatchEvent(touch("pointermove", 220));
+      window.dispatchEvent(touch("pointermove", 240));
+      vi.advanceTimersByTime(300);
+    });
+    expect(container.scrollTop).toBe(80);
+    expect(calls.onPickup).not.toHaveBeenCalled();
+    act(() => void window.dispatchEvent(touch("pointerup", 240)));
+
+    expect(result.current.panFrom(pointer("pointerdown"))).toBe(false);
+  });
+
   describe("the hand-panned scroll's fling", () => {
     /** A container jsdom will let scroll: scrollTop clamps to [0, 1000]. */
     function scrollable() {
@@ -268,6 +305,27 @@ describe("usePressDrag", () => {
       container.remove();
     });
 
+    it("stops on a tap during its slow tail, and the tap still clicks", () => {
+      const container = scrollable();
+      const { result } = setup(container);
+      act(() => swipeUp(result.current.begin("row-a")));
+      // Still coasting, below the catch speed.
+      act(() => void vi.advanceTimersByTime(1000));
+
+      act(() => {
+        const down = pointer("pointerdown", { pointerType: "touch", clientY: 300 });
+        container.dispatchEvent(down);
+        result.current.begin("row-b")(down);
+      });
+      const stopped = container.scrollTop;
+      act(() => void vi.advanceTimersByTime(100));
+      expect(container.scrollTop).toBe(stopped);
+
+      act(() => void window.dispatchEvent(pointer("pointerup", { pointerType: "touch", clientY: 300 })));
+      expect(result.current.shouldSuppressClick()).toBe(false);
+      container.remove();
+    });
+
     it("an ordinary tap at rest still clicks", () => {
       const container = scrollable();
       const { result } = setup(container);
@@ -310,6 +368,31 @@ describe("usePressDrag", () => {
       expect(during.defaultPrevented).toBe(true);
 
       container.remove();
+    });
+
+    it("cancels touchmove while hand-panning, on the container and on a pan surface", () => {
+      const container = document.createElement("div");
+      const surface = document.createElement("div");
+      document.body.append(container, surface);
+      const { result } = setup(container);
+      act(() => result.current.attachPanSurface(surface));
+
+      act(() => {
+        result.current.panFrom(pointer("pointerdown", { pointerType: "touch", clientY: 300 }));
+        window.dispatchEvent(pointer("pointermove", { pointerType: "touch", clientY: 280 }));
+      });
+      for (const el of [container, surface]) {
+        const move = new Event("touchmove", { bubbles: true, cancelable: true });
+        el.dispatchEvent(move);
+        expect(move.defaultPrevented).toBe(true);
+      }
+
+      act(() => void window.dispatchEvent(pointer("pointerup", { pointerType: "touch", clientY: 280 })));
+      const after = new Event("touchmove", { bubbles: true, cancelable: true });
+      surface.dispatchEvent(after);
+      expect(after.defaultPrevented).toBe(false);
+      container.remove();
+      surface.remove();
     });
   });
 });

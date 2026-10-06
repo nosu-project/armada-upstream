@@ -3,6 +3,10 @@ import { describe, expect, it, vi } from "vitest";
 vi.mock("@sapphi-red/web-noise-suppressor", () => ({
   loadRnnoise: vi.fn(async () => new ArrayBuffer(8)),
   RnnoiseWorkletNode: class {
+    static last: unknown;
+    constructor() {
+      (this.constructor as unknown as { last: unknown }).last = this;
+    }
     connect() {}
     disconnect() {}
     destroy() {}
@@ -21,6 +25,7 @@ class FakeMediaStream {
 vi.stubGlobal("MediaStream", FakeMediaStream);
 
 const { createRnnoiseProcessor } = await import("./voiceProcessor");
+const { RnnoiseWorkletNode } = await import("@sapphi-red/web-noise-suppressor");
 
 function fakeContext() {
   const node = () => ({ connect: vi.fn(), disconnect: vi.fn() });
@@ -62,5 +67,14 @@ describe("RNNoise track processor", () => {
     await processor.restart(opts);
     await processor.restart(opts);
     expect(ctx.createMediaStreamSource).toHaveBeenCalledTimes(3);
+  });
+
+  it("runs the graph in mono so a stereo capture isn't denoised to one side", async () => {
+    const ctx = fakeContext();
+    await createRnnoiseProcessor().init({ kind: "audio", track: {} as MediaStreamTrack, audioContext: ctx });
+    const node = (RnnoiseWorkletNode as unknown as { last: AudioNode }).last;
+    expect(node).toMatchObject({ channelCount: 1, channelCountMode: "explicit", channelInterpretation: "speakers" });
+    const destination = vi.mocked(ctx.createMediaStreamDestination).mock.results[0].value;
+    expect(destination.channelCount).toBe(1);
   });
 });

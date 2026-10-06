@@ -14,6 +14,7 @@ import { useResumeOutgoing } from "@/concord/hooks/useResumeOutgoing";
 import { useResumeGuestbookJoins } from "@/concord/hooks/usePendingGuestbookJoin";
 import { useWarmDiscover } from "@/hooks/useDiscover";
 import { useForegroundNotifications } from "@/hooks/useForegroundNotifications";
+import { useNotificationSettingsAbsenceProof } from "@/hooks/useNotificationSettingsAbsenceProof";
 import { WireSync } from "@/wire/WireSync";
 
 /**
@@ -34,8 +35,15 @@ export function SignedInServices() {
       <NativeNotifications />
       <NativeReadMarkerSync />
       <NativeReadDismiss />
+      {/* Its own leaf: it reads app config, which changes often. */}
+      <NotificationSettingsAbsenceProof />
     </>
   );
+}
+
+function NotificationSettingsAbsenceProof() {
+  useNotificationSettingsAbsenceProof();
+  return null;
 }
 
 /** Signed-in services that must sit under `WebPushNotifications`. */

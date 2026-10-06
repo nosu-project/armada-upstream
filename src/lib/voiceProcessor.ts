@@ -86,7 +86,14 @@ class RnnoiseTrackProcessor implements AudioTrackProcessor {
       maxChannels: 1,
       wasmBinary: binary,
     });
+    // Mono end to end. Chromium's source node is two-channel even for a mono
+    // mic, and the worklet fills only `maxChannels` and leaves the rest silent,
+    // so a default graph publishes the voice in the left channel only.
+    rnnoise.channelCount = 1;
+    rnnoise.channelCountMode = "explicit";
+    rnnoise.channelInterpretation = "speakers";
     const destination = audioContext.createMediaStreamDestination();
+    destination.channelCount = 1;
 
     source.connect(rnnoise);
     rnnoise.connect(destination);

@@ -47,7 +47,8 @@ const routed = (path: string) => script.routes.some((route) => new URLPattern({ 
 
 afterEach(() => vi.unstubAllGlobals());
 
-describe("routes", () => {
+// URLPattern is global from Node 24; CI and the `>=22` engine floor run 22.
+describe.skipIf(typeof URLPattern === "undefined")("routes", () => {
   it("names profiles and invites", () => {
     for (const path of [
       `/${npub}`,

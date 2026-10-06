@@ -25,7 +25,9 @@ import { ServerRail } from "@/components/layout/ServerRail";
 import { SwipeReveal } from "@/components/layout/SwipeReveal";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useOverlayBack } from "@/hooks/useAndroidBack";
 import { useAppContext } from "@/hooks/useAppContext";
+import { useIsDesktop } from "@/hooks/useIsDesktop";
 import { useIsTouch } from "@/hooks/useIsMobile";
 import { useInsertText } from "@/hooks/useInsertText";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
@@ -66,6 +68,13 @@ export function MeshPage() {
   // Nearby-members panel beside the broadcast room (like Concord's member pane).
   const [membersVisible, setMembersVisible] = useState(false);
   const [membersOpen, setMembersOpen] = useState(false);
+  // On mobile the roster covers the room, so back closes it before revealing the list.
+  const isDesktop = useIsDesktop();
+  useOverlayBack(() => {
+    setMembersOpen(false);
+    setMembersVisible(false);
+    return true;
+  }, membersOpen && view?.type === "broadcast" && !isDesktop);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const { insertAtCursor } = useInsertText(textareaRef, draft, setDraft);
 

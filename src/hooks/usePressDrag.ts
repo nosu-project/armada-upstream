@@ -26,6 +26,15 @@ const FLING_MAX_VELOCITY = 8;
 /** Exponential decay time constant (ms); coast distance is velocity × this. */
 const FLING_DECAY_MS = 325;
 const FLING_STOP_VELOCITY = 0.02;
+/** px/ms; a tap that stops a slower fling still clicks. */
+const FLING_CATCH_VELOCITY = 0.3;
+
+/** Touches hand-panned as a scroll, for `useEdgeSwipe` (MeshPage's rail is inside its pane). */
+const handScrolling = new Set<number>();
+
+export function isHandScrolling(pointerId: number): boolean {
+  return handScrolling.has(pointerId);
+}
 
 export interface PressDragOptions<T> {
   /** Owned by the caller and populated by `attachContainer`. */
@@ -82,15 +91,22 @@ export function usePressDrag<T>({
   const handlers = useRef({ onPickup, onAim, onDrop, onAbort, onContainerScroll });
   handlers.current = { onPickup, onAim, onDrop, onAbort, onContainerScroll };
 
+  const panning = useRef(false);
+
+  // Also while panning: from an uncancelled fast lift Chromium starts an invisible fling, even
+  // under `touch-action: none`, and drops the next tap as its cancel.
   const onTouchMove = useCallback((ev: TouchEvent) => {
-    if (active.current !== null && ev.cancelable) ev.preventDefault();
+    if ((active.current !== null || panning.current) && ev.cancelable) ev.preventDefault();
   }, []);
 
+  const flingVelocity = useRef(0);
+
+  /** True if the fling was still visibly moving. */
   const stopFling = useCallback(() => {
     if (flingRaf.current === null) return false;
     cancelAnimationFrame(flingRaf.current);
     flingRaf.current = null;
-    return true;
+    return Math.abs(flingVelocity.current) >= FLING_CATCH_VELOCITY;
   }, []);
 
   /** `velocity` in scroll px/ms, positive downward. */
@@ -98,6 +114,7 @@ export function usePressDrag<T>({
     (velocity: number) => {
       stopFling();
       let v = Math.max(-FLING_MAX_VELOCITY, Math.min(FLING_MAX_VELOCITY, velocity));
+      flingVelocity.current = v;
       let last = performance.now();
       const tick = () => {
         const el = containerRef.current;
@@ -108,6 +125,7 @@ export function usePressDrag<T>({
         // Integral over the frame, so coast length is frame-rate independent.
         const distance = v * FLING_DECAY_MS * (1 - decay);
         v *= decay;
+        flingVelocity.current = v;
         if (!el) {
           flingRaf.current = null;
           return;
@@ -158,6 +176,17 @@ export function usePressDrag<T>({
     [containerRef, onTouchMove, onContainerPointerDown, stopFling],
   );
 
+  /** For a {@link panFrom} surface outside the container. */
+  const panSurface = useRef<HTMLElement | null>(null);
+  const attachPanSurface = useCallback(
+    (el: HTMLElement | null) => {
+      panSurface.current?.removeEventListener("touchmove", onTouchMove);
+      panSurface.current = el;
+      el?.addEventListener("touchmove", onTouchMove, { passive: false });
+    },
+    [onTouchMove],
+  );
+
   // Grabbing cursor only while picked up; a grab-on-hover hand confuses people.
   const dragging = source !== null;
   useEffect(() => {
@@ -169,15 +198,16 @@ export function usePressDrag<T>({
     };
   }, [dragging]);
 
-  const begin = useCallback(
-    (from: T) => (e: PointerEvent) => {
+  /** `from` null: scroll only. */
+  const press = useCallback(
+    (from: T | null, e: PointerEvent) => {
       // Only left mouse / touch / pen.
       if (e.button !== 0 && e.pointerType === "mouse") return;
       // Normally already caught by the container's own listener.
       stopFling();
       const pointerId = e.pointerId;
       const isMouse = e.pointerType === "mouse";
-      const movePicks = isMouse || pickupOnMove === "all";
+      const movePicks = from !== null && (isMouse || pickupOnMove === "all");
       const startX = e.clientX;
       const startY = e.clientY;
       // Pick up at the cursor rather than the press point.
@@ -227,7 +257,9 @@ export function usePressDrag<T>({
         if (timer.current) clearTimeout(timer.current);
         timer.current = null;
         stopAutoScroll();
-        window.removeEventListener("pointermove", onMove);
+        handScrolling.delete(pointerId);
+        panning.current = false;
+        window.removeEventListener("pointermove", onMove, true);
         window.removeEventListener("pointerup", onUp);
         window.removeEventListener("pointercancel", onCancel);
         window.removeEventListener("contextmenu", onContextMenu, true);
@@ -272,6 +304,8 @@ export function usePressDrag<T>({
             if (timer.current) clearTimeout(timer.current);
             timer.current = null;
             manualScroll = true;
+            panning.current = true;
+            handScrolling.add(pointerId);
             lastScrollY = ev.clientY;
             scrollSamples = [{ t: performance.now(), y: ev.clientY }];
           }
@@ -326,7 +360,8 @@ export function usePressDrag<T>({
         handlers.current.onAbort();
       };
 
-      window.addEventListener("pointermove", onMove, { passive: false });
+      // Capture: claim the scroll before `useEdgeSwipe` sees the same move.
+      window.addEventListener("pointermove", onMove, { passive: false, capture: true });
       window.addEventListener("pointerup", onUp);
       window.addEventListener("pointercancel", onCancel);
       window.addEventListener("contextmenu", onContextMenu, true);
@@ -334,7 +369,7 @@ export function usePressDrag<T>({
       function pickup() {
         if (timer.current) clearTimeout(timer.current);
         timer.current = null;
-        if (active.current !== null) return;
+        if (active.current !== null || from === null) return;
         active.current = from;
         handlers.current.onPickup(from, lastX, lastY);
         setSource(from);
@@ -343,9 +378,22 @@ export function usePressDrag<T>({
       }
 
       // A touch that became a scroll cleared the timer.
-      timer.current = setTimeout(pickup, PICKUP_MS);
+      if (from !== null) timer.current = setTimeout(pickup, PICKUP_MS);
     },
     [containerRef, fling, stopFling, pickupOnMove],
+  );
+
+  const begin = useCallback((from: T) => (e: PointerEvent) => press(from, e), [press]);
+
+  /** Scroll-only press from a `touch-action: none` surface off any entry; true if it caught a fling. */
+  const panFrom = useCallback(
+    (e: PointerEvent) => {
+      if (e.pointerType !== "touch") return false;
+      const caught = stopFling();
+      press(null, e);
+      return caught;
+    },
+    [press, stopFling],
   );
 
   /** A drag just finished, or the tap only caught a fling. */
@@ -359,7 +407,7 @@ export function usePressDrag<T>({
     [stopFling],
   );
 
-  return { attachContainer, begin, source, dragging, shouldSuppressClick };
+  return { attachContainer, attachPanSurface, begin, panFrom, source, dragging, shouldSuppressClick };
 }
 
 /** Radix `asChild` Slots don't reliably forward React pointer props. */

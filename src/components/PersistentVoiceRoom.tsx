@@ -443,11 +443,18 @@ function CallAudioKeeper() {
   return null;
 }
 
-/** `musicHighQuality` (96 kbps) mono, with RED + DTX asserted explicitly in case defaults change. */
+/**
+ * `musicHighQuality` (96 kbps) mono, with RED + DTX asserted explicitly in case
+ * defaults change. `forceStereo: false` because LiveKit otherwise negotiates
+ * stereo from the published track's channelCount, which a processor's output or
+ * a device ignoring the mono constraint can report as 2; screen-share audio
+ * passes its own `forceStereo: true`.
+ */
 const audioPublishDefaults = {
   audioPreset: AudioPresets.musicHighQuality,
   red: true,
   dtx: true,
+  forceStereo: false,
 } as const;
 
 /**
@@ -564,9 +571,9 @@ function MobileCallBar({
       className={cn(
         // The inset is spelled out: the shell zeroes `--safe-area-pad-bottom` for everything above the bar.
         "fixed bottom-0 inset-x-0 z-40 px-2 pb-[max(0.75rem,var(--safe-area-inset-bottom,env(safe-area-inset-bottom,0px)))] sidebar:hidden",
-        // Over the list, continue the rail (60px) and channel column beneath it.
+        // Over the list, continue the rail (60px, 72px on touch) and channel column beneath it.
         listShowing
-          ? "bg-[linear-gradient(to_right,hsl(var(--chrome-deep))_60px,hsl(var(--chrome))_60px)]"
+          ? "bg-[linear-gradient(to_right,hsl(var(--chrome-deep))_60px,hsl(var(--chrome))_60px)] touch:bg-[linear-gradient(to_right,hsl(var(--chrome-deep))_72px,hsl(var(--chrome))_72px)]"
           : "bg-background",
         exiting
           ? "animate-out fade-out-0 slide-out-to-bottom-4 duration-200 fill-mode-forwards"
