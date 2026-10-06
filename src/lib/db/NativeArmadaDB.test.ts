@@ -26,6 +26,8 @@ import type { ArmadaSqlDriver, SqlRow, SqlValue } from "./driver";
  */
 const native = vi.hoisted(() => {
   const calls = { query: 0, event: 0, count: 0, remove: 0, kvSet: 0, kvOps: 0 };
+  /** Every `kvOps` batch as sent, for asserting what crossed. */
+  const kvBatches: Array<Array<{ op: string; key?: string }>> = [];
   let store: {
     tenant(id: string): {
       query(filters: NostrFilter[]): Promise<NostrRumor[]>;
@@ -46,6 +48,7 @@ const native = vi.hoisted(() => {
 
   return {
     calls,
+    kvBatches,
     /** Mutable so the adapter's platform gate can be tested on both natives. */
     platform: "android" as string,
     pluginAvailable: true,
@@ -106,6 +109,7 @@ const native = vi.hoisted(() => {
       // results aligned positionally, values still opaque JSON TEXT.
       async kvOps({ ops }: { ops: string }) {
         calls.kvOps++;
+        kvBatches.push(JSON.parse(ops));
         const batch = JSON.parse(ops) as Array<
           | { op: "get"; key: string }
           | { op: "set"; key: string; value: string }
@@ -380,6 +384,42 @@ describe("NativeArmadaDB", () => {
     db.tenant("t").event(rumor({ id: "c" }));
     await db.tenant("t").remove([{ ids: ["a"] }]);
     expect((await db.tenant("t").query([{}])).map((r) => r.id).sort()).toEqual(["b", "c"]);
+  });
+
+  it("sends a key read several times in one crossing once, and hands each reader its own value", async () => {
+    await db.kv.set("dup:list", { entries: [1, 2] });
+    native.kvBatches.length = 0;
+
+    const reads = await Promise.all([
+      db.kv.get<{ entries: number[] }>("dup:list"),
+      db.kv.get<{ entries: number[] }>("dup:list"),
+      db.kv.get<{ entries: number[] }>("dup:other"),
+      db.kv.get<{ entries: number[] }>("dup:list"),
+    ]);
+
+    expect(native.kvBatches).toEqual([[
+      { op: "get", key: "dup:list" },
+      { op: "get", key: "dup:other" },
+    ]]);
+    expect(reads).toEqual([{ entries: [1, 2] }, { entries: [1, 2] }, undefined, { entries: [1, 2] }]);
+    // Separate parses, so one reader mutating its copy can't reach another's.
+    reads[0]!.entries.push(3);
+    expect(reads[1]).toEqual({ entries: [1, 2] });
+  });
+
+  it("re-reads a key written between two reads of it in one crossing", async () => {
+    await db.kv.set("dup:k", "old");
+    native.kvBatches.length = 0;
+
+    const [before, , after] = await Promise.all([
+      db.kv.get("dup:k"),
+      db.kv.set("dup:k", "new"),
+      db.kv.get("dup:k"),
+    ]);
+
+    expect(before).toBe("old");
+    expect(after).toBe("new");
+    expect(native.kvBatches[0]!.filter((op) => op.op === "get")).toHaveLength(2);
   });
 
   it("coalesces a same-tick kv burst into one crossing, in arrival order", async () => {

@@ -135,11 +135,11 @@ describe("SqliteArmadaDB — query plans", () => {
   it("keeps the index driving when conditions are left for the rumors table", async () => {
     const { db, driver } = makeDb();
     const store = db.tenant("t");
-    await store.event(rumor({ kind: 1, content: "treasure map", tags: [["channel", "c1"]] }));
+    await store.event(rumor({ kind: 9, content: "treasure map", tags: [["channel", "c1"]] }));
 
     for (const filters of [
-      [{ "#channel": ["c1"], kinds: [1], limit: 10 }],
-      [{ search: "treasure", limit: 10 }],
+      [{ "#channel": ["c1"], kinds: [9], limit: 10 }],
+      [{ kinds: [9], search: "treasure", limit: 10 }],
     ]) {
       driver.selects.length = 0;
       await store.query(filters);
@@ -414,59 +414,62 @@ describe("SqliteArmadaDB — scans", () => {
 });
 
 describe("SqliteArmadaDB — search", () => {
+  // A chat kind, so these exercise the content index rather than the in-memory match.
+  const chat = (partial: Partial<NostrRumor> = {}) => rumor({ kind: 9, ...partial });
+
   it("matches keywords case- and accent-insensitively", async () => {
     const { db } = makeDb();
     const store = db.tenant("t");
-    const hit = rumor({ content: "Ahoy Matelot" });
+    const hit = chat({ content: "Ahoy Matelot" });
     await store.event(hit);
-    await store.event(rumor({ content: "nothing here" }));
+    await store.event(chat({ content: "nothing here" }));
 
-    expect(await store.query([{ search: "ahoy" }])).toEqual([hit]);
-    expect(await store.query([{ search: "MATELOT" }])).toEqual([hit]);
-    expect(await store.query([{ search: "matelôt" }])).toEqual([hit]);
+    expect(await store.query([{ kinds: [9], search: "ahoy" }])).toEqual([hit]);
+    expect(await store.query([{ kinds: [9], search: "MATELOT" }])).toEqual([hit]);
+    expect(await store.query([{ kinds: [9], search: "matelôt" }])).toEqual([hit]);
   });
 
   it("requires every keyword and honors negation", async () => {
     const { db } = makeDb();
     const store = db.tenant("t");
-    const both = rumor({ content: "red boat" });
+    const both = chat({ content: "red boat" });
     await store.event(both);
-    await store.event(rumor({ content: "red anchor" }));
+    await store.event(chat({ content: "red anchor" }));
 
-    expect(await store.query([{ search: "red boat" }])).toEqual([both]);
-    expect(await store.query([{ search: "red -anchor" }])).toEqual([both]);
-    expect(await store.query([{ search: "red boat anchor" }])).toEqual([]);
+    expect(await store.query([{ kinds: [9], search: "red boat" }])).toEqual([both]);
+    expect(await store.query([{ kinds: [9], search: "red -anchor" }])).toEqual([both]);
+    expect(await store.query([{ kinds: [9], search: "red boat anchor" }])).toEqual([]);
   });
 
   it("combines search with other constraints", async () => {
     const { db } = makeDb();
     const store = db.tenant("t");
-    const hit = rumor({ kind: 1, pubkey: "alice", content: "treasure map" });
+    const hit = chat({ pubkey: "alice", content: "treasure map" });
     await store.event(hit);
-    await store.event(rumor({ kind: 1, pubkey: "bob", content: "treasure map" }));
+    await store.event(chat({ pubkey: "bob", content: "treasure map" }));
 
-    expect(await store.query([{ search: "treasure", authors: ["alice"] }])).toEqual([hit]);
-    expect(await store.query([{ search: "treasure", kinds: [7] }])).toEqual([]);
+    expect(await store.query([{ kinds: [9], search: "treasure", authors: ["alice"] }])).toEqual([hit]);
+    expect(await store.query([{ search: "treasure", kinds: [1068] }])).toEqual([]);
   });
 
   it("intersects keywords with a tag-driven scan", async () => {
     const { db } = makeDb();
     const store = db.tenant("t");
-    const hit = rumor({ content: "treasure map", tags: [["channel", "c1"]] });
+    const hit = chat({ content: "treasure map", tags: [["channel", "c1"]] });
     await store.event(hit);
-    await store.event(rumor({ content: "treasure map", tags: [["channel", "c2"]] }));
-    await store.event(rumor({ content: "nothing here", tags: [["channel", "c1"]] }));
+    await store.event(chat({ content: "treasure map", tags: [["channel", "c2"]] }));
+    await store.event(chat({ content: "nothing here", tags: [["channel", "c1"]] }));
 
-    expect(await store.query([{ search: "treasure", "#channel": ["c1"] }])).toEqual([hit]);
+    expect(await store.query([{ kinds: [9], search: "treasure", "#channel": ["c1"] }])).toEqual([hit]);
   });
 
   it("keeps search results inside their tenant", async () => {
     const { db } = makeDb();
-    const mine = rumor({ content: "shared word" });
+    const mine = chat({ content: "shared word" });
     await db.tenant("a").event(mine);
-    await db.tenant("b").event(rumor({ content: "shared word" }));
+    await db.tenant("b").event(chat({ content: "shared word" }));
 
-    expect(await db.tenant("a").query([{ search: "shared" }])).toEqual([mine]);
+    expect(await db.tenant("a").query([{ kinds: [9], search: "shared" }])).toEqual([mine]);
   });
 
   it("counts matches without reading rumor bodies", async () => {
@@ -475,15 +478,15 @@ describe("SqliteArmadaDB — search", () => {
 
     await Promise.all(
       Array.from({ length: 1100 }, (_, i) =>
-        store.event(rumor({ created_at: 5000 + i, content: `common message ${i}` }))),
+        store.event(chat({ created_at: 5000 + i, content: `common message ${i}` }))),
     );
-    await store.event(rumor({ created_at: 9999, content: "unrelated" }));
+    await store.event(chat({ created_at: 9999, content: "unrelated" }));
 
-    const got = await store.query([{ search: "common", limit: 5 }]);
+    const got = await store.query([{ kinds: [9], search: "common", limit: 5 }]);
 
     expect(got).toHaveLength(5);
     expect(got.every((r) => r.content.includes("common"))).toBe(true);
-    expect(await store.count([{ search: "common" }])).toEqual({
+    expect(await store.count([{ kinds: [9], search: "common" }])).toEqual({
       count: 1100,
       approximate: false,
     });
@@ -492,12 +495,12 @@ describe("SqliteArmadaDB — search", () => {
   it("still matches keywords with the index turned off", async () => {
     const { db, driver } = makeDb({ search: false });
     const store = db.tenant("t");
-    const hit = rumor({ content: "the quick brown fox" });
+    const hit = chat({ content: "the quick brown fox" });
     await store.event(hit);
-    await store.event(rumor({ content: "nothing here" }));
+    await store.event(chat({ content: "nothing here" }));
 
-    expect(await store.query([{ search: "BROWN" }])).toEqual([hit]);
-    expect(await store.query([{ search: "quick -fox" }])).toEqual([]);
+    expect(await store.query([{ kinds: [9], search: "BROWN" }])).toEqual([hit]);
+    expect(await store.query([{ kinds: [9], search: "quick -fox" }])).toEqual([]);
     // Tags stay queryable — only the content index is optional.
     expect(rows(driver, "SELECT name FROM sqlite_master WHERE name = 'rumors_fts'")).toHaveLength(0);
     expect(
@@ -505,14 +508,60 @@ describe("SqliteArmadaDB — search", () => {
     ).toHaveLength(1);
   });
 
+  it("indexes only the content kinds, and matches the rest in memory", async () => {
+    const { db, driver } = makeDb();
+    const store = db.tenant("t");
+    const message = chat({ content: "harbour lights" });
+    const setting = rumor({ kind: 30078, pubkey: "alice", tags: [["d", "x"]], content: "harbour lights" });
+    await store.event(message);
+    await store.event(setting);
+
+    expect(rows(driver, "SELECT rowid FROM rumors_fts")).toHaveLength(1);
+    expect(await store.query([{ kinds: [9], search: "harbour" }])).toEqual([message]);
+    // A kind the index doesn't hold is still found, by substring.
+    expect(await store.query([{ kinds: [30078], search: "arbou" }])).toEqual([setting]);
+    expect(await store.query([{ search: "harbour" }])).toHaveLength(2);
+  });
+
+  it("limits an existing file's content index on open, and lets old entries leave with their rumors", async () => {
+    const { db, driver } = makeDb();
+    await db.ready;
+    // The insert trigger every file carried before the kind restriction.
+    driver.run("DROP TRIGGER rumors_fts_insert");
+    driver.run(`CREATE TRIGGER rumors_fts_insert AFTER INSERT ON rumors BEGIN
+      INSERT INTO rumors_fts (rowid, content) VALUES (new.seq, new.content); END`);
+    await db.tenant("t").event(rumor({ id: "v1", kind: 30078, pubkey: "alice", created_at: 100, tags: [["d", "x"]] }));
+    expect(rows(driver, "SELECT rowid FROM rumors_fts")).toHaveLength(1);
+
+    const reopened = new SqliteArmadaDB(driver);
+    await reopened.ready;
+    const [trigger] = rows(driver, "SELECT sql FROM sqlite_master WHERE name = 'rumors_fts_insert'");
+    expect(String(trigger.sql)).toMatch(/WHEN new\.kind IN \(9, 14, 15, 1068, 1111\)/);
+    expect(rows(driver, "SELECT rowid FROM rumors_fts")).toHaveLength(1);
+
+    await reopened.tenant("t").event(rumor({ id: "v2", kind: 30078, pubkey: "alice", created_at: 200, tags: [["d", "x"]] }));
+    expect(rows(driver, "SELECT rowid FROM rumors_fts")).toHaveLength(0);
+  });
+
+  it("matches a keyword still being typed as a word prefix", async () => {
+    const { db } = makeDb();
+    const store = db.tenant("t");
+    const hit = chat({ content: "lighthouse keeper" });
+    await store.event(hit);
+
+    expect(await store.query([{ kinds: [9], search: "lighth" }])).toEqual([hit]);
+    expect(await store.query([{ kinds: [9], search: "kee light" }])).toEqual([hit]);
+    expect(await store.query([{ kinds: [9], search: "house" }])).toEqual([]);
+  });
+
   it("stops finding a rumor once it is removed", async () => {
     const { db, driver } = makeDb();
     const store = db.tenant("t");
-    await store.event(rumor({ content: "ephemeral phrase" }));
+    await store.event(chat({ content: "ephemeral phrase" }));
 
-    await store.remove([{ search: "ephemeral" }]);
+    await store.remove([{ kinds: [9], search: "ephemeral" }]);
 
-    expect(await store.query([{ search: "ephemeral" }])).toEqual([]);
+    expect(await store.query([{ kinds: [9], search: "ephemeral" }])).toEqual([]);
     expect(rows(driver, "SELECT rowid FROM rumors_fts")).toHaveLength(0);
   });
 });
@@ -549,7 +598,8 @@ describe("SqliteArmadaDB — index upkeep", () => {
     expect(rows(driver, "SELECT coord, id FROM rumor_coords")).toEqual([
       { coord: "30078:alice:x", id: "v2" },
     ]);
-    expect(rows(driver, "SELECT rowid FROM rumors_fts")).toHaveLength(1);
+    // Settings are not a content kind; the superseded version took nothing with it.
+    expect(rows(driver, "SELECT rowid FROM rumors_fts")).toHaveLength(0);
   });
 
   it("leaves no rows behind when a rumor is removed", async () => {
@@ -581,7 +631,7 @@ describe("SqliteArmadaDB — index upkeep", () => {
   it("indexes a re-delivered rumor exactly once", async () => {
     const { db, driver } = makeDb();
     const store = db.tenant("t");
-    const again = rumor({ id: "twice", tags: [["channel", "c1"]] });
+    const again = rumor({ id: "twice", kind: 9, tags: [["channel", "c1"]] });
 
     await store.event(again);
     await store.event({ ...again });

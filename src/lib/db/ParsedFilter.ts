@@ -7,6 +7,7 @@
  */
 import { NIP50 } from "@nostrify/nostrify";
 
+import { CONTENT_INDEXED_KINDS } from "./sqliteSchema";
 import { TERM_NAMESPACES_RESERVED, termNamespaceRange } from "./types";
 
 import type { NostrFilter } from "@nostrify/nostrify";
@@ -51,7 +52,11 @@ export class ParsedFilter {
    */
   readonly distinct?: string;
 
-  /** Keywords as an FTS5 `MATCH` expression; `undefined` if inexpressible (e.g. only negations). */
+  /**
+   * Keywords as an FTS5 `MATCH` expression; `undefined` if inexpressible (e.g.
+   * only negations) or if `kinds` may reach a kind outside
+   * {@link CONTENT_INDEXED_KINDS}, whose rows the index doesn't hold.
+   */
   readonly searchQuery?: string;
 
   readonly since?: number;
@@ -133,7 +138,9 @@ export class ParsedFilter {
 
       if (required.length > 0 || negated.length > 0) {
         this.searchKeywords = { required, negated };
-        this.searchQuery = toFtsQuery(required, negated);
+        if (this.kinds?.every((kind) => CONTENT_INDEXED_KINDS.includes(kind))) {
+          this.searchQuery = toFtsQuery(required, negated);
+        }
       } else if (terms.length === 0 && distinct === undefined && this.search.trim() !== "") {
         // Everything was consumed by the parse (unimplemented extension, or
         // punctuation): fail closed rather than return the whole tenant. A blank
@@ -215,15 +222,31 @@ export class ParsedFilter {
 }
 
 /**
+ * A NIP-50 `search` that matches what a person typed as plain words, ANDed:
+ * each is quoted, so `re:meeting` stays a keyword rather than becoming a term
+ * lookup, and a leading `-` is dropped rather than read as a negation. Empty
+ * when nothing searchable remains — which as a `search` would constrain nothing.
+ */
+export function literalSearch(text: string): string {
+  return text
+    .split(/\s+/)
+    .map((word) => word.replace(/"/g, "").replace(/^-+/, ""))
+    .filter((word) => word.length > 0)
+    .map((word) => `"${word}"`)
+    .join(" ");
+}
+
+/**
  * FTS5 `MATCH` expression from NIP-50 keywords, each a quoted phrase (quotes
- * doubled) so user input is never query syntax. `undefined` for only negations
- * (FTS5 rejects bare `NOT`) or a NUL (its parser is NUL-terminated).
+ * doubled) so user input is never query syntax, matched as a prefix so a word
+ * being typed already finds itself. `undefined` for only negations (FTS5
+ * rejects bare `NOT`) or a NUL (its parser is NUL-terminated).
  */
 function toFtsQuery(required: string[], negated: string[]): string | undefined {
   if (required.length === 0) return undefined;
   if ([...required, ...negated].some((keyword) => keyword.includes("\u0000"))) return undefined;
 
-  const phrase = (keyword: string) => `"${keyword.replace(/"/g, '""')}"`;
+  const phrase = (keyword: string) => `"${keyword.replace(/"/g, '""')}"*`;
 
   return [
     required.map(phrase).join(" AND "),

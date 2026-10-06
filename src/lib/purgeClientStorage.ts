@@ -14,6 +14,7 @@ import { clearOutgoingMemory } from "@/concord/lib/outgoing";
 import { clearOutgoingVerifyMemory } from "@/concord/lib/outgoingVerify";
 import { clearPendingGuestbookJoinMemory } from "@/concord/lib/pendingGuestbookJoin";
 import { clearPendingJoins } from "@/concord/lib/pendingJoins";
+import { clearRumorStoreMemory } from "@/concord/lib/rumorStore";
 import { clearShareShortcuts } from "@/lib/shareTarget";
 import { writePushDisabledFlag } from "@/lib/swPushDisabled";
 import { WEB_PUSH_RETIREMENT_KEY } from "@/lib/webPushEndpoint";
@@ -117,6 +118,7 @@ export async function purgeClientStorage(): Promise<void> {
   clearRenderedPlaintext();
   clearRecentDecrypts();
   clearFoldedMemory();
+  clearRumorStoreMemory();
   clearDeferredFoldMemory();
   clearIconThumbMemory();
   clearAudioMetadata();
@@ -145,6 +147,7 @@ export async function purgeClientStorage(): Promise<void> {
   resetKvCaches();
   clearRecentDecrypts();
   clearFoldedMemory();
+  clearRumorStoreMemory();
   clearIconThumbMemory();
   clearAudioMetadata();
   clearPendingJoins();

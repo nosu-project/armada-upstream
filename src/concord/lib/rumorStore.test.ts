@@ -267,6 +267,42 @@ describe("concord rumor store", () => {
     expect(after.some((m) => m.rumorId === msg.id)).toBe(false);
   });
 
+  it("shares one store read of the control plane until the next write to it", async () => {
+    const cid = "cd".repeat(32);
+    const alice = signer();
+    const control = channelGroupKey(new Uint8Array(32).fill(9), new Uint8Array(32).fill(2), 0);
+    const edition = async (eid: string) => {
+      const rumor = buildRumor({
+        kind: 3308,
+        content: "{}",
+        tags: [["vsk", "0"], ["eid", eid], ["ev", "1"]],
+        pubkey: alice.pubkey,
+        ms: null,
+      });
+      return openWrap(wrapSeal(await sealRumor(rumor, KIND_SEAL_PLAINTEXT, control, alice), control), control);
+    };
+    await writeOpened(cid, [await edition("01".repeat(32))], "control");
+
+    const store = getArmadaDB().tenant(`c2:${cid}`);
+    const query = vi.spyOn(store.constructor.prototype, "query");
+    try {
+      const reads = await Promise.all([queryPlane(cid, "control"), queryPlane(cid, "control")]);
+      await queryPlane(cid, "control");
+      expect(query).toHaveBeenCalledTimes(1);
+      expect(reads[0]).toHaveLength(1);
+      // Each reader gets its own objects.
+      expect(reads[0][0]).not.toBe(reads[1][0]);
+
+      // A write issued while a read is in flight is still seen by the next read.
+      const inFlight = queryPlane(cid, "control");
+      await writeOpened(cid, [await edition("02".repeat(32))], "control");
+      await inFlight;
+      expect(await queryPlane(cid, "control")).toHaveLength(2);
+    } finally {
+      query.mockRestore();
+    }
+  });
+
   it("preserves the full signed seal in KV, not in the stored rumor (control compaction)", async () => {
     const alice = signer();
     const control = channelGroupKey(new Uint8Array(32).fill(9), new Uint8Array(32).fill(1), 0);

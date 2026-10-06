@@ -352,40 +352,83 @@ class ArmadaDbTest {
 
     // ── NIP-50 search ─────────────────────────────────────────────────────────
 
-    @Test
-    fun `search matches whole words, case and accent insensitively`() {
-        val db = open()
-        db.event("t", rumor(id = "a", content = "The quick brown fox"))
-        db.event("t", rumor(id = "b", content = "CAFÉ society"))
+    // A chat kind, so these exercise the content index rather than the in-memory match.
+    private fun chat(id: String, content: String, tags: List<List<String>> = emptyList()) =
+        rumor(id = id, kind = 9, content = content, tags = tags)
 
-        assertEquals(listOf("a"), db.query("t", filters("{\"search\":\"BROWN\"}")).map { it.id })
-        assertEquals(listOf("b"), db.query("t", filters("{\"search\":\"cafe\"}")).map { it.id })
-        // Whole words, not substrings.
-        assertEquals(emptyList<String>(), db.query("t", filters("{\"search\":\"brow\"}")).map { it.id })
+    private fun search(db: SqliteArmadaDb, tenant: String, json: String): List<String> =
+        db.query(tenant, filters("{\"kinds\":[9],$json}")).map { it.id }
+
+    @Test
+    fun `search matches word prefixes, case and accent insensitively`() {
+        val db = open()
+        db.event("t", chat("a", "The quick brown fox"))
+        db.event("t", chat("b", "CAFÉ society"))
+
+        assertEquals(listOf("a"), search(db, "t", "\"search\":\"BROWN\""))
+        assertEquals(listOf("b"), search(db, "t", "\"search\":\"cafe\""))
+        // A word being typed finds itself; the middle of a word does not.
+        assertEquals(listOf("a"), search(db, "t", "\"search\":\"brow\""))
+        assertEquals(emptyList<String>(), search(db, "t", "\"search\":\"rown\""))
     }
 
     @Test
     fun `search ANDs keywords and honours negation`() {
         val db = open()
-        db.event("t", rumor(id = "a", content = "red boat"))
-        db.event("t", rumor(id = "b", content = "red anchor"))
+        db.event("t", chat("a", "red boat"))
+        db.event("t", chat("b", "red anchor"))
 
-        assertEquals(listOf("a"), db.query("t", filters("{\"search\":\"red -anchor\"}")).map { it.id })
-        assertEquals(emptyList<String>(), db.query("t", filters("{\"search\":\"red sail\"}")).map { it.id })
+        assertEquals(listOf("a"), search(db, "t", "\"search\":\"red -anchor\""))
+        assertEquals(emptyList<String>(), search(db, "t", "\"search\":\"red sail\""))
     }
 
     @Test
     fun `search intersects with a tag-driven scan and is tenant-scoped`() {
         val db = open()
-        db.event("a", rumor(id = "hit", content = "red boat", tags = listOf(listOf("channel", "c1"))))
-        db.event("a", rumor(id = "miss", content = "blue boat", tags = listOf(listOf("channel", "c1"))))
-        db.event("b", rumor(id = "other", content = "red boat"))
+        db.event("a", chat("hit", "red boat", listOf(listOf("channel", "c1"))))
+        db.event("a", chat("miss", "blue boat", listOf(listOf("channel", "c1"))))
+        db.event("b", chat("other", "red boat"))
 
+        assertEquals(listOf("hit"), search(db, "a", "\"#channel\":[\"c1\"],\"search\":\"red\""))
+        assertEquals(listOf("other"), search(db, "b", "\"search\":\"red\""))
+    }
+
+    @Test
+    fun `only the content kinds are indexed, and the rest are matched in memory`() {
+        val db = open()
+        db.event("t", chat("message", "harbour lights"))
+        db.event("t", rumor(id = "setting", kind = 30078, tags = listOf(listOf("d", "x")), content = "harbour lights"))
+
+        assertEquals(1L, driver!!.query("SELECT COUNT(*) FROM rumors_fts") { it.long(0) }.single())
+        assertEquals(listOf("message"), search(db, "t", "\"search\":\"harbour\""))
+        // A kind the index doesn't hold is still found, by substring.
         assertEquals(
-            listOf("hit"),
-            db.query("a", filters("{\"#channel\":[\"c1\"],\"search\":\"red\"}")).map { it.id },
+            listOf("setting"),
+            db.query("t", filters("{\"kinds\":[30078],\"search\":\"arbou\"}")).map { it.id },
         )
-        assertEquals(listOf("other"), db.query("b", filters("{\"search\":\"red\"}")).map { it.id })
+        assertEquals(2, db.query("t", filters("{\"search\":\"harbour\"}")).size)
+    }
+
+    @Test
+    fun `an existing file's content index is limited on open, and old entries leave with their rumors`() {
+        val db = open()
+        val recording = driver!!
+        // The insert trigger every file carried before the kind restriction.
+        recording.run("DROP TRIGGER rumors_fts_insert")
+        recording.run(
+            "CREATE TRIGGER rumors_fts_insert AFTER INSERT ON rumors BEGIN " +
+                "INSERT INTO rumors_fts (rowid, content) VALUES (new.seq, new.content); END",
+        )
+        db.event("t", rumor(id = "v1", kind = 30078, createdAt = 100, tags = listOf(listOf("d", "x"))))
+        assertEquals(1L, recording.query("SELECT COUNT(*) FROM rumors_fts") { it.long(0) }.single())
+
+        val reopened = SqliteArmadaDb(recording)
+        val trigger = recording.query("SELECT sql FROM sqlite_master WHERE name = 'rumors_fts_insert'") { it.text(0) }
+        assertTrue(trigger.single().contains("WHEN new.kind IN (9, 14, 15, 1068, 1111)"))
+        assertEquals(1L, recording.query("SELECT COUNT(*) FROM rumors_fts") { it.long(0) }.single())
+
+        reopened.event("t", rumor(id = "v2", kind = 30078, createdAt = 200, tags = listOf(listOf("d", "x"))))
+        assertEquals(0L, recording.query("SELECT COUNT(*) FROM rumors_fts") { it.long(0) }.single())
     }
 
     @Test
@@ -401,20 +444,20 @@ class ArmadaDbTest {
     @Test
     fun `search still works with the content index off`() {
         val db = open(search = false)
-        db.event("t", rumor(id = "a", content = "The quick brown fox"))
+        db.event("t", chat("a", "The quick brown fox"))
 
-        assertEquals(listOf("a"), db.query("t", filters("{\"search\":\"brown\"}")).map { it.id })
+        assertEquals(listOf("a"), search(db, "t", "\"search\":\"brown\""))
         // Without the index it is a substring match, matching IndexedDB.
-        assertEquals(listOf("a"), db.query("t", filters("{\"search\":\"brow\"}")).map { it.id })
+        assertEquals(listOf("a"), search(db, "t", "\"search\":\"rown\""))
     }
 
     @Test
     fun `a removed rumor disappears from the search index`() {
         val db = open()
-        db.event("t", rumor(id = "a", content = "findable"))
+        db.event("t", chat("a", "findable"))
         db.remove("t", filters("{\"ids\":[\"a\"]}"))
 
-        assertEquals(emptyList<String>(), db.query("t", filters("{\"search\":\"findable\"}")).map { it.id })
+        assertEquals(emptyList<String>(), search(db, "t", "\"search\":\"findable\""))
     }
 
     // ── Query plans ───────────────────────────────────────────────────────────
@@ -579,12 +622,12 @@ class ArmadaDbTest {
     @Test
     fun `a NUL in a search falls back to the in-memory match`() {
         val db = open()
-        db.event("t", rumor(id = "a", content = "hello"))
+        db.event("t", chat("a", "hello"))
 
         // FTS5's query parser is NUL-terminated, so such a keyword can't be put
         // to the index at all; it is matched in memory instead, where it matches
         // nothing rather than quietly searching for "hel".
-        val filter = JSONObject().put("search", "hel\u0000lo")
+        val filter = JSONObject().put("kinds", org.json.JSONArray().put(9)).put("search", "hel\u0000lo")
         assertEquals(emptyList<String>(), db.query("t", listOf(filter)).map { it.id })
     }
 
