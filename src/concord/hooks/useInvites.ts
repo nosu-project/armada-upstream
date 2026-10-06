@@ -31,7 +31,6 @@ import {
   mintToken,
   parseInviteLink,
   shareableInviteUrl,
-  STOCK_RELAYS,
   type InviteBundle,
   type InviteList,
 } from "@/concord/lib/invite";
@@ -41,6 +40,7 @@ import { inviteDeliveryRelays, recipientInboxRelays } from "@/concord/lib/invite
 import { publishToAnyRelay } from "@/concord/lib/relayPublish";
 import { useNostrPublish } from "@/hooks/useNostrPublish";
 import { toast } from "@/hooks/useToast";
+import { RESCUE_RELAYS } from "@/lib/platform";
 import { linkStoreBase, shareOrigin } from "@/lib/shareOrigin";
 import {
   publishSignedEventToRelays,
@@ -78,7 +78,7 @@ export function readPersistedInviteList(pubkey: string): Promise<PersistedInvite
 
 /** Explicit NIP-65/account destinations plus the fixed CORD rescue floor. */
 export function inviteListRelays(selfRelays: Iterable<string>): string[] {
-  return uniqueRelayUrls([...selfRelays, ...STOCK_RELAYS]);
+  return uniqueRelayUrls([...selfRelays, ...RESCUE_RELAYS]);
 }
 
 /** Queue exact signed bytes, fan every target independently, retain misses. */
@@ -249,7 +249,7 @@ export function useInviteList() {
           } satisfies PersistedInviteList);
         } else {
           const canonical = uniqueRelayUrls(selfStateRelays(config, user!.pubkey));
-          const requiredFloor = canonical.length > 0 ? canonical : uniqueRelayUrls(STOCK_RELAYS);
+          const requiredFloor = canonical.length > 0 ? canonical : uniqueRelayUrls(RESCUE_RELAYS);
           const canReconcile = !unreadable
             && answered.some((url) => requiredFloor.includes(url));
           if (canReconcile) {
@@ -358,7 +358,7 @@ export async function updateInviteList(
       "Couldn't decrypt the current creator invite list; not saving to avoid losing revocation secrets.",
     );
   }
-  const requiredFloor = canonical.length > 0 ? canonical : uniqueRelayUrls(STOCK_RELAYS);
+  const requiredFloor = canonical.length > 0 ? canonical : uniqueRelayUrls(RESCUE_RELAYS);
   if (!read.answered.some((url) => requiredFloor.includes(url))) {
     throw new Error(
       "Couldn't confirm your creator invite list on an account-state relay; not saving to avoid overwriting it.",

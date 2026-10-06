@@ -1,7 +1,6 @@
 /**
  * Build-time platform configuration.
- * - `APP_RELAYS` — default app relays (non-NIP-29 traffic). User-overridable.
- * - `BROADCAST_RELAYS` — write-only relays pool traffic is also published to. User-overridable.
+ * - `RELAYS` — the deployment's relays, which every relay default follows.
  * - `APP_NAME` — display name of the deployment.
  * - `APP_ID` — fork identifier namespacing the app's own NIP-78 `d` tags.
  */
@@ -108,14 +107,33 @@ export function isStandalonePwa(): boolean {
   return Boolean(displayMode) || iosStandalone;
 }
 
+/** A comma-separated list of relay URLs, normalized, invalid ones dropped. */
+function relayList(value: string): string[] {
+  return value
+    .split(",")
+    .map((url: string) => normalizeRelayUrl(url))
+    .filter((url: string | undefined): url is string => Boolean(url));
+}
+
+/**
+ * The deployment's own relays (`RELAYS`), the one relay setting. Empty or
+ * unset means Armada's public relays and the third-party helpers below.
+ * Set, it is every relay default at once — account data, search, new
+ * communities, desktop releases, and the {@link RESCUE_RELAYS} a user's
+ * community and invite lists are backed up to — and the helpers (broadcast,
+ * NIP-65 and git discovery) are off: naming your relays means only those.
+ */
+export const DEPLOYMENT_RELAYS: string[] = relayList(config("RELAYS") ?? "");
+const OWN_RELAYS = DEPLOYMENT_RELAYS.length > 0;
+
 /**
  * Default app relays (Ditto's concept) for non-NIP-29 traffic: profiles, 10009
- * lists, etc. Group events go directly to their host. Seeds `AppConfig.appRelays`.
+ * lists, etc. Group events go directly to their host. Seeds `AppConfig.appRelays`
+ * and, the same list, `AppConfig.searchRelays`.
  */
-export const APP_RELAYS: string[] = (config("APP_RELAYS") || "wss://relay.ditto.pub,wss://relay.dreamith.to")
-  .split(",")
-  .map((url: string) => normalizeRelayUrl(url))
-  .filter((url: string | undefined): url is string => Boolean(url));
+export const APP_RELAYS: string[] = OWN_RELAYS
+  ? DEPLOYMENT_RELAYS
+  : relayList("wss://relay.ditto.pub,wss://relay.dreamith.to");
 
 /**
  * Write-only relays for general pool traffic: published to for reach, never
@@ -123,45 +141,34 @@ export const APP_RELAYS: string[] = (config("APP_RELAYS") || "wss://relay.ditto.
  * relays. Folded only into `poolWriteRelays`; Concord/NIP-29 traffic never
  * goes here. Seeds `AppConfig.broadcastRelays`.
  */
-export const BROADCAST_RELAYS: string[] = (
-  config("BROADCAST_RELAYS") ?? "wss://relay.primal.net"
-)
-  .split(",")
-  .map((url: string) => normalizeRelayUrl(url))
-  .filter((url: string | undefined): url is string => Boolean(url));
+export const BROADCAST_RELAYS: string[] = OWN_RELAYS ? [] : relayList("wss://relay.primal.net");
 
 /** Public NIP-65 indexes used only for a bounded kind-10002 lookup at login. May be empty. */
-export const RELAY_LIST_DISCOVERY_RELAYS: string[] = (
-  config("NIP65_DISCOVERY_RELAYS")
-  ?? "wss://purplepag.es,wss://user.kindpag.es,wss://relay.nos.social"
-)
-  .split(",")
-  .map((url: string) => normalizeRelayUrl(url))
-  .filter((url: string | undefined): url is string => Boolean(url));
+export const RELAY_LIST_DISCOVERY_RELAYS: string[] = OWN_RELAYS
+  ? []
+  : relayList("wss://purplepag.es,wss://user.kindpag.es,wss://relay.nos.social");
+
+/**
+ * Where the CORD stock set is used as a network floor rather than as wire
+ * format: the encrypted community list's and invite list's backup copies,
+ * invite delivery to someone with no inbox, and bootstrap fallbacks. The
+ * stock set itself stays frozen for the invite codec (`invite.ts`); only a
+ * deployment's own relays replace it here.
+ */
+export const RESCUE_RELAYS: string[] = OWN_RELAYS ? DEPLOYMENT_RELAYS : STOCK_RELAYS;
 
 /**
  * Default home relays for a NEW Concord community. Seeds
- * `AppConfig.communityRelays`; unset or empty means the CORD stock set, which
- * an emptied list falls back to anyway. Only this default moves: the stock
- * set's protocol uses (fragment codec, vault floor, invite fallbacks) don't.
+ * `AppConfig.communityRelays`; an emptied list falls back to
+ * {@link RESCUE_RELAYS}.
  */
-export const COMMUNITY_RELAYS: string[] = (config("COMMUNITY_RELAYS") || STOCK_RELAYS.join(","))
-  .split(",")
-  .map((url: string) => normalizeRelayUrl(url))
-  .filter((url: string | undefined): url is string => Boolean(url));
-
-/** Default NIP-50 search relays. Seeds `AppConfig.searchRelays`. */
-export const SEARCH_RELAYS: string[] = (config("SEARCH_RELAYS") || "wss://relay.ditto.pub,wss://relay.dreamith.to")
-  .split(",")
-  .map((url: string) => normalizeRelayUrl(url))
-  .filter((url: string | undefined): url is string => Boolean(url));
+export const COMMUNITY_RELAYS: string[] = RESCUE_RELAYS;
 
 /**
  * NIP-34 repository directory (kind 30617 index) for search and hintless
  * lookups only — never subscribed or persisted. Empty disables directory search.
  */
-export const GIT_ANNOUNCEMENT_DISCOVERY_RELAY: string =
-  normalizeRelayUrl(config("GIT_DISCOVERY_RELAY") ?? "wss://index.ngit.dev") ?? "";
+export const GIT_ANNOUNCEMENT_DISCOVERY_RELAY: string = OWN_RELAYS ? "" : "wss://index.ngit.dev";
 
 /** Whether a relay is the discovery index, compared as normalized URLs rather than by substring. */
 export function isGitAnnouncementDiscoveryRelay(url: string): boolean {
@@ -180,15 +187,6 @@ export const CONCORD_AV_SERVERS: string[] = (
   .split(",")
   .map((s: string) => s.trim())
   .filter((s: string) => Boolean(s));
-
-/**
- * Fallback DM relays when the user has no kind-10050 inbox (added to app relays
- * in `effectiveDmRelays`). Empty unless `DM_RELAYS` is set.
- */
-export const DM_RELAYS: string[] = (config("DM_RELAYS") ?? "")
-  .split(",")
-  .map((url: string) => normalizeRelayUrl(url))
-  .filter((url: string | undefined): url is string => Boolean(url));
 
 /** Build-time boolean: "true"/"1", "false"/"0", else `dflt`. */
 function envBool(value: string | undefined, dflt: boolean): boolean {

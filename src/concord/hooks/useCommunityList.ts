@@ -37,10 +37,10 @@ import {
   serializeFragList,
   type FragList,
 } from "@/concord/lib/listFrag";
-import { STOCK_RELAYS } from "@/concord/lib/invite";
 import { hydratePendingJoins, pendingJoinEntriesFor, subscribePendingJoins } from "@/concord/lib/pendingJoins";
 import { KIND_COMMUNITY_LIST_FRAG, KIND_COMMUNITY_LIST_RETIRED } from "@/concord/lib/kinds";
 import type { Community } from "@/concord/lib/types";
+import { RESCUE_RELAYS } from "@/lib/platform";
 import { logSync } from "@/lib/syncLog";
 import { publishSignedEventToRelays, uniqueRelayUrls } from "@/lib/nip65";
 import { queryRelayStrict, type ReqRelay } from "@/lib/strictRelayQuery";
@@ -226,7 +226,7 @@ export interface FragSet {
 
 /** The explicit rescue/write set for the encrypted Concord vault. */
 export function communityListRelays(selfRelays: Iterable<string>): string[] {
-  return uniqueRelayUrls([...selfRelays, ...STOCK_RELAYS]);
+  return uniqueRelayUrls([...selfRelays, ...RESCUE_RELAYS]);
 }
 
 function newestEventFirst(a: NostrRumor, b: NostrRumor): number {
@@ -769,7 +769,7 @@ async function seedCommunityList(
   const confirm = communityListRelays(selfRelays);
   const empty = await confirmedEmptyFragmentRelays(nostr, user.pubkey, confirm);
   const canonical = uniqueRelayUrls(selfRelays);
-  const requiredFloor = canonical.length > 0 ? canonical : uniqueRelayUrls(STOCK_RELAYS);
+  const requiredFloor = canonical.length > 0 ? canonical : uniqueRelayUrls(RESCUE_RELAYS);
   if (empty.sawFragments || !empty.answered.some((url) => requiredFloor.includes(url))) {
     logSync("list2", "seed DEFERRED — the empty read is unconfirmed; retrying on a later sync");
     return;
@@ -809,7 +809,7 @@ async function fetchRetiredList(
     filter,
   ));
   const answered = new Set(latest.answered);
-  const complete = uniqueRelayUrls(STOCK_RELAYS).every((url) => answered.has(url));
+  const complete = uniqueRelayUrls(RESCUE_RELAYS).every((url) => answered.has(url));
   const event = latest.events.sort(newestEventFirst)[0];
   if (!event?.content) return { complete };
   const plaintext = await user.signer.nip44.decrypt(user.pubkey, event.content);
@@ -848,7 +848,7 @@ export async function syncCommunityList(
   );
   const { set, unreadable } = read;
   const explicit = uniqueRelayUrls(selfRelays ?? []);
-  const repairFloor = explicit.length > 0 ? explicit : uniqueRelayUrls(STOCK_RELAYS);
+  const repairFloor = explicit.length > 0 ? explicit : uniqueRelayUrls(RESCUE_RELAYS);
   const repairPending = selfRelays !== undefined && (
     unreadable
     || Boolean(set && !set.complete)
@@ -919,7 +919,7 @@ export async function syncCommunityList(
   // converged. Skipped while a list mutation is in flight (a same-second
   // lowest-id race it could lose); the next sync re-arms it.
   const canonical = uniqueRelayUrls(selfRelays ?? []);
-  const requiredFloor = canonical.length > 0 ? canonical : uniqueRelayUrls(STOCK_RELAYS);
+  const requiredFloor = canonical.length > 0 ? canonical : uniqueRelayUrls(RESCUE_RELAYS);
   const hasCanonicalAnswer = read.answered.some((url) => requiredFloor.includes(url));
   if (selfRelays && set.complete && !unreadable && hasCanonicalAnswer && user.signer.nip44
     && queryClient.isMutating({ mutationKey: LIST_MUTATION_KEY }) === 0) {
@@ -1133,7 +1133,7 @@ export async function updateCommunityList(
   // Require a canonical account-state answer (stock only for legacy accounts
   // without one); unanswered rescue relays are left out of the write cohort.
   const canonical = uniqueRelayUrls(relays);
-  const requiredFloor = canonical.length > 0 ? canonical : uniqueRelayUrls(STOCK_RELAYS);
+  const requiredFloor = canonical.length > 0 ? canonical : uniqueRelayUrls(RESCUE_RELAYS);
   if (!read.answered.some((url) => requiredFloor.includes(url))) {
     throw new Error(
       "Couldn't confirm your community list on an account-state relay; not saving to avoid overwriting it.",

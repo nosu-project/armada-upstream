@@ -10,6 +10,7 @@ import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useRemoveRailKey } from "@/hooks/useRemoveRailKey";
 import { getArmadaDB } from "@/lib/db/armadaDB";
+import { RESCUE_RELAYS } from "@/lib/platform";
 import { verifyEventOnce } from "@/lib/verifyCache";
 import { preferPortableRelays, unusableRelaysReason } from "@/lib/relayUsability";
 import { channelKeysToWire, isLive, nextChannelEpoch, toJoinMaterial, rehydrateCommunity, type CommunityListEntry, type JoinMaterial } from "@/concord/lib/communityList";
@@ -29,7 +30,6 @@ import {
   InviteError,
   parseBundleEvent,
   parseInviteLink,
-  STOCK_RELAYS,
   type InviteBundle,
   type ParsedInviteLink,
 } from "@/concord/lib/invite";
@@ -397,7 +397,7 @@ export function inviteRefOf(invite: ParsedInviteLink): string {
  * are deliberately not included.
  */
 export function defaultCreateRelays(communityRelays: string[]): string[] {
-  return capRelays(preferPortableRelays(communityRelays.length > 0 ? communityRelays : STOCK_RELAYS));
+  return capRelays(preferPortableRelays(communityRelays.length > 0 ? communityRelays : RESCUE_RELAYS));
 }
 
 /** The create dialog's preselected relays; synchronous so the list paints on first render. */
@@ -419,7 +419,7 @@ export function useCommunityActions() {
   const queryClient = useQueryClient();
 
   // For fragments with no bootstrap relays: the user's app relays, else the stock interop set.
-  const bootstrapRelays = config.appRelays.length > 0 ? config.appRelays : STOCK_RELAYS;
+  const bootstrapRelays = config.appRelays.length > 0 ? config.appRelays : RESCUE_RELAYS;
 
   const create = useMutation<
     { communityId: string; name: string },
@@ -1370,7 +1370,7 @@ export function useStrandedRecovery(
 
   const inviteRef = typeof entry?.invite_ref === "string" ? entry.invite_ref : undefined;
   const canRecover = Boolean(stranded && inviteRef && user && community);
-  const bootstrapRelays = config.appRelays.length > 0 ? config.appRelays : STOCK_RELAYS;
+  const bootstrapRelays = config.appRelays.length > 0 ? config.appRelays : RESCUE_RELAYS;
 
   /** True when a fresher epoch was merged in. */
   const checkNow = useCallback(async (): Promise<boolean> => {

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   APP_BLOSSOM_SERVERS,
@@ -23,6 +23,35 @@ function listEvent(servers: string[]): NostrEvent {
     sig: "0".repeat(128),
   };
 }
+
+describe("BLOSSOM_SERVERS", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.resetModules();
+  });
+
+  async function load(value?: string) {
+    if (value !== undefined) vi.stubGlobal("window", { ENV: { BLOSSOM_SERVERS: value } });
+    vi.resetModules();
+    return import("./blossom");
+  }
+
+  it("leaves Armada's public servers and no preference when unset", async () => {
+    const { APP_BLOSSOM_SERVERS, PREFERRED_BLOSSOM_SERVER } = await load();
+    expect(APP_BLOSSOM_SERVERS).toEqual([
+      "https://blossom.ditto.pub/",
+      "https://blossom.dreamith.to/",
+      "https://blossom.primal.net/",
+    ]);
+    expect(PREFERRED_BLOSSOM_SERVER).toBe("");
+  });
+
+  it("prefers the first of a deployment's servers", async () => {
+    const { APP_BLOSSOM_SERVERS, PREFERRED_BLOSSOM_SERVER } = await load("armada.example.com, https://blossom.ditto.pub");
+    expect(APP_BLOSSOM_SERVERS).toEqual(["https://armada.example.com/", "https://blossom.ditto.pub/"]);
+    expect(PREFERRED_BLOSSOM_SERVER).toBe("https://armada.example.com/");
+  });
+});
 
 describe("parseBlossomServerList", () => {
   it("extracts server tags", () => {

@@ -48,34 +48,53 @@ describe("linkPreviewUrl", () => {
   });
 });
 
-describe("COMMUNITY_RELAYS", () => {
+describe("RELAYS", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.resetModules();
   });
 
   async function load(value?: string) {
-    if (value !== undefined) vi.stubGlobal("window", { ENV: { COMMUNITY_RELAYS: value } });
+    if (value !== undefined) vi.stubGlobal("window", { ENV: { RELAYS: value } });
     vi.resetModules();
-    const [{ COMMUNITY_RELAYS }, { STOCK_RELAYS }] = await Promise.all([
+    const [platform, { RELEASE_RELAYS }, { STOCK_RELAYS }] = await Promise.all([
       import("./platform"),
+      import("./releases"),
       import("@/concord/lib/stockRelays"),
     ]);
-    return { COMMUNITY_RELAYS, STOCK_RELAYS };
+    return { ...platform, RELEASE_RELAYS, STOCK_RELAYS };
   }
 
-  it("defaults to the CORD stock set, unchanged", async () => {
-    const { COMMUNITY_RELAYS, STOCK_RELAYS } = await load();
-    expect(COMMUNITY_RELAYS).toEqual(STOCK_RELAYS);
+  it("leaves Armada's public relays and the stock set when unset", async () => {
+    const relays = await load();
+    expect(relays.APP_RELAYS).toEqual(["wss://relay.ditto.pub", "wss://relay.dreamith.to"]);
+    expect(relays.COMMUNITY_RELAYS).toEqual(relays.STOCK_RELAYS);
+    expect(relays.RESCUE_RELAYS).toEqual(relays.STOCK_RELAYS);
+    expect(relays.BROADCAST_RELAYS).toEqual(["wss://relay.primal.net"]);
+    expect(relays.RELAY_LIST_DISCOVERY_RELAYS).not.toEqual([]);
+    expect(relays.GIT_ANNOUNCEMENT_DISCOVERY_RELAY).toBe("wss://index.ngit.dev");
   });
 
-  it("falls back to the stock set when set empty", async () => {
-    const { COMMUNITY_RELAYS, STOCK_RELAYS } = await load("");
-    expect(COMMUNITY_RELAYS).toEqual(STOCK_RELAYS);
+  it("counts empty as unset", async () => {
+    const relays = await load(" ");
+    expect(relays.APP_RELAYS).toEqual(["wss://relay.ditto.pub", "wss://relay.dreamith.to"]);
+    expect(relays.RESCUE_RELAYS).toEqual(relays.STOCK_RELAYS);
   });
 
-  it("takes a deployment's own relays", async () => {
-    const { COMMUNITY_RELAYS } = await load("wss://armada.example.com/, relay.ditto.pub");
-    expect(COMMUNITY_RELAYS).toEqual(["wss://armada.example.com", "wss://relay.ditto.pub"]);
+  it("is every relay default when set, with no helper relays", async () => {
+    const relays = await load("wss://armada.example.com/, relay.ditto.pub");
+    const own = ["wss://armada.example.com", "wss://relay.ditto.pub"];
+    expect(relays.APP_RELAYS).toEqual(own);
+    expect(relays.COMMUNITY_RELAYS).toEqual(own);
+    expect(relays.RESCUE_RELAYS).toEqual(own);
+    expect(relays.RELEASE_RELAYS).toEqual(own);
+    expect(relays.BROADCAST_RELAYS).toEqual([]);
+    expect(relays.RELAY_LIST_DISCOVERY_RELAYS).toEqual([]);
+    expect(relays.GIT_ANNOUNCEMENT_DISCOVERY_RELAY).toBe("");
+  });
+
+  it("leaves the stock set itself alone, for the invite codec", async () => {
+    const { STOCK_RELAYS } = await load("wss://armada.example.com");
+    expect(STOCK_RELAYS).toContain("wss://jskitty.com/nostr");
   });
 });

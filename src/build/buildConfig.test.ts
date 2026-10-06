@@ -17,14 +17,14 @@ describe("resolveBuildConfig", () => {
 
   it("falls back to the VITE_ spelling, with a warning", () => {
     const warn = vi.fn();
-    expect(resolveBuildConfig({ VITE_APP_RELAYS: "wss://a" }, warn)).toEqual({ APP_RELAYS: "wss://a" });
-    expect(warn).toHaveBeenCalledWith("VITE_APP_RELAYS is deprecated; set APP_RELAYS instead.");
+    expect(resolveBuildConfig({ VITE_RELAYS: "wss://a" }, warn)).toEqual({ RELAYS: "wss://a" });
+    expect(warn).toHaveBeenCalledWith("VITE_RELAYS is deprecated; set RELAYS instead.");
   });
 
   it("prefers the bare name over the VITE_ spelling, without a warning", () => {
     const warn = vi.fn();
-    expect(resolveBuildConfig({ APP_RELAYS: "wss://new", VITE_APP_RELAYS: "wss://old" }, warn)).toEqual({
-      APP_RELAYS: "wss://new",
+    expect(resolveBuildConfig({ RELAYS: "wss://new", VITE_RELAYS: "wss://old" }, warn)).toEqual({
+      RELAYS: "wss://new",
     });
     expect(warn).not.toHaveBeenCalled();
   });

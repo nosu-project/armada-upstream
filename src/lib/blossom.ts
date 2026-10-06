@@ -4,26 +4,26 @@ import { isLocalNetworkUrl, sanitizeUrl } from "@/lib/sanitizeUrl";
 import type { NostrRumor } from "@/lib/nostrRumor";
 
 /**
- * App default Blossom servers (mirrors Ditto's APP_BLOSSOM_SERVERS), most
- * trusted first (BUD-03). Overridable via `APP_BLOSSOM_SERVERS`
- * (comma-separated origins).
+ * The deployment's Blossom servers (`BLOSSOM_SERVERS`, comma-separated
+ * origins), most trusted first (BUD-03). The first is the preferred one,
+ * whose URL uploads embed when it takes the blob. Unset or empty means
+ * Armada's public servers with no preference.
  */
-const DEFAULT_APP_BLOSSOM_SERVERS =
-  "https://blossom.ditto.pub/,https://blossom.dreamith.to/,https://blossom.primal.net/";
+const DEPLOYMENT_BLOSSOM_SERVERS: string[] = parseServerList(config("BLOSSOM_SERVERS") ?? "");
 
-export const APP_BLOSSOM_SERVERS: string[] = (
-  config("APP_BLOSSOM_SERVERS") || DEFAULT_APP_BLOSSOM_SERVERS
-)
-  .split(",")
-  .map((url: string) => normalizeBlossomServerUrl(url))
-  .filter((url: string | null): url is string => url !== null);
+export const APP_BLOSSOM_SERVERS: string[] = DEPLOYMENT_BLOSSOM_SERVERS.length > 0
+  ? DEPLOYMENT_BLOSSOM_SERVERS
+  : parseServerList("https://blossom.ditto.pub/,https://blossom.dreamith.to/,https://blossom.primal.net/");
 
-/**
- * The deployment's preferred Blossom server (`PREFERRED_BLOSSOM_SERVER`):
- * the URL uploads embed when it takes the blob. Empty = no preference.
- */
-export const PREFERRED_BLOSSOM_SERVER: string =
-  normalizeBlossomServerUrl(config("PREFERRED_BLOSSOM_SERVER") ?? "") ?? "";
+/** The first of a deployment's `BLOSSOM_SERVERS`, or "" for no preference. */
+export const PREFERRED_BLOSSOM_SERVER: string = DEPLOYMENT_BLOSSOM_SERVERS[0] ?? "";
+
+function parseServerList(value: string): string[] {
+  return value
+    .split(",")
+    .map((url: string) => normalizeBlossomServerUrl(url))
+    .filter((url: string | null): url is string => url !== null);
+}
 
 /**
  * The user's Blossom server list, synced with their kind 10063 event.

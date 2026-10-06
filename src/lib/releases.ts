@@ -2,24 +2,23 @@
 
 import type { DownloadOs } from "./downloads";
 import { config } from "./env";
-import { normalizeRelayUrl } from "./platform";
+import { DEPLOYMENT_RELAYS, normalizeRelayUrl } from "./platform";
 
 /** See docs/releases.md. */
 export const RELEASE_KIND = 30622;
 
 /**
  * Relays releases are read from — explicit because `/downloads` works signed
- * out. Discovery only (never pooled or subscribed). Must match `DEFAULT_RELAYS`
- * in `scripts/publish-release.mjs`. `relay.ngit.dev` is excluded: it rejects
+ * out. Discovery only (never pooled or subscribed). A deployment's `RELAYS`
+ * replace these; otherwise they must match `DEFAULT_RELAYS` in
+ * `scripts/publish-release.mjs`. `relay.ngit.dev` is excluded: it rejects
  * release events.
  */
-export const RELEASE_RELAYS: string[] = (
-  config("RELEASE_RELAYS") ??
-  "wss://relay.ditto.pub,wss://relay.dreamith.to,wss://relay.primal.net"
-)
-  .split(",")
-  .map((url: string) => normalizeRelayUrl(url))
-  .filter((url: string | undefined): url is string => Boolean(url));
+export const RELEASE_RELAYS: string[] = DEPLOYMENT_RELAYS.length > 0
+  ? DEPLOYMENT_RELAYS
+  : ["wss://relay.ditto.pub", "wss://relay.dreamith.to", "wss://relay.primal.net"]
+    .map((url: string) => normalizeRelayUrl(url))
+    .filter((url: string | undefined): url is string => Boolean(url));
 
 /** Repository id (`d` of the 30617 announcement, `D` of each release). Overridable for forks. */
 export const RELEASE_REPO_ID: string = config("RELEASE_REPO_ID") || "armada";

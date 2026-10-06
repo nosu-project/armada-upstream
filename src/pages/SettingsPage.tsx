@@ -19,7 +19,6 @@ import {
   Palette,
   ScrollText,
   Search,
-  Server,
   Shield,
   ShieldAlert,
   ShieldCheck,
@@ -64,16 +63,14 @@ import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useDmRelayList } from "@/hooks/useDmRelayList";
 import { useInstallPrompt } from "@/hooks/useInstallPrompt";
 import { useIsTouch } from "@/hooks/useIsMobile";
-import { useNip29Servers } from "@/hooks/useNip29Servers";
 import { usePullPortableSetup } from "@/hooks/usePullPortableSetup";
 import { usePublishPortableSetup } from "@/hooks/usePublishPortableSetup";
 import { useSearchRelayList } from "@/hooks/useSearchRelayList";
 import { toast } from "@/hooks/useToast";
-import { useUpdateUserGroupList } from "@/hooks/useUserGroupList";
 import { isDesktop } from "@/lib/desktop";
 import { APP_BLOSSOM_SERVERS } from "@/lib/blossom";
 import { effectiveDmRelays } from "@/contexts/AppContext";
-import { APP_RELAYS, BROADCAST_RELAYS, COMMUNITY_RELAYS, DM_RELAYS, SEARCH_RELAYS } from "@/lib/platform";
+import { APP_RELAYS, BROADCAST_RELAYS, COMMUNITY_RELAYS } from "@/lib/platform";
 import {
   getAudioProcessing,
   setAudioProcessing,
@@ -99,7 +96,6 @@ type SectionId =
   | "appearance"
   | "desktop"
   | "voice"
-  | "servers"
   | "app-relays"
   | "community-relays"
   | "search-relays"
@@ -159,8 +155,6 @@ export function SettingsPage({
   const { user } = useCurrentUser();
   const isTouch = useIsTouch();
   const { logins } = useNostrLogin();
-  const { mutateAsync: updateList } = useUpdateUserGroupList();
-  const servers = useNip29Servers();
   const dmRelayList = useDmRelayList();
   const blossomServerList = useBlossomServerList();
   const searchRelayList = useSearchRelayList();
@@ -240,23 +234,6 @@ export function SettingsPage({
     if (user) {
       searchRelayList.publish(relays).catch((err) =>
         console.warn("Search relay list (kind 10007) publish failed:", err));
-    }
-  };
-
-  /** Update added servers by diffing the kind 10009 list (their only store). */
-  const setAddedRelays = (relays: string[]) => {
-    if (!user) return;
-    for (const url of relays) {
-      if (!servers.includes(url)) {
-        updateList({ type: "add-server", url }).catch((err) =>
-          console.warn("Failed to add server to group list:", err));
-      }
-    }
-    for (const url of servers) {
-      if (!relays.includes(url)) {
-        updateList({ type: "remove-server", url }).catch((err) =>
-          console.warn("Failed to remove server from group list:", err));
-      }
     }
   };
 
@@ -384,7 +361,6 @@ export function SettingsPage({
     }
     appItems.push(
       { id: "voice", title: "Voice", icon: Mic },
-      { id: "servers", title: "Servers", icon: Server },
       { id: "app-relays", title: "App relays", icon: Waypoints },
       { id: "community-relays", title: "Community relays", icon: ShieldCheck },
       { id: "search-relays", title: "Search relays", icon: Search },
@@ -456,26 +432,6 @@ export function SettingsPage({
         );
       case "desktop":
         return <DesktopSettings />;
-      case "servers":
-        return (
-          <>
-            <SettingsRow>
-              <p className="text-xs text-muted-foreground leading-snug">
-                Trust-the-host NIP-29 servers you've connected to. Each is a
-                single relay that stores that server's channels and messages.
-                Usually added by joining, with the + button in the server rail.
-              </p>
-            </SettingsRow>
-            <SettingsRow>
-              <RelayListEditor
-                relays={servers}
-                onChange={setAddedRelays}
-                emptyText="No extra servers added. Use the + button in the server rail to add one."
-                placeholder="wss://server.example.com"
-              />
-            </SettingsRow>
-          </>
-        );
       case "app-relays": {
         const ownsRelayList =
           !config.relayMetadata.pubkey || config.relayMetadata.pubkey === user?.pubkey;
@@ -674,7 +630,7 @@ export function SettingsPage({
               <RelayListEditor
                 relays={config.searchRelays}
                 onChange={setSearchRelays}
-                onReset={() => setSearchRelays([...SEARCH_RELAYS])}
+                onReset={() => setSearchRelays([...APP_RELAYS])}
                 emptyText="No search relays. Search uses your app relays."
               />
             </SettingsRow>
@@ -706,7 +662,7 @@ export function SettingsPage({
                   <RelayListEditor
                     relays={config.appDmRelays}
                     onChange={setAppDmRelays}
-                    onReset={() => setAppDmRelays([...DM_RELAYS])}
+                    onReset={() => setAppDmRelays([])}
                     emptyText="No additional app DM relays. Legacy DMs still use your general app relays."
                     placeholder="wss://dm-relay.example.com"
                   />

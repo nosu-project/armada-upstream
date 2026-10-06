@@ -28,9 +28,9 @@ describe("config", () => {
   });
 
   it("ignores a value that is not a string", () => {
-    window.ENV = { APP_NAME: 42, APP_RELAYS: ["wss://a"] };
+    window.ENV = { APP_NAME: 42, RELAYS: ["wss://a"] };
     expect(config("APP_NAME")).toBe(__ARMADA_BUILD_CONFIG__.APP_NAME);
-    expect(config("APP_RELAYS")).toBe(__ARMADA_BUILD_CONFIG__.APP_RELAYS);
+    expect(config("RELAYS")).toBe(__ARMADA_BUILD_CONFIG__.RELAYS);
   });
 
   it("ignores a window.ENV that is not an object", () => {
