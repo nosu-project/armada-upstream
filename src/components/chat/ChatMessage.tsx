@@ -45,7 +45,7 @@ import { useToast } from "@/hooks/useToast";
 import { AppContext } from "@/contexts/AppContext";
 import { sendsOnEnter } from "@/lib/sendOnEnter";
 import { getComposerCollisionPadding, useComposerBoundsRef } from "@/contexts/ComposerBoundsContext";
-import { ChatImageMenuContext, withImageActions, type ChatImageMenu } from "@/contexts/ChatImageMenuContext";
+import { ChatImageMenuContext, linkActionsAt, withImageActions, type ChatImageMenu } from "@/contexts/ChatImageMenuContext";
 import { getAvatarShape } from "@/lib/avatarShape";
 import { buildEmojiMap } from "@/lib/customEmoji";
 import { writeClipboardText } from "@/lib/clipboard";
@@ -475,7 +475,10 @@ const ChatMessageInner = memo(function ChatMessageInner({
   // but can't be reached privately (legacy Concord epoch), so no report.
   const [reportOpen, setReportOpen] = useState(false);
   // Built on first right-click (see useLazyContextMenu).
-  const clearImageActions = useCallback(() => setImageActions(null), []);
+  const stageLinkActions = useCallback(
+    (e: React.MouseEvent) => setImageActions(linkActionsAt(e.target)),
+    [],
+  );
   const contextMenu = useLazyContextMenu();
   const chatScope = useChatScope();
   const reportTo = reportDestination(chatScope);
@@ -915,9 +918,9 @@ const ChatMessageInner = memo(function ChatMessageInner({
     {isTouch ? (
       row
     ) : (
-      // Clearing in the capture phase (before an image restages) keeps a text
+      // Restaging in the capture phase (before an image restages) keeps a text
       // right-click from inheriting the last image's actions.
-      <span className="block" onContextMenuCapture={clearImageActions} onContextMenu={contextMenu.onContextMenu}>
+      <span className="block" onContextMenuCapture={stageLinkActions} onContextMenu={contextMenu.onContextMenu}>
         {row}
       </span>
     )}

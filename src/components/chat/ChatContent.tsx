@@ -1021,6 +1021,7 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
       key={key}
       to={path}
       title={url}
+      data-copy-url={url}
       className="text-primary hover:underline break-all"
       onClick={(e) => e.stopPropagation()}
     >

@@ -51,6 +51,7 @@ import { useMessagePermalink } from "@/hooks/useMessagePermalink";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { isTombstoneRoot } from "@/concord/hooks/useConcordThreads";
 import { ComposerBoundsProvider, getComposerCollisionPadding, useComposerBoundsRef } from "@/contexts/ComposerBoundsContext";
+import { linkActionsAt, withImageActions } from "@/contexts/ChatImageMenuContext";
 import { getAvatarShape } from "@/lib/avatarShape";
 import { sendsOnEnter } from "@/lib/sendOnEnter";
 import { fullDateTime, shortClockTime, shortTimeAgo } from "@/lib/formatTime";
@@ -158,6 +159,7 @@ export function ThreadMessage({
   // Gated as in ChatMessage: the chat scope decides the destination (none for
   // legacy Concord epochs).
   const [reportOpen, setReportOpen] = useState(false);
+  const [linkActions, setLinkActions] = useState<MessageActionItem[] | null>(null);
   // Built on the first right-click, beside the row (see useLazyContextMenu).
   const contextMenu = useLazyContextMenu();
   const chatScope = useChatScope();
@@ -327,7 +329,9 @@ export function ThreadMessage({
       {...longPress}
       onContextMenu={(e) => {
         longPress.onContextMenu(e);
-        if (!isTouch) contextMenu.onContextMenu(e);
+        if (isTouch) return;
+        setLinkActions(linkActionsAt(e.target));
+        contextMenu.onContextMenu(e);
       }}
       className={cn(
         "group/threadmsg relative flex items-start gap-3 transition-colors hover:z-10 focus-within:z-10",
@@ -442,7 +446,7 @@ export function ThreadMessage({
         className="w-52"
         collisionPadding={contextMenu.open ? getComposerCollisionPadding(composerBoundsRef) : undefined}
       >
-        <MessageMenuItems actions={menuActions} />
+        <MessageMenuItems actions={withImageActions(linkActions, menuActions)} />
       </LazyContextMenuContent>
     )}
     {isTouch && (
