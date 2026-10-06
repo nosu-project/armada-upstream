@@ -105,11 +105,46 @@ export function audioDeviceLabel(device: MediaDeviceInfo, fallback: string): str
   return device.deviceId === "default" || device.deviceId === "" ? "Automatic" : fallback;
 }
 
+const deviceListeners = new Set<(kind: MediaDeviceKind) => void>();
+
+/**
+ * Subscribe to device choices, from the call bar or Settings alike, so a live
+ * room can follow them. Returns an unsubscribe function.
+ */
+export function subscribeVoiceDevices(listener: (kind: MediaDeviceKind) => void): () => void {
+  deviceListeners.add(listener);
+  return () => deviceListeners.delete(listener);
+}
+
 /** Persist the user's device choice for the given kind. */
 export function rememberVoiceDevice(kind: MediaDeviceKind, deviceId: string): void {
   if (kind === "audioinput") write(MIC_KEY, deviceId);
   else if (kind === "audiooutput") write(SPEAKER_KEY, deviceId);
   else if (kind === "videoinput") write(CAMERA_KEY, deviceId);
+  for (const listener of deviceListeners) listener(kind);
+}
+
+/**
+ * The mic or speaker a live room should switch to so it matches the remembered
+ * choice ("default" when none), or undefined when `activeId` already does or
+ * the platform offers no choice for `kind`.
+ */
+export function liveDeviceSwitch(
+  kind: MediaDeviceKind,
+  activeId: string | undefined,
+): string | undefined {
+  let preferred: string | undefined;
+  if (kind === "audioinput") {
+    if (platformRoutesCallAudio()) return undefined;
+    preferred = getPreferredMicId();
+  } else if (kind === "audiooutput") {
+    if (!supportsSpeakerSelection()) return undefined;
+    preferred = getPreferredSpeakerId();
+  } else {
+    return undefined;
+  }
+  const target = preferred ?? "default";
+  return target === (activeId || "default") ? undefined : target;
 }
 
 /**

@@ -112,7 +112,9 @@ function DeviceSelectGroup({
           <DropdownMenuItem
             key={device.deviceId}
             onSelect={() => {
-              void setActiveMediaDevice(device.deviceId);
+              // VoiceDeviceSync (PersistentVoiceRoom.tsx) switches the room to a
+              // remembered mic or speaker; switching here too would race it.
+              if (kind === "videoinput") void setActiveMediaDevice(device.deviceId);
               rememberVoiceDevice(kind, device.deviceId);
             }}
             className="gap-2"

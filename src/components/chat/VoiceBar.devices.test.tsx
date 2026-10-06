@@ -8,6 +8,12 @@ import type { CallContextType } from "@/contexts/CallContext";
 
 const platform = vi.hoisted(() => ({ name: "web" }));
 const deviceSelect = vi.hoisted(() => vi.fn());
+/** What the mocked useMediaDeviceSelect reports; `devices` overrides the default per-kind list. */
+const picker = vi.hoisted(() => ({
+  devices: undefined as MediaDeviceInfo[] | undefined,
+  activeDeviceId: "",
+  setActiveMediaDevice: vi.fn(),
+}));
 
 vi.mock("@capacitor/core", () => ({
   Capacitor: { getPlatform: () => platform.name, isNativePlatform: () => platform.name !== "web" },
@@ -35,9 +41,11 @@ vi.mock("@livekit/components-react", () => ({
   useMediaDeviceSelect: (opts: { kind: MediaDeviceKind; requestPermissions: boolean }) => {
     deviceSelect(opts);
     return {
-      devices: [{ deviceId: `${opts.kind}-1`, label: "", kind: opts.kind } as MediaDeviceInfo],
-      activeDeviceId: "",
-      setActiveMediaDevice: vi.fn(),
+      devices: picker.devices?.filter((d) => d.kind === opts.kind) ?? [
+        { deviceId: `${opts.kind}-1`, label: "", kind: opts.kind } as MediaDeviceInfo,
+      ],
+      activeDeviceId: picker.activeDeviceId,
+      setActiveMediaDevice: picker.setActiveMediaDevice,
     };
   },
   useRoomContext: () => ({ canPlaybackAudio: true, startAudio: vi.fn() }),
@@ -100,6 +108,9 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.clearAllMocks();
+  picker.devices = undefined;
+  picker.activeDeviceId = "";
+  localStorage.clear();
   nativeCall.available = false;
   nativeCall.routes = { supported: true, routes: [], active: null };
 });
@@ -160,5 +171,13 @@ describe("call device menu", () => {
   it("names unlabeled cameras by position", async () => {
     openMenu();
     expect(await screen.findByText("Camera 1")).toBeTruthy();
+  });
+
+  it("only remembers a mic pick, leaving the live switch to VoiceDeviceSync", async () => {
+    picker.devices = [{ deviceId: "mic-1", kind: "audioinput", label: "USB Mic" }] as MediaDeviceInfo[];
+    openMenu();
+    fireEvent.click(await screen.findByText("USB Mic"));
+    expect(localStorage.getItem("armada:voice:micDeviceId")).toBe("mic-1");
+    expect(picker.setActiveMediaDevice).not.toHaveBeenCalled();
   });
 });

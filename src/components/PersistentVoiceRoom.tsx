@@ -86,9 +86,11 @@ import {
   getPreferredSpeakerId,
   getScreenShareVolume,
   getUserVolume,
+  liveDeviceSwitch,
   micCaptureConstraints,
   preferredAudioOutput,
   subscribeUserVolumes,
+  subscribeVoiceDevices,
   supportsSpeakerSelection,
 } from "@/lib/voiceDevices";
 import { syncRnnoise } from "@/lib/voiceProcessor";
@@ -286,32 +288,44 @@ function PlaybackVolumeApplier() {
 }
 
 /**
- * Reapplies the remembered speaker on join. Mic and camera reach their
- * preference through capture constraints; output has no such hook and
- * otherwise stays on whatever the browser picked as default (see
- * DeviceSelectGroup in VoiceBar.tsx for the in-call picker that writes it).
+ * Keeps the live room on the remembered mic and speaker. Device pickers (the
+ * call bar's DeviceSelectGroup and Settings' VoiceDeviceSettings) only call
+ * rememberVoiceDevice; this is the one place that switches the room, so a
+ * pick from either applies mid-call without two switches racing.
  *
- * rejoinRoom (voiceRejoin.ts) reconnects the same Room instance after a
- * dropped connection rather than remounting this component, so the apply is
- * tied to RoomEvent.Connected (fired on every connect, initial or rejoin)
- * rather than a one-shot mount effect.
+ * The speaker is also reapplied on every RoomEvent.Connected: mic and camera
+ * reach their preference through capture constraints, but output has no such
+ * hook, and rejoinRoom (voiceRejoin.ts) reconnects the same Room instance,
+ * whose fresh AudioContext starts on the default output while
+ * getActiveDevice still reports the old pick — so that reapply skips the
+ * "already active" check.
  */
-function SpeakerDeviceApplier() {
+function VoiceDeviceSync() {
   const room = useRoomContext();
 
   useEffect(() => {
-    const apply = () => {
-      if (!supportsSpeakerSelection()) return;
-      const speakerId = getPreferredSpeakerId();
-      if (!speakerId) return;
-      void room.switchActiveDevice("audiooutput", speakerId).catch(() => {
-        // Device may be gone since it was remembered — fall back silently.
+    const switchTo = (kind: MediaDeviceKind, deviceId: string) => {
+      void room.switchActiveDevice(kind, deviceId).catch(() => {
+        // Device may be gone since it was remembered — keep the current one.
       });
     };
-    if (room.state === ConnectionState.Connected) apply();
-    room.on(RoomEvent.Connected, apply);
+    const follow = (kind: MediaDeviceKind) => {
+      if (room.state !== ConnectionState.Connected) return;
+      const deviceId = liveDeviceSwitch(kind, room.getActiveDevice(kind));
+      if (deviceId) switchTo(kind, deviceId);
+    };
+    const onConnected = () => {
+      const speakerId = getPreferredSpeakerId();
+      if (supportsSpeakerSelection() && speakerId) switchTo("audiooutput", speakerId);
+      // A mic picked while reconnecting was remembered but not applied.
+      follow("audioinput");
+    };
+    if (room.state === ConnectionState.Connected) onConnected();
+    room.on(RoomEvent.Connected, onConnected);
+    const unsubscribe = subscribeVoiceDevices(follow);
     return () => {
-      room.off(RoomEvent.Connected, apply);
+      room.off(RoomEvent.Connected, onConnected);
+      unsubscribe();
     };
   }, [room]);
 
@@ -763,7 +777,7 @@ function VoiceRoomShell({
       <CallAudioKeeper />
       <CallSoundEffects />
       <MicNoiseProcessor />
-      <SpeakerDeviceApplier />
+      <VoiceDeviceSync />
       <DesktopPushToTalk />
       <MutedReporter />
       <StreamingReporter />
