@@ -102,6 +102,9 @@ export function useLongPress(
   return {
     onPointerDown: (e: React.PointerEvent) => {
       if (!onLongPress || e.pointerType !== "touch") return;
+      // Presses in portaled overlays (a lightbox) propagate through the React tree; they're not
+      // presses on this element.
+      if (e.currentTarget instanceof Node && e.target instanceof Node && !e.currentTarget.contains(e.target)) return;
       if (!allowInteractive && (e.target as HTMLElement).closest(INTERACTIVE)) return;
       fired.current = false;
       origin.current = { x: e.clientX, y: e.clientY };
