@@ -267,6 +267,18 @@ describe("usePressDrag", () => {
       act(() => void window.dispatchEvent(touch("pointerup", 160)));
     });
 
+    it("panFrom hand-pans a touch that starts outside the container", () => {
+      const { container, result } = rail(false);
+      act(() => {
+        result.current.panFrom(touch("pointerdown", 200));
+        window.dispatchEvent(touch("pointermove", 220));
+        window.dispatchEvent(touch("pointermove", 240));
+      });
+      expect(container.scrollTop).toBe(80);
+      act(() => void window.dispatchEvent(touch("pointerup", 240)));
+      expect(result.current.panFrom(pointer("pointerdown"))).toBe(false);
+    });
+
     it("leaves gaps to the browser when off", () => {
       const { container, gap } = rail(false);
       act(() => {
@@ -358,6 +370,27 @@ describe("usePressDrag", () => {
       container.remove();
     });
 
+    it("stops on a tap during its slow tail, and the tap still clicks", () => {
+      const container = scrollable();
+      const { result } = setup(container);
+      act(() => swipeUp(result.current.begin("row-a")));
+      // Released at 2 px/ms: by 1s it is under 0.1 px/ms, still coasting but reading as stopped.
+      act(() => void vi.advanceTimersByTime(1000));
+
+      act(() => {
+        const down = pointer("pointerdown", { pointerType: "touch", clientY: 300 });
+        container.dispatchEvent(down);
+        result.current.begin("row-b")(down);
+      });
+      const stopped = container.scrollTop;
+      act(() => void vi.advanceTimersByTime(100));
+      expect(container.scrollTop).toBe(stopped);
+
+      act(() => void window.dispatchEvent(pointer("pointerup", { pointerType: "touch", clientY: 300 })));
+      expect(result.current.shouldSuppressClick()).toBe(false);
+      container.remove();
+    });
+
     it("an ordinary tap at rest still clicks", () => {
       const container = scrollable();
       const { result } = setup(container);
@@ -400,6 +433,32 @@ describe("usePressDrag", () => {
       expect(during.defaultPrevented).toBe(true);
 
       container.remove();
+    });
+
+    // Chromium starts an invisible fling from an uncancelled fast lift, which eats the next tap.
+    it("cancels touchmove while hand-panning, on the container and on a pan surface", () => {
+      const container = document.createElement("div");
+      const surface = document.createElement("div");
+      document.body.append(container, surface);
+      const { result } = setup(container);
+      act(() => result.current.attachPanSurface(surface));
+
+      act(() => {
+        result.current.panFrom(pointer("pointerdown", { pointerType: "touch", clientY: 300 }));
+        window.dispatchEvent(pointer("pointermove", { pointerType: "touch", clientY: 280 }));
+      });
+      for (const el of [container, surface]) {
+        const move = new Event("touchmove", { bubbles: true, cancelable: true });
+        el.dispatchEvent(move);
+        expect(move.defaultPrevented).toBe(true);
+      }
+
+      act(() => void window.dispatchEvent(pointer("pointerup", { pointerType: "touch", clientY: 280 })));
+      const after = new Event("touchmove", { bubbles: true, cancelable: true });
+      surface.dispatchEvent(after);
+      expect(after.defaultPrevented).toBe(false);
+      container.remove();
+      surface.remove();
     });
   });
 });

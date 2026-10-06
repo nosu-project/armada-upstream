@@ -1547,6 +1547,7 @@ function ServerRailInner({
   const dragSource = railDrag.source;
   const handleDragPointerDown = railDrag.begin;
   const draggable = items.length > 1;
+  const reachZone = !useSideBySideLayout();
 
   // The Settings footer divider only shows when content is scrolled off below.
   const [contentBelow, setContentBelow] = useState(false);
@@ -1656,7 +1657,7 @@ function ServerRailInner({
     );
   };
 
-  return (
+  const rail = (
     <div
       className={cn(
         // Wider on touch: a thumb lands on the rail's right edge and past it.
@@ -2089,5 +2090,49 @@ function ServerRailInner({
         <div data-rail-drag-overlay className="fixed inset-0 z-[298] cursor-grabbing" aria-hidden />
       )}
     </div>
+  );
+
+  if (!reachZone) return rail;
+  // Outside the rail's overflow clip, so the zone can extend past its edge.
+  return (
+    <div className="relative flex shrink-0">
+      {rail}
+      <RailReachZone panFrom={railDrag.panFrom} attach={railDrag.attachPanSurface} />
+    </div>
+  );
+}
+
+/**
+ * Extends the rail's scroll surface over the list beside it: a thumb reaching up-left lands
+ * short of the rail. Swipes here pan the rail; a tap goes to whatever is underneath.
+ */
+function RailReachZone({
+  panFrom,
+  attach,
+}: {
+  panFrom: (e: PointerEvent) => boolean;
+  attach: (el: HTMLElement | null) => void;
+}) {
+  // The tap that stops a fling must not also open what's underneath.
+  const caughtFling = useRef(false);
+  return (
+    <div
+      ref={attach}
+      aria-hidden
+      data-rail-reach
+      className="absolute inset-y-0 left-full z-20 w-10 touch-none"
+      onPointerDown={(e) => {
+        caughtFling.current = panFrom(e.nativeEvent);
+      }}
+      onClick={(e) => {
+        if (caughtFling.current) return;
+        const zone = e.currentTarget;
+        zone.style.pointerEvents = "none";
+        const below = document.elementFromPoint(e.clientX, e.clientY);
+        zone.style.pointerEvents = "";
+        if (below instanceof HTMLElement) below.click();
+      }}
+      onContextMenu={(e) => e.preventDefault()}
+    />
   );
 }
