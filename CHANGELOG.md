@@ -4,6 +4,14 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.64.6] - 2026-10-06
+
+Armada's Zapstore listing now carries the desktop downloads for Linux, Windows
+and macOS alongside the Android app.
+
+### Changed
+- Zapstore lists Armada's Linux, Windows and macOS downloads, not only Android
+
 ## [0.64.5] - 2026-10-06
 
 A text size slider in Appearance settings, Copy link on links, and Jump to
