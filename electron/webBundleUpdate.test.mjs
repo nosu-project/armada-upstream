@@ -245,10 +245,12 @@ describe("updateWebBundle", () => {
     expect(outcome).toEqual({ result: "installed", id: contentId(archive) });
   });
 
-  it("prunes the superseded bundle", async () => {
+  it("keeps the bundle the running window serves and prunes the rest", async () => {
+    const stale = archiveOf({ "index.html": "stale" });
     const old = archiveOf({ "index.html": "old" });
     const fresh = archiveOf({ "index.html": "new" });
     const bundlesDir = tmp();
+    const staleId = extractBundle({ bundlesDir, archive: stale });
     const oldId = extractBundle({ bundlesDir, archive: old });
     const outcome = await updateWebBundle({
       bundlesDir,
@@ -258,7 +260,11 @@ describe("updateWebBundle", () => {
       fetchImpl: async () => response(200, fresh),
     });
     expect(outcome.result).toBe("installed");
-    expect(fs.existsSync(path.join(bundlesDir, oldId))).toBe(false);
+    // Still on disk until the restart: the open window loads its lazy chunks
+    // (and, on a chunk reload, index.html) from it.
+    expect(fs.existsSync(path.join(bundlesDir, oldId, "dist", "index.html"))).toBe(true);
+    expect(fs.existsSync(path.join(bundlesDir, outcome.id))).toBe(true);
+    expect(fs.existsSync(path.join(bundlesDir, staleId))).toBe(false);
   });
 
   it("fails when every server fails, without touching the store", async () => {

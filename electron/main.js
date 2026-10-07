@@ -81,7 +81,7 @@ const createLinuxStatusNotifier =
 const path = require("node:path");
 const fs = require("node:fs");
 const { randomUUID } = require("node:crypto");
-const { resolveDistRoot } = require("./bundleStore");
+const { pruneBundles, resolveDistRoot } = require("./bundleStore");
 const { spawnSync } = require("node:child_process");
 const {
   DEFAULT_LINUX_VIDEO_ENCODER_MODE,
@@ -219,6 +219,13 @@ function selectActiveBundle() {
   activeDist = selected.root;
   activeBundleId = selected.id;
   console.log(`[bundle] serving ${selected.source}${selected.id ? ` ${selected.id}` : ""}`);
+  // A mid-session update leaves the bundle the previous run was serving in
+  // place (webBundleUpdate.js); this is the first moment nothing reads it.
+  try {
+    pruneBundles(BUNDLES_DIR, activeBundleId);
+  } catch (error) {
+    console.warn("[bundle] prune failed", error);
+  }
 }
 // Custom app scheme. Host segment "armada" keeps a stable origin
 // (app://armada) for the service worker + secure-context checks.
