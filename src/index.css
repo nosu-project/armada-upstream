@@ -63,11 +63,16 @@
      * max(0.25rem, inset) keeps the tight desktop look while clearing the bar on
      * a landscape phone. */
     --safe-area-pad-bottom-tight: max(0.25rem, var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
+    /* Under the mobile composer, the rail's settings button and the account
+     * switcher, so all three end on one line: 8px when nothing is below (the
+     * keyboard is up), the system bar plus a little air when one is. */
+    --bottom-chrome-pad: calc(max(0.5rem, var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px))) + min(0.375rem, var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px))));
     /* The desktop grid. Panes sit on 12px side gutters; top bars span 12-60px and
      * bottom bars end 12px up. Below a top bar, content steps by 20px (`stack`), so
      * it starts at 80px, where the rail's second entry starts too (48px icons, 20px
-     * gaps, a divider adding one more gap). Phones keep 8px. */
-    --gutter: 0.5rem;
+     * gaps, a divider adding one more gap). Phones share the 12px gutter, the
+     * same inset as their rail icons and sidebar footers, and keep an 8px stack. */
+    --gutter: 0.75rem;
     --stack: 0.5rem;
     /* System emoji first; the bundled Twemoji only fills what they lack. Read
      * by Tailwind's `font-sans`/`font-emoji` and the emoji picker's shadow DOM. */
@@ -75,7 +80,6 @@
   }
   @media (min-width: 900px) {
     :root {
-      --gutter: 0.75rem;
       --stack: 1.25rem;
     }
   }

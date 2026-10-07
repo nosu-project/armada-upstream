@@ -409,10 +409,10 @@ function SidebarFooter() {
   return (
     <>
       <div ref={ref} className="empty:hidden shrink-0 px-2 pb-2" />
-      {/* pb-2 mirrors the composer's inner `p-2` so both end on the same line. */}
-      <div className="px-3 pb-safe shrink-0">
+      {/* Ends on the composer's line: the same --bottom-chrome-pad on mobile. */}
+      <div className="px-3 pb-[var(--bottom-chrome-pad)] sidebar:pb-[var(--safe-area-pad-bottom-tight)] shrink-0">
         {user ? (
-          <div className="pb-2">
+          <div className="sidebar:pb-2">
             <LoginArea className="w-full flex" />
           </div>
         ) : (

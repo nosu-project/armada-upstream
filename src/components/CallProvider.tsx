@@ -353,8 +353,10 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
         className={cn(
           "relative flex h-full w-full overflow-hidden",
           // Mobile: reserve the fixed call bar's measured height. Desktop: the bar is in the sidebar.
-          // The bar already clears the bottom inset, so content above it drops its own.
-          user && activeCall && "max-sidebar:pb-[var(--call-bar-h,0px)] max-sidebar:[--safe-area-pad-bottom:0px]",
+          // The bar already clears the bottom inset, so content above it drops its own —
+          // only while the bar is mounted (it isn't on the call's own channel).
+          user && activeCall && "max-sidebar:pb-[var(--call-bar-h,0px)]",
+          user && activeCall && callBarHeight > 0 && "max-sidebar:[--safe-area-pad-bottom:0px] max-sidebar:[--bottom-chrome-pad:0.5rem]",
         )}
       >
         {children}
