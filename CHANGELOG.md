@@ -4,6 +4,31 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.64.8] - 2026-10-07
+
+Call audio devices stick: the chosen speaker is kept across calls and
+reconnects, and mic or speaker picks in Settings switch a live call. Relay
+lists show whether each relay is reachable, tapping a reply banner jumps to the
+original message, and back/forward navigation and mobile spacing are tidier.
+
+### Added
+- A reachability light on relay rows, including community relay lists
+- Tapping the reply banner in the composer jumps to the message being replied to
+
+### Changed
+- Mic and speaker picks in Settings → Voice apply to a call in progress
+- Tighter, more even spacing for the mobile header and composer
+
+### Fixed
+- The chosen speaker is kept when joining or reconnecting to a call
+- On Android, call audio follows the system's audio route instead of a remembered speaker
+- The call bar shows Default as checked when the default output is playing
+- No ringback plays when a call is answered while it is still being placed
+- Back and forward onto a community channel show that channel's chat, and Android back from the first screen leaves the app
+- Inviting someone directly no longer shows a stale success toast after the dialog closes, and reports failures
+- The image viewer's page dots clear the screen edges and notch
+- The avatar shape picker sizes correctly
+
 ## [0.64.7] - 2026-10-06
 
 Armada's Zapstore listing now carries the desktop downloads for Linux, Windows
