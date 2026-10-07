@@ -408,7 +408,8 @@ export function DmCallProvider({ children }: { children: React.ReactNode }) {
       armCollisionFallback(callId);
       const ctx: DmVoiceContext = { peer, callId, secretHex, broker };
       joinDmCall(ctx);
-      startRingback();
+      // The answer can beat our own offer's slowest relay; nothing stops a ringback started after it.
+      if (!outgoingRef.current!.answered) startRingback();
       ringTimeoutRef.current = setTimeout(() => {
         const out = outgoingRef.current;
         if (!out || out.callId !== callId || out.answered) return;

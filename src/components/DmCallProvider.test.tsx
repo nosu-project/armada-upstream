@@ -12,7 +12,7 @@ import {
   dmCallTags,
   mintDmCall,
 } from "@/lib/dmCall";
-import { startIncomingRing } from "@/lib/callSounds";
+import { startIncomingRing, startRingback } from "@/lib/callSounds";
 import { consumeNativeCallAnswer, dismissNativeCallRing } from "@/lib/nativeNotifications";
 import { KIND_DM_CALL, type OpenedDm } from "@/lib/nip17/protocol";
 
@@ -537,6 +537,24 @@ describe("DmCallProvider signaling", () => {
       expect(toastMock).toHaveBeenCalledWith(
         expect.objectContaining({ title: expect.stringMatching(/another call/i) }),
       );
+    });
+
+    it("plays no ringback when the answer lands before our offer finished sending", async () => {
+      let release!: (ok: boolean) => void;
+      probe.fn.mockImplementationOnce(() => new Promise<boolean>((r) => (release = r)));
+      render(tree());
+      let placing!: Promise<void>;
+      act(() => {
+        placing = ctx.current!.startCall(realPeer);
+      });
+      const [ours] = JSON.parse(sessionStorage.getItem("armada:dm-call-own-ids")!) as string[];
+      act(() => deliverDmCallRumors([rumor(realPeer, "answer", dmCallTags(self, ours))]));
+      await act(async () => {
+        release(true);
+        await placing;
+      });
+      expect(joinDmCall).toHaveBeenCalledWith(expect.objectContaining({ callId: ours }));
+      expect(vi.mocked(startRingback)).not.toHaveBeenCalled();
     });
 
     it("ignores a busy receipt for some other call", async () => {
