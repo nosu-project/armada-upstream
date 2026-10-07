@@ -1,5 +1,5 @@
 import { Check, ChevronRight, Copy, Info, Link as LinkIcon, Loader2, Share2, UserPlus, X } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { ArmadaCrest, ArmadaCrestKeyframes } from "@/components/brand/ArmadaCrest";
 import { ProfileSearchSelect } from "@/components/chat/ProfileSearchSelect";
@@ -103,20 +103,38 @@ function InviteBody({ community, canCreateLink }: { community: Community | undef
   const [pendingPubkey, setPendingPubkey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  // A send can settle long after the sheet closed (a remote signer awaiting
+  // approval), when a success toast names someone out of nowhere.
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+
   const handleSelect = async (profile: SearchProfile) => {
     setError(null);
     setPendingPubkey(profile.pubkey);
+    const name = profile.metadata.name || profile.metadata.display_name;
     try {
       await sendDirectInvite({ recipientPubkey: profile.pubkey });
+      if (!mounted.current) return;
       setSentPubkey(profile.pubkey);
       toast({
         title: "Invite sent",
-        description: `${profile.metadata.name || profile.metadata.display_name || "They"} will be asked to accept.`,
+        description: `${name || "They"} will be asked to accept.`,
       });
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Couldn't send the invite.");
+      const message = e instanceof Error ? e.message : "Couldn't send the invite.";
+      // A failure stays worth hearing about after close; nowhere else reports it.
+      if (!mounted.current) {
+        toast({ title: `Couldn't invite ${name || "them"}`, description: message, variant: "destructive" });
+        return;
+      }
+      setError(message);
     } finally {
-      setPendingPubkey(null);
+      if (mounted.current) setPendingPubkey(null);
     }
   };
 
