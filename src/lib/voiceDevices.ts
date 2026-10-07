@@ -87,6 +87,16 @@ export function supportsSpeakerSelection(): boolean {
 }
 
 /**
+ * `RoomOptions.audioOutput` for the remembered speaker, where the app offers a
+ * speaker choice at all; undefined means the system default.
+ */
+export function preferredAudioOutput(): { deviceId: string } | undefined {
+  if (platformRoutesCallAudio() || !supportsSpeakerSelection()) return undefined;
+  const deviceId = getPreferredSpeakerId();
+  return deviceId ? { deviceId } : undefined;
+}
+
+/**
  * A device's display name; `fallback` for an unlabeled non-default device. The
  * unlabeled default is Chromium-on-Android's, which follows a plugged-in headset.
  */
