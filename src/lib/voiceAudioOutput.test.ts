@@ -91,12 +91,48 @@ describe("keepCallAudioOutput()", () => {
     await flush();
     expect(sinkCalls).toEqual(["usb-headphones"]);
 
+    // An in-call pick: remembered, then switched by VoiceDeviceSync.
+    rememberVoiceDevice("audiooutput", "hdmi");
     await room.switchActiveDevice("audiooutput", "hdmi");
+    room.emit(RoomEvent.Reconnected);
+    await flush();
+    expect(sinkCalls).toEqual(["usb-headphones", "hdmi"]);
+
     await internals(room).audioContext?.close();
     await internals(room).acquireAudioContext();
     room.emit(RoomEvent.Reconnected);
     await flush();
     expect(sinkCalls).toEqual(["usb-headphones", "hdmi", "hdmi"]);
+    stop();
+  });
+
+  it("puts a fresh context on the remembered speaker, not a stale room option", async () => {
+    rememberVoiceDevice("audiooutput", "usb-headphones");
+    const room = await connectedRoom();
+    const stop = keepCallAudioOutput(room);
+    await flush();
+
+    // Picked from Settings while disconnected: remembered, never switched.
+    rememberVoiceDevice("audiooutput", "hdmi");
+    await internals(room).audioContext?.close();
+    await internals(room).acquireAudioContext();
+    room.emit(RoomEvent.Connected);
+    await flush();
+    expect(sinkCalls).toEqual(["usb-headphones", "hdmi"]);
+    stop();
+  });
+
+  it("applies a pick made while reconnecting when the same context resumes", async () => {
+    rememberVoiceDevice("audiooutput", "usb-headphones");
+    const room = await connectedRoom();
+    const stop = keepCallAudioOutput(room);
+    await flush();
+
+    rememberVoiceDevice("audiooutput", "hdmi");
+    room.emit(RoomEvent.Reconnected);
+    await flush();
+    expect(sinkCalls).toEqual(["usb-headphones", "hdmi"]);
+    expect(room.getActiveDevice("audiooutput")).toBe("hdmi");
     stop();
   });
 

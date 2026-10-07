@@ -83,7 +83,6 @@ import { playJoinSound, playLeaveSound } from "@/lib/callSounds";
 import {
   getAudioProcessing,
   getPreferredCameraId,
-  getPreferredSpeakerId,
   getScreenShareVolume,
   getUserVolume,
   liveDeviceSwitch,
@@ -91,7 +90,6 @@ import {
   preferredAudioOutput,
   subscribeUserVolumes,
   subscribeVoiceDevices,
-  supportsSpeakerSelection,
 } from "@/lib/voiceDevices";
 import { syncRnnoise } from "@/lib/voiceProcessor";
 import { keepCallAwake } from "@/lib/callKeepAwake";
@@ -291,40 +289,28 @@ function PlaybackVolumeApplier() {
  * Keeps the live room on the remembered mic and speaker. Device pickers (the
  * call bar's DeviceSelectGroup and Settings' VoiceDeviceSettings) only call
  * rememberVoiceDevice; this is the one place that switches the room, so a
- * pick from either applies mid-call without two switches racing.
- *
- * The speaker is also reapplied on every RoomEvent.Connected: mic and camera
- * reach their preference through capture constraints, but output has no such
- * hook, and rejoinRoom (voiceRejoin.ts) reconnects the same Room instance,
- * whose fresh AudioContext starts on the default output while
- * getActiveDevice still reports the old pick — so that reapply skips the
- * "already active" check.
+ * pick from either applies mid-call without two switches racing. On
+ * (re)connect the speaker belongs to keepCallAudioOutput (CallAudioKeeper).
  */
 function VoiceDeviceSync() {
   const room = useRoomContext();
 
   useEffect(() => {
-    const switchTo = (kind: MediaDeviceKind, deviceId: string) => {
+    const follow = (kind: MediaDeviceKind) => {
+      if (room.state !== ConnectionState.Connected) return;
+      const deviceId = liveDeviceSwitch(kind, room.getActiveDevice(kind));
+      if (!deviceId) return;
       void room.switchActiveDevice(kind, deviceId).catch(() => {
         // Device may be gone since it was remembered — keep the current one.
       });
     };
-    const follow = (kind: MediaDeviceKind) => {
-      if (room.state !== ConnectionState.Connected) return;
-      const deviceId = liveDeviceSwitch(kind, room.getActiveDevice(kind));
-      if (deviceId) switchTo(kind, deviceId);
-    };
-    const onConnected = () => {
-      const speakerId = getPreferredSpeakerId();
-      if (supportsSpeakerSelection() && speakerId) switchTo("audiooutput", speakerId);
-      // A mic picked while reconnecting was remembered but not applied.
-      follow("audioinput");
-    };
-    if (room.state === ConnectionState.Connected) onConnected();
-    room.on(RoomEvent.Connected, onConnected);
+    // A mic picked while reconnecting was remembered but not applied.
+    const followMic = () => follow("audioinput");
+    followMic();
+    room.on(RoomEvent.Connected, followMic).on(RoomEvent.Reconnected, followMic);
     const unsubscribe = subscribeVoiceDevices(follow);
     return () => {
-      room.off(RoomEvent.Connected, onConnected);
+      room.off(RoomEvent.Connected, followMic).off(RoomEvent.Reconnected, followMic);
       unsubscribe();
     };
   }, [room]);
