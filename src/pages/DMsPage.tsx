@@ -899,7 +899,7 @@ const Conversation = memo(function Conversation({
     <div className="flex flex-col flex-1 min-h-0">
       {/* Keyed by CONVERSATION, matching the launch card's `ChatScopeContext`. */}
       <AppStageSlot scope={{ kind: "dm", conversation }} />
-      <header className="relative h-12 touch:h-14 mx-gutter mt-3 px-2 sidebar:px-3 flex items-center gap-2 shrink-0 clip-corner-lg bg-chrome">
+      <header className="relative h-12 touch:h-[3.25rem] mx-gutter mt-1 sidebar:mt-3 px-2 sidebar:px-3 flex items-center gap-2 shrink-0 clip-corner-lg bg-chrome">
         <Button
           variant="ghost"
           size="icon"
@@ -1622,7 +1622,7 @@ function NewDMPane({
 
   return (
     <div className="flex h-full min-h-0 flex-col safe-area-top">
-      <header className="h-12 touch:h-14 mx-gutter mt-3 px-2 sidebar:px-3 flex items-center gap-2 shrink-0 clip-corner-lg bg-chrome">
+      <header className="h-12 touch:h-[3.25rem] mx-gutter mt-1 sidebar:mt-3 px-2 sidebar:px-3 flex items-center gap-2 shrink-0 clip-corner-lg bg-chrome">
         <Button
           variant="ghost"
           size="icon"
@@ -2298,8 +2298,8 @@ export function ConversationList({
 
       <div ref={callBarRef} className="empty:hidden shrink-0" />
 
-      <div className="px-3 pb-safe shrink-0">
-        <div className="pb-2">
+      <div className="px-3 pb-[var(--bottom-chrome-pad)] sidebar:pb-[var(--safe-area-pad-bottom-tight)] shrink-0">
+        <div className="sidebar:pb-2">
           <LoginArea className="w-full flex" />
         </div>
       </div>

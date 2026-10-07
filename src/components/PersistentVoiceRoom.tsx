@@ -86,11 +86,12 @@ import {
   getScreenShareVolume,
   getUserVolume,
   micCaptureConstraints,
+  preferredAudioOutput,
   subscribeUserVolumes,
 } from "@/lib/voiceDevices";
 import { syncRnnoise } from "@/lib/voiceProcessor";
 import { keepCallAwake } from "@/lib/callKeepAwake";
-import { keepCallAudioRunning } from "@/lib/voiceAudioContext";
+import { keepCallAudioOutput, keepCallAudioRunning } from "@/lib/voiceAudioContext";
 import { DetectedSpeakersContext, useDetectedSpeakers, useSpeakers } from "@/hooks/useSpeakers";
 import { useListShowing } from "@/contexts/PaneCoveredContext";
 import { ignorePrivateCandidatesFrom } from "@/lib/privateIceCandidates";
@@ -439,6 +440,7 @@ function UnmuteOnJoin() {
 function CallAudioKeeper() {
   const room = useRoomContext();
   useEffect(() => keepCallAudioRunning(room), [room]);
+  useEffect(() => keepCallAudioOutput(room), [room]);
   useEffect(() => keepCallAwake(), []);
   return null;
 }
@@ -468,12 +470,14 @@ installWorkerCriticalTimers();
 function useRoomOptions(extra?: Partial<RoomOptions>): RoomOptions {
   return useMemo<RoomOptions>(() => {
     const cameraId = getPreferredCameraId();
+    const audioOutput = preferredAudioOutput();
     return {
       adaptiveStream: true,
       dynacast: true,
       disconnectOnPageLeave,
       // Mono capture and the user's processing prefs — see micCaptureConstraints.
       audioCaptureDefaults: micCaptureConstraints(),
+      ...(audioOutput ? { audioOutput } : {}),
       videoCaptureDefaults: {
         ...(cameraId ? { deviceId: cameraId } : {}),
         resolution: VideoPresets.h720.resolution,
@@ -880,6 +884,7 @@ function buildE2eeRoom(keyProvider: BaseKeyProvider): {
     return { room: null, worker: null, error: err };
   }
   const cameraId = getPreferredCameraId();
+  const audioOutput = preferredAudioOutput();
   const opts: RoomOptions = {
     adaptiveStream: true,
     dynacast: true,
@@ -888,6 +893,7 @@ function buildE2eeRoom(keyProvider: BaseKeyProvider): {
     disconnectOnPageLeave,
     e2ee: { keyProvider, worker },
     audioCaptureDefaults: micCaptureConstraints(),
+    ...(audioOutput ? { audioOutput } : {}),
     videoCaptureDefaults: {
       ...(cameraId ? { deviceId: cameraId } : {}),
       resolution: VideoPresets.h720.resolution,

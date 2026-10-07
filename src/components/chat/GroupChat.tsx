@@ -205,16 +205,16 @@ function Nip29ChatMessage({
 function ComposerSkeleton() {
   return (
     <div
-      className="relative shrink-0 pb-[var(--safe-area-pad-bottom,0px)] sidebar:pb-[var(--safe-area-pad-bottom-tight,0.25rem)]"
+      className="relative shrink-0 pb-[var(--bottom-chrome-pad)] sidebar:pb-[var(--safe-area-pad-bottom-tight,0.25rem)]"
       aria-hidden
     >
-      <div className="p-2">
-        <div className="flex items-end gap-0.5 clip-corner-lg bg-secondary/60 px-1.5 py-1.5">
-          <Skeleton className="size-9 shrink-0 rounded-full" />
+      <div className="px-2 pt-1.5 sidebar:py-2">
+        <div className="flex items-end gap-0.5 clip-corner-lg bg-secondary/60 px-1.5 py-1.5 touch:p-1">
+          <Skeleton className="size-9 touch:size-11 shrink-0 rounded-full" />
           <div className="flex-1 min-w-0 px-1.5 py-2">
             <Skeleton className="h-5 w-40 max-w-full rounded" />
           </div>
-          <Skeleton className="size-9 shrink-0 rounded-full" />
+          <Skeleton className="size-9 touch:size-11 shrink-0 rounded-full" />
         </div>
       </div>
     </div>

@@ -1963,7 +1963,7 @@ function ServerRailInner({
               variant="secondary"
               size="icon"
               aria-label="Add a server or encrypted chat"
-              className="size-12 shrink-0 clip-corner-lg transition-all text-success hover:bg-success hover:text-success-foreground"
+              className="size-12 touch:size-12 shrink-0 clip-corner-lg transition-all text-success hover:bg-success hover:text-success-foreground"
               onClick={() => setAddOpen(true)}
             >
               <Plus className="size-5" />
@@ -2022,7 +2022,7 @@ function ServerRailInner({
         className={cn(
           "flex flex-col items-center shrink-0 w-full pt-3",
           contentBelow && "border-t border-chrome-divider",
-          "pb-[calc(var(--safe-area-pad-bottom,0.75rem)+0.5rem)] sidebar:pb-[calc(var(--safe-area-pad-bottom-tight,0.25rem)+0.5rem)]",
+          "pb-[var(--bottom-chrome-pad)] sidebar:pb-[calc(var(--safe-area-pad-bottom-tight,0.25rem)+0.5rem)]",
         )}
       >
         <Tooltip>
@@ -2033,7 +2033,7 @@ function ServerRailInner({
               aria-label={inSettings ? "Close settings" : "Settings"}
               aria-pressed={inSettings}
               className={cn(
-                "size-12 shrink-0 clip-corner-lg transition-all",
+                "size-12 touch:size-12 shrink-0 clip-corner-lg transition-all",
                 inSettings && "bg-primary/20 text-primary hover:bg-primary/25",
               )}
               onClick={toggleSettings}

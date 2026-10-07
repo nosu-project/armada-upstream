@@ -256,10 +256,11 @@ export function ProfileCard({
               </DropdownMenu>
 
               <Dialog open={emojiPickerOpen} onOpenChange={setEmojiPickerOpen}>
+                {/* `w-fit` needs the card to have an intrinsic width, which an inline-size container lacks. */}
                 <ChromeDialogContent
                   title="Set avatar shape"
                   className="w-fit max-w-[calc(100vw-2rem)] sm:max-w-[calc(100vw-2rem)]"
-                  contentClassName="p-4 sm:p-5"
+                  contentClassName="p-4 sm:p-5 [container-type:normal]"
                 >
                   <ChromeDialogHeader icon={SmilePlus} title="set avatar shape" description="Pick an emoji to mask your avatar" className="mb-4" />
                   <Suspense fallback={<div className="h-[360px] w-[352px] max-w-[calc(100vw-4rem)]" />}>

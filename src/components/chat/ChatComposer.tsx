@@ -2070,7 +2070,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
   return (
     <div
       ref={(node) => { composerBoundsRef.current = node; }}
-      className="relative shrink-0 pb-[var(--safe-area-pad-bottom,0px)] sidebar:pb-[var(--safe-area-pad-bottom-tight,0.25rem)]"
+      className="relative shrink-0 pb-[var(--bottom-chrome-pad)] sidebar:pb-[var(--safe-area-pad-bottom-tight,0.25rem)]"
       onFocusCapture={claimPasteOwnership}
       onPointerDownCapture={claimPasteOwnership}
       onDragEnter={handleDragEnter}
@@ -2114,7 +2114,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
         onUpdate={updateAttachment}
       />
 
-      <div className="px-gutter py-2">
+      <div className="px-gutter pt-1.5 sidebar:py-2">
         {voiceRecorder.isRecording || isPublishingVoice ? (
           <div className="flex items-center gap-3 clip-hairline-lg [--edge:var(--destructive)/0.2] [--fill:var(--destructive)/0.05] [--fill-hover:var(--destructive)/0.05] px-3 py-2.5">
             <div className="flex items-center gap-2 min-w-0">
@@ -2183,7 +2183,8 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
             /* A document wraps: the textarea takes the first line, controls fall onto a toolbar row. */
             <div
               className={cn(
-                "clip-corner-lg bg-secondary/60 px-1.5 py-1.5",
+                // Touch: the 44px controls with an even 4px inset.
+                "clip-corner-lg bg-secondary/60 px-1.5 py-1.5 touch:p-1",
                 isDocument ? "flex flex-wrap items-center gap-0.5 touch:gap-1.5" : "flex items-end gap-0.5 touch:gap-1.5",
               )}
             >
@@ -2228,7 +2229,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                     aria-hidden
                     dir="auto"
                     className={cn(
-                      "pointer-events-none select-none absolute inset-x-0 top-0 truncate px-1.5 touch:pl-0.5 touch:pr-2 pt-[7px] pb-[9px] touch:pt-[11px] touch:pb-[13px] text-muted-foreground",
+                      "pointer-events-none select-none absolute inset-x-0 top-0 truncate px-1.5 touch:pl-0.5 touch:pr-2 pt-[7px] pb-[9px] touch:pt-[13px] touch:pb-[11px] text-muted-foreground",
                       isDocument ? "text-chat leading-relaxed" : "text-base md:text-sm leading-5",
                     )}
                   >
@@ -2258,7 +2259,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                   rows={isDocument ? 5 : 1}
                   maxLength={MAX_CHARS}
                   className={cn(
-                    "block w-full resize-none bg-transparent border-0 outline-none px-1.5 touch:pl-0.5 touch:pr-2 pt-[7px] pb-[9px] touch:pt-[11px] touch:pb-[13px] disabled:opacity-50 overflow-y-auto align-middle",
+                    "block w-full resize-none bg-transparent border-0 outline-none px-1.5 touch:pl-0.5 touch:pr-2 pt-[7px] pb-[9px] touch:pt-[13px] touch:pb-[11px] disabled:opacity-50 overflow-y-auto align-middle",
                     isDocument
                       ? "text-chat leading-relaxed"
                       : "text-base md:text-sm leading-5 max-h-40",
@@ -2293,7 +2294,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                 />
               </div>
 
-              <div ref={pickerToggleGroupRef} className="flex shrink-0 items-center gap-0.5 touch:gap-1">
+              <div ref={pickerToggleGroupRef} className="flex shrink-0 items-center gap-0.5 touch:gap-1.5">
                 <PickerToggleButton
                   label="Emoji / Stickers"
                   tooltip={!pickerOpen || pickerTab === "gif" ? "Emoji" : null}

@@ -8,6 +8,35 @@ export function contextOf(room: Room): AudioContext | undefined {
 const MAX_RETRY_MS = 10_000;
 
 /**
+ * Point every AudioContext LiveKit creates at the room's chosen output. Under
+ * `webAudioMix` it applies `audioOutput` only to a context that already exists,
+ * then creates a fresh one on connect (and after a close) on the default sink.
+ */
+export function keepCallAudioOutput(room: Room): () => void {
+  let applied: AudioContext | undefined;
+  const apply = () => {
+    const ctx = contextOf(room);
+    // Follows in-call picks too: switchActiveDevice writes them back here.
+    const deviceId = room.options.audioOutput?.deviceId;
+    if (!ctx || ctx === applied || !deviceId || !("setSinkId" in ctx)) return;
+    applied = ctx;
+    void room.switchActiveDevice("audiooutput", deviceId).catch(() => {});
+  };
+
+  room
+    .on(RoomEvent.Connected, apply)
+    .on(RoomEvent.Reconnected, apply)
+    .on(RoomEvent.AudioPlaybackStatusChanged, apply);
+  apply();
+  return () => {
+    room
+      .off(RoomEvent.Connected, apply)
+      .off(RoomEvent.Reconnected, apply)
+      .off(RoomEvent.AudioPlaybackStatusChanged, apply);
+  };
+}
+
+/**
  * Resume the call's AudioContext whenever the browser suspends it mid-call.
  * Neither the app nor LiveKit suspends it, but Chromium on Android can (seen
  * after a reconnect), and nothing resumes it: remote playback stops and the

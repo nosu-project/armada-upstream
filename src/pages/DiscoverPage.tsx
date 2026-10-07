@@ -126,7 +126,7 @@ export function DiscoverPage() {
       <main className="flex flex-col flex-1 min-w-0 h-full safe-area-top">
         <div className="mx-auto flex w-full max-w-5xl flex-1 min-h-0 flex-col px-3 sm:px-4">
           {/* Dropped on phones, where the tab pills carry the page identity. */}
-          <header className="relative h-12 touch:h-14 mt-4 px-3 hidden sm:flex items-center gap-2 shrink-0 clip-corner-lg bg-chrome">
+          <header className="relative h-12 touch:h-[3.25rem] mt-4 px-3 hidden sm:flex items-center gap-2 shrink-0 clip-corner-lg bg-chrome">
             <Compass className="size-5 shrink-0 text-muted-foreground" />
             <h1 className="min-w-0 flex-1 truncate font-semibold leading-tight">Discover</h1>
             {user && <DiscoverScopeToggle scope={scope} onChange={setScope} />}

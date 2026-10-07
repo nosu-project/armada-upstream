@@ -13,7 +13,7 @@ export const ChatHeader = forwardRef<HTMLElement, { className?: string; children
       <header
         ref={ref}
         className={cn(
-          "relative h-12 touch:h-14 max-sidebar:h-auto max-sidebar:py-2 mx-gutter mt-3 px-2 sidebar:px-3 flex items-center gap-1.5 shrink-0 clip-corner-lg bg-chrome",
+          "relative h-12 touch:h-[3.25rem] max-sidebar:h-auto max-sidebar:py-1 mx-gutter mt-1 sidebar:mt-3 px-2 sidebar:px-3 flex items-center gap-1.5 shrink-0 clip-corner-lg bg-chrome",
           className,
         )}
       >

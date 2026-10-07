@@ -286,7 +286,7 @@ export function NotificationsPage() {
         ))}
 
         <div className="mx-auto flex w-full max-w-3xl flex-1 min-h-0 flex-col px-2 sm:px-4">
-          <header className="relative mt-3 flex h-12 touch:h-14 shrink-0 items-center gap-2 px-3 clip-corner-lg bg-chrome">
+          <header className="relative mt-1 sidebar:mt-3 flex h-12 touch:h-[3.25rem] shrink-0 items-center gap-2 px-3 clip-corner-lg bg-chrome">
             <Bell className="size-5 shrink-0 text-muted-foreground" />
             <h1 className="min-w-0 truncate font-semibold">Notifications</h1>
             {unreadCount > 0 && (
