@@ -9,17 +9,20 @@ import {
   audioDeviceLabel,
   effectiveAvServers,
   getPreferredMicId,
+  getPreferredSpeakerId,
   micCaptureConstraints,
   platformRoutesCallAudio,
   rememberVoiceDevice,
   getScreenShareVolume,
   getUserVolume,
   getUserVolumes,
+  liveDeviceSwitch,
   MAX_PLAYBACK_VOLUME,
   rememberScreenShareVolume,
   rememberUserVolume,
   setPreferredVoiceServer,
   subscribeUserVolumes,
+  subscribeVoiceDevices,
 } from "@/lib/voiceDevices";
 
 describe("voice server replacement", () => {
@@ -125,5 +128,74 @@ describe("Android call routing", () => {
     platform.name = "android";
     expect(getPreferredMicId()).toBeUndefined();
     expect(micCaptureConstraints()).not.toHaveProperty("deviceId");
+  });
+});
+
+describe("live device switching", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    platform.name = "web";
+    vi.unstubAllGlobals();
+  });
+
+  /** A Chromium-like engine whose AudioContext can pick an output. */
+  const stubSpeakerSelection = () => {
+    vi.stubGlobal("document", {});
+    vi.stubGlobal("AudioContext", class { setSinkId() {} });
+  };
+
+  it("notifies subscribers of each device choice by kind", () => {
+    const listener = vi.fn();
+    const unsubscribe = subscribeVoiceDevices(listener);
+
+    rememberVoiceDevice("audioinput", "mic-2");
+    rememberVoiceDevice("audiooutput", "default");
+    expect(listener.mock.calls).toEqual([["audioinput"], ["audiooutput"]]);
+
+    unsubscribe();
+    rememberVoiceDevice("audioinput", "mic-3");
+    expect(listener).toHaveBeenCalledTimes(2);
+  });
+
+  it("switches the mic only when the room is on a different one", () => {
+    expect(liveDeviceSwitch("audioinput", undefined)).toBeUndefined();
+
+    rememberVoiceDevice("audioinput", "mic-2");
+    expect(liveDeviceSwitch("audioinput", "mic-1")).toBe("mic-2");
+    expect(liveDeviceSwitch("audioinput", "mic-2")).toBeUndefined();
+
+    rememberVoiceDevice("audioinput", "default");
+    expect(liveDeviceSwitch("audioinput", "mic-2")).toBe("default");
+    expect(liveDeviceSwitch("audioinput", "")).toBeUndefined();
+  });
+
+  it("follows the speaker only where the platform can select one", () => {
+    rememberVoiceDevice("audiooutput", "speaker-2");
+    expect(liveDeviceSwitch("audiooutput", "speaker-1")).toBeUndefined();
+
+    stubSpeakerSelection();
+    expect(liveDeviceSwitch("audiooutput", "speaker-1")).toBe("speaker-2");
+    expect(liveDeviceSwitch("audiooutput", "speaker-2")).toBeUndefined();
+  });
+
+  it("leaves the mic to the platform on Android and never switches cameras", () => {
+    rememberVoiceDevice("audioinput", "earpiece-id");
+    rememberVoiceDevice("videoinput", "camera-2");
+    platform.name = "android";
+
+    expect(liveDeviceSwitch("audioinput", "mic-1")).toBeUndefined();
+    expect(liveDeviceSwitch("videoinput", "camera-1")).toBeUndefined();
+  });
+
+  it("leaves the speaker to the platform on Android, even a stale remembered one", () => {
+    stubSpeakerSelection();
+    rememberVoiceDevice("audiooutput", "speaker-2");
+    platform.name = "android";
+
+    expect(getPreferredSpeakerId()).toBeUndefined();
+    expect(liveDeviceSwitch("audiooutput", "speaker-1")).toBeUndefined();
+    // Not "default" either: that would override the route Android picked.
+    localStorage.clear();
+    expect(liveDeviceSwitch("audiooutput", "speaker-1")).toBeUndefined();
   });
 });

@@ -174,8 +174,9 @@ describe("useMobileMembersOverlay", () => {
   });
 
   it("back from the list walks history when androidBackLeavesApp is off", async () => {
-    window.history.pushState({}, "", "/c/earlier");
-    window.history.pushState({}, "", "/c/c1");
+    // react-router's entry index rides in history state.
+    window.history.pushState({ idx: 0 }, "", "/c/earlier");
+    window.history.pushState({ idx: 1 }, "", "/c/c1");
     const back = vi.spyOn(window.history, "back").mockImplementation(() => undefined);
     const config = { ...defaultConfig, androidBackLeavesApp: false };
     render(
@@ -190,6 +191,26 @@ describe("useMobileMembersOverlay", () => {
     await pressBack();
     expect(back).toHaveBeenCalledTimes(1);
     expect(minimizeApp).not.toHaveBeenCalled();
+    back.mockRestore();
+  });
+
+  it("leaves the app from the first in-app entry even with forward entries left behind", async () => {
+    window.history.pushState({ idx: 0 }, "", "/c/c1");
+    window.history.pushState({ idx: 1 }, "", "/c/later");
+    window.history.replaceState({ idx: 0 }, "", "/c/c1");
+    expect(window.history.length).toBeGreaterThan(1);
+    const back = vi.spyOn(window.history, "back").mockImplementation(() => undefined);
+    const config = { ...defaultConfig, androidBackLeavesApp: false };
+    render(
+      <AppContext.Provider value={{ config, updateConfig: () => undefined }}>
+        <Page communityId="c1" />
+      </AppContext.Provider>,
+    );
+
+    await pressBack();
+    await pressBack();
+    expect(back).not.toHaveBeenCalled();
+    expect(minimizeApp).toHaveBeenCalledTimes(1);
     back.mockRestore();
   });
 

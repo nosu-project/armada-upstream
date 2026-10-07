@@ -258,6 +258,8 @@ interface ChatComposerProps {
   messages: NostrRumor[];
   replyTo?: NostrRumor;
   onCancelReply?: () => void;
+  /** Scrolls the timeline to the message being replied to; makes the reply banner tappable. */
+  onJumpToReply?: (id: string) => void;
   /**
    * An encrypted plane (Concord, DMs): no NIP-18 embed `q`s and no relay hint on
    * the reply `q`. Inline replies are a NIP-C7 `q` everywhere (CORD-03 §3);
@@ -478,7 +480,7 @@ const PickerToggleButton = memo(function PickerToggleButton({
  * voice, NIP-88 polls, replies, NIP-18 quotes, drafts. With `sendOverride` it
  * doubles as a generic composer (DMs, Concord).
  */
-export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelReply, sealed = false, onSent, shareLabel, shareIconUrl, sendOverride, canSend, mentionPubkeys, canMentionEveryone = false, placeholder, draftScope, shareRoute, onOptimisticInsert, onOptimisticSent, onOptimisticFailed, canModerate = false, autoFocus = false, onTyping, onSlashAction, encryptAttachments = false, disappearingTimer, botCommands = false, botDmPeer, recentAuthors, conversationRelays, pollsEnabled = true, onPollSubmit, messageKind = KIND_GROUP_CHAT, onEditLast, layout = "bar", documentEnterSends = false, submitLabel = "Post", onCancel }: ChatComposerProps) {
+export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelReply, onJumpToReply, sealed = false, onSent, shareLabel, shareIconUrl, sendOverride, canSend, mentionPubkeys, canMentionEveryone = false, placeholder, draftScope, shareRoute, onOptimisticInsert, onOptimisticSent, onOptimisticFailed, canModerate = false, autoFocus = false, onTyping, onSlashAction, encryptAttachments = false, disappearingTimer, botCommands = false, botDmPeer, recentAuthors, conversationRelays, pollsEnabled = true, onPollSubmit, messageKind = KIND_GROUP_CHAT, onEditLast, layout = "bar", documentEnterSends = false, submitLabel = "Post", onCancel }: ChatComposerProps) {
   const isDocument = layout === "document";
   const { user } = useCurrentUser();
   const composerBoundsRef = useComposerBoundsRef();
@@ -2089,7 +2091,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
 
       {replyTo && (
         <div className="px-3 pt-2">
-          <ReplyBanner event={replyTo} onCancel={onCancelReply} />
+          <ReplyBanner event={replyTo} onCancel={onCancelReply} onJump={onJumpToReply} />
         </div>
       )}
 
@@ -2594,7 +2596,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
   );
 }
 
-function ReplyBanner({ event, onCancel }: { event: NostrRumor; onCancel?: () => void }) {
+function ReplyBanner({ event, onCancel, onJump }: { event: NostrRumor; onCancel?: () => void; onJump?: (id: string) => void }) {
   const author = useAuthor(event.pubkey);
   const metadata = author.data?.metadata;
   const displayName = useScopedDisplayName(event.pubkey, metadata);
@@ -2604,23 +2606,32 @@ function ReplyBanner({ event, onCancel }: { event: NostrRumor; onCancel?: () => 
 
   return (
     <div className="flex items-center gap-2 clip-corner-lg bg-secondary/50 py-2 pl-2.5 pr-1 text-sm animate-in slide-in-from-top-2 fade-in-0 duration-200">
-      <Reply className="size-4 text-muted-foreground shrink-0" />
-      <span className="min-w-0 flex-1 flex items-center gap-1.5 text-muted-foreground">
-        {/* Narrow screens: the reply icon says it, and the snippet needs the room. */}
-        <span className="sr-only sm:not-sr-only sm:shrink-0">Replying to</span>
-        <Avatar shape={getAvatarShape(metadata)} className="size-5 shrink-0">
-          <AvatarImage src={metadata?.picture} imeta={author.data?.imeta?.picture} alt="" />
-          <AvatarFallback className="bg-primary/20 text-primary text-monogram">
-            {displayName[0]?.toUpperCase()}
-          </AvatarFallback>
-        </Avatar>
-        <span className="font-semibold text-primary shrink-0 truncate max-w-[45%]">
-          <DisplayName pubkey={event.pubkey} name={displayName} />
+      <button
+        type="button"
+        disabled={!onJump}
+        onClick={() => onJump?.(event.id)}
+        // Keep the draft focused, so the keyboard stays up while the timeline scrolls.
+        onMouseDown={(e) => e.preventDefault()}
+        className="min-w-0 flex-1 flex items-center gap-2 text-left enabled:cursor-pointer disabled:cursor-default"
+      >
+        <Reply className="size-4 text-muted-foreground shrink-0" />
+        <span className="min-w-0 flex-1 flex items-center gap-1.5 text-muted-foreground">
+          {/* Narrow screens: the reply icon says it, and the snippet needs the room. */}
+          <span className="sr-only sm:not-sr-only sm:shrink-0">Replying to</span>
+          <Avatar shape={getAvatarShape(metadata)} className="size-5 shrink-0">
+            <AvatarImage src={metadata?.picture} imeta={author.data?.imeta?.picture} alt="" />
+            <AvatarFallback className="bg-primary/20 text-primary text-monogram">
+              {displayName[0]?.toUpperCase()}
+            </AvatarFallback>
+          </Avatar>
+          <span className="font-semibold text-primary shrink-0 truncate max-w-[45%]">
+            <DisplayName pubkey={event.pubkey} name={displayName} />
+          </span>
+          <span className="min-w-0 flex-1 truncate text-muted-foreground/70">
+            <ReplyPreview content={event.content} tags={held ? undefined : event.tags} />
+          </span>
         </span>
-        <span className="min-w-0 flex-1 truncate text-muted-foreground/70">
-          <ReplyPreview content={event.content} tags={held ? undefined : event.tags} />
-        </span>
-      </span>
+      </button>
       <button
         type="button"
         aria-label="Cancel reply"

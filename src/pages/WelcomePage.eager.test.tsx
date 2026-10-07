@@ -1,3 +1,4 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it } from "vitest";
@@ -22,13 +23,19 @@ import { WelcomePage } from "@/pages/WelcomePage";
  *    Suspense-triggering child — would show up as the landing NOT being
  *    present synchronously, which is what the first assertion catches.
  */
-describe("WelcomePage (the signed-out landing)", () => {
-  it("renders the landing synchronously, with nothing to await", () => {
-    render(
+function renderLanding() {
+  render(
+    <QueryClientProvider client={new QueryClient()}>
       <MemoryRouter initialEntries={["/"]}>
         <WelcomePage />
-      </MemoryRouter>,
-    );
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+}
+
+describe("WelcomePage (the signed-out landing)", () => {
+  it("renders the landing synchronously, with nothing to await", () => {
+    renderLanding();
 
     // No `findBy`, no `await act`: it is either in the first commit or the
     // page has stopped being eager. (Two of them — the deck opens and closes
@@ -37,11 +44,7 @@ describe("WelcomePage (the signed-out landing)", () => {
   });
 
   it("does not mount the login dialog or the wizard until asked", () => {
-    render(
-      <MemoryRouter initialEntries={["/"]}>
-        <WelcomePage />
-      </MemoryRouter>,
-    );
+    renderLanding();
 
     // The login dialog's own heading, and the wizard's first step. Neither is
     // reachable without a tap, so neither chunk is on the boot path.

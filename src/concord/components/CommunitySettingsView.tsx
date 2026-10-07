@@ -36,6 +36,7 @@ import { ChromeDialogContent, ChromeDialogHeader, Dialog } from "@/components/ui
 import { OwnerAvatar, OwnerSlashRepo, RepositoryPicker, type PickedRepository } from "@/components/projects/RepositoryPicker";
 import { Input } from "@/components/ui/input";
 import { PillTabs, type PillTab } from "@/components/ui/pill-tabs";
+import { RelayListEditor } from "@/components/RelayListEditor";
 import { Textarea } from "@/components/ui/textarea";
 import { useNostr } from "@nostrify/react";
 
@@ -1594,21 +1595,6 @@ function ChannelRow({
   return row;
 }
 
-/** Default to wss://, require a websocket scheme, drop a bare origin's trailing slash. */
-function normalizeRelayUrl(input: string): string | null {
-  let raw = input.trim();
-  if (!raw) return null;
-  if (!/^[a-z]+:\/\//i.test(raw)) raw = `wss://${raw}`;
-  try {
-    const u = new URL(raw);
-    if (u.protocol !== "wss:" && u.protocol !== "ws:") return null;
-    const s = u.toString();
-    return u.pathname === "/" && s.endsWith("/") ? s.slice(0, -1) : s;
-  } catch {
-    return null;
-  }
-}
-
 /**
  * Disappearing messages (CORD-08): publishes a metadata edition and a kind-1740
  * notice into each keyed channel. Applies at SEND time only.
@@ -1938,7 +1924,6 @@ function RelaysSection({
 
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<string[]>([]);
-  const [addValue, setAddValue] = useState("");
   const [busy, setBusy] = useState<MirrorProgress | { phase: "edition" } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -1946,25 +1931,8 @@ function RelaysSection({
 
   const startEditing = () => {
     setDraft(relays);
-    setAddValue("");
     setError(null);
     setEditing(true);
-  };
-
-  const addRelay = () => {
-    setError(null);
-    const url = normalizeRelayUrl(addValue);
-    if (!url) {
-      setError("Enter a relay websocket URL, like wss://relay.example.com");
-      return;
-    }
-    if (draft.includes(url)) {
-      setAddValue("");
-      return;
-    }
-    if (draft.length >= MAX_COMMUNITY_RELAYS) return;
-    setDraft([...draft, url]);
-    setAddValue("");
   };
 
   const handleSave = async () => {
@@ -2051,68 +2019,17 @@ function RelaysSection({
       </div>
 
       {!editing ? (
-        <ul className="space-y-1">
-          {relays.map((r) => (
-            <li key={r} className="truncate rounded-md bg-secondary/40 px-2 py-1 text-xs font-mono">
-              {r}
-            </li>
-          ))}
-        </ul>
+        <RelayListEditor relays={relays} readOnly />
       ) : (
         <div className="space-y-1.5">
-          <ul className="space-y-1">
-            {draft.map((r) => (
-              <li
-                key={r}
-                className="flex items-center gap-1 rounded-md bg-secondary/40 py-0.5 pl-2 pr-0.5 text-xs font-mono"
-              >
-                <span className="min-w-0 flex-1 truncate">{r}</span>
-                <Button
-                  type="button"
-                  size="icon"
-                  variant="ghost"
-                  className="size-6 shrink-0 text-muted-foreground hover:text-destructive"
-                  aria-label={`Remove ${r}`}
-                  disabled={busy !== null || draft.length === 1}
-                  onClick={() => setDraft(draft.filter((x) => x !== r))}
-                >
-                  <Trash2 className="size-3" />
-                </Button>
-              </li>
-            ))}
-          </ul>
-
-          {draft.length < MAX_COMMUNITY_RELAYS ? (
-            <form
-              className="flex items-center gap-1"
-              onSubmit={(e) => {
-                e.preventDefault();
-                addRelay();
-              }}
-            >
-              <Input
-                value={addValue}
-                onChange={(e) => setAddValue(e.target.value)}
-                placeholder="wss://relay.example.com"
-                disabled={busy !== null}
-                className="h-7 flex-1 font-mono text-xs"
-              />
-              <Button
-                type="submit"
-                size="icon"
-                variant="ghost"
-                className="size-7 shrink-0"
-                disabled={busy !== null || !addValue.trim()}
-                aria-label="Add relay"
-              >
-                <Plus className="size-3.5" />
-              </Button>
-            </form>
-          ) : (
-            <p className="text-2xs text-muted-foreground">
-              Up to {MAX_COMMUNITY_RELAYS} relays; past that, clients trim the list.
-            </p>
-          )}
+          <RelayListEditor
+            relays={draft}
+            onChange={setDraft}
+            disabled={busy !== null}
+            min={1}
+            max={MAX_COMMUNITY_RELAYS}
+            maxText={`Up to ${MAX_COMMUNITY_RELAYS} relays; past that, clients trim the list.`}
+          />
 
           {error && (
             <Alert variant="destructive">

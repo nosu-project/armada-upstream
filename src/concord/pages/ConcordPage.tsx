@@ -1,6 +1,6 @@
 import { AtSign, Ban, CalendarClock, CheckCheck, ChevronDown, Bell, BellOff, Crown, Folder, FolderGit2, Hash, Headphones, KeyRound, Loader2, Lock, LogOut, Megaphone, MessageSquareText, MessagesSquare, Pause, Phone, Pin, Play, Plus, RefreshCw, Rss, Search, Settings, Shield, ShieldOff, Timer, Trash2, UserMinus, UserPlus, X, type LucideIcon } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Navigate, useLocation, useSearchParams } from "react-router-dom";
+import { Navigate, useLocation, useNavigationType, useSearchParams } from "react-router-dom";
 
 import { AppStageSlot } from "@/components/chat/AppStage";
 import { MountWhenOpened } from "@/components/MountWhenOpened";
@@ -946,6 +946,7 @@ export function ConcordPage() {
   // Parsed via `parseChatRoute` (panes are static segments with no params), the
   // same parse the builder, notifications and analytics use.
   const location = useLocation();
+  const navigationType = useNavigationType();
   const { pathname } = location;
   const route = useMemo(() => {
     const parsed = parseChatRoute(pathname);
@@ -1134,7 +1135,9 @@ export function ConcordPage() {
   const selectChannel = useCallback(
     (idHex: string) => {
       if (!communityId) return;
-      navigateTo(chatRoute({ kind: "concord", communityId, channelId: idHex }));
+      const to = chatRoute({ kind: "concord", communityId, channelId: idHex });
+      // Reopening the channel already behind the list mustn't stack a duplicate history entry.
+      navigateTo(to, { replace: to === window.location.pathname });
     },
     [communityId, navigateTo],
   );
@@ -1790,11 +1793,12 @@ export function ConcordPage() {
   }
   // A permalink must show the chat pane, even within the already-open community.
   // Keyed per NAVIGATION (like `useMessagePermalink`), so tapping one notification
-  // twice lands twice; the mount seeds rather than fires.
+  // twice lands twice; the mount seeds rather than fires. Back/forward onto a
+  // channel shows its chat too, or walking history from the list moves nothing on screen.
   const [focusNavKey, setFocusNavKey] = useState(location.key);
   if (focusNavKey !== location.key) {
     setFocusNavKey(location.key);
-    if (route?.messageId) setChannelsOpen(false);
+    if (route?.messageId || (navigationType === "POP" && routeChannelId)) setChannelsOpen(false);
   }
   // The open channel's route (thread panel, message links, legacy query redirects).
   const channelRoute = useMemo(
@@ -3577,6 +3581,7 @@ export function ConcordPage() {
                           replyTo={replyTo}
                           sealed
                           onCancelReply={() => setReplyTo(undefined)}
+                          onJumpToReply={jumpWithinChannel}
                           onTyping={publishTyping}
                           encryptAttachments
                           disappearingTimer={resolveMessageTimer}

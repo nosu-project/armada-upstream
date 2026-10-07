@@ -747,6 +747,37 @@
   color: inherit;
 }
 
+/* Relay status lights (src/components/RelayLed.tsx). steps(1,end) makes each
+   change a hard switch, a blink rather than a breath. OPACITY ONLY: the glow is
+   a static shadow that dims with it, since animating box-shadow runs on the
+   main thread and restyles the page every frame. */
+
+/* A live relay: fast, uneven, mostly lit — traffic, not a heartbeat. */
+@keyframes armada-led-busy {
+  0%   { opacity: 1; }
+  7%   { opacity: 0.2; }
+  11%  { opacity: 1; }
+  15%  { opacity: 0.2; }
+  23%  { opacity: 1; }
+  34%  { opacity: 0.2; }
+  38%  { opacity: 1; }
+  45%  { opacity: 0.2; }
+  49%  { opacity: 1; }
+  61%  { opacity: 0.2; }
+  66%  { opacity: 1; }
+  72%  { opacity: 0.2; }
+  76%  { opacity: 1; }
+  88%  { opacity: 0.2; }
+  93%  { opacity: 1; }
+}
+
+/* A dead relay: one short pulse per cycle, same beat every time. */
+@keyframes armada-led-fault {
+  0%   { opacity: 1; }
+  22%  { opacity: 0.15; }
+  100% { opacity: 0.15; }
+}
+
 /*
  * Syntax highlighting for fenced code blocks — highlight.js scope classes,
  * emitted by lowlight in src/lib/highlighter.ts and rendered as spans by

@@ -1,5 +1,7 @@
 import { ConnectionState, RoomEvent, type Room } from "livekit-client";
 
+import { liveDeviceSwitch, preferredAudioOutput } from "@/lib/voiceDevices";
+
 /** LiveKit's `webAudioMix` context; private in its typings, replaced on every reconnect after a close. */
 export function contextOf(room: Room): AudioContext | undefined {
   return (room as unknown as { audioContext?: AudioContext }).audioContext;
@@ -8,19 +10,25 @@ export function contextOf(room: Room): AudioContext | undefined {
 const MAX_RETRY_MS = 10_000;
 
 /**
- * Point every AudioContext LiveKit creates at the room's chosen output. Under
+ * Point every AudioContext LiveKit creates at the remembered speaker. Under
  * `webAudioMix` it applies `audioOutput` only to a context that already exists,
  * then creates a fresh one on connect (and after a close) on the default sink.
+ * This is the only switch on (re)connect; VoiceDeviceSync owns picks made while
+ * connected, so the two never race (LiveKit doesn't serialize switches).
  */
 export function keepCallAudioOutput(room: Room): () => void {
   let applied: AudioContext | undefined;
   const apply = () => {
     const ctx = contextOf(room);
-    // Follows in-call picks too: switchActiveDevice writes them back here.
-    const deviceId = room.options.audioOutput?.deviceId;
-    if (!ctx || ctx === applied || !deviceId || !("setSinkId" in ctx)) return;
+    if (!ctx || !("setSinkId" in ctx)) return;
+    const fresh = ctx !== applied;
     applied = ctx;
-    void room.switchActiveDevice("audiooutput", deviceId).catch(() => {});
+    // A fresh context is on the default sink whatever getActiveDevice reports;
+    // a kept one may have missed a pick made while reconnecting.
+    const deviceId = fresh
+      ? preferredAudioOutput()?.deviceId
+      : liveDeviceSwitch("audiooutput", room.getActiveDevice("audiooutput"));
+    if (deviceId) void room.switchActiveDevice("audiooutput", deviceId).catch(() => {});
   };
 
   room

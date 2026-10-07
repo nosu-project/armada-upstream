@@ -1,16 +1,16 @@
 import { HardDriveDownload } from "lucide-react";
-import { memo, useEffect, useRef, useState } from "react";
+import { memo, useRef } from "react";
 import { Link } from "react-router-dom";
 
 import { ArmadaCrest, ArmadaCrestKeyframes } from "@/components/brand/ArmadaCrest";
 import { BrandMark } from "@/components/brand/BrandMark";
+import { RelayLed } from "@/components/RelayLed";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { RELAY_DICTIONARY } from "@/concord/lib/stockRelays";
 import { isDesktop } from "@/lib/desktop";
 import { ANDROID_STORES } from "@/lib/downloads";
 import { DEPLOYMENT_RELAYS, isNativeRuntime, relayToHttpUrl } from "@/lib/platform";
-import { cn } from "@/lib/utils";
 
 import { AsciiSea } from "./AsciiSea";
 import { EncryptionQuiz } from "./EncryptionQuiz";
@@ -266,44 +266,10 @@ export const LandingPage = memo(function LandingPage({
   );
 });
 
-/** Relay liveness light via HEAD to NIP-11; with the `application/nostr+json` accept it's a simple CORS request (no preflight). */
 function RelayLight({ url, index }: { url: string; index: number }) {
-  const [alive, setAlive] = useState<boolean>();
-
-  useEffect(() => {
-    let cancelled = false;
-    fetch(relayToHttpUrl(url), {
-      method: "HEAD",
-      headers: { accept: "application/nostr+json" },
-      signal: AbortSignal.timeout(8000),
-    })
-      .then((res) => !cancelled && setAlive(res.ok))
-      .catch(() => !cancelled && setAlive(false));
-    return () => {
-      cancelled = true;
-    };
-  }, [url]);
-
   return (
     <li className="flex items-center gap-2 tracking-wide">
-      <span
-        aria-hidden="true"
-        style={
-          alive === undefined
-            ? undefined
-            : alive
-              ? { animationDelay: `${index * 0.29}s`, animationDuration: `${1.15 + index * 0.13}s` }
-              : { animationDelay: `${index * 0.11}s` }
-        }
-        className={cn(
-          "size-1.5 shrink-0 rounded-full ring-2",
-          alive === undefined && "animate-pulse bg-muted-foreground/40 ring-transparent motion-reduce:animate-none",
-          alive === true &&
-            "animate-[armada-led-busy_1.15s_steps(1,end)_infinite] bg-emerald-400 text-emerald-400/60 ring-emerald-400/20 shadow-[0_0_5px_1px_currentColor] motion-reduce:animate-none",
-          alive === false &&
-            "animate-[armada-led-fault_1.9s_steps(1,end)_infinite] bg-red-400 text-red-400/50 ring-red-400/15 shadow-[0_0_4px_0_currentColor] motion-reduce:animate-none",
-        )}
-      />
+      <RelayLed url={url} phase={index} />
       <a
         href={relayToHttpUrl(url)}
         target="_blank"
@@ -312,9 +278,6 @@ function RelayLight({ url, index }: { url: string; index: number }) {
       >
         {url.replace(/^wss:\/\//, "")}
       </a>
-      <span className="sr-only">
-        {alive === undefined ? "(checking)" : alive ? "(online)" : "(offline)"}
-      </span>
     </li>
   );
 }
@@ -351,39 +314,6 @@ function LandingKeyframes() {
       }
       @media (prefers-reduced-motion: reduce) {
         [class*="animate-[armada-reveal"] { animation-duration: 1ms !important; }
-      }
-
-      /* A live relay's activity light: fast, uneven, mostly lit — traffic,
-         not a heartbeat. Driven with steps(1,end) so every change is a hard
-         switch; interpolating between stops would make it breathe instead of
-         blink. OPACITY ONLY — the glow is a static shadow on the element that
-         dims with it. Animating box-shadow ran on the main thread, and four
-         of these restyled the landing page on every frame, forever. */
-      @keyframes armada-led-busy {
-        0%   { opacity: 1; }
-        7%   { opacity: 0.2; }
-        11%  { opacity: 1; }
-        15%  { opacity: 0.2; }
-        23%  { opacity: 1; }
-        34%  { opacity: 0.2; }
-        38%  { opacity: 1; }
-        45%  { opacity: 0.2; }
-        49%  { opacity: 1; }
-        61%  { opacity: 0.2; }
-        66%  { opacity: 1; }
-        72%  { opacity: 0.2; }
-        76%  { opacity: 1; }
-        88%  { opacity: 0.2; }
-        93%  { opacity: 1; }
-      }
-
-      /* A dead relay's fault light: one short pulse per cycle, same beat every
-         time — the point is that it is NOT doing any work. Opacity only, like
-         the busy light. */
-      @keyframes armada-led-fault {
-        0%   { opacity: 1; }
-        22%  { opacity: 0.15; }
-        100% { opacity: 0.15; }
       }
 
       /* The scroll cue riding the swell. Transform only. */

@@ -85,9 +85,11 @@ import {
   getPreferredCameraId,
   getScreenShareVolume,
   getUserVolume,
+  liveDeviceSwitch,
   micCaptureConstraints,
   preferredAudioOutput,
   subscribeUserVolumes,
+  subscribeVoiceDevices,
 } from "@/lib/voiceDevices";
 import { syncRnnoise } from "@/lib/voiceProcessor";
 import { keepCallAwake } from "@/lib/callKeepAwake";
@@ -279,6 +281,39 @@ function PlaybackVolumeApplier() {
     apply();
     return subscribeUserVolumes(apply);
   }, [participants, resolveIdentity]);
+
+  return null;
+}
+
+/**
+ * Keeps the live room on the remembered mic and speaker. Device pickers (the
+ * call bar's DeviceSelectGroup and Settings' VoiceDeviceSettings) only call
+ * rememberVoiceDevice; this is the one place that switches the room, so a
+ * pick from either applies mid-call without two switches racing. On
+ * (re)connect the speaker belongs to keepCallAudioOutput (CallAudioKeeper).
+ */
+function VoiceDeviceSync() {
+  const room = useRoomContext();
+
+  useEffect(() => {
+    const follow = (kind: MediaDeviceKind) => {
+      if (room.state !== ConnectionState.Connected) return;
+      const deviceId = liveDeviceSwitch(kind, room.getActiveDevice(kind));
+      if (!deviceId) return;
+      void room.switchActiveDevice(kind, deviceId).catch(() => {
+        // Device may be gone since it was remembered — keep the current one.
+      });
+    };
+    // A mic picked while reconnecting was remembered but not applied.
+    const followMic = () => follow("audioinput");
+    followMic();
+    room.on(RoomEvent.Connected, followMic).on(RoomEvent.Reconnected, followMic);
+    const unsubscribe = subscribeVoiceDevices(follow);
+    return () => {
+      room.off(RoomEvent.Connected, followMic).off(RoomEvent.Reconnected, followMic);
+      unsubscribe();
+    };
+  }, [room]);
 
   return null;
 }
@@ -728,6 +763,7 @@ function VoiceRoomShell({
       <CallAudioKeeper />
       <CallSoundEffects />
       <MicNoiseProcessor />
+      <VoiceDeviceSync />
       <DesktopPushToTalk />
       <MutedReporter />
       <StreamingReporter />

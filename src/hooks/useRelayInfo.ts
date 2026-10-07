@@ -1,4 +1,4 @@
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient, type UseQueryOptions } from '@tanstack/react-query';
 import { useEffect } from 'react';
 
 import { KvPrefixCache } from '@/lib/db/kvCache';
@@ -109,6 +109,9 @@ export function sanitizeRelayInfo(payload: unknown): RelayInfoDocument {
 }
 
 function writeCachedInfo(relayUrl: string, info: RelayInfoDocument): void {
+  // Refreshes mostly return the same doc; on Android every KV write crosses the bridge.
+  const cached = relayInfoCache.get(relayUrl);
+  if (cached && JSON.stringify(cached) === JSON.stringify(info)) return;
   relayInfoCache.set(relayUrl, info);
 }
 
@@ -159,7 +162,7 @@ export function useRelayInfo(relayUrl: string | undefined) {
       if (!cached) return;
       const key = ['relay-info', relayUrl];
       if (queryClient.getQueryData<RelayInfoDocument>(key) === undefined) {
-        queryClient.setQueryData(key, cached);
+        queryClient.setQueryData(key, cached, { updatedAt: 0 });
       }
     });
     return () => {
@@ -167,10 +170,19 @@ export function useRelayInfo(relayUrl: string | undefined) {
     };
   }, [relayUrl, httpUrl, queryClient]);
 
-  return useQuery<RelayInfoDocument>({
+  return useQuery(relayInfoQueryOptions(relayUrl));
+}
+
+/**
+ * Shared by `useRelayReachable`, which observes the same query with a shorter staleTime, so
+ * one NIP-11 GET answers both. A seed carries `dataUpdatedAt: 0`, which that hook reads as
+ * "not yet heard from the relay".
+ */
+export function relayInfoQueryOptions(relayUrl: string | undefined) {
+  return {
     queryKey: ['relay-info', relayUrl],
-    queryFn: ({ signal }) => fetchRelayInfoDoc(relayUrl!, signal),
-    enabled: !!httpUrl,
+    queryFn: ({ signal }: { signal: AbortSignal }) => fetchRelayInfoDoc(relayUrl!, signal),
+    enabled: !!relayUrl && !!relayToHttpUrl(relayUrl),
     // Seed as a real success so a fetch failure never blanks it; `initialDataUpdatedAt: 0` still
     // triggers one background refresh.
     initialData: () => readCachedInfo(relayUrl),
@@ -178,6 +190,6 @@ export function useRelayInfo(relayUrl: string | undefined) {
     staleTime: 12 * 60 * 60 * 1000,
     gcTime: 24 * 60 * 60 * 1000,
     retry: 1,
-  });
+  } satisfies UseQueryOptions<RelayInfoDocument>;
 }
 
