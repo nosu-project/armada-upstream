@@ -3581,6 +3581,7 @@ export function ConcordPage() {
                           replyTo={replyTo}
                           sealed
                           onCancelReply={() => setReplyTo(undefined)}
+                          onJumpToReply={jumpWithinChannel}
                           onTyping={publishTyping}
                           encryptAttachments
                           disappearingTimer={resolveMessageTimer}

@@ -1311,6 +1311,7 @@ const Conversation = memo(function Conversation({
           replyTo={replyTo}
           sealed
           onCancelReply={() => setReplyTo(undefined)}
+          onJumpToReply={jumpToMessage}
           // Client-side AES-256-GCM attachments on NIP-17 only (kind 4 can't carry the key).
           encryptAttachments={dm17Enabled}
           disappearingTimer={resolveDisappearingTimer}

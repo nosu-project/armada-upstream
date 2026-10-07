@@ -627,6 +627,7 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
             shareLabel={channelName}
             shareIconUrl={groupDetails?.group?.picture}
             onCancelReply={() => setReplyTo(undefined)}
+            onJumpToReply={jumpToReply}
             onSent={pinToPresent}
             onOptimisticInsert={insertOptimistic}
             onOptimisticSent={markSent}
