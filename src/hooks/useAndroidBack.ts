@@ -31,8 +31,10 @@ function handleBack() {
       }
     }
   }
-  // Unconsumed: walk history, or minimize at the root.
-  if (window.history.length > 1) {
+  // Unconsumed: walk history, or minimize at the root. The router's entry index,
+  // not `history.length`, which also counts the forward entries back leaves behind.
+  const idx = (window.history.state as { idx?: number } | null)?.idx ?? 0;
+  if (idx > 0) {
     window.history.back();
   } else {
     leaveApp();
