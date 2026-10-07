@@ -370,7 +370,8 @@ export function Lightbox({ media, currentIndex, onClose, onNext, onPrev }: Light
                   if (el) slotRefs.current.set(i, el);
                   else slotRefs.current.delete(i);
                 }}
-                className="absolute inset-0 flex items-center justify-center will-change-transform py-6 pt-14 px-4 sm:px-12"
+                // Clear the status and nav bars: a tall video's controls sit at the slot's bottom edge.
+                className="absolute inset-0 flex items-center justify-center will-change-transform pt-[calc(3.5rem+var(--safe-area-inset-top,env(safe-area-inset-top,0px)))] pb-[calc(1.5rem+var(--safe-area-inset-bottom,env(safe-area-inset-bottom,0px)))] px-4 sm:px-12"
                 style={{ transform: slotTransform(i - currentIndex, 0) }}
               >
                 {covered(media[i]) ? (
@@ -409,7 +410,7 @@ export function Lightbox({ media, currentIndex, onClose, onNext, onPrev }: Light
         </div>
 
         {hasMultiple && media.length <= 10 && (
-          <div className="absolute left-1/2 -translate-x-1/2 z-10 flex items-center gap-1.5 bottom-6 sm:hidden">
+          <div className="absolute left-1/2 -translate-x-1/2 z-10 flex items-center gap-1.5 bottom-[calc(0.5rem+var(--safe-area-inset-bottom,env(safe-area-inset-bottom,0px)))] sm:hidden">
             {media.map((_, i) => (
               <div
                 key={i}
