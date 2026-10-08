@@ -226,7 +226,7 @@ export const SANDBOX_DOMAIN: string = config("SANDBOX_DOMAIN") || "iframe.diy";
  * `{url}` is replaced with the encoded URL, otherwise it's appended.
  */
 export const LINK_PREVIEW_ENDPOINT: string = (
-  config("LINK_PREVIEW_ENDPOINT") ?? "https://ditto.pub/api/link-preview/{url}"
+  config("LINK_PREVIEW_ENDPOINT") ?? "https://api.ditto.pub/link-preview/{url}"
 ).trim();
 
 /** Build the proxy request URL for a link preview, or null if no proxy is configured. */
@@ -265,14 +265,6 @@ export function bridgePortalUrl(path: "/" | "/import" = "/"): string | null {
   if (!BRIDGE_PORTAL_URL) return null;
   return path === "/" ? BRIDGE_PORTAL_URL : `${BRIDGE_PORTAL_URL}${path}`;
 }
-
-/**
- * Plausible analytics domain. OFF by default; set only by hosted deployments,
- * and build-time so it can't be toggled or synced. `PLAUSIBLE_ENDPOINT`
- * optionally points at a self-hosted instance or proxy.
- */
-export const PLAUSIBLE_DOMAIN: string = (config("PLAUSIBLE_DOMAIN") ?? "").trim();
-export const PLAUSIBLE_ENDPOINT: string = (config("PLAUSIBLE_ENDPOINT") ?? "").trim();
 
 /**
  * nostr-push gateway: `NOSTR_PUSH_PUBKEY` (npub or hex, `#p`-tagged on

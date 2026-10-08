@@ -4,6 +4,21 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.64.9] - 2026-10-08
+
+Link previews and site icons load again, and Armada no longer sends usage
+analytics. The privacy policy now names the default servers Armada uses and
+the error reporting on the hosted site.
+
+### Changed
+- The privacy policy names Armada's default servers and the hosted site's error reporting
+
+### Fixed
+- Link previews and site icons load again
+
+### Removed
+- Usage analytics
+
 ## [0.64.8] - 2026-10-07
 
 Call audio devices stick: the chosen speaker is kept across calls and

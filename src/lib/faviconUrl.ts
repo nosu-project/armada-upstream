@@ -5,7 +5,7 @@ import { fillUriTemplate } from "@/lib/uriTemplate";
  * rendering a host list doesn't announce the reader to each host.
  * Use `{origin}/favicon.ico` to contact hosts directly.
  */
-export const FAVICON_URL_TEMPLATE = "https://ditto.pub/api/favicon/{hostname}";
+export const FAVICON_URL_TEMPLATE = "https://api.ditto.pub/favicon/{hostname}";
 
 export interface TemplateUrlOpts {
   template: string;

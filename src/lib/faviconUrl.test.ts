@@ -19,7 +19,7 @@ describe("fillUriTemplate (the RFC 6570 subset)", () => {
 describe("faviconUrl", () => {
   it("fills the service template with the host, never fetching from the host itself", () => {
     const url = faviconUrl("https://voice.example.com");
-    expect(url).toBe("https://ditto.pub/api/favicon/voice.example.com");
+    expect(url).toBe("https://api.ditto.pub/favicon/voice.example.com");
     // The point of the template: the request goes to the service, not to the
     // host being rendered.
     expect(new URL(url!).hostname).not.toBe("voice.example.com");

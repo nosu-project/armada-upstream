@@ -24,7 +24,7 @@ describe("linkPreviewUrl", () => {
   it("defaults to the public proxy when unconfigured", async () => {
     const linkPreviewUrl = await loadLinkPreviewUrl();
     expect(linkPreviewUrl("https://example.com/a")).toBe(
-      "https://ditto.pub/api/link-preview/https%3A%2F%2Fexample.com%2Fa",
+      "https://api.ditto.pub/link-preview/https%3A%2F%2Fexample.com%2Fa",
     );
   });
 
