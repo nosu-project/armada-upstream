@@ -226,7 +226,7 @@ export const SANDBOX_DOMAIN: string = config("SANDBOX_DOMAIN") || "iframe.diy";
  * `{url}` is replaced with the encoded URL, otherwise it's appended.
  */
 export const LINK_PREVIEW_ENDPOINT: string = (
-  config("LINK_PREVIEW_ENDPOINT") ?? "https://ditto.pub/api/link-preview/{url}"
+  config("LINK_PREVIEW_ENDPOINT") ?? "https://api.ditto.pub/link-preview/{url}"
 ).trim();
 
 /** Build the proxy request URL for a link preview, or null if no proxy is configured. */
