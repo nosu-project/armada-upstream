@@ -1,6 +1,6 @@
 import { createContext } from "react";
 
-import { APP_RELAYS, BROADCAST_RELAYS, COMMUNITY_RELAYS, normalizeRelayUrl } from "@/lib/platform";
+import { APP_RELAYS, BROADCAST_RELAYS, COMMUNITY_RELAYS, normalizeRelayUrl, SEARCH_RELAYS } from "@/lib/platform";
 import { DEFAULT_PUSH_PREFS, type PushPrefs } from "@/lib/pushPrefs";
 import { getPreferredVoiceServer } from "@/lib/voiceDevices";
 
@@ -88,7 +88,7 @@ export interface AppConfig {
    * from `appRelays` (account traffic).
    */
   communityRelays: string[];
-  /** NIP-50 search relays (seeded from APP_RELAYS); empty falls back to app relays. */
+  /** NIP-50 search relays (seeded from SEARCH_RELAYS); empty falls back to app relays. */
   searchRelays: string[];
   /** Host for starting empty Concord/DM voice calls; an account preference synced via NIP-78. */
   preferredVoiceServer: string;
@@ -369,7 +369,7 @@ export const defaultConfig: AppConfig = {
   appRelays: [...APP_RELAYS],
   broadcastRelays: [...BROADCAST_RELAYS],
   communityRelays: [...COMMUNITY_RELAYS],
-  searchRelays: [...APP_RELAYS],
+  searchRelays: [...SEARCH_RELAYS],
   preferredVoiceServer: getPreferredVoiceServer(),
   automaticSettingsSync: true,
   useAppRelays: true,

@@ -126,14 +126,20 @@ function relayList(value: string): string[] {
 export const DEPLOYMENT_RELAYS: string[] = relayList(config("RELAYS") ?? "");
 const OWN_RELAYS = DEPLOYMENT_RELAYS.length > 0;
 
+/** Armada's public relays: the only defaults that answer NIP-50 search. */
+const PUBLIC_RELAYS = relayList("wss://relay.ditto.pub,wss://relay.dreamith.to");
+
 /**
  * Default app relays (Ditto's concept) for non-NIP-29 traffic: profiles, 10009
- * lists, etc. Group events go directly to their host. Seeds `AppConfig.appRelays`
- * and, the same list, `AppConfig.searchRelays`.
+ * lists, etc. Group events go directly to their host. Seeds `AppConfig.appRelays`.
+ * Includes the CORD stock set, so an account's home is where its communities are.
  */
 export const APP_RELAYS: string[] = OWN_RELAYS
   ? DEPLOYMENT_RELAYS
-  : relayList("wss://relay.ditto.pub,wss://relay.dreamith.to");
+  : [...new Set([...PUBLIC_RELAYS, ...relayList(STOCK_RELAYS.join(","))])];
+
+/** Default NIP-50 search relays. Seeds `AppConfig.searchRelays`. */
+export const SEARCH_RELAYS: string[] = OWN_RELAYS ? DEPLOYMENT_RELAYS : PUBLIC_RELAYS;
 
 /**
  * Write-only relays for general pool traffic: published to for reach, never

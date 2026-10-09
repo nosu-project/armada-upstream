@@ -2,7 +2,7 @@ import { generateSecretKey, getPublicKey, verifyEvent } from "nostr-tools";
 import { describe, expect, it } from "vitest";
 
 import { APP_BLOSSOM_SERVERS } from "@/lib/blossom";
-import { APP_RELAYS, DM_INBOX_RELAYS, RELAY_LIST_DISCOVERY_RELAYS } from "@/lib/platform";
+import { APP_RELAYS, DM_INBOX_RELAYS, RELAY_LIST_DISCOVERY_RELAYS, SEARCH_RELAYS } from "@/lib/platform";
 import { buildSignupLists, defaultSignupSetup, type SignupSetup } from "@/lib/signupLists";
 
 const HOME = ["wss://home.example"];
@@ -35,10 +35,10 @@ describe("defaultSignupSetup", () => {
     });
   });
 
-  it("falls back to the app relays for no home relays and no search relays", () => {
+  it("falls back to the app and search defaults for empty home and search lists", () => {
     const defaults = defaultSignupSetup([], { ...CONFIG, searchRelays: [] });
     expect(defaults.home).toEqual(APP_RELAYS);
-    expect(defaults.search).toEqual(APP_RELAYS);
+    expect(defaults.search).toEqual(SEARCH_RELAYS);
   });
 });
 

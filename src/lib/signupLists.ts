@@ -2,7 +2,7 @@ import { finalizeEvent } from "nostr-tools";
 
 import { APP_BLOSSOM_SERVERS, normalizeBlossomServerUrl } from "@/lib/blossom";
 import { KIND_RELAY_LIST, uniqueRelayUrls } from "@/lib/nip65";
-import { APP_RELAYS, DM_INBOX_RELAYS, RELAY_LIST_DISCOVERY_RELAYS } from "@/lib/platform";
+import { APP_RELAYS, DM_INBOX_RELAYS, RELAY_LIST_DISCOVERY_RELAYS, SEARCH_RELAYS } from "@/lib/platform";
 import { KIND_BLOSSOM_SERVERS, KIND_DM_RELAYS, KIND_SEARCH_RELAYS } from "@/lib/selfSyncKinds";
 
 import type { NostrEvent } from "@nostrify/nostrify";
@@ -47,7 +47,7 @@ export function defaultSignupSetup(
   return {
     home: homeRelays,
     dm: uniqueRelayUrls([...homeRelays, ...DM_INBOX_RELAYS]),
-    search: uniqueRelayUrls(config.searchRelays.length > 0 ? config.searchRelays : APP_RELAYS),
+    search: uniqueRelayUrls(config.searchRelays.length > 0 ? config.searchRelays : SEARCH_RELAYS),
     blossom: [...APP_BLOSSOM_SERVERS],
     community: uniqueRelayUrls(config.communityRelays),
     broadcast: uniqueRelayUrls(config.broadcastRelays),

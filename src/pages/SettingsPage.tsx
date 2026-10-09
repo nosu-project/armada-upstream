@@ -72,7 +72,7 @@ import { useSearchRelayList } from "@/hooks/useSearchRelayList";
 import { toast } from "@/hooks/useToast";
 import { isDesktop } from "@/lib/desktop";
 import { APP_BLOSSOM_SERVERS, uploadTargets } from "@/lib/blossom";
-import { APP_RELAYS, BROADCAST_RELAYS, COMMUNITY_RELAYS } from "@/lib/platform";
+import { APP_RELAYS, BROADCAST_RELAYS, COMMUNITY_RELAYS, SEARCH_RELAYS } from "@/lib/platform";
 import {
   getAudioProcessing,
   setAudioProcessing,
@@ -594,7 +594,7 @@ export function SettingsPage({
                   <RelayListEditor
                     relays={config.searchRelays}
                     onChange={setSearchRelays}
-                    onReset={() => setSearchRelays([...APP_RELAYS])}
+                    onReset={() => setSearchRelays([...SEARCH_RELAYS])}
                     emptyText="No search relays. Search uses your app relays."
                   />
                 </SettingsRow>
