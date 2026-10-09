@@ -256,4 +256,16 @@ describe("installing a bundle", () => {
     // The pointer and ETag files are not bundles.
     expect(fs.existsSync(path.join(space.bundlesDir, BUNDLE_POINTER))).toBe(true);
   });
+
+  it("keeps every bundle it is told to, ignoring a null id", () => {
+    const space = workspace({ current: ID_B, bundles: { [ID_A]: {}, [ID_B]: {} } });
+    pruneBundles(space.bundlesDir, [ID_B, ID_A, null]);
+
+    expect(fs.existsSync(path.join(space.bundlesDir, ID_A))).toBe(true);
+    expect(fs.existsSync(path.join(space.bundlesDir, ID_B))).toBe(true);
+
+    pruneBundles(space.bundlesDir, null);
+    expect(fs.existsSync(path.join(space.bundlesDir, ID_A))).toBe(false);
+    expect(fs.existsSync(path.join(space.bundlesDir, ID_B))).toBe(false);
+  });
 });

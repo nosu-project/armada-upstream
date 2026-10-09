@@ -170,7 +170,9 @@ async function updateWebBundle({ bundlesDir, bundle, activeId, shellVersion, fet
   }
   commitBundle(bundlesDir, id, null, shellVersion);
   writeBundleManifestAt(bundlesDir, bundle.createdAt);
-  pruneBundles(bundlesDir, id);
+  // The window is still serving `activeId` until the restart; the startup
+  // prune in main.js removes it once nothing is reading from it.
+  pruneBundles(bundlesDir, [id, activeId]);
   return { result: "installed", id };
 }
 

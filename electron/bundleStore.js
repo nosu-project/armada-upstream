@@ -202,8 +202,16 @@ function commitBundle(bundlesDir, id, etag, shellVersion) {
   else fs.rmSync(path.join(bundlesDir, BUNDLE_SHELL_VERSION), { force: true });
 }
 
-/** Remove every bundle except the active one. */
-function pruneBundles(bundlesDir, keepId) {
+/**
+ * Remove every bundle not named in `keepIds`.
+ *
+ * A running shell keeps serving the bundle it booted from until it restarts,
+ * so a mid-session install must keep that one as well as the new one —
+ * deleting it out from under the window 404s every lazy chunk and, on the
+ * chunk-reload that follows, index.html itself.
+ */
+function pruneBundles(bundlesDir, keepIds) {
+  const keep = new Set([keepIds].flat().filter(Boolean));
   let entries;
   try {
     entries = fs.readdirSync(bundlesDir, { withFileTypes: true });
@@ -211,7 +219,7 @@ function pruneBundles(bundlesDir, keepId) {
     return;
   }
   for (const entry of entries) {
-    if (!entry.isDirectory() || entry.name === keepId) continue;
+    if (!entry.isDirectory() || keep.has(entry.name)) continue;
     if (!CONTENT_ID.test(entry.name)) continue;
     fs.rmSync(path.join(bundlesDir, entry.name), { recursive: true, force: true });
   }
