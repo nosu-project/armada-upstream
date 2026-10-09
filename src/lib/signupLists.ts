@@ -1,11 +1,12 @@
 import { finalizeEvent } from "nostr-tools";
 
-import { APP_BLOSSOM_SERVERS } from "@/lib/blossom";
+import { APP_BLOSSOM_SERVERS, normalizeBlossomServerUrl } from "@/lib/blossom";
 import { KIND_RELAY_LIST, uniqueRelayUrls } from "@/lib/nip65";
 import { APP_RELAYS, DM_INBOX_RELAYS, RELAY_LIST_DISCOVERY_RELAYS } from "@/lib/platform";
 import { KIND_BLOSSOM_SERVERS, KIND_DM_RELAYS, KIND_SEARCH_RELAYS } from "@/lib/selfSyncKinds";
 
 import type { NostrEvent } from "@nostrify/nostrify";
+import type { AppConfig } from "@/contexts/AppContext";
 
 /** One signed list and the relays it is published to. */
 export interface SignupListEvent {
@@ -15,21 +16,67 @@ export interface SignupListEvent {
 
 export interface SignupLists {
   events: SignupListEvent[];
-  /** The new account's scoped config, mirroring the lists so they apply before any relay read. */
+  /** The new account's config, mirroring the lists so they apply before any relay read. */
   configSeed: Record<string, unknown>;
+  /** Home relays plus the indexers: where another client looks the account up. */
+  discoverable: string[];
+}
+
+/** Every relay and server list a new account starts with, as the signup step edits them. */
+export interface SignupSetup {
+  /** NIP-65 (10002) and app relays: account data. */
+  home: string[];
+  /** NIP-17 DM inbox (10050). */
+  dm: string[];
+  /** NIP-50 search (10007). */
+  search: string[];
+  /** BUD-03 Blossom servers (10063), primary first. */
+  blossom: string[];
+  /** Defaults for communities the account creates (synced setting, no list event). */
+  community: string[];
+  /** Write-only public reach (synced setting, no list event). */
+  broadcast: string[];
+}
+
+/** The setup a new account gets when nothing is changed. `home` is the join link's or app relays. */
+export function defaultSignupSetup(
+  home: string[],
+  config: Pick<AppConfig, "searchRelays" | "communityRelays" | "broadcastRelays">,
+): SignupSetup {
+  const homeRelays = uniqueRelayUrls(home.length > 0 ? home : APP_RELAYS);
+  return {
+    home: homeRelays,
+    dm: uniqueRelayUrls([...homeRelays, ...DM_INBOX_RELAYS]),
+    search: uniqueRelayUrls(config.searchRelays.length > 0 ? config.searchRelays : APP_RELAYS),
+    blossom: [...APP_BLOSSOM_SERVERS],
+    community: uniqueRelayUrls(config.communityRelays),
+    broadcast: uniqueRelayUrls(config.broadcastRelays),
+  };
+}
+
+function uniqueServers(servers: string[]): string[] {
+  const out: string[] = [];
+  for (const raw of servers) {
+    const url = normalizeBlossomServerUrl(raw);
+    if (url && !out.includes(url)) out.push(url);
+  }
+  return out;
 }
 
 /**
- * The relay and media lists every new account starts with: NIP-65 (10002),
- * NIP-17 DM inbox (10050), NIP-50 search (10007) and BUD-03 Blossom (10063).
- * Only for a key the signup flow generated itself — such a key provably has no
- * list anywhere to overwrite, which is the whole of why publishing is allowed.
+ * Signs the new account's lists — NIP-65 (10002), DM inbox (10050), search
+ * (10007), Blossom (10063) — and seeds every list into its config. Only for a
+ * key the signup flow generated itself: such a key provably has no list
+ * anywhere to overwrite, which is the whole of why publishing is allowed. An
+ * emptied list is honoured (nothing published) except `home`, which falls back
+ * to the app relays since an account must live somewhere.
  */
-export function buildSignupLists(sk: Uint8Array, homeRelays: string[]): SignupLists {
-  const home = uniqueRelayUrls(homeRelays);
-  const dm = uniqueRelayUrls([...home, ...DM_INBOX_RELAYS]);
-  const search = uniqueRelayUrls(APP_RELAYS);
-  const blossom = [...APP_BLOSSOM_SERVERS];
+export function buildSignupLists(sk: Uint8Array, setup: SignupSetup): SignupLists {
+  const chosenHome = uniqueRelayUrls(setup.home);
+  const home = chosenHome.length > 0 ? chosenHome : uniqueRelayUrls(APP_RELAYS);
+  const dm = uniqueRelayUrls(setup.dm);
+  const search = uniqueRelayUrls(setup.search);
+  const blossom = uniqueServers(setup.blossom);
   const created_at = Math.floor(Date.now() / 1000);
   const sign = (kind: number, tags: string[][]) =>
     finalizeEvent({ kind, created_at, tags, content: "" }, sk);
@@ -38,7 +85,13 @@ export function buildSignupLists(sk: Uint8Array, homeRelays: string[]): SignupLi
   const discoverable = uniqueRelayUrls([...home, ...RELAY_LIST_DISCOVERY_RELAYS]);
 
   const events: SignupListEvent[] = [];
-  const configSeed: Record<string, unknown> = { appRelays: home };
+  const configSeed: Record<string, unknown> = {
+    appRelays: home,
+    dmRelays: dm,
+    searchRelays: search,
+    communityRelays: uniqueRelayUrls(setup.community),
+    broadcastRelays: uniqueRelayUrls(setup.broadcast),
+  };
 
   if (home.length > 0) {
     const relayList = sign(KIND_RELAY_LIST, home.map((url) => ["r", url]));
@@ -52,11 +105,9 @@ export function buildSignupLists(sk: Uint8Array, homeRelays: string[]): SignupLi
   }
   if (dm.length > 0) {
     events.push({ event: sign(KIND_DM_RELAYS, dm.map((url) => ["relay", url])), relays: discoverable });
-    configSeed.dmRelays = dm;
   }
   if (search.length > 0) {
     events.push({ event: sign(KIND_SEARCH_RELAYS, search.map((url) => ["relay", url])), relays: home });
-    configSeed.searchRelays = search;
   }
   if (blossom.length > 0) {
     const blossomList = sign(KIND_BLOSSOM_SERVERS, blossom.map((url) => ["server", url]));
@@ -67,5 +118,5 @@ export function buildSignupLists(sk: Uint8Array, homeRelays: string[]): SignupLi
       eventId: blossomList.id,
     };
   }
-  return { events, configSeed };
+  return { events, configSeed, discoverable };
 }

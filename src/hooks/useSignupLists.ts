@@ -1,42 +1,46 @@
 import { useNostr } from "@nostrify/react";
 import { nip19 } from "nostr-tools";
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback } from "react";
 
-import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useAppContext } from "@/hooks/useAppContext";
 import { APP_CONFIG_STORAGE_KEY, seedAccountConfig } from "@/lib/activeAccount";
-import { publishSignedEventToRelays } from "@/lib/nip65";
-import { buildSignupLists, type SignupListEvent } from "@/lib/signupLists";
+import { publishSignedEventToRelays, uniqueRelayUrls } from "@/lib/nip65";
+import { buildSignupLists, type SignupSetup } from "@/lib/signupLists";
+
+import type { NostrEvent } from "@nostrify/nostrify";
 
 /**
- * Seeds a freshly generated account with its default lists ({@link buildSignupLists}).
- * `prepare` runs BEFORE login: it signs the lists and seeds the account's scoped
- * config (`updateConfig` still points at the outgoing account then). They are
- * published once the new account is active, so NIP-42 AUTH relays get its signer.
+ * A freshly generated account's lists ({@link buildSignupLists}), in two parts.
+ * `seed` runs BEFORE login and only points the account at its home relays
+ * (`updateConfig` still names the outgoing account then), so the profile step
+ * publishes there. `publish` runs from the relay step, after login, so NIP-42
+ * AUTH relays get the new signer; it re-sends the profile to the chosen relays.
  */
-export function useSignupLists(): (pubkey: string, nsec: string, homeRelays: string[]) => void {
+export function useSignupLists() {
   const { nostr } = useNostr();
-  const { user } = useCurrentUser();
-  const pending = useRef<{ pubkey: string; events: SignupListEvent[] } | null>(null);
+  const { updateConfig } = useAppContext();
 
-  useEffect(() => {
-    const queued = pending.current;
-    if (!queued || user?.pubkey !== queued.pubkey) return;
-    pending.current = null;
-    for (const { event, relays } of queued.events) {
+  const seed = useCallback((pubkey: string, homeRelays: string[]) => {
+    seedAccountConfig(APP_CONFIG_STORAGE_KEY, pubkey, { appRelays: homeRelays });
+  }, []);
+
+  const publish = useCallback((nsec: string, setup: SignupSetup, profile?: NostrEvent) => {
+    let built: ReturnType<typeof buildSignupLists>;
+    try {
+      built = buildSignupLists(nip19.decode(nsec).data as Uint8Array, setup);
+    } catch {
+      return; // best effort; the account still works on its home relays
+    }
+    const { events, configSeed, discoverable } = built;
+    updateConfig((current) => ({ ...current, ...configSeed }));
+    for (const { event, relays } of events) {
       void publishSignedEventToRelays(nostr, event, relays, 8_000);
     }
-  }, [user?.pubkey, nostr]);
-
-  return useCallback((pubkey: string, nsec: string, homeRelays: string[]) => {
-    let seed: Record<string, unknown> = { appRelays: homeRelays };
-    try {
-      const sk = nip19.decode(nsec).data as Uint8Array;
-      const { events, configSeed } = buildSignupLists(sk, homeRelays);
-      pending.current = { pubkey, events };
-      seed = configSeed;
-    } catch {
-      // best effort; the account still works on the app relays
+    if (profile) {
+      const reach = uniqueRelayUrls([...discoverable, ...(configSeed.broadcastRelays as string[])]);
+      void publishSignedEventToRelays(nostr, profile, reach, 8_000);
     }
-    seedAccountConfig(APP_CONFIG_STORAGE_KEY, pubkey, seed);
-  }, []);
+  }, [nostr, updateConfig]);
+
+  return { seed, publish };
 }

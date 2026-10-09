@@ -1,11 +1,13 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
+
+import type { NostrEvent } from "@nostrify/nostrify";
 
 import { ArmadaIdentity } from "@/components/brand/ArmadaCrest";
 import { ProfileStepBody } from "@/components/onboarding/ProfileStep";
 import { WizardShell } from "@/components/onboarding/WizardShell";
 import {
-  GenerateStepBody,
+  RelayStepBody,
   SaveKeyStepBody,
   useSignupKey,
 } from "@/components/onboarding/signupSteps";
@@ -16,21 +18,21 @@ import { suppressNextSyncGate } from "@/hooks/useFreshLogin";
 import { setOnboardingActive } from "@/hooks/useOnboarding";
 import { useSignupLists } from "@/hooks/useSignupLists";
 import { clearPendingJoin, peekPendingJoin, type JoinLink } from "@/lib/joinLink";
-import { uniqueRelayUrls } from "@/lib/nip65";
+import { defaultSignupSetup } from "@/lib/signupLists";
 import { markNotificationSettingsReady } from "@/lib/notificationSettingsAuthority";
 import { markRelayRecoveryPromptShown } from "@/lib/relayRecoveryPrompt";
 import { useLoginActions } from "@/hooks/useLoginActions";
 import { toast } from "@/hooks/useToast";
 
 /**
- * Full-page account-creation wizard (Ditto-style): generate key → save it
- * (Continue only after a successful backup) → profile (skippable). Step bodies
+ * Full-page account-creation wizard (Ditto-style): save the minted key
+ * (Continue only after a backup) → profile (skippable) → relays. Step bodies
  * are shared with {@link SignupDialog} (`signupSteps.tsx`); this adds the
- * progress bar, a `/join` referral confirmation (whose relays become the home
- * relays the default lists name), and an exit onto /discover. Lazy-loaded: the landing doesn't need its deps.
+ * progress bar, a `/join` confirmation (whose relays become the home relays)
+ * and an exit onto /discover. Lazy-loaded: the landing doesn't need its deps.
  */
 
-const WIZARD_STEPS = ["generate", "download", "profile"] as const;
+const WIZARD_STEPS = ["download", "profile", "relays"] as const;
 type WizardStep = (typeof WIZARD_STEPS)[number];
 
 /** The shared wizard chrome, positioned within this wizard's step sequence. */
@@ -71,7 +73,7 @@ export function SignupWizard({ onExit }: SignupWizardProps) {
   // confirmation screen precedes key generation.
   const [join, setJoin] = useState<JoinLink | undefined>(() => peekPendingJoin());
   // `null` is the join confirmation step.
-  const [step, setStep] = useState<WizardStep | null>(() => (peekPendingJoin() ? null : "generate"));
+  const [step, setStep] = useState<WizardStep | null>(() => (peekPendingJoin() ? null : "download"));
   const dismissJoin = () => {
     clearPendingJoin();
     setJoin(undefined);
@@ -80,19 +82,22 @@ export function SignupWizard({ onExit }: SignupWizardProps) {
   // Keeps the save step rendered while `login.nsec` persists (otherwise
   // neither branch matches and nothing renders).
   const [loggingIn, setLoggingIn] = useState(false);
+  // Home relays are the join link's, else the app's; the rest follow the app defaults.
+  const [defaultSetup] = useState(() => defaultSignupSetup(join ? join.relays : config.appRelays, config));
+  const [setup, setSetup] = useState(defaultSetup);
 
   // Clear on any exit; it's set synchronously at login (handleContinue) to beat the race.
   useEffect(() => () => setOnboardingActive(false), []);
 
-  const prepareSignupLists = useSignupLists();
+  const signupLists = useSignupLists();
+  // The profile step's kind 0, re-sent to the relays chosen after it.
+  const profileRef = useRef<NostrEvent | undefined>(undefined);
 
-  const handleGenerate = () => {
-    signupKey.generate();
-    setStep("download");
-  };
-
-  // Exit onto Discover: browsing live communities beats a blank create form.
+  // The ONE exception to never-auto-publish: a key minted moments ago has
+  // provably no existing list to overwrite. Closing counts as accepting the
+  // lists shown. Then exit onto Discover: browsing live communities beats a blank form.
   const finishOnboarding = () => {
+    signupLists.publish(signupKey.nsec, setup, profileRef.current);
     navigate("/discover");
   };
 
@@ -110,12 +115,10 @@ export function SignupWizard({ onExit }: SignupWizardProps) {
       markNotificationSettingsReady(identity.pubkey);
     }
 
-    const homeRelays = uniqueRelayUrls(join ? join.relays : config.appRelays);
     if (join) clearPendingJoin();
 
-    // The ONE exception to never-auto-publish: a key minted moments ago has
-    // provably no existing list to overwrite. Must never run for existing keys.
-    if (identity) prepareSignupLists(identity.pubkey, nsec, homeRelays);
+    // Home relays only, so the profile step publishes there; the lists follow the relay step.
+    if (identity) signupLists.seed(identity.pubkey, defaultSetup.home);
 
     // Set BEFORE login so the first commit exposing the user already suppresses
     // the web-push opt-in and native notification step.
@@ -139,19 +142,11 @@ export function SignupWizard({ onExit }: SignupWizardProps) {
     setStep("profile");
   };
 
-  if (!user && step === "generate") {
-    return (
-      <SignupShell step="generate" onBack={onExit} onClose={onExit}>
-        <GenerateStepBody onGenerate={handleGenerate} />
-      </SignupShell>
-    );
-  }
-
   if (!user && step === "download") {
     return (
       <SignupShell
         step="download"
-        onBack={() => setStep("generate")}
+        onBack={onExit}
         onClose={onExit}
       >
         <SaveKeyStepBody signupKey={signupKey} loggingIn={loggingIn} onContinue={handleContinue} />
@@ -159,13 +154,27 @@ export function SignupWizard({ onExit }: SignupWizardProps) {
     );
   }
 
-  // No back arrow: the account exists now, and back would loop.
+  // No back arrow on either: the account exists now, and back would loop.
   if (user && step === "profile") {
     return (
-      <SignupShell step="profile" onClose={onExit}>
+      <SignupShell step="profile" onClose={finishOnboarding}>
         <ProfileStepBody
           expectedPubkey={signupKey.identity?.pubkey}
-          onFinish={finishOnboarding}
+          onPublished={(event) => { profileRef.current = event; }}
+          onFinish={() => setStep("relays")}
+        />
+      </SignupShell>
+    );
+  }
+
+  if (user && step === "relays") {
+    return (
+      <SignupShell step="relays" onClose={finishOnboarding}>
+        <RelayStepBody
+          setup={setup}
+          defaults={defaultSetup}
+          onChange={setSetup}
+          onContinue={finishOnboarding}
         />
       </SignupShell>
     );
@@ -201,7 +210,7 @@ export function SignupWizard({ onExit }: SignupWizardProps) {
             <Button
               size="lg"
               className="h-12 w-full clip-corner-lg text-base font-medium"
-              onClick={() => setStep("generate")}
+              onClick={() => setStep("download")}
             >
               Create my account
             </Button>

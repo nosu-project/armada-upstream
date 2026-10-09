@@ -14,7 +14,6 @@ export function RelayLed({ url, phase: phaseIndex, className }: { url: string; p
   return <StatusLed alive={alive} url={url} phase={phaseIndex} noun="Relay" className={className} />;
 }
 
-/** Blossom server status light; see {@link StatusLed}. */
 export function BlossomLed({ url, className }: { url: string; className?: string }) {
   const alive = useBlossomReachable(url);
   return <StatusLed alive={alive} url={url} noun="Server" className={className} />;

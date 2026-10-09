@@ -1,9 +1,11 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
+
+import type { NostrEvent } from '@nostrify/nostrify';
 
 import { ProfileStepBody } from '@/components/onboarding/ProfileStep';
 import { WizardShell } from '@/components/onboarding/WizardShell';
 import {
-  GenerateStepBody,
+  RelayStepBody,
   SaveKeyStepBody,
   useSignupKey,
 } from '@/components/onboarding/signupSteps';
@@ -11,7 +13,7 @@ import { useAppContext } from '@/hooks/useAppContext';
 import { useCurrentUser } from '@/hooks/useCurrentUser';
 import { useLoginActions } from '@/hooks/useLoginActions';
 import { useSignupLists } from '@/hooks/useSignupLists';
-import { uniqueRelayUrls } from '@/lib/nip65';
+import { defaultSignupSetup } from '@/lib/signupLists';
 import { suppressNextSyncGate } from '@/hooks/useFreshLogin';
 import { setOnboardingActive } from '@/hooks/useOnboarding';
 import { toast } from '@/hooks/useToast';
@@ -37,14 +39,22 @@ const SignupDialog: React.FC<SignupDialogProps> = ({ isOpen, onClose, onComplete
   const { user } = useCurrentUser();
   const signupKey = useSignupKey();
   const { config } = useAppContext();
-  const prepareSignupLists = useSignupLists();
-  const [step, setStep] = useState<'generate' | 'download' | 'profile'>('generate');
+  const signupLists = useSignupLists();
+  const [step, setStep] = useState<'download' | 'profile' | 'relays'>('download');
+  const [defaultSetup, setDefaultSetup] = useState(() => defaultSignupSetup(config.appRelays, config));
+  const [setup, setSetup] = useState(defaultSetup);
+  // The profile step's kind 0, re-sent to the relays chosen after it.
+  const profileRef = useRef<NostrEvent | undefined>(undefined);
   // Prevents a second tap from starting a second login for the same key.
   const [loggingIn, setLoggingIn] = useState(false);
 
   useEffect(() => {
     if (!isOpen) return;
-    setStep('generate');
+    setStep('download');
+    const fresh = defaultSignupSetup(config.appRelays, config);
+    setDefaultSetup(fresh);
+    setSetup(fresh);
+    profileRef.current = undefined;
     setLoggingIn(false);
     signupKey.reset();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -52,11 +62,6 @@ const SignupDialog: React.FC<SignupDialogProps> = ({ isOpen, onClose, onComplete
 
   // Backstop for an unmount that skips finishOnboarding.
   useEffect(() => () => setOnboardingActive(false), []);
-
-  const handleGenerate = () => {
-    signupKey.generate();
-    setStep('download');
-  };
 
   // Only reachable once the key is backed up. Awaited: the profile step renders
   // on `user`, and a rejected persist must be handled.
@@ -69,8 +74,8 @@ const SignupDialog: React.FC<SignupDialogProps> = ({ isOpen, onClose, onComplete
       suppressNextSyncGate(identity.pubkey);
       markRelayRecoveryPromptShown(identity.pubkey);
       markNotificationSettingsReady(identity.pubkey);
-      // Fresh key only: the sanctioned signup list publish.
-      prepareSignupLists(identity.pubkey, nsec, uniqueRelayUrls(config.appRelays));
+      // Home relays only, so the profile step publishes there; the lists follow the relay step.
+      signupLists.seed(identity.pubkey, defaultSetup.home);
     }
     // BEFORE login, so LoginSetup (z-[260]) never paints over the profile step (z-[255]).
     setOnboardingActive(true);
@@ -90,7 +95,9 @@ const SignupDialog: React.FC<SignupDialogProps> = ({ isOpen, onClose, onComplete
     setStep('profile');
   };
 
+  // Fresh key only: the sanctioned signup list publish. Closing accepts the lists shown.
   const finishOnboarding = () => {
+    signupLists.publish(signupKey.nsec, setup, profileRef.current);
     setOnboardingActive(false);
     onComplete?.();
     onClose();
@@ -98,22 +105,13 @@ const SignupDialog: React.FC<SignupDialogProps> = ({ isOpen, onClose, onComplete
 
   if (!isOpen) return null;
 
-  if (step === 'generate') {
-    return (
-      <WizardShell index={0} total={3} stepKey="generate" zClassName="z-[255]" onClose={onClose}>
-        <GenerateStepBody onGenerate={handleGenerate} />
-      </WizardShell>
-    );
-  }
-
   if (step === 'download') {
     return (
       <WizardShell
-        index={1}
+        index={0}
         total={3}
         stepKey="download"
         zClassName="z-[255]"
-        onBack={() => setStep('generate')}
         onClose={onClose}
       >
         <SaveKeyStepBody signupKey={signupKey} loggingIn={loggingIn} onContinue={handleContinue} />
@@ -121,13 +119,27 @@ const SignupDialog: React.FC<SignupDialogProps> = ({ isOpen, onClose, onComplete
     );
   }
 
-  // No back arrow: the account can't be un-created. Waits for `user` to commit.
+  // No back arrow on either: the account can't be un-created. Both wait for `user` to commit.
   if (step === 'profile' && user) {
     return (
-      <WizardShell index={2} total={3} stepKey="profile" zClassName="z-[255]" onClose={finishOnboarding}>
+      <WizardShell index={1} total={3} stepKey="profile" zClassName="z-[255]" onClose={finishOnboarding}>
         <ProfileStepBody
           expectedPubkey={signupKey.identity?.pubkey}
-          onFinish={finishOnboarding}
+          onPublished={(event) => { profileRef.current = event; }}
+          onFinish={() => setStep('relays')}
+        />
+      </WizardShell>
+    );
+  }
+
+  if (step === 'relays' && user) {
+    return (
+      <WizardShell index={2} total={3} stepKey="relays" zClassName="z-[255]" onClose={finishOnboarding}>
+        <RelayStepBody
+          setup={setup}
+          defaults={defaultSetup}
+          onChange={setSetup}
+          onContinue={finishOnboarding}
         />
       </WizardShell>
     );

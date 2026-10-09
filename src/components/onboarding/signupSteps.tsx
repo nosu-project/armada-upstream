@@ -1,17 +1,25 @@
 import { useMemo, useState, type Dispatch, type SetStateAction } from "react";
-import { AlertTriangle, Check, Copy, Download, Eye } from "lucide-react";
+import { AlertTriangle, Check, ChevronDown, Copy, Download, Eye, Info, Waypoints } from "lucide-react";
 import { generateSecretKey, getPublicKey, nip19 } from "nostr-tools";
 
-import { ArmadaIdentity, ArmadaKey } from "@/components/brand/ArmadaCrest";
+import { ArmadaKey } from "@/components/brand/ArmadaCrest";
+import { BlossomServerListEditor } from "@/components/BlossomServerListEditor";
+import { RelayListEditor } from "@/components/RelayListEditor";
 import { Button } from "@/components/ui/button";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { BlossomLed, RelayLed } from "@/components/RelayLed";
 import { Input } from "@/components/ui/input";
 import { toast } from "@/hooks/useToast";
 import { writeClipboardText } from "@/lib/clipboard";
 import { backUpNsec } from "@/lib/credentialManager";
+import { cn } from "@/lib/utils";
+
+import type { SignupSetup } from "@/lib/signupLists";
 
 /**
  * Shared account-creation parts for {@link SignupWizard} and {@link SignupDialog}:
- * key minting, the backup gate ({@link useSignupKey}) and the key step bodies.
+ * key minting, the backup gate ({@link useSignupKey}) and the key and relay step bodies.
  * Login, chrome and step transitions stay with each consumer.
  */
 
@@ -24,15 +32,17 @@ export interface SignupKey {
   saving: boolean;
   /** True once the key has demonstrably left the screen (Copy, keyring save, or export); reveals Continue. */
   backedUp: boolean;
-  generate: () => void;
   copyKey: () => Promise<void>;
   saveKey: () => Promise<void>;
-  /** Return to a pristine, key-less state (the dialog reuses one instance). */
+  /** Start over with a fresh, un-backed-up key (the dialog reuses one instance). */
   reset: () => void;
 }
 
+const mintNsec = () => nip19.nsecEncode(generateSecretKey());
+
+/** Mints the key on mount: it stays on this device until a login uses it. */
 export function useSignupKey(): SignupKey {
-  const [nsec, setNsec] = useState("");
+  const [nsec, setNsec] = useState(mintNsec);
   const [showKey, setShowKey] = useState(false);
   const [copied, setCopied] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -50,15 +60,8 @@ export function useSignupKey(): SignupKey {
     }
   }, [nsec]);
 
-  const generate = () => {
-    setNsec(nip19.nsecEncode(generateSecretKey()));
-    setShowKey(false);
-    setCopied(false);
-    setBackedUp(false);
-  };
-
   const reset = () => {
-    setNsec("");
+    setNsec(mintNsec());
     setShowKey(false);
     setCopied(false);
     setSaving(false);
@@ -130,50 +133,16 @@ export function useSignupKey(): SignupKey {
     copied,
     saving,
     backedUp,
-    generate,
     copyKey,
     saveKey,
     reset,
   };
 }
 
-/** Step 1 body. ToS is a plain anchor: a mid-wizard route change isn't safe, and /terms exists everywhere. */
-export function GenerateStepBody({ onGenerate }: { onGenerate: () => void }) {
-  return (
-    <div className="flex flex-col items-center gap-8 text-center">
-      <ArmadaIdentity size={110} />
-      <div className="space-y-2.5">
-        <h1 className="font-mono text-2xl font-bold lowercase tracking-tight text-foreground">
-          create your account
-        </h1>
-        <p className="text-sm leading-relaxed text-muted-foreground">
-          Your identity is a secret key that lives on your device.
-          There's no email or password.
-        </p>
-      </div>
-      <div className="w-full space-y-3">
-        <Button
-          size="lg"
-          className="h-12 w-full clip-corner-lg text-base font-medium"
-          onClick={onGenerate}
-        >
-          Generate my key
-        </Button>
-        <p className="text-xs leading-relaxed text-muted-foreground">
-          By creating an account, you agree to the{" "}
-          <a href="/terms" className="text-primary hover:underline">
-            Terms of Service
-          </a>
-          .
-        </p>
-      </div>
-    </div>
-  );
-}
-
 /**
- * Step 2 body: back the key up. Continue is ABSENT (not disabled) until backed
- * up, with its space reserved so nothing moves when it fades in.
+ * Step 1 body: back up the already-minted key. Continue is ABSENT (not disabled)
+ * until backed up, with its space reserved so nothing moves when it fades in.
+ * ToS is a plain anchor: a mid-wizard route change isn't safe, and /terms exists everywhere.
  */
 export function SaveKeyStepBody({
   signupKey,
@@ -187,10 +156,15 @@ export function SaveKeyStepBody({
   const { nsec, showKey, setShowKey, copied, saving, backedUp, copyKey, saveKey } = signupKey;
   return (
     <div className="flex flex-col items-center gap-6 text-center">
-      <ArmadaKey size={110} />
-      <h1 className="font-mono text-2xl font-bold lowercase tracking-tight text-foreground">
-        save your secret key
-      </h1>
+      <ArmadaKey size={96} />
+      <div className="space-y-2">
+        <h1 className="font-mono text-2xl font-bold lowercase tracking-tight text-foreground">
+          save your secret key
+        </h1>
+        <p className="text-sm leading-relaxed text-muted-foreground">
+          This key is your account. There's no email or password.
+        </p>
+      </div>
 
       <div className="w-full clip-corner-lg bg-destructive/10 p-3.5 text-left">
         <div className="flex items-start gap-2.5">
@@ -270,9 +244,150 @@ export function SaveKeyStepBody({
             </Button>
           )}
         </div>
+        <p className="text-xs leading-relaxed text-muted-foreground">
+          By creating an account, you agree to the{" "}
+          <a href="/terms" className="text-primary hover:underline">
+            Terms of Service
+          </a>
+          .
+        </p>
       </div>
     </div>
   );
 }
 
-/* Step 3 is {@link ProfileStepBody} in `./ProfileStep`. */
+const SETUP_ROWS: { field: keyof SignupSetup; label: string; hint: string }[] = [
+  { field: "home", label: "Home", hint: "Stores your profile, follows and settings." },
+  { field: "dm", label: "Messages", hint: "Other apps deliver your direct messages here." },
+  { field: "search", label: "Search", hint: "Used to find people and communities." },
+  { field: "blossom", label: "Media", hint: "Your uploads go here. Links use the first server." },
+  { field: "community", label: "Communities", hint: "Default relays for communities you create." },
+  { field: "broadcast", label: "Broadcast", hint: "Extra relays your public profile is sent to." },
+];
+
+/**
+ * An ⓘ that explains a heading. Opens on hover and on tap, since phones never
+ * hover; drawn above the signup dialog's own layer (`z-[255]`).
+ */
+function InfoTip({ label, hint }: { label: string; hint: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <Tooltip open={open} onOpenChange={setOpen}>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          aria-label={`About ${label}`}
+          className="flex size-8 shrink-0 items-center justify-center text-muted-foreground hover:text-foreground touch:size-11"
+          onClick={() => setOpen((prev) => !prev)}
+        >
+          <Info className="size-3.5" aria-hidden />
+        </button>
+      </TooltipTrigger>
+      <TooltipContent side="top" className="z-[300] max-w-60">{hint}</TooltipContent>
+    </Tooltip>
+  );
+}
+
+function hostOf(url: string): string {
+  return url.replace(/^[a-z]+:\/\//i, "").replace(/\/+$/, "");
+}
+
+/**
+ * Step 3 body: every relay and media server list the new account starts with,
+ * one row each with its first entry's status light. A row opens its editor
+ * (one at a time); Continue accepts everything as listed.
+ */
+export function RelayStepBody({
+  setup,
+  defaults,
+  onChange,
+  onContinue,
+}: {
+  setup: SignupSetup;
+  defaults: SignupSetup;
+  onChange: (setup: SignupSetup) => void;
+  onContinue: () => void;
+}) {
+  const [open, setOpen] = useState<keyof SignupSetup | null>(null);
+  const set = (field: keyof SignupSetup) => (list: string[]) => onChange({ ...setup, [field]: list });
+  return (
+    <TooltipProvider delayDuration={300}>
+      <div className="flex flex-col items-center gap-6 text-center">
+        <Waypoints className="size-16 text-primary" aria-hidden />
+        <div className="space-y-2">
+          <div className="flex items-center justify-center gap-1">
+            <h1 className="font-mono text-2xl font-bold lowercase tracking-tight text-foreground">
+              your relays
+            </h1>
+            <InfoTip
+              label="relays"
+              hint="Relays are servers that store and pass along your profile, messages and lists. You can use any you like, and more than one."
+            />
+          </div>
+          <p className="text-sm leading-relaxed text-muted-foreground">
+            Armada picked these for you. Change any of them now or later in Settings.
+          </p>
+        </div>
+        <div className="w-full clip-corner-lg bg-secondary/40 text-left divide-y divide-background/60">
+          {SETUP_ROWS.map(({ field, label, hint }) => {
+            const list = setup[field];
+            const first = list[0];
+            const expanded = open === field;
+            return (
+              <Collapsible key={field} open={expanded} onOpenChange={(next) => setOpen(next ? field : null)}>
+                <CollapsibleTrigger asChild>
+                  <button type="button" className="flex w-full items-center gap-3 px-3 py-3 text-left touch:min-h-12">
+                    <span className="text-sm font-medium text-foreground">{label}</span>
+                    <span className="ml-auto flex min-w-0 items-center gap-1.5 font-mono text-xs text-muted-foreground">
+                      {first && (field === "blossom" ? <BlossomLed url={first} /> : <RelayLed url={first} />)}
+                      <span className="truncate">
+                        {first ? hostOf(first) : "None"}
+                        {list.length > 1 && ` +${list.length - 1}`}
+                      </span>
+                    </span>
+                    <ChevronDown
+                      className={cn(
+                        "size-4 shrink-0 text-muted-foreground transition-transform duration-200",
+                        expanded && "rotate-180",
+                      )}
+                    />
+                  </button>
+                </CollapsibleTrigger>
+                <CollapsibleContent className="overflow-hidden data-[state=open]:animate-collapsible-down data-[state=closed]:animate-collapsible-up">
+                  <div className="space-y-2 px-3 pb-3">
+                    <p className="text-xs leading-snug text-muted-foreground">{hint}</p>
+                    {field === "blossom" ? (
+                      <BlossomServerListEditor
+                        servers={setup.blossom}
+                        onChange={set("blossom")}
+                        onReset={() => set("blossom")(defaults.blossom)}
+                        emptyText="None. Uploads use Armada's servers."
+                      />
+                    ) : (
+                      <RelayListEditor
+                        relays={list}
+                        onChange={set(field)}
+                        onReset={() => set(field)(defaults[field])}
+                        emptyText={field === "home" ? "None. Continue uses the defaults." : "None."}
+                      />
+                    )}
+                  </div>
+                </CollapsibleContent>
+              </Collapsible>
+            );
+          })}
+        </div>
+        <Button
+          type="button"
+          size="lg"
+          className="h-12 w-full clip-corner-lg text-base font-medium"
+          onClick={onContinue}
+        >
+          Continue
+        </Button>
+      </div>
+    </TooltipProvider>
+  );
+}
+
+/* Step 2 is {@link ProfileStepBody} in `./ProfileStep`. */

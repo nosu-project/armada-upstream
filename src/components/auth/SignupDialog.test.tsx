@@ -1,8 +1,8 @@
 /**
  * `SignupDialog` is the in-app account-creation flow (reached from the
  * "Create account" escape hatch in `LoginScreen`, opened by `JoinButton`,
- * `LoginArea` and `GroupChat`). It now mirrors the landing wizard: generate a
- * key, save it, then a profile step — and it applies the same fresh-account
+ * `LoginArea` and `GroupChat`). It mirrors the landing wizard: save the
+ * minted key, then a profile step — and it applies the same fresh-account
  * suppressions and onboarding flag so the post-login setup flow (`LoginSetup`,
  * including its "restore your setup" relay step, which is external-login
  * recovery UI) never fires over a brand-new signup.
@@ -26,15 +26,35 @@ const h = vi.hoisted(() => ({
   markRelayRecoveryPromptShown: vi.fn<(pubkey: string) => void>(),
   markNotificationSettingsReady: vi.fn<(pubkey: string) => void>(),
   setOnboardingActive: vi.fn<(next: boolean) => void>(),
-  prepareSignupLists: vi.fn<(pubkey: string, nsec: string, homeRelays: string[]) => void>(),
+  seed: vi.fn<(pubkey: string, homeRelays: string[]) => void>(),
+  publish: vi.fn(),
   user: undefined as { pubkey: string } | undefined,
 }));
 
+vi.mock("@/components/RelayListEditor", () => ({
+  RelayListEditor: ({ relays, onChange }: { relays: string[]; onChange: (r: string[]) => void }) => (
+    <div>
+      <p>{relays.join(" ")}</p>
+      <button onClick={() => onChange(["wss://mine.example"])}>Use my relay</button>
+    </div>
+  ),
+}));
 vi.mock("@/hooks/useAppContext", () => ({
-  useAppContext: () => ({ config: { appRelays: ["wss://home.example/"] } }),
+  useAppContext: () => ({
+    config: {
+      appRelays: ["wss://home.example/"],
+      searchRelays: ["wss://search.example"],
+      communityRelays: [],
+      broadcastRelays: [],
+    },
+  }),
 }));
 vi.mock("@/hooks/useSignupLists", () => ({
-  useSignupLists: () => h.prepareSignupLists,
+  useSignupLists: () => ({ seed: h.seed, publish: h.publish }),
+}));
+vi.mock("@/components/RelayLed", () => ({
+  RelayLed: () => null,
+  BlossomLed: () => null,
 }));
 
 vi.mock("@/components/onboarding/WizardShell", () => ({
@@ -83,7 +103,6 @@ import SignupDialog from "@/components/auth/SignupDialog";
  * revealed — so satisfying the gate is: reveal, then copy.
  */
 async function reachContinue() {
-  fireEvent.click(screen.getByRole("button", { name: "Generate my key" }));
   fireEvent.click(await screen.findByRole("button", { name: "Show key" }));
   fireEvent.click(screen.getByRole("button", { name: "Copy key" }));
   await screen.findByRole("button", { name: "Continue" });
@@ -95,7 +114,8 @@ beforeEach(() => {
   h.markRelayRecoveryPromptShown.mockReset();
   h.markNotificationSettingsReady.mockReset();
   h.setOnboardingActive.mockReset();
-  h.prepareSignupLists.mockReset();
+  h.seed.mockReset();
+  h.publish.mockReset();
   h.user = undefined;
 });
 
@@ -106,7 +126,6 @@ describe("SignupDialog account creation", () => {
     // nothing by — and the only way to copy is to reveal the key first, which
     // replaces the eye with a clipboard for good.
     render(<SignupDialog isOpen onClose={vi.fn()} onComplete={vi.fn()} />);
-    fireEvent.click(screen.getByRole("button", { name: "Generate my key" }));
     await screen.findByText("save your secret key");
 
     expect(screen.queryByRole("button", { name: "Continue" })).toBeNull();
@@ -151,7 +170,7 @@ describe("SignupDialog account creation", () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
-  it("dismisses and reports complete when the profile step finishes", async () => {
+  it("dismisses and reports complete when the relay step finishes", async () => {
     h.nsec.mockResolvedValue(undefined);
     const onClose = vi.fn();
     const onComplete = vi.fn();
@@ -163,9 +182,17 @@ describe("SignupDialog account creation", () => {
     fireEvent.click(screen.getByRole("button", { name: "Continue" }));
     await screen.findByText("set up your profile");
 
-    // Skipping the profile step ends onboarding, hands back to the caller, and
-    // dismisses — and lowers the onboarding flag it raised at login.
+    // Skipping the profile leads to the relays; their Continue publishes the lists,
+    // ends onboarding, hands back to the caller, and dismisses.
     fireEvent.click(screen.getByRole("button", { name: "Skip for now" }));
+    await screen.findByText("your relays");
+    expect(onComplete).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    expect(h.publish).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ home: ["wss://home.example"] }),
+      undefined,
+    );
     expect(onComplete).toHaveBeenCalledTimes(1);
     expect(onClose).toHaveBeenCalledTimes(1);
     expect(h.setOnboardingActive).toHaveBeenLastCalledWith(false);
@@ -222,9 +249,10 @@ describe("SignupDialog account creation", () => {
     // The onboarding flag is raised before login so LoginSetup can't paint over
     // the profile step.
     expect(h.setOnboardingActive).toHaveBeenCalledWith(true);
-    // Same default lists as the landing wizard, prepared before login.
-    expect(h.prepareSignupLists).toHaveBeenCalledWith(pubkey, nsecArg, ["wss://home.example"]);
-    expect(h.prepareSignupLists.mock.invocationCallOrder[0])
+    // Home relays are seeded before login; the lists wait for the relay step.
+    expect(h.seed).toHaveBeenCalledWith(pubkey, ["wss://home.example"]);
+    expect(h.seed.mock.invocationCallOrder[0])
       .toBeLessThan(h.nsec.mock.invocationCallOrder[0]);
+    expect(h.publish).not.toHaveBeenCalled();
   });
 });
