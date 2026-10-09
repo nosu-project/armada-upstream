@@ -77,10 +77,10 @@ export function MessageActionSheet({
   }
 
   const react = useCallback(
-    (key: string, url?: string) => {
+    (key: string, url?: string, recorded = false) => {
       if (!reactions) return;
       const input = toggleInput(key, url, reactions.tallies);
-      if (!input.mineEventId) recordReaction(user?.pubkey, input.key, input.emojiUrl);
+      if (!input.mineEventId && !recorded) recordReaction(user?.pubkey, input.key, input.emojiUrl);
       reactions.react(input);
       onOpenChange(false);
     },
@@ -108,8 +108,9 @@ export function MessageActionSheet({
                 customEmojis={customEmojis}
                 onBrowsePacks={() => onOpenChange(false)}
                 onSelect={(selection) => {
-                  if (selection.type === "native") react(selection.emoji);
-                  else react(`:${selection.shortcode}:`, selection.url);
+                  // The picker has already counted it toward the frequent reactions.
+                  if (selection.type === "native") react(selection.emoji, undefined, true);
+                  else react(`:${selection.shortcode}:`, selection.url, true);
                 }}
               />
             </Suspense>

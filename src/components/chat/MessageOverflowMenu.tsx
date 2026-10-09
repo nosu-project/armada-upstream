@@ -2,6 +2,7 @@ import { MoreHorizontal } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { MessageMenuItems } from "@/components/chat/MessageMenuItems";
+import { usePointerOpened } from "@/components/chat/usePointerOpened";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
@@ -9,6 +10,7 @@ import type { MessageActionItem } from "@/components/chat/messageActions";
 
 /** The desktop toolbar's `⋯`: everything not worth a dedicated button. */
 export function MessageOverflowMenu({ actions }: { actions: MessageActionItem[] }) {
+  const pointerOpened = usePointerOpened();
   if (actions.length === 0) return null;
 
   return (
@@ -20,6 +22,7 @@ export function MessageOverflowMenu({ actions }: { actions: MessageActionItem[] 
               variant="ghost"
               size="icon"
               aria-label="More actions"
+              {...pointerOpened.triggerProps}
               className="size-9 md:size-7 touch:size-11 touch:md:size-11 text-muted-foreground hover:text-primary"
             >
               <MoreHorizontal className="size-[18px] md:size-3.5" />
@@ -28,7 +31,7 @@ export function MessageOverflowMenu({ actions }: { actions: MessageActionItem[] 
         </TooltipTrigger>
         <TooltipContent>More actions</TooltipContent>
       </Tooltip>
-      <DropdownMenuContent align="end" className="w-52">
+      <DropdownMenuContent align="end" className="w-52" onCloseAutoFocus={pointerOpened.onCloseAutoFocus}>
         <MessageMenuItems actions={actions} />
       </DropdownMenuContent>
     </DropdownMenu>

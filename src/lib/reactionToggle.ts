@@ -3,6 +3,9 @@ import type { ReactInput, ReactionTally } from "@/hooks/useReactions";
 /** Quick-reaction slots on the desktop hover toolbar. */
 export const QUICK_SLOTS_POINTER = 3;
 
+/** Quick-reaction slots atop the right-click menu (its width, beside the picker button). */
+export const QUICK_SLOTS_MENU = 5;
+
 /** Quick-reaction slots in the touch action sheet (a full row, so more than desktop). */
 export const QUICK_SLOTS_SHEET = 6;
 

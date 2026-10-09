@@ -28,6 +28,7 @@ import {
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { MessageMenuItems } from "@/components/chat/MessageMenuItems";
+import { MenuReactionPicker, MenuReactionRow } from "@/components/chat/MenuReactions";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { LazyContextMenuContent, useLazyContextMenu } from "@/components/chat/LazyContextMenu";
 import { EventJsonDialog } from "@/components/EventJsonDialog";
@@ -483,6 +484,20 @@ const ChatMessageInner = memo(function ChatMessageInner({
     [],
   );
   const contextMenu = useLazyContextMenu();
+  const [menuPickerOpen, setMenuPickerOpen] = useState(false);
+  // Opened once the menu has unmounted: its focus trap outlives the close and
+  // would pull focus back out of the picker, which dismisses it.
+  const menuPickerPending = useRef(false);
+  const openMenuPicker = useCallback(() => {
+    menuPickerPending.current = true;
+  }, []);
+  const closeMenuPicker = useCallback(() => setMenuPickerOpen(false), []);
+  const onMenuCloseAutoFocus = useCallback((e: Event) => {
+    keepActionFocus(e);
+    if (!menuPickerPending.current) return;
+    menuPickerPending.current = false;
+    setMenuPickerOpen(true);
+  }, []);
   const chatScope = useChatScope();
   const reportTo = reportDestination(chatScope);
   // Mesh/proxied identities aren't Nostr pubkeys.
@@ -900,8 +915,8 @@ const ChatMessageInner = memo(function ChatMessageInner({
             continuation && !hasReplyContext && !heading && !isEditing && !isPinned && !mentionsMe
           }
           className={cn(
-            // Keyed on the sheet alone so the highlight can't linger without a menu.
-            sheetOpen && "bg-secondary/40",
+            // Keyed on the open menus alone so the highlight can't linger without one.
+            (sheetOpen || contextMenu.open || menuPickerOpen) && "bg-secondary/40",
             isPinned && "bg-amber-500/5",
             mentionsMe && "bg-primary/10 hover:bg-primary/15 border-l-2 border-primary pl-2",
             isFailed && "bg-destructive/5",
@@ -934,11 +949,17 @@ const ChatMessageInner = memo(function ChatMessageInner({
       <LazyContextMenuContent
         menu={contextMenu}
         className="w-52"
-        onCloseAutoFocus={keepActionFocus}
+        onCloseAutoFocus={onMenuCloseAutoFocus}
         collisionPadding={contextMenu.open ? getComposerCollisionPadding(composerBoundsRef) : undefined}
       >
+        {canWrite && !isEditing && reactions && (
+          <MenuReactionRow reactions={reactions} onOpenPicker={openMenuPicker} />
+        )}
         <MessageMenuItems actions={withImageActions(imageActions, menuActions)} />
       </LazyContextMenuContent>
+    )}
+    {menuPickerOpen && contextMenu.point && reactions && (
+      <MenuReactionPicker point={contextMenu.point} reactions={reactions} onClose={closeMenuPicker} />
     )}
     {isTouch && (sheetOpen || sheetBuilt) && (
       <MessageActionSheet
