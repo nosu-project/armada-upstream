@@ -753,6 +753,7 @@ export function InvitesPage() {
       open={!selected}
       onReveal={() => setSelectedWrapId(undefined)}
       onClose={() => undefined}
+      canClose={false}
       underlay={
         <>
           <ServerRail />

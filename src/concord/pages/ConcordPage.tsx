@@ -3006,6 +3006,7 @@ export function ConcordPage() {
           open: channelsOpen,
           onReveal: () => setChannelsOpen(true),
           onClose: () => setChannelsOpen(false),
+          canClose: !!channel,
           underlay: (
             <>
               {/* No onNavigate: closing this list would flash this community's chat

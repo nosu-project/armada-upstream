@@ -32,6 +32,8 @@ interface SwipeRevealProps {
   open: boolean;
   onReveal: () => void;
   onClose: () => void;
+  /** Whether `onClose` has a pane to return to; false where it would show nothing. */
+  canClose?: boolean;
 }
 
 /**
@@ -40,7 +42,7 @@ interface SwipeRevealProps {
  * committed gesture settles optimistically (`pendingOpen`) with navigation
  * deferred until the settle is on the compositor (`deferCommit`), so release doesn't hitch.
  */
-export function SwipeReveal({ underlay, children, open, onReveal, onClose }: SwipeRevealProps) {
+export function SwipeReveal({ underlay, children, open, onReveal, onClose, canClose = true }: SwipeRevealProps) {
   const isTouch = useIsTouch();
   // Narrow AND touch, so a small desktop window keeps side-by-side panes.
   const [narrow, setNarrow] = useState(
@@ -144,7 +146,8 @@ export function SwipeReveal({ underlay, children, open, onReveal, onClose }: Swi
 
   // Android back reveals the list when the chat is showing (the OS eats in-WebView
   // edge swipes). From the revealed list, back leaves the app by default (it is a
-  // root screen); `androidBackLeavesApp` off hands it to history instead.
+  // root screen); `androidBackLeavesApp` off returns to the chat behind the list,
+  // so back toggles the two and never walks history out of the app.
   const backLeavesApp =
     useContext(AppContext)?.config.androidBackLeavesApp ?? defaultConfig.androidBackLeavesApp;
   useAndroidBack(() => {
@@ -152,7 +155,10 @@ export function SwipeReveal({ underlay, children, open, onReveal, onClose }: Swi
       commitReveal();
       return true;
     }
-    if (!backLeavesApp) return false;
+    if (!backLeavesApp && canClose) {
+      commitClose();
+      return true;
+    }
     leaveApp();
     return true;
   }, swipeEnabled);

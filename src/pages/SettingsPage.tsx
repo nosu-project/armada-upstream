@@ -795,7 +795,7 @@ export function SettingsPage({
             {Capacitor.getPlatform() === "android" && (
               <SettingsRow
                 label="Back leaves the app"
-                description="Off, back steps through recent chats."
+                description="Off, back switches between the channel list and the chat."
               >
                 <Switch
                   checked={config.androidBackLeavesApp}

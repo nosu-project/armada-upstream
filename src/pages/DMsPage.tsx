@@ -2357,6 +2357,11 @@ export function DMsPage() {
   // its `enqueueRoomMessage` key: `dm:<conversationKey>`.
   useActiveRoom(activePeer ? `dm:${activePeer}` : undefined);
 
+  // The last thread opened, which Android back from the list returns to; unlike
+  // `renderedPeer` it outlives the slid-out thread's unmount.
+  const [returnPeer, setReturnPeer] = useState(activePeer);
+  if (activePeer && returnPeer !== activePeer) setReturnPeer(activePeer);
+
   // Lags `activePeer` so the thread stays mounted while sliding out on mobile.
   const [renderedPeer, setRenderedPeer] = useState(activePeer);
   useEffect(() => {
@@ -2692,7 +2697,7 @@ export function DMsPage() {
     return <Navigate to="/" replace />;
   }
   const returnToThread = () => {
-    if (renderedPeer) navigate(chatRoute({ kind: "dm", peer: dmRouteParam(renderedPeer) }));
+    if (returnPeer) navigate(chatRoute({ kind: "dm", peer: dmRouteParam(returnPeer) }));
   };
   const startComposing = () => {
     navigate("/dm");
@@ -2709,6 +2714,7 @@ export function DMsPage() {
         open: listRevealed,
         onReveal: revealList,
         onClose: returnToThread,
+        canClose: !!returnPeer,
         underlay: (
         <>
           <ServerRail />
