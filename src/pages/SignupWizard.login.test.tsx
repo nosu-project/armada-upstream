@@ -2,9 +2,9 @@
  * The page signup wizard's key-save step is the second call site that invokes
  * the now-asynchronous `login.nsec` fire-and-forget.
  *
- * It is the riskier of the two: `handleContinue` stashes a kind-10002 signed
- * with the freshly minted key in `pendingRelayList`, seeds that account's
- * scoped config blob, and then advances the wizard — all on the assumption
+ * It is the riskier of the two: `handleContinue` signs the default lists with
+ * the freshly minted key (`useSignupLists`), seeds that account's scoped
+ * config blob, and then advances the wizard — all on the assumption
  * that the login it just requested is now the active one. Advancing before
  * the login is durable leaves the wizard rendering nothing (the profile step
  * requires `user`), and a rejected persist has no handler at all.
@@ -20,7 +20,7 @@ const h = vi.hoisted(() => ({
   toast: vi.fn(),
 }));
 
-vi.mock("@nostrify/react", () => ({ useNostr: () => ({ nostr: {} }) }));
+vi.mock("@/hooks/useSignupLists", () => ({ useSignupLists: () => vi.fn() }));
 vi.mock("react-router-dom", () => ({ useNavigate: () => vi.fn() }));
 vi.mock("@/components/onboarding/WizardShell", () => ({
   WizardShell: ({ children }: { children: ReactNode }) => <div>{children}</div>,
@@ -38,10 +38,6 @@ vi.mock("@/hooks/useLoginActions", () => ({
 vi.mock("@/hooks/useToast", () => ({ toast: h.toast }));
 vi.mock("@/hooks/useFreshLogin", () => ({ suppressNextSyncGate: vi.fn() }));
 vi.mock("@/hooks/useOnboarding", () => ({ setOnboardingActive: vi.fn() }));
-vi.mock("@/lib/activeAccount", () => ({
-  APP_CONFIG_STORAGE_KEY: "armada:app-config",
-  seedAccountConfig: vi.fn(),
-}));
 vi.mock("@/lib/relayRecoveryPrompt", () => ({ markRelayRecoveryPromptShown: vi.fn() }));
 vi.mock("@/lib/joinLink", () => ({
   peekPendingJoin: () => undefined,

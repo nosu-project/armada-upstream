@@ -26,7 +26,15 @@ const h = vi.hoisted(() => ({
   markRelayRecoveryPromptShown: vi.fn<(pubkey: string) => void>(),
   markNotificationSettingsReady: vi.fn<(pubkey: string) => void>(),
   setOnboardingActive: vi.fn<(next: boolean) => void>(),
+  prepareSignupLists: vi.fn<(pubkey: string, nsec: string, homeRelays: string[]) => void>(),
   user: undefined as { pubkey: string } | undefined,
+}));
+
+vi.mock("@/hooks/useAppContext", () => ({
+  useAppContext: () => ({ config: { appRelays: ["wss://home.example/"] } }),
+}));
+vi.mock("@/hooks/useSignupLists", () => ({
+  useSignupLists: () => h.prepareSignupLists,
 }));
 
 vi.mock("@/components/onboarding/WizardShell", () => ({
@@ -87,6 +95,7 @@ beforeEach(() => {
   h.markRelayRecoveryPromptShown.mockReset();
   h.markNotificationSettingsReady.mockReset();
   h.setOnboardingActive.mockReset();
+  h.prepareSignupLists.mockReset();
   h.user = undefined;
 });
 
@@ -213,5 +222,9 @@ describe("SignupDialog account creation", () => {
     // The onboarding flag is raised before login so LoginSetup can't paint over
     // the profile step.
     expect(h.setOnboardingActive).toHaveBeenCalledWith(true);
+    // Same default lists as the landing wizard, prepared before login.
+    expect(h.prepareSignupLists).toHaveBeenCalledWith(pubkey, nsecArg, ["wss://home.example"]);
+    expect(h.prepareSignupLists.mock.invocationCallOrder[0])
+      .toBeLessThan(h.nsec.mock.invocationCallOrder[0]);
   });
 });

@@ -1,9 +1,5 @@
-import { useNostr } from "@nostrify/react";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
-import { finalizeEvent, nip19 } from "nostr-tools";
-
-import type { NostrEvent } from "@nostrify/nostrify";
 
 import { ArmadaIdentity } from "@/components/brand/ArmadaCrest";
 import { ProfileStepBody } from "@/components/onboarding/ProfileStep";
@@ -18,9 +14,9 @@ import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { suppressNextSyncGate } from "@/hooks/useFreshLogin";
 import { setOnboardingActive } from "@/hooks/useOnboarding";
-import { APP_CONFIG_STORAGE_KEY, seedAccountConfig } from "@/lib/activeAccount";
+import { useSignupLists } from "@/hooks/useSignupLists";
 import { clearPendingJoin, peekPendingJoin, type JoinLink } from "@/lib/joinLink";
-import { publishSignedEventToRelays, uniqueRelayUrls } from "@/lib/nip65";
+import { uniqueRelayUrls } from "@/lib/nip65";
 import { markNotificationSettingsReady } from "@/lib/notificationSettingsAuthority";
 import { markRelayRecoveryPromptShown } from "@/lib/relayRecoveryPrompt";
 import { useLoginActions } from "@/hooks/useLoginActions";
@@ -30,8 +26,8 @@ import { toast } from "@/hooks/useToast";
  * Full-page account-creation wizard (Ditto-style): generate key → save it
  * (Continue only after a successful backup) → profile (skippable). Step bodies
  * are shared with {@link SignupDialog} (`signupSteps.tsx`); this adds the
- * progress bar, a `/join` referral confirmation, the kind-10002 relay-list seed,
- * and an exit onto /discover. Lazy-loaded: the landing doesn't need its deps.
+ * progress bar, a `/join` referral confirmation (whose relays become the home
+ * relays the default lists name), and an exit onto /discover. Lazy-loaded: the landing doesn't need its deps.
  */
 
 const WIZARD_STEPS = ["generate", "download", "profile"] as const;
@@ -68,7 +64,6 @@ export interface SignupWizardProps {
 export function SignupWizard({ onExit }: SignupWizardProps) {
   const { config } = useAppContext();
   const { user } = useCurrentUser();
-  const { nostr } = useNostr();
   const navigate = useNavigate();
   const login = useLoginActions();
   const signupKey = useSignupKey();
@@ -89,15 +84,7 @@ export function SignupWizard({ onExit }: SignupWizardProps) {
   // Clear on any exit; it's set synchronously at login (handleContinue) to beat the race.
   useEffect(() => () => setOnboardingActive(false), []);
 
-  // Relay list for the just-minted key, published post-login so NIP-42 AUTH
-  // relays get the now-active signer. See handleContinue for why it's safe.
-  const pendingRelayList = useRef<{ pubkey: string; event: NostrEvent; relays: string[] } | null>(null);
-  useEffect(() => {
-    const pending = pendingRelayList.current;
-    if (!pending || user?.pubkey !== pending.pubkey) return;
-    pendingRelayList.current = null;
-    void publishSignedEventToRelays(nostr, pending.event, pending.relays, 8_000);
-  }, [user?.pubkey, nostr]);
+  const prepareSignupLists = useSignupLists();
 
   const handleGenerate = () => {
     signupKey.generate();
@@ -124,43 +111,12 @@ export function SignupWizard({ onExit }: SignupWizardProps) {
     }
 
     const homeRelays = uniqueRelayUrls(join ? join.relays : config.appRelays);
-
-    // Seed THIS account's scoped config directly; `updateConfig` still points
-    // at the outgoing account until the login commits.
-    const configSeed: Record<string, unknown> = { appRelays: homeRelays };
-
     if (join) clearPendingJoin();
 
     // The ONE exception to never-auto-publish: a key minted moments ago has
     // provably no existing list to overwrite. Must never run for existing keys.
-    // Signed now; fanned out post-login by the effect above.
-    if (identity && homeRelays.length > 0) {
-      try {
-        const sk = nip19.decode(nsec).data as Uint8Array;
-        const event = finalizeEvent(
-          {
-            kind: 10002,
-            created_at: Math.floor(Date.now() / 1000),
-            tags: homeRelays.map((url) => ["r", url]),
-            content: "",
-          },
-          sk,
-        );
-        pendingRelayList.current = { pubkey: identity.pubkey, event, relays: homeRelays };
-        configSeed.relayMetadata = {
-          relays: homeRelays.map((url) => ({ url, read: true, write: true })),
-          updatedAt: event.created_at,
-          eventId: event.id,
-          pubkey: identity.pubkey,
-        };
-      } catch {
-        // best effort; the account still works on the app relays
-      }
-    }
+    if (identity) prepareSignupLists(identity.pubkey, nsec, homeRelays);
 
-    if (identity) {
-      seedAccountConfig(APP_CONFIG_STORAGE_KEY, identity.pubkey, configSeed);
-    }
     // Set BEFORE login so the first commit exposing the user already suppresses
     // the web-push opt-in and native notification step.
     setOnboardingActive(true);

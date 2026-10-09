@@ -7,8 +7,11 @@ import {
   SaveKeyStepBody,
   useSignupKey,
 } from '@/components/onboarding/signupSteps';
+import { useAppContext } from '@/hooks/useAppContext';
 import { useCurrentUser } from '@/hooks/useCurrentUser';
 import { useLoginActions } from '@/hooks/useLoginActions';
+import { useSignupLists } from '@/hooks/useSignupLists';
+import { uniqueRelayUrls } from '@/lib/nip65';
 import { suppressNextSyncGate } from '@/hooks/useFreshLogin';
 import { setOnboardingActive } from '@/hooks/useOnboarding';
 import { toast } from '@/hooks/useToast';
@@ -25,14 +28,16 @@ interface SignupDialogProps {
 /**
  * In-app account creation (from {@link LoginScreen}'s "Create account"). Shares
  * step bodies with the landing {@link SignupWizard} (`signupSteps.tsx`,
- * `ProfileStep.tsx`) but seeds no relay list and doesn't navigate; it hands
- * back through `onComplete`. A fresh key suppresses the sync gate and
+ * `ProfileStep.tsx`) and the default lists ({@link useSignupLists}) but doesn't
+ * navigate; it hands back through `onComplete`. A fresh key suppresses the sync gate and
  * {@link LoginSetup}'s restore step.
  */
 const SignupDialog: React.FC<SignupDialogProps> = ({ isOpen, onClose, onComplete }) => {
   const login = useLoginActions();
   const { user } = useCurrentUser();
   const signupKey = useSignupKey();
+  const { config } = useAppContext();
+  const prepareSignupLists = useSignupLists();
   const [step, setStep] = useState<'generate' | 'download' | 'profile'>('generate');
   // Prevents a second tap from starting a second login for the same key.
   const [loggingIn, setLoggingIn] = useState(false);
@@ -64,6 +69,8 @@ const SignupDialog: React.FC<SignupDialogProps> = ({ isOpen, onClose, onComplete
       suppressNextSyncGate(identity.pubkey);
       markRelayRecoveryPromptShown(identity.pubkey);
       markNotificationSettingsReady(identity.pubkey);
+      // Fresh key only: the sanctioned signup list publish.
+      prepareSignupLists(identity.pubkey, nsec, uniqueRelayUrls(config.appRelays));
     }
     // BEFORE login, so LoginSetup (z-[260]) never paints over the profile step (z-[255]).
     setOnboardingActive(true);

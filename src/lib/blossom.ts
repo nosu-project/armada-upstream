@@ -13,7 +13,9 @@ const DEPLOYMENT_BLOSSOM_SERVERS: string[] = parseServerList(config("BLOSSOM_SER
 
 export const APP_BLOSSOM_SERVERS: string[] = DEPLOYMENT_BLOSSOM_SERVERS.length > 0
   ? DEPLOYMENT_BLOSSOM_SERVERS
-  : parseServerList("https://blossom.ditto.pub/,https://blossom.dreamith.to/,https://blossom.primal.net/");
+  : parseServerList(
+    "https://blossom.ditto.pub/,https://blossom.dreamith.to/,https://blossom.primal.net/,https://cdn.hzrd149.com/",
+  );
 
 /** The first of a deployment's `BLOSSOM_SERVERS`, or "" for no preference. */
 export const PREFERRED_BLOSSOM_SERVER: string = DEPLOYMENT_BLOSSOM_SERVERS[0] ?? "";

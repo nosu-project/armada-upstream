@@ -143,6 +143,15 @@ export const APP_RELAYS: string[] = OWN_RELAYS
  */
 export const BROADCAST_RELAYS: string[] = OWN_RELAYS ? [] : relayList("wss://relay.primal.net");
 
+/**
+ * AUTH-gated NIP-17 inbox relays a new account's kind 10050 lists beside its
+ * home relays, so DMs survive a single operator going away. None when the
+ * deployment names its own relays.
+ */
+export const DM_INBOX_RELAYS: string[] = OWN_RELAYS
+  ? []
+  : relayList("wss://auth.nostr1.com,wss://relay.0xchat.com");
+
 /** Public NIP-65 indexes used only for a bounded kind-10002 lookup at login. May be empty. */
 export const RELAY_LIST_DISCOVERY_RELAYS: string[] = OWN_RELAYS
   ? []

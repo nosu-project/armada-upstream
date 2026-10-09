@@ -42,6 +42,7 @@ describe("BLOSSOM_SERVERS", () => {
       "https://blossom.ditto.pub/",
       "https://blossom.dreamith.to/",
       "https://blossom.primal.net/",
+      "https://cdn.hzrd149.com/",
     ]);
     expect(PREFERRED_BLOSSOM_SERVER).toBe("");
   });
