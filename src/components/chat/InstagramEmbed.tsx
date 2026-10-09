@@ -1,10 +1,14 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+
+import { useEmbedLiveness } from "@/hooks/useEmbedLiveness";
 
 import { cn } from "@/lib/utils";
 
 interface InstagramEmbedProps {
   shortcode: string;
   className?: string;
+  /** Shown instead when the frame never renders (blocked or unavailable). */
+  fallback: ReactNode;
 }
 
 /**
@@ -12,8 +16,9 @@ interface InstagramEmbedProps {
  * resized from its `{"type":"MEASURE"}` postMessage. Videos show only a poster:
  * inline playback is behind Instagram's login wall.
  */
-export function InstagramEmbed({ shortcode, className }: InstagramEmbedProps) {
+export function InstagramEmbed({ shortcode, className, fallback }: InstagramEmbedProps) {
   const iframeRef = useRef<HTMLIFrameElement>(null);
+  const { failed, markAlive, onLoad } = useEmbedLiveness(iframeRef);
   const [height, setHeight] = useState<number | null>(null);
 
   useEffect(() => {
@@ -32,6 +37,7 @@ export function InstagramEmbed({ shortcode, className }: InstagramEmbedProps) {
 
       const message = data as { type?: string; details?: { height?: number } } | undefined;
       if (!message || typeof message !== "object" || message.type !== "MEASURE") return;
+      markAlive();
 
       const measured = message.details?.height;
       if (typeof measured === "number" && measured > 0) {
@@ -41,7 +47,9 @@ export function InstagramEmbed({ shortcode, className }: InstagramEmbedProps) {
 
     window.addEventListener("message", handleMessage);
     return () => window.removeEventListener("message", handleMessage);
-  }, []);
+  }, [markAlive]);
+
+  if (failed) return fallback;
 
   return (
     <div
@@ -57,6 +65,7 @@ export function InstagramEmbed({ shortcode, className }: InstagramEmbedProps) {
         scrolling="no"
         allowFullScreen
         loading="lazy"
+        onLoad={onLoad}
         sandbox="allow-scripts allow-same-origin allow-popups"
       />
     </div>

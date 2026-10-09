@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const native = vi.hoisted(() => ({
@@ -259,5 +259,38 @@ describe("GIF page links", () => {
     const video = container.querySelector("video");
     expect(video?.getAttribute("src")).toBe("https://media.tenor.com/NSnx2uRkjAEAAAPo/mbison-bison.mp4");
     expect(video?.hasAttribute("loop")).toBe(true);
+  });
+});
+
+describe("provider iframe embeds", () => {
+  const TWEET = "https://x.com/someone/status/1234567890";
+
+  afterEach(() => vi.useRealTimers());
+
+  it("falls back to a plain link when the frame never reports in", () => {
+    vi.useFakeTimers();
+    render(<LinkEmbed url={TWEET} />);
+    fireEvent.load(screen.getByTitle("Tweet"));
+    act(() => vi.advanceTimersByTime(5_000));
+    expect(screen.queryByTitle("Tweet")).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: TWEET })).toHaveAttribute("href", TWEET);
+  });
+
+  it("keeps a frame that posted its resize", () => {
+    vi.useFakeTimers();
+    render(<LinkEmbed url={TWEET} />);
+    const iframe = screen.getByTitle("Tweet") as HTMLIFrameElement;
+    fireEvent.load(iframe);
+    act(() => {
+      window.dispatchEvent(
+        new MessageEvent("message", {
+          origin: "https://platform.twitter.com",
+          source: iframe.contentWindow,
+          data: { "twttr.embed": { method: "twttr.private.resize", params: [{ height: 400 }] } },
+        }),
+      );
+    });
+    act(() => vi.advanceTimersByTime(30_000));
+    expect(screen.getByTitle("Tweet")).toBeInTheDocument();
   });
 });

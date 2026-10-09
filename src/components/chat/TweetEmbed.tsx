@@ -1,4 +1,6 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
+
+import { useEmbedLiveness } from "@/hooks/useEmbedLiveness";
 
 import { getBackgroundThemeMode } from "@/lib/colorUtils";
 import { cn } from "@/lib/utils";
@@ -6,6 +8,8 @@ import { cn } from "@/lib/utils";
 interface TweetEmbedProps {
   tweetId: string;
   className?: string;
+  /** Shown instead when the frame never renders (blocked or unavailable). */
+  fallback: ReactNode;
 }
 
 /**
@@ -14,8 +18,9 @@ interface TweetEmbedProps {
  * Theme is read once (the iframe only re-themes on reload), which also keeps
  * this mountable without an AppProvider.
  */
-export function TweetEmbed({ tweetId, className }: TweetEmbedProps) {
+export function TweetEmbed({ tweetId, className, fallback }: TweetEmbedProps) {
   const iframeRef = useRef<HTMLIFrameElement>(null);
+  const { failed, markAlive, onLoad } = useEmbedLiveness(iframeRef);
 
   const resolvedTheme = getBackgroundThemeMode();
 
@@ -34,6 +39,7 @@ export function TweetEmbed({ tweetId, className }: TweetEmbedProps) {
         | { method?: string; params?: Array<{ height?: number }> }
         | undefined;
       if (!wrapper || typeof wrapper !== "object") return;
+      markAlive();
 
       if (wrapper.method === "twttr.private.resize") {
         const height = wrapper.params?.[0]?.height;
@@ -45,7 +51,9 @@ export function TweetEmbed({ tweetId, className }: TweetEmbedProps) {
 
     window.addEventListener("message", handleMessage);
     return () => window.removeEventListener("message", handleMessage);
-  }, []);
+  }, [markAlive]);
+
+  if (failed) return fallback;
 
   return (
     <div
@@ -61,6 +69,7 @@ export function TweetEmbed({ tweetId, className }: TweetEmbedProps) {
         scrolling="no"
         allowFullScreen
         loading="lazy"
+        onLoad={onLoad}
         sandbox="allow-scripts allow-same-origin allow-popups"
       />
     </div>
