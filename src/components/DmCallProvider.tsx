@@ -173,14 +173,14 @@ export function DmCallProvider({ children }: { children: React.ReactNode }) {
   const myRelaysRef = useRef(myRelays);
   myRelaysRef.current = myRelays;
 
-  // STOCK floor (mirrors inviteRelays.ts): a user with app DM relays off AND no
+  // STOCK floor (mirrors inviteRelays.ts): a user with app relays off AND no
   // kind-10050 inbox has no rendezvous, so both caller and scanner fall back to
   // the stock set. Tightly gated so private-floor users never REQ their `#p` publicly.
   const scanRelays = useMemo(() => {
     if (myRelays.length === 0) return [];
-    const stockFloor = !config.useAppDmRelays && publishedRelays.length === 0 ? RESCUE_RELAYS : [];
+    const stockFloor = !config.useAppRelays && publishedRelays.length === 0 ? RESCUE_RELAYS : [];
     return [...new Set([...myRelays, ...stockFloor])];
-  }, [myRelays, config.useAppDmRelays, publishedRelays]);
+  }, [myRelays, config.useAppRelays, publishedRelays]);
   const scanRelaysRef = useRef(scanRelays);
   scanRelaysRef.current = scanRelays;
 

@@ -53,7 +53,6 @@ export function buildSignupLists(sk: Uint8Array, homeRelays: string[]): SignupLi
   if (dm.length > 0) {
     events.push({ event: sign(KIND_DM_RELAYS, dm.map((url) => ["relay", url])), relays: discoverable });
     configSeed.dmRelays = dm;
-    configSeed.useOwnDmRelays = true;
   }
   if (search.length > 0) {
     events.push({ event: sign(KIND_SEARCH_RELAYS, search.map((url) => ["relay", url])), relays: home });

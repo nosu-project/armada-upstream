@@ -1,25 +1,18 @@
 import { useContext, useMemo } from "react";
 
 import { AppContext } from "@/contexts/AppContext";
-import { APP_BLOSSOM_SERVERS, getEffectiveBlossomServers, PREFERRED_BLOSSOM_SERVER } from "@/lib/blossom";
+import { APP_BLOSSOM_SERVERS, lookupBlossomServers } from "@/lib/blossom";
 
 /**
- * The viewer's effective Blossom server list, stable across renders. Reads the
- * context directly (app defaults without a provider) since it sits under every
- * avatar. Its own module to avoid a cycle between `useBlossomCandidates` and
- * `useMediaPolicy`.
+ * The viewer's Blossom servers to find blobs on, stable across renders. Reads
+ * the context directly (app defaults without a provider) since it sits under
+ * every avatar. Its own module to avoid a cycle between `useBlossomCandidates`
+ * and `useMediaPolicy`.
  */
 export function useBlossomServers(): string[] {
-  const config = useContext(AppContext)?.config;
-  const appBlossomServers = config?.appBlossomServers ?? APP_BLOSSOM_SERVERS;
-  const blossomServerMetadata = config?.blossomServerMetadata;
-  const useAppBlossomServers = config?.useAppBlossomServers ?? true;
-  const preferredBlossomServer = config?.preferredBlossomServer ?? PREFERRED_BLOSSOM_SERVER;
+  const blossomServerMetadata = useContext(AppContext)?.config.blossomServerMetadata;
   return useMemo(
-    () =>
-      blossomServerMetadata
-        ? getEffectiveBlossomServers(appBlossomServers, blossomServerMetadata, useAppBlossomServers, preferredBlossomServer)
-        : [...appBlossomServers],
-    [appBlossomServers, blossomServerMetadata, useAppBlossomServers, preferredBlossomServer],
+    () => blossomServerMetadata ? lookupBlossomServers(blossomServerMetadata) : [...APP_BLOSSOM_SERVERS],
+    [blossomServerMetadata],
   );
 }

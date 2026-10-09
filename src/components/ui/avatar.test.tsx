@@ -11,12 +11,13 @@ import { Avatar, AvatarFallback, AvatarImage } from "./avatar";
  * No proxy, so the walk cases see the URLs as written; the policy has its own
  * case below.
  */
+vi.mock("@/hooks/useBlossomServers", () => ({
+  useBlossomServers: () => ["https://blossom.ditto.pub/", "https://blossom.dreamith.to/"],
+}));
+
 const contextWith = (config: Record<string, unknown>) =>
   ({
     config: {
-      appBlossomServers: ["https://blossom.ditto.pub/", "https://blossom.dreamith.to/"],
-      blossomServerMetadata: { servers: [], updatedAt: 0 },
-      useAppBlossomServers: true,
       mediaProxies: [],
       ...config,
     },

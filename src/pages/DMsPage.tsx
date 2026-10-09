@@ -82,7 +82,7 @@ import {
   useHasUnreadDMs,
 } from "@/hooks/useDirectMessages";
 import { useBotManifests } from "@/hooks/useBotManifests";
-import { useAdoptDmInbox, useDm17Backfill, useDm17Conversations, useDm17Support } from "@/hooks/useDm17";
+import { useDm17Backfill, useDm17Conversations, useDm17Support } from "@/hooks/useDm17";
 import { useDmConversationName } from "@/hooks/useDmConversationName";
 import {
   recordDmConversationIndex,
@@ -2335,8 +2335,6 @@ export function DMsPage() {
   const { conversations: dm17Conversations, isLoading: dm17Loading } = useDm17Conversations({
     interactive: true,
   });
-  // Adopt the published kind 10050 inbox locally; NEVER publishes.
-  useAdoptDmInbox();
   const indexedConversations = useDmConversationIndex();
   const indexReady = useDmConversationIndexReady();
   const { isKnown, isLoading: followsLoading } = useKnownDmPeers();

@@ -14,11 +14,12 @@ import { useMediaWithFallback } from "./useMediaWithFallback";
  * walk, and routing has its own suite in `useBlossomCandidates.test.ts` and
  * `mediaPolicy.test.ts`.
  */
+vi.mock("@/hooks/useBlossomServers", () => ({
+  useBlossomServers: () => ["https://a.example/", "https://b.example/", "https://c.example/"],
+}));
+
 const context = {
   config: {
-    appBlossomServers: ["https://a.example/", "https://b.example/"],
-    blossomServerMetadata: { servers: ["https://c.example/"], updatedAt: 0 },
-    useAppBlossomServers: true,
     mediaProxies: [],
   },
   updateConfig: vi.fn(),

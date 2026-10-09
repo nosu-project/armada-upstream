@@ -40,8 +40,6 @@ vi.mock("@/hooks/useAppContext", () => ({
   useAppContext: () => ({
     config: {
       showDmRequests: true,
-      useAppDmRelays: false,
-      useOwnDmRelays: false,
       appRelays: [],
       dmRelays: [],
     },
@@ -82,7 +80,6 @@ vi.mock("@/hooks/useDm17", () => ({
   useDm17Backfill: () => ({ hasMore: false, isLoading: false, loadOlder: async () => [] }),
   useDm17Conversations: () => ({ rows: [], isLoading: false }),
   useDm17Support: () => true,
-  useAdoptDmInbox: () => {},
 }));
 vi.mock("@/components/auth/LoginArea", () => ({ LoginArea: () => null }));
 vi.mock("@/components/DisplayName", () => ({

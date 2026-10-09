@@ -12,9 +12,7 @@ import type { ReactNode } from "react";
 // set so the resolver stays on the plain URL (routing has its own suites).
 const context = {
   config: {
-    appBlossomServers: [],
     blossomServerMetadata: { servers: [] },
-    useAppBlossomServers: false,
     mediaProxies: [],
   },
   updateConfig: vi.fn(),

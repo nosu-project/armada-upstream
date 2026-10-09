@@ -59,7 +59,6 @@ describe("buildSignupLists", () => {
         pubkey: relayList.pubkey,
       },
       dmRelays: [...HOME, ...DM_INBOX_RELAYS],
-      useOwnDmRelays: true,
       searchRelays: APP_RELAYS,
       blossomServerMetadata: {
         servers: APP_BLOSSOM_SERVERS,

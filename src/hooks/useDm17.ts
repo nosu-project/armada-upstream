@@ -22,7 +22,7 @@ import { useMutedPubkeys } from "@/hooks/useMuteList";
 import { customEmojiReactionTags } from "@/hooks/useReactions";
 import { useResumeEpoch } from "@/hooks/useResumeEpoch";
 import { effectiveDmRelays } from "@/contexts/AppContext";
-import { APP_RELAYS, normalizeRelayUrl } from "@/lib/platform";
+import { normalizeRelayUrl } from "@/lib/platform";
 import { mayBulkDecrypt, signerNeedsApproval } from "@/lib/bulkDecryptGate";
 import { getDecryptConsent } from "@/lib/decryptConsent";
 import { isDmSynced, markDmSynced } from "@/lib/dmSynced";
@@ -121,39 +121,6 @@ function sweepExpiredSoon(self: string): void {
 export function useDm17Support(): boolean {
   const { user } = useCurrentUser();
   return !!user?.signer.nip44;
-}
-
-const dmRelaysAdopted = new Set<string>();
-
-/**
- * Adopt the user's published kind-10050 list as their DM relays when they haven't
- * customized the default set (once per session).
- * NEVER publishes: a cold/empty read would make a "first" 10050 REPLACE the user's real one.
- */
-export function useAdoptDmInbox(): void {
-  const { user } = useCurrentUser();
-  const { config, updateConfig } = useAppContext();
-  const { hasList, isLoading, relays: publishedRelays } = useDmRelayList();
-  const publishedKey = publishedRelays.join(",");
-
-  useEffect(() => {
-    const self = user?.pubkey;
-    if (!self || isLoading || !hasList || publishedRelays.length === 0) return;
-    if (config.useOwnDmRelays) return;
-    // Only adopt an untouched default — never clobber a deliberate custom list.
-    const isDefaultDmRelays =
-      config.dmRelays.length === APP_RELAYS.length &&
-      config.dmRelays.every((r, i) => r === APP_RELAYS[i]);
-    if (!isDefaultDmRelays) return;
-    if (dmRelaysAdopted.has(self)) return;
-    dmRelaysAdopted.add(self);
-    updateConfig((current) => ({
-      ...current,
-      useOwnDmRelays: true,
-      dmRelays: publishedRelays,
-    }));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user?.pubkey, isLoading, hasList, publishedKey, config.useOwnDmRelays]);
 }
 
 type NostrPool = ReturnType<typeof useNostr>["nostr"];

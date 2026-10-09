@@ -12,10 +12,8 @@ const h = vi.hoisted(() => ({
   },
   config: {
     dmsDisabled: false,
-    useAppDmRelays: true,
+    useAppRelays: true,
     appRelays: ["wss://app.example"],
-    appDmRelays: [] as string[],
-    useOwnDmRelays: false,
     dmRelays: [] as string[],
   },
   updateConfig: vi.fn(),
@@ -70,7 +68,7 @@ describe("useDmInboxSetup", () => {
     const expected = ["wss://app.example", ...DM_INBOX_RELAYS];
     expect(h.list.publish).toHaveBeenCalledWith(expected);
     const next = h.updateConfig.mock.calls[0][0](h.config);
-    expect(next).toMatchObject({ dmRelays: expected, useOwnDmRelays: true });
+    expect(next).toMatchObject({ dmRelays: expected });
   });
 
   it("does not touch config when the publish is refused", async () => {

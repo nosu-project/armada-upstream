@@ -1,6 +1,5 @@
 import { createContext } from "react";
 
-import { APP_BLOSSOM_SERVERS, PREFERRED_BLOSSOM_SERVER } from "@/lib/blossom";
 import { APP_RELAYS, BROADCAST_RELAYS, COMMUNITY_RELAYS, normalizeRelayUrl } from "@/lib/platform";
 import { DEFAULT_PUSH_PREFS, type PushPrefs } from "@/lib/pushPrefs";
 import { getPreferredVoiceServer } from "@/lib/voiceDevices";
@@ -111,32 +110,13 @@ export interface AppConfig {
    * editor. An empty/failed read never clears it.
    */
   relayMetadata: RelayMetadata;
-  /** Whether app DM relays are in the DM set (default on); combines with `useOwnDmRelays` — see `effectiveDmRelays`. */
-  useAppDmRelays: boolean;
-  /**
-   * Additional app DM relays, empty for a fresh config; kept in settings so a
-   * restored setup replaces it. `appRelays` stay in the set for NIP-04.
-   */
-  appDmRelays: string[];
-  /** Whether the user's own `dmRelays` are in the DM set (default off). */
-  useOwnDmRelays: boolean;
-  /** The user's own DM relays only (never app defaults). */
+  /** Mirror of the user's kind 10050 DM inbox; never app defaults. */
   dmRelays: string[];
   /**
-   * Personal Blossom server list (BUD-03), synced with kind 10063. App servers
-   * (`appBlossomServers`) are separate.
+   * Mirror of the user's kind 10063 Blossom list (BUD-03); empty means uploads
+   * go to the app servers (`uploadTargets`).
    */
   blossomServerMetadata: BlossomServerMetadata;
-  /** Whether app Blossom servers are used alongside kind 10063 ones (default on). */
-  useAppBlossomServers: boolean;
-  /** App Blossom servers; seeded only for a fresh config, a synced value replaces them. */
-  appBlossomServers: string[];
-  /**
-   * Blossom server whose URL an upload embeds when it takes the blob, the
-   * others becoming `fallback`s; empty = whichever answers first. Seeded from
-   * `PREFERRED_BLOSSOM_SERVER` for a fresh config, like `appBlossomServers`.
-   */
-  preferredBlossomServer: string;
   /**
    * Last open channel per server/community: `relayUrl` → groupId, `c:${communityId}`
    * → channel id hex.
@@ -316,12 +296,6 @@ export const METADATA_CONFIG_KEYS = [
   "preferredVoiceServer",
   "useAppRelays",
   "useUserRelays",
-  "useAppDmRelays",
-  "appDmRelays",
-  "useOwnDmRelays",
-  "useAppBlossomServers",
-  "appBlossomServers",
-  "preferredBlossomServer",
   "dmTypingIndicators",
   "dmsDisabled",
   "showDmRequests",
@@ -401,14 +375,8 @@ export const defaultConfig: AppConfig = {
   useAppRelays: true,
   useUserRelays: false,
   relayMetadata: { relays: [], updatedAt: 0 },
-  useAppDmRelays: true,
-  appDmRelays: [],
-  useOwnDmRelays: false,
   dmRelays: [],
   blossomServerMetadata: { servers: [], updatedAt: 0 },
-  useAppBlossomServers: true,
-  appBlossomServers: [...APP_BLOSSOM_SERVERS],
-  preferredBlossomServer: PREFERRED_BLOSSOM_SERVER,
   lastChannelByServer: {},
   mutedCommunities: [],
   mutedChannels: [],
@@ -443,20 +411,15 @@ export const defaultConfig: AppConfig = {
 export const AppContext = createContext<AppContextType | undefined>(undefined);
 
 /**
- * The DM relay set: app DM relays (`appRelays` ∪ `appDmRelays`, when
- * `useAppDmRelays`) plus the user's own (`dmRelays`, when `useOwnDmRelays`).
- * Neither ⇒ empty (DMs off). Client-side only: app relays are never written into
- * the user's kind-10050; Armada senders also publish to their own set (useDm17),
- * so Armada↔Armada delivery works over shared app relays.
+ * The DM relay set: the user's kind 10050 inbox plus the app relays (when
+ * `useAppRelays`). Client-side only: app relays are never written into the
+ * user's 10050; Armada senders also publish to their own set (useDm17), so
+ * Armada↔Armada delivery works over shared app relays.
  */
 export function effectiveDmRelays(config: AppConfig): string[] {
-  const out = new Set<string>();
-  if (config.useAppDmRelays) {
+  const out = new Set<string>(config.dmRelays);
+  if (config.useAppRelays) {
     for (const url of config.appRelays) out.add(url);
-    for (const url of config.appDmRelays) out.add(url);
-  }
-  if (config.useOwnDmRelays) {
-    for (const url of config.dmRelays) out.add(url);
   }
   return [...out];
 }

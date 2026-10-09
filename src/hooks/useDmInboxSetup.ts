@@ -46,7 +46,7 @@ export function useDmInboxSetup() {
     setPublishing(true);
     try {
       await dmRelayList.publish(relays);
-      updateConfig((current) => ({ ...current, dmRelays: relays, useOwnDmRelays: true }));
+      updateConfig((current) => ({ ...current, dmRelays: relays }));
     } finally {
       setPublishing(false);
     }
