@@ -49,6 +49,7 @@ import { KeyBackupSettings } from "@/components/settings/KeyBackupSettings";
 import { MediaPrivacySettings } from "@/components/settings/MediaPrivacySettings";
 import { MutedPeopleSettings } from "@/components/settings/MutedPeopleSettings";
 import { ChatSearchBar } from "@/components/chat/ChatSearchBar";
+import { QuickReactionsSettings } from "@/components/settings/QuickReactionsSettings";
 import { SettingsRow } from "@/components/settings/SettingsSection";
 import { useSettingsFilter } from "@/components/settings/settingsSearch";
 import { WalletSettings } from "@/components/settings/WalletSettings";
@@ -786,6 +787,7 @@ export function SettingsPage({
                 onCheckedChange={setSendOnEnter}
               />
             </SettingsRow>
+            {user && <QuickReactionsSettings />}
             <SettingsRow
               label="Typing indicators"
               description="Share and see typing status in DMs and channels."

@@ -24,6 +24,8 @@ export const KIND_DM_RELAYS = 10050;
 export const KIND_BLOSSOM_SERVERS = 10063;
 /** NIP-51 user custom emoji list (10030). */
 export const KIND_USER_EMOJIS = 10030;
+/** NIP-51 quick reactions (10077): the reactions offered first, in the user's order. */
+export const KIND_QUICK_REACTIONS = 10077;
 /**
  * Concord community list vault fragments (CORD-02 §8, 33302). One addressable
  * event per fragment `d`, so echo-dedup must key per `d`.
@@ -138,6 +140,7 @@ export const SELF_SYNC_REPLACEABLE_KINDS: number[] = [
   KIND_DM_RELAYS,
   KIND_BLOSSOM_SERVERS,
   KIND_USER_EMOJIS,
+  KIND_QUICK_REACTIONS,
   KIND_COMMUNITY_LIST_FRAG,
   KIND_INVITE_LIST,
 ];
@@ -166,6 +169,8 @@ export function queryKeysForSelfEvent(
       return [["blossom-server-list"]];
     case KIND_USER_EMOJIS:
       return [["custom-emojis"]];
+    case KIND_QUICK_REACTIONS:
+      return [["quick-reactions"]];
     case KIND_COMMUNITY_LIST_FRAG:
       return [["concord", "list"]];
     case KIND_INVITE_LIST:

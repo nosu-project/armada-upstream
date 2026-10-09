@@ -6,7 +6,8 @@ import { Drawer, DrawerContent, DrawerTitle } from "@/components/ui/drawer";
 import { useOverlayBack } from "@/hooks/useAndroidBack";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useCustomEmojis } from "@/hooks/useCustomEmojis";
-import { recordReaction, useFrequentReactions } from "@/hooks/useFrequentReactions";
+import { recordReaction } from "@/hooks/useFrequentReactions";
+import { useQuickReactions } from "@/hooks/useQuickReactionList";
 import { QUICK_SLOTS_SHEET, toggleInput } from "@/lib/reactionToggle";
 import { cn } from "@/lib/utils";
 
@@ -48,7 +49,7 @@ export function MessageActionSheet({
   const [pickerOpen, setPickerOpen] = useState(false);
   const { user } = useCurrentUser();
   const { emojis: customEmojis } = useCustomEmojis();
-  const frequent = useFrequentReactions(user?.pubkey, QUICK_SLOTS_SHEET);
+  const frequent = useQuickReactions(user?.pubkey, QUICK_SLOTS_SHEET);
   const [moderationOpen, setModerationOpen] = useState(false);
   const main = actions.filter((a) => !a.moderation);
   const moderation = actions.filter((a) => a.moderation);

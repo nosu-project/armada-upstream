@@ -9,6 +9,9 @@ export const QUICK_SLOTS_MENU = 5;
 /** Quick-reaction slots in the touch action sheet (a full row, so more than desktop). */
 export const QUICK_SLOTS_SHEET = 6;
 
+/** Reactions that can be pinned: the longest row, which every shorter one is a prefix of. */
+export const MAX_QUICK_REACTIONS = QUICK_SLOTS_SHEET;
+
 /**
  * Publish input for reacting with `key`. Always a toggle: an existing reaction
  * with this key is retracted instead of publishing a duplicate kind 7.

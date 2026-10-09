@@ -14,7 +14,8 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { useAuthor } from "@/hooks/useAuthor";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useCustomEmojis } from "@/hooks/useCustomEmojis";
-import { recordReaction, useFrequentReactions } from "@/hooks/useFrequentReactions";
+import { recordReaction } from "@/hooks/useFrequentReactions";
+import { useQuickReactions } from "@/hooks/useQuickReactionList";
 import { useIsTouch } from "@/hooks/useIsMobile";
 import { getAvatarShape } from "@/lib/avatarShape";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
@@ -406,9 +407,11 @@ export function useToggleReact(onReact: (input: ReactInput) => void, tallies: Re
 export function ReactionPickerPanel({
   onPick,
   onBrowsePacks,
+  recordUsage,
 }: {
   onPick: (key: string, url?: string) => void;
   onBrowsePacks: () => void;
+  recordUsage?: boolean;
 }) {
   const { emojis: customEmojis } = useCustomEmojis();
   return (
@@ -416,6 +419,7 @@ export function ReactionPickerPanel({
       <LazyEmojiPicker
         customEmojis={customEmojis}
         onBrowsePacks={onBrowsePacks}
+        recordUsage={recordUsage}
         onSelect={(selection) => {
           if (selection.type === "native") onPick(selection.emoji);
           else onPick(`:${selection.shortcode}:`, selection.url);
@@ -439,7 +443,7 @@ export function ReactionActions({
   const [open, setOpen] = useState(false);
   const pointerOpened = usePointerOpened();
 
-  const frequent = useFrequentReactions(user?.pubkey, quickSlots);
+  const frequent = useQuickReactions(user?.pubkey, quickSlots);
   const react = useToggleReact(onReact, tallies);
 
   return (

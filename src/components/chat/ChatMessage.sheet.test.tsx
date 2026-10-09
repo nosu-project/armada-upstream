@@ -53,6 +53,7 @@ vi.mock("@/hooks/useMentionNameMap", () => ({
   useMentionNameMap: () => ({ byName: new Map(), regex: null }),
 }));
 vi.mock("@/hooks/useCustomEmojis", () => ({ useCustomEmojis: () => ({ emojis: [], isLoading: false }) }));
+vi.mock("@/hooks/useQuickReactionList", () => ({ useQuickReactions: () => [] }));
 vi.mock("@/hooks/useResolvedMediaSrc", () => ({ useResolvedMediaSrc: () => ({ src: undefined }) }));
 vi.mock("@/components/chat/ProfilePreviewCard", () => ({
   ProfilePreviewCard: ({ children }: { children?: ReactNode }) => <>{children}</>,

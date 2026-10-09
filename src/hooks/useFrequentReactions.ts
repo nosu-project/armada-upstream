@@ -1,5 +1,7 @@
 import { useMemo, useSyncExternalStore } from "react";
 
+import type { QuickReaction } from "@/lib/quickReactions";
+
 export interface FrequentReaction {
   /** The display key (emoji, 👍/👎, or `:shortcode:`). */
   key: string;
@@ -141,27 +143,49 @@ export function hydrateFrequentReactions(pubkey: string, remote: FrequentReactio
   save(pubkey, next);
 }
 
-/** The user's most-used reactions, padded with defaults, for the quick-reaction row. */
-export function useFrequentReactions(pubkey: string | undefined, limit = 3): FrequentReaction[] {
-  const stored = useSyncExternalStore(
+/** A slot in the quick-reaction row. */
+export interface QuickReactionSlot extends QuickReaction {
+  /** Chosen by the user (their kind-10077 list), rather than filled from use. */
+  pinned: boolean;
+}
+
+/**
+ * The quick-reaction row: the pinned reactions in order, then the most-used,
+ * then defaults, so the row stays full-width and buttons don't shift as it fills in.
+ */
+export function quickReactionRow(
+  stored: FrequentReaction[],
+  pinned: readonly QuickReaction[],
+  limit: number,
+): QuickReactionSlot[] {
+  const row: QuickReactionSlot[] = [];
+  const seen = new Set<string>();
+  const add = (reaction: QuickReaction, pinned: boolean) => {
+    if (row.length >= limit || seen.has(reaction.key)) return;
+    seen.add(reaction.key);
+    row.push({ ...reaction, pinned });
+  };
+  for (const p of pinned) add(p, true);
+  for (const e of [...stored].sort(byScore)) add(e.url ? { key: e.key, url: e.url } : { key: e.key }, false);
+  for (const key of DEFAULT_KEYS) add({ key }, false);
+  return row;
+}
+
+/** The user's reaction-frequency table, live. */
+export function useFrequentReactionTable(pubkey: string | undefined): FrequentReaction[] {
+  return useSyncExternalStore(
     subscribe,
     () => (pubkey ? load(pubkey) : EMPTY),
     () => EMPTY,
   );
+}
 
-  return useMemo(() => {
-    const top = [...stored].sort(byScore).slice(0, limit);
-    if (top.length >= limit) return top;
-    // Keep the row full-width so buttons don't shift as it fills in.
-    const seen = new Set(top.map((e) => e.key));
-    for (const key of DEFAULT_KEYS) {
-      if (top.length >= limit) break;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      top.push({ key, count: 0, usedAt: 0 });
-    }
-    return top;
-  }, [stored, limit]);
+const NO_PINS: QuickReaction[] = [];
+
+/** The most-used reactions, padded with defaults; `useQuickReactions` puts the pinned ones first. */
+export function useFrequentReactions(pubkey: string | undefined, limit = 3): QuickReactionSlot[] {
+  const stored = useFrequentReactionTable(pubkey);
+  return useMemo(() => quickReactionRow(stored, NO_PINS, limit), [stored, limit]);
 }
 
 /** Test seam. */

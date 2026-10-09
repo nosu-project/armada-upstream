@@ -16,7 +16,8 @@ vi.mock("@/hooks/useCurrentUser", () => ({ useCurrentUser: () => ({ user: undefi
 vi.mock("@/hooks/useIsMobile", () => ({ useIsTouch: () => false }));
 vi.mock("@/hooks/useAuthor", () => ({ useAuthor: () => ({ data: undefined }) }));
 vi.mock("@/hooks/useScopedDisplayName", () => ({ useScopedDisplayName: () => "Ana" }));
-vi.mock("@/hooks/useFrequentReactions", () => ({ recordReaction: () => {}, useFrequentReactions: () => [] }));
+vi.mock("@/hooks/useFrequentReactions", () => ({ recordReaction: () => {} }));
+vi.mock("@/hooks/useQuickReactionList", () => ({ useQuickReactions: () => [] }));
 vi.mock("@/components/DisplayName", () => ({ DisplayName: ({ name }: { name: string }) => <>{name}</> }));
 vi.mock("@/components/chat/CustomEmoji", () => ({
   CustomEmojiImg: ({ url }: { url: string }) => <img alt="" data-url={url} />,

@@ -5,7 +5,7 @@ import { ReactionGlyph, ReactionPickerPanel, REACTION_PICKER_CLASS, useToggleRea
 import { DropdownMenuItem, DropdownMenuSeparator } from "@/components/ui/dropdown-menu";
 import { Popover, PopoverAnchor, PopoverContent } from "@/components/ui/popover";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
-import { useFrequentReactions } from "@/hooks/useFrequentReactions";
+import { useQuickReactions } from "@/hooks/useQuickReactionList";
 import { QUICK_SLOTS_MENU } from "@/lib/reactionToggle";
 import { cn } from "@/lib/utils";
 
@@ -20,7 +20,7 @@ export function MenuReactionRow({
   onOpenPicker: () => void;
 }) {
   const { user } = useCurrentUser();
-  const frequent = useFrequentReactions(user?.pubkey, QUICK_SLOTS_MENU);
+  const frequent = useQuickReactions(user?.pubkey, QUICK_SLOTS_MENU);
   const react = useToggleReact(reactions.react, reactions.tallies);
 
   return (
