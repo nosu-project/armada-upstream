@@ -252,7 +252,10 @@ build and shipped a release with no desktop installers.
    `ngit release publish` with `.ngit/release.yaml`, publishing the same eight
    files as a NIP-82 release of `buzz.armada.app` (kinds 32267/30063/3063,
    also sent to the Zapstore relay). That one is all-or-nothing: a missing
-   artifact fails it while the kind-30622 event still goes out.
+   artifact fails it while the kind-30622 event still goes out. Last,
+   `scripts/zapstore-compat.mjs` re-signs the app event and the APK asset so
+   Zapstore's current client finds the release notes and installs the APK
+   rather than a desktop build (see its header).
 
 `deploy-nsite.yml` is a separate workflow on a separate trigger: it publishes
 the web client to Blossom + relays as the nsite `armada` on **pushes to `main`
@@ -296,7 +299,7 @@ secrets notes.
 | `ANDROID_KEYSTORE_BASE64` | base64 of the JKS upload keystore (single line) |
 | `KEYSTORE_PASSWORD` | keystore store password |
 | `KEY_PASSWORD` | key password (**must equal** the store password — CI migrates JKS→PKCS12, which uses one password) |
-| `ZAPSTORE_BUNKER_URL` | `bunker://` URL of the NIP-46 signer that signs the kind-30622 release event (the name predates that). |
+| `ZAPSTORE_BUNKER_URL` | `bunker://` URL of the NIP-46 signer that signs the kind-30622 release event and the Zapstore re-signs (`scripts/zapstore-compat.mjs`). |
 | `ZAPSTORE_CLIENT_KEY` | the client secret key that bunker session was established with (hex or nsec). Both halves are needed: the URL's one-time `secret=` is long spent, and this is the key the bunker actually authorized. |
 
 Optional (Google Play publish on tags, ngit-ci `release.yml`):

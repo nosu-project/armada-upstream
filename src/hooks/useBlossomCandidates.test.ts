@@ -13,9 +13,10 @@ import { useBlossomServers } from "@/hooks/useBlossomServers";
 function contextWith(config: Record<string, unknown>): AppContextType {
   return {
     config: {
-      appBlossomServers: ["https://a.example/", "https://b.example/"],
-      blossomServerMetadata: { servers: ["https://c.example/"], updatedAt: 0 },
-      useAppBlossomServers: true,
+      blossomServerMetadata: {
+        servers: ["https://a.example/", "https://b.example/", "https://c.example/"],
+        updatedAt: 0,
+      },
       ...config,
     },
     updateConfig: vi.fn(),
@@ -33,9 +34,14 @@ const HASH = "a".repeat(64);
 const PROXY = "https://proxy.example/?url={href}";
 
 describe("useBlossomServers", () => {
-  it("reads the effective list from the app config", () => {
+  it("looks on the user's servers, then the app's", () => {
     const { result } = renderHook(() => useBlossomServers(), { wrapper });
-    expect(result.current).toEqual(["https://a.example/", "https://b.example/", "https://c.example/"]);
+    expect(result.current).toEqual([
+      "https://a.example/",
+      "https://b.example/",
+      "https://c.example/",
+      ...APP_BLOSSOM_SERVERS,
+    ]);
   });
 
   it("falls back to the app defaults with no provider mounted", () => {
@@ -124,6 +130,10 @@ describe("useImageFallback", () => {
       `https://b.example/${HASH}.png`,
       `https://c.example/${HASH}.png`,
     ]);
+    for (const server of APP_BLOSSOM_SERVERS) {
+      act(() => result.current.onError());
+      expect(result.current.src).toBe(`${server}${HASH}.png`);
+    }
     expect(result.current.failed).toBe(false);
     act(() => result.current.onError());
     expect(result.current.failed).toBe(true);

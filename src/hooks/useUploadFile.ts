@@ -5,7 +5,7 @@ import { useMutation } from "@tanstack/react-query";
 import { useCallback } from "react";
 import { z } from "zod";
 
-import { getEffectiveBlossomServers, normalizeBlossomServerUrl } from "@/lib/blossom";
+import { uploadTargets } from "@/lib/blossom";
 import { mediaSrc } from "@/lib/mediaPolicy";
 import { preflightRefusal, uploadTimeoutMs, type PreflightRequest } from "@/lib/blossomPreflight";
 
@@ -37,15 +37,7 @@ export function useUploadFile() {
       }
       const { file, signal, expiration } = request instanceof File ? { file: request } as UploadRequest : request;
 
-      // App defaults merged with the user's kind 10063 list (config.blossomServerMetadata),
-      // the preferred server first.
-      const servers = getEffectiveBlossomServers(
-        config.appBlossomServers,
-        config.blossomServerMetadata,
-        config.useAppBlossomServers,
-        config.preferredBlossomServer,
-      );
-      const preferred = normalizeBlossomServerUrl(config.preferredBlossomServer) ?? undefined;
+      const { servers, preferred } = uploadTargets(config.blossomServerMetadata);
 
       return uploadToServers(file, servers, user.signer, { preferred, signal, expiration });
     },
@@ -224,12 +216,7 @@ export function useRehostFile() {
     mutationFn: async (sourceUrl: string): Promise<string> => {
       if (!user) throw new Error("Must be logged in to upload files");
 
-      const servers = getEffectiveBlossomServers(
-        config.appBlossomServers,
-        config.blossomServerMetadata,
-        config.useAppBlossomServers,
-        config.preferredBlossomServer,
-      );
+      const { servers } = uploadTargets(config.blossomServerMetadata);
       const originOf = (u: string) => {
         try {
           return new URL(u).origin;
@@ -282,15 +269,11 @@ export function useRehostFile() {
  */
 export function useUploadPreflight() {
   const { config } = useAppContext();
-  const { appBlossomServers, blossomServerMetadata, useAppBlossomServers, preferredBlossomServer } = config;
+  const { blossomServerMetadata } = config;
   return useCallback(
     (req: PreflightRequest, signal?: AbortSignal) =>
-      preflightRefusal(
-        getEffectiveBlossomServers(appBlossomServers, blossomServerMetadata, useAppBlossomServers, preferredBlossomServer),
-        req,
-        { signal },
-      ),
-    [appBlossomServers, blossomServerMetadata, useAppBlossomServers, preferredBlossomServer],
+      preflightRefusal(uploadTargets(blossomServerMetadata).servers, req, { signal }),
+    [blossomServerMetadata],
   );
 }
 

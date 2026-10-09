@@ -16,9 +16,7 @@ import { AudioMessage } from "./AudioMessage";
 function wrapperWith(mediaProxies: string[]) {
   const context = {
     config: {
-      appBlossomServers: [],
       blossomServerMetadata: { servers: [], updatedAt: 0 },
-      useAppBlossomServers: false,
       mediaProxies,
     },
     updateConfig: vi.fn(),

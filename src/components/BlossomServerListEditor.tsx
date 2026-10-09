@@ -1,7 +1,8 @@
-import { Plus, RotateCcw, X } from "lucide-react";
+import { ArrowUpToLine, Plus, RotateCcw, X } from "lucide-react";
 import { useState } from "react";
 
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { BlossomLed } from "@/components/RelayLed";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { toast } from "@/hooks/useToast";
@@ -15,40 +16,67 @@ function serverHost(url: string): string {
   }
 }
 
-/** One server row, shaped like RelayListEditor's RelayIdentity minus NIP-11 bits. */
+/**
+ * Favicon candidates for a server: its own host, then its root domain (a
+ * `cdn.` or `blossom.` host often serves no icon of its own).
+ */
+export function serverFavicons(url: string): string[] {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return [];
+  }
+  const host = parsed.hostname;
+  const out = [`${parsed.origin}/favicon.ico`];
+  const labels = host.split(".");
+  const isIp = /^[\d.]+$/.test(host) || host.includes(":");
+  if (!isIp && labels.length > 2) out.push(`https://${labels.slice(-2).join(".")}/favicon.ico`);
+  return out;
+}
+
 function ServerIdentity({ url }: { url: string }) {
   const host = serverHost(url);
+  const favicons = serverFavicons(url);
+  const [attempt, setAttempt] = useState(0);
+  const icon = favicons[attempt];
   return (
     <div className="flex items-center gap-2.5 min-w-0">
       <Avatar className="size-7 rounded-md shrink-0">
+        {icon && (
+          <AvatarImage key={icon} src={icon} alt={host} onError={() => setAttempt((n) => n + 1)} />
+        )}
         <AvatarFallback className="rounded-md bg-secondary text-secondary-foreground text-xs">
           {host.charAt(0).toUpperCase()}
         </AvatarFallback>
       </Avatar>
       <div className="min-w-0">
         <div className="text-sm font-medium truncate leading-tight">{host}</div>
-        <div className="text-xs text-muted-foreground font-mono truncate leading-tight">{url}</div>
+        <div className="flex items-center gap-1.5 text-xs text-muted-foreground font-mono leading-tight">
+          <BlossomLed url={url} />
+          <span className="truncate">{url}</span>
+        </div>
       </div>
     </div>
   );
 }
 
 export interface BlossomServerListEditorProps {
-  /** Editable server URLs (the user's kind 10063 list). */
+  /** Editable server URLs (the user's kind 10063 list), most trusted first. */
   servers: string[];
   onChange: (servers: string[]) => void;
-  /** Read-only, non-removable servers shown first (the app defaults). */
-  pinned?: string[];
   onReset?: () => void;
   emptyText?: string;
   placeholder?: string;
 }
 
-/** Blossom server list editor; the https sibling of RelayListEditor. */
+/**
+ * Blossom server list editor; the https sibling of RelayListEditor. The first
+ * server is the primary one (BUD-03), whose links uploads embed.
+ */
 export function BlossomServerListEditor({
   servers,
   onChange,
-  pinned = [],
   onReset,
   emptyText = "No media servers configured.",
   placeholder = "https://blossom.example.com",
@@ -65,7 +93,7 @@ export function BlossomServerListEditor({
       });
       return;
     }
-    if (pinned.includes(normalized) || servers.includes(normalized)) {
+    if (servers.includes(normalized)) {
       toast({ title: "Already in the list", description: normalized });
       return;
     }
@@ -75,20 +103,25 @@ export function BlossomServerListEditor({
 
   return (
     <div className="space-y-1.5">
-      {pinned.map((url) => (
+      {servers.map((url, index) => (
         <div key={url} className="flex items-center gap-2 clip-corner bg-background/40 px-3 py-2.5">
           <div className="flex-1 min-w-0">
             <ServerIdentity url={url} />
           </div>
-          <span className="text-xs text-muted-foreground shrink-0 ml-1">Default</span>
-        </div>
-      ))}
-
-      {servers.map((url) => (
-        <div key={url} className="flex items-center gap-2 clip-corner bg-background/40 px-3 py-2.5">
-          <div className="flex-1 min-w-0">
-            <ServerIdentity url={url} />
-          </div>
+          {index === 0 ? (
+            <span className="text-xs text-muted-foreground shrink-0 ml-1">Primary</span>
+          ) : (
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label={`Make ${url} primary`}
+              title="Make primary"
+              className="size-7 touch:size-11 text-muted-foreground hover:text-foreground shrink-0"
+              onClick={() => onChange([url, ...servers.filter((u) => u !== url)])}
+            >
+              <ArrowUpToLine className="size-4" />
+            </Button>
+          )}
           <Button
             variant="ghost"
             size="icon"
@@ -101,7 +134,7 @@ export function BlossomServerListEditor({
         </div>
       ))}
 
-      {servers.length === 0 && pinned.length === 0 && (
+      {servers.length === 0 && (
         <p className="text-sm text-muted-foreground py-1">{emptyText}</p>
       )}
 

@@ -43,16 +43,6 @@ function deserializeConfig(raw: string): AppConfig {
     }
   }
 
-  // Migration: `useOwnDmRelays` split into `useAppDmRelays` + `useOwnDmRelays`;
-  // preserve the old XOR ("own" meant own relays ONLY).
-  if (!("useAppDmRelays" in source)) {
-    const storedOwn = source.useOwnDmRelays === true;
-    const storedDm = Array.isArray(source.dmRelays) ? source.dmRelays : [];
-    const ownOnly = storedOwn && storedDm.length > 0;
-    result.useAppDmRelays = !ownOnly;
-    result.useOwnDmRelays = ownOnly;
-  }
-
   return result as unknown as AppConfig;
 }
 

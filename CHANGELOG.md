@@ -4,6 +4,34 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.64.10] - 2026-10-09
+
+Pick your own quick reactions, and right-click a message to react straight
+from the menu. Signup now ends with a step that sets up your relays, DM inbox
+and media servers, and accounts without a DM inbox can add one in a tap.
+Relay, DM and media server settings are each one tidy list.
+
+### Added
+- Pin your own quick reactions in Chat settings, with tap-to-swap and drag-to-reorder
+- Quick reactions and an Add reaction button at the top of the message right-click menu
+- A relay step at the end of signup that sets up your relays, DM inbox and media servers
+- One-tap DM inbox setup in the DM list and Settings for accounts that have none
+- A status light and site icon on each media server row
+
+### Changed
+- Relay, DM inbox and media server settings are each a single list, with broadcast, search and community relays under Relays → Advanced
+- Key creation is folded into the save-your-key step of signup
+- More default relays and media servers for new accounts
+- The typing indicators setting moved to Chat settings and now applies to Concord and Buzz channels too
+- The color picker lays out side by side on short screens
+- A Concord invite link in the middle of a message shows its card after the text
+
+### Fixed
+- The message toolbar stays up while its emoji picker or menu is open
+- X and Instagram embeds that never load fall back to a plain link
+- On Android, Back returns to the chat behind the list instead of leaving the app when "Back leaves the app" is off
+- On desktop, installing a web update mid-session no longer leaves the window on a "Not Found" page
+
 ## [0.64.9] - 2026-10-08
 
 Link previews and site icons load again, and Armada no longer sends usage

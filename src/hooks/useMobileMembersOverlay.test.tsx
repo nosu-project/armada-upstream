@@ -173,8 +173,8 @@ describe("useMobileMembersOverlay", () => {
     back.mockRestore();
   });
 
-  it("back from the list walks history when androidBackLeavesApp is off", async () => {
-    // react-router's entry index rides in history state.
+  it("with androidBackLeavesApp off, back toggles list and chat and never leaves", async () => {
+    // Earlier entries on the stack, and the first in-app entry: neither is walked.
     window.history.pushState({ idx: 0 }, "", "/c/earlier");
     window.history.pushState({ idx: 1 }, "", "/c/c1");
     const back = vi.spyOn(window.history, "back").mockImplementation(() => undefined);
@@ -187,31 +187,29 @@ describe("useMobileMembersOverlay", () => {
 
     await pressBack();
     expect(chat().dataset.listOpen).toBe("true");
-
     await pressBack();
-    expect(back).toHaveBeenCalledTimes(1);
+    expect(chat().dataset.listOpen).toBe("false");
+    expect(chat().dataset.channel).toBe("general");
+    await pressBack();
+    expect(chat().dataset.listOpen).toBe("true");
+
+    expect(back).not.toHaveBeenCalled();
     expect(minimizeApp).not.toHaveBeenCalled();
     back.mockRestore();
   });
 
-  it("leaves the app from the first in-app entry even with forward entries left behind", async () => {
-    window.history.pushState({ idx: 0 }, "", "/c/c1");
-    window.history.pushState({ idx: 1 }, "", "/c/later");
-    window.history.replaceState({ idx: 0 }, "", "/c/c1");
-    expect(window.history.length).toBeGreaterThan(1);
-    const back = vi.spyOn(window.history, "back").mockImplementation(() => undefined);
+  it("with androidBackLeavesApp off, back from a list with no chat behind it leaves", async () => {
     const config = { ...defaultConfig, androidBackLeavesApp: false };
     render(
       <AppContext.Provider value={{ config, updateConfig: () => undefined }}>
-        <Page communityId="c1" />
+        <SwipeReveal open onReveal={() => undefined} onClose={() => undefined} canClose={false} underlay={<nav />}>
+          <main />
+        </SwipeReveal>
       </AppContext.Provider>,
     );
 
     await pressBack();
-    await pressBack();
-    expect(back).not.toHaveBeenCalled();
     expect(minimizeApp).toHaveBeenCalledTimes(1);
-    back.mockRestore();
   });
 
   it("leaves back alone on the desktop layout", async () => {

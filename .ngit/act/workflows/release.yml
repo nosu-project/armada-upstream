@@ -77,7 +77,7 @@ name: Release
 #   KEY_PASSWORD             upload key password (== store password; PKCS12
 #                            uses a single password, so the two must match)
 #   ZAPSTORE_BUNKER_URL      bunker:// URL of the NIP-46 signer that signs the
-#                            kind-30622 release event (the name predates that).
+#                            kind-30622 release event and the Zapstore re-signs.
 #   ZAPSTORE_CLIENT_KEY      the client secret key that bunker session was
 #                            established with (hex or nsec). Both halves are
 #                            needed: the URL's one-time `secret=` is long spent,
@@ -779,6 +779,7 @@ jobs:
       # succeeded: the two are read by different clients and neither should
       # cost the other. Runs after it so the blobs are already on Blossom.
       - name: Publish the NIP-82 release
+        id: nip82
         if: ${{ always() }}
         # A STEP deadline, for the reason given on the step above.
         timeout-minutes: 25
@@ -798,6 +799,20 @@ jobs:
             --repo nostr://npub10qdp2fc9ta6vraczxrcs8prqnv69fru2k6s2dj48gqjcylulmtjsg9arpj/relay.ngit.dev/armada \
             --commit "$GITHUB_SHA" \
             --nbunksec-file "$RUNNER_TEMP/nbunksec"
+
+      # Until Zapstore ships purplebase/models' fix, its client takes the app's
+      # first `a` tag as the release and installs the newest asset of ANY
+      # platform. Re-sign the app and the APK asset so it reads them (see the
+      # script's header). Same key as the NIP-82 release, through the 30622 one's
+      # session.
+      - name: Adapt the NIP-82 release for Zapstore
+        if: ${{ always() && steps.nip82.outcome == 'success' }}
+        timeout-minutes: 10
+        env:
+          NOSTR_BUNKER_URL: ${{ secrets.ZAPSTORE_BUNKER_URL }}
+          NOSTR_CLIENT_KEY: ${{ secrets.ZAPSTORE_CLIENT_KEY }}
+          TAG: ${{ github.ref_name }}
+        run: node scripts/zapstore-compat.mjs --version "${TAG#v}"
 
       - name: Remove the signer
         if: ${{ always() }}

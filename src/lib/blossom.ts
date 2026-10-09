@@ -13,7 +13,9 @@ const DEPLOYMENT_BLOSSOM_SERVERS: string[] = parseServerList(config("BLOSSOM_SER
 
 export const APP_BLOSSOM_SERVERS: string[] = DEPLOYMENT_BLOSSOM_SERVERS.length > 0
   ? DEPLOYMENT_BLOSSOM_SERVERS
-  : parseServerList("https://blossom.ditto.pub/,https://blossom.dreamith.to/,https://blossom.primal.net/");
+  : parseServerList(
+    "https://blossom.ditto.pub/,https://blossom.dreamith.to/,https://blossom.primal.net/,https://cdn.hzrd149.com/",
+  );
 
 /** The first of a deployment's `BLOSSOM_SERVERS`, or "" for no preference. */
 export const PREFERRED_BLOSSOM_SERVER: string = DEPLOYMENT_BLOSSOM_SERVERS[0] ?? "";
@@ -77,22 +79,28 @@ function normalizeUrl(url: string): string {
   return url.toLowerCase().replace(/\/+$/, "");
 }
 
+export interface UploadTargets {
+  servers: string[];
+  /** The server whose URL an upload embeds when it takes the blob. */
+  preferred?: string;
+}
+
 /**
- * Effective Blossom servers: app servers + user's (deduped) when enabled, else
- * only the user's — even if empty; an explicit off must not dial defaults.
- * A preferred server goes first, joining the list if neither names it: it is
- * a setting of its own, cleared rather than switched off.
+ * Where uploads go: the user's kind 10063 list, else the app servers. BUD-03
+ * orders the list most trusted first, so its first server is the preferred one.
  */
-export function getEffectiveBlossomServers(
-  appServers: string[],
-  userMeta: BlossomServerMetadata,
-  useAppBlossomServers: boolean,
-  preferredServer = "",
-): string[] {
-  const preferred = normalizeBlossomServerUrl(preferredServer);
-  const head = preferred ? [preferred] : [];
-  if (!useAppBlossomServers) return dedupeServers([...head, ...userMeta.servers]);
-  return dedupeServers([...head, ...appServers, ...userMeta.servers]);
+export function uploadTargets(userMeta: BlossomServerMetadata): UploadTargets {
+  const own = dedupeServers(
+    userMeta.servers
+      .map((url) => normalizeBlossomServerUrl(url))
+      .filter((url): url is string => url !== null),
+  );
+  if (own.length > 0) return { servers: own, preferred: own[0] };
+  return { servers: [...APP_BLOSSOM_SERVERS], preferred: PREFERRED_BLOSSOM_SERVER || undefined };
+}
+
+export function lookupBlossomServers(userMeta: BlossomServerMetadata): string[] {
+  return dedupeServers([...userMeta.servers, ...APP_BLOSSOM_SERVERS]);
 }
 
 /**

@@ -67,11 +67,17 @@ export function LinkEmbed({ url, className }: LinkEmbedProps) {
   }
 
   if (tweetId) {
-    return <TweetEmbed tweetId={tweetId} className={className} />;
+    return <TweetEmbed tweetId={tweetId} className={className} fallback={<PlainLink url={url} />} />;
   }
 
   if (instagramShortcode) {
-    return <InstagramEmbed shortcode={instagramShortcode} className={className} />;
+    return (
+      <InstagramEmbed
+        shortcode={instagramShortcode}
+        className={className}
+        fallback={<PlainLink url={url} />}
+      />
+    );
   }
 
   if (spotify) {
@@ -157,6 +163,20 @@ function EmbedInfoBar({ url }: { url: string }) {
   );
 }
 
+function PlainLink({ url }: { url: string }) {
+  return (
+    <a
+      href={url}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="text-primary hover:underline break-all"
+      onClick={(e) => e.stopPropagation()}
+    >
+      {url}
+    </a>
+  );
+}
+
 function displayDomain(url: string): string {
   try {
     return new URL(url).hostname.replace(/^www\./, "");
@@ -203,19 +223,7 @@ function LinkPreview({ url, className }: { url: string; className?: string }) {
     );
   }
 
-  if (!embed) {
-    return (
-      <a
-        href={url}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="text-primary hover:underline break-all"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {url}
-      </a>
-    );
-  }
+  if (!embed) return <PlainLink url={url} />;
 
   const images = embed.images;
   const single = images.length === 1 ? images[0] : undefined;

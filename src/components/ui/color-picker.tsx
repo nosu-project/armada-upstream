@@ -199,8 +199,16 @@ export function ColorPicker({ value, onChange, label, className, disabled }: Col
           )}
         </button>
       </PopoverTrigger>
-      <PopoverContent className="w-64 p-3 space-y-3" align="center" sideOffset={8} onOpenAutoFocus={(e) => e.preventDefault()}>
-        <div className="relative w-full aspect-square rounded-lg overflow-hidden cursor-crosshair">
+      {/* A stacked picker is ~330px tall, more than a landscape phone has, so short
+          viewports put the square beside the controls and size it to the space left. */}
+      <PopoverContent
+        className="w-64 p-3 flex flex-col gap-3 overflow-y-auto [@media(max-height:500px)]:w-auto [@media(max-height:500px)]:flex-row"
+        align="center"
+        sideOffset={8}
+        onOpenAutoFocus={(e) => e.preventDefault()}
+      >
+        <div className="relative w-full aspect-square rounded-lg overflow-hidden cursor-crosshair shrink-0 [@media(max-height:500px)]:w-[clamp(6rem,calc(var(--radix-popover-content-available-height)-1.5rem),11rem)]">
+
           <canvas
             ref={canvasRef}
             width={256}
@@ -221,39 +229,41 @@ export function ColorPicker({ value, onChange, label, className, disabled }: Col
           />
         </div>
 
-        <div className="relative w-full h-3 rounded-full overflow-hidden cursor-pointer">
-          <canvas
-            ref={hueRef}
-            width={256}
-            height={12}
-            className="w-full h-full touch-none"
-            onMouseDown={(e) => {
-              setIsDraggingHue(true);
-              handleHueInteraction(e);
-            }}
-            onTouchStart={(e) => {
-              setIsDraggingHue(true);
-              handleHueInteraction(e);
-            }}
-          />
-          <div
-            className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 size-4 rounded-full border-2 border-white shadow-[0_0_0_1px_rgba(0,0,0,0.3)] pointer-events-none"
-            style={{ left: `${hueX}%` }}
-          />
-        </div>
+        <div className="flex flex-col gap-3 [@media(max-height:500px)]:w-44 [@media(max-height:500px)]:justify-center">
+          <div className="relative w-full h-3 rounded-full overflow-hidden cursor-pointer">
+            <canvas
+              ref={hueRef}
+              width={256}
+              height={12}
+              className="w-full h-full touch-none"
+              onMouseDown={(e) => {
+                setIsDraggingHue(true);
+                handleHueInteraction(e);
+              }}
+              onTouchStart={(e) => {
+                setIsDraggingHue(true);
+                handleHueInteraction(e);
+              }}
+            />
+            <div
+              className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 size-4 rounded-full border-2 border-white shadow-[0_0_0_1px_rgba(0,0,0,0.3)] pointer-events-none"
+              style={{ left: `${hueX}%` }}
+            />
+          </div>
 
-        <div className="flex items-center gap-2">
-          <div
-            className="size-8 rounded-md border border-border shrink-0"
-            style={{ backgroundColor: localHex }}
-          />
-          <Input
-            value={localHex}
-            onChange={handleHexInput}
-            className="h-8 font-mono text-base uppercase"
-            maxLength={7}
-            spellCheck={false}
-          />
+          <div className="flex items-center gap-2">
+            <div
+              className="size-8 rounded-md border border-border shrink-0"
+              style={{ backgroundColor: localHex }}
+            />
+            <Input
+              value={localHex}
+              onChange={handleHexInput}
+              className="h-8 font-mono text-base uppercase"
+              maxLength={7}
+              spellCheck={false}
+            />
+          </div>
         </div>
       </PopoverContent>
     </Popover>

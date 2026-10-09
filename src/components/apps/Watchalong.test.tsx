@@ -36,9 +36,7 @@ vi.mock("@/lib/nativeYouTube", () => ({
 const PROXY = "https://proxy.example/?url={href}";
 const context = {
   config: {
-    appBlossomServers: [],
     blossomServerMetadata: { servers: [] },
-    useAppBlossomServers: false,
     mediaProxies: [PROXY],
   },
   updateConfig: vi.fn(),

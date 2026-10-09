@@ -1,6 +1,7 @@
 import { useNostr } from "@nostrify/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { KIND_SEAL_ENCRYPTED, KIND_TYPING } from "@/concord/lib/kinds";
 import { subscribeEphemeral } from "@/concord/lib/ephemeralSub";
@@ -22,6 +23,7 @@ const TYPING_THROTTLE_MS = 4000;
 export function useTyping(community: Community | undefined, channel: Channel | undefined): string[] {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
+  const enabled = useAppContext().config.dmTypingIndicators;
   const [typers, setTypers] = useState<string[]>([]);
   const seen = useRef(new Map<string, number>());
 
@@ -31,7 +33,7 @@ export function useTyping(community: Community | undefined, channel: Channel | u
   useEffect(() => {
     seen.current = new Map();
     setTypers([]);
-    if (!community || !channel || !channelIdHex || !currentPk) return;
+    if (!enabled || !community || !channel || !channelIdHex || !currentPk) return;
     const group = channel.current.group;
     const epoch = channel.current.epoch;
 
@@ -78,7 +80,7 @@ export function useTyping(community: Community | undefined, channel: Channel | u
       if (decay) clearTimeout(decay);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nostr, community?.idHex, channelIdHex, currentPk, user?.pubkey]);
+  }, [nostr, community?.idHex, channelIdHex, currentPk, user?.pubkey, enabled]);
 
   return typers;
 }
@@ -87,10 +89,11 @@ export function useTyping(community: Community | undefined, channel: Channel | u
 export function useTypingPublisher(community: Community | undefined, channel: Channel | undefined) {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
+  const enabled = useAppContext().config.dmTypingIndicators;
   const lastSent = useRef(0);
 
   return useCallback(() => {
-    if (!user || !community || !channel) return;
+    if (!enabled || !user || !community || !channel) return;
     const now = Date.now();
     if (now - lastSent.current < TYPING_THROTTLE_MS) return;
     lastSent.current = now;
@@ -113,5 +116,5 @@ export function useTypingPublisher(community: Community | undefined, channel: Ch
         // best-effort; typing is ephemeral
       }
     })();
-  }, [nostr, user, community, channel]);
+  }, [nostr, user, community, channel, enabled]);
 }

@@ -40,11 +40,11 @@ object SelfState {
      * The bare replaceable kinds, synced with a plain `{authors:[me], kinds:[…]}`
      * filter: follow (3), mute (10000), the NIP-65 pointer (10002), search
      * relays (10007), NIP-29 servers/channels (10009), DM relays (10050),
-     * Blossom servers (10063), custom emoji (10030), the fragmented Concord
-     * community vault (33302), and the invite list (13303).
+     * Blossom servers (10063), custom emoji (10030), quick reactions (10077),
+     * the fragmented Concord community vault (33302), and the invite list (13303).
      */
     @JvmField
-    val KINDS: Set<Int> = setOf(3, 10000, 10002, 10007, 10009, 10050, 10063, 10030, 33302, 13303)
+    val KINDS: Set<Int> = setOf(3, 10000, 10002, 10007, 10009, 10050, 10063, 10030, 10077, 33302, 13303)
 
     /**
      * The `d` values of the addressable kind-30078 documents Armada owns, for

@@ -19,6 +19,8 @@ import { DEFAULT_AVATARS, type DefaultAvatar } from "@/lib/defaultAvatars";
 import { impact } from "@/lib/haptics";
 import { cn } from "@/lib/utils";
 
+import type { NostrEvent } from "@nostrify/nostrify";
+
 /** Signup step 3: optional name and picture (twelve presets, one tap). Everything else stays in Settings. */
 
 type Picture =
@@ -33,10 +35,12 @@ export interface ProfileStepBodyProps {
    * silently replaces someone's profile, so publishing refuses on mismatch.
    */
   expectedPubkey: string | undefined;
+  /** The signed kind 0, so a later step can send it to more relays. */
+  onPublished?: (event: NostrEvent) => void;
   onFinish: () => void;
 }
 
-export function ProfileStepBody({ expectedPubkey, onFinish }: ProfileStepBodyProps) {
+export function ProfileStepBody({ expectedPubkey, onPublished, onFinish }: ProfileStepBodyProps) {
   const [name, setName] = useState("");
   const [picture, setPicture] = useState<Picture>({ kind: "none" });
   const [saving, setSaving] = useState(false);
@@ -123,11 +127,12 @@ export function ProfileStepBody({ expectedPubkey, onFinish }: ProfileStepBodyPro
       if (trimmed) metadata.name = trimmed;
       if (pictureUrl) metadata.picture = pictureUrl;
 
-      await publishEvent({
+      const event = await publishEvent({
         kind: 0,
         content: JSON.stringify(metadata),
         tags: picture.kind === "uploaded" ? profileImetaTags(metadata, [picture.imeta]) : [],
       });
+      if (event) onPublished?.(event);
       queryClient.invalidateQueries({ queryKey: ["logins"] });
       queryClient.invalidateQueries({ queryKey: ["author", user.pubkey] });
     } catch {

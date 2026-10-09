@@ -54,11 +54,13 @@ explicit one-shot publish while the switch is off. Standard signed Nostr lists
 still change when the user explicitly edits or saves those lists.
 
 Synchronized endpoint arrays are complete replacement sets. Build-time values
-seed a fresh config only. In particular, `appRelays`, `appDmRelays`,
-`appBlossomServers`, `preferredBlossomServer`, `communityRelays`, and a
+seed a fresh config only. In particular, `appRelays`, `communityRelays`, and a
 non-empty voice-server preference do not have public Armada addresses unioned back in after restore. Public
 NIP-65 discovery indexes and CORD's versioned stock-relay dictionary are
 protocol discovery/interoperability floors, not runtime account settings.
+DM inbox and media servers have no synced setting of their own: they are the
+kind 10050 and 10063 lists, and the build's Blossom servers are only where
+uploads go while the 10063 is empty.
 
 ## Why several and not one
 

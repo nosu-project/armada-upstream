@@ -4,10 +4,11 @@ import {
   APP_BLOSSOM_SERVERS,
   attachmentExpiration,
   blossomFallbackUrls,
-  getEffectiveBlossomServers,
+  lookupBlossomServers,
   mediaCandidates,
   normalizeBlossomServerUrl,
   parseBlossomServerList,
+  uploadTargets,
 } from "./blossom";
 
 import type { NostrEvent } from "@nostrify/nostrify";
@@ -42,6 +43,7 @@ describe("BLOSSOM_SERVERS", () => {
       "https://blossom.ditto.pub/",
       "https://blossom.dreamith.to/",
       "https://blossom.primal.net/",
+      "https://cdn.hzrd149.com/",
     ]);
     expect(PREFERRED_BLOSSOM_SERVER).toBe("");
   });
@@ -69,75 +71,37 @@ describe("parseBlossomServerList", () => {
   });
 });
 
-describe("getEffectiveBlossomServers", () => {
-  it("returns app servers when the user has none", () => {
-    expect(getEffectiveBlossomServers(APP_BLOSSOM_SERVERS, { servers: [], updatedAt: 0 }, true))
-      .toEqual(APP_BLOSSOM_SERVERS);
+describe("uploadTargets", () => {
+  it("uploads to the app servers, with no preference, when the user has no list", () => {
+    expect(uploadTargets({ servers: [], updatedAt: 0 }))
+      .toEqual({ servers: APP_BLOSSOM_SERVERS, preferred: undefined });
   });
 
-  it("merges app servers first, then user servers, deduped", () => {
+  it("uploads only to the user's list, its first server preferred (BUD-03)", () => {
+    const userMeta = { servers: ["https://mine.example", "https://blossom.primal.net/"], updatedAt: 0 };
+    expect(uploadTargets(userMeta)).toEqual({
+      servers: ["https://mine.example/", "https://blossom.primal.net/"],
+      preferred: "https://mine.example/",
+    });
+  });
+
+  it("dedupes case- and trailing-slash-insensitively and drops unusable entries", () => {
     const userMeta = {
-      servers: ["https://mine.example/", "https://blossom.primal.net"],
+      servers: ["HTTPS://MINE.EXAMPLE", "https://mine.example//", "ftp://x"],
       updatedAt: 0,
     };
-    expect(getEffectiveBlossomServers(APP_BLOSSOM_SERVERS, userMeta, true)).toEqual([
-      ...APP_BLOSSOM_SERVERS,
+    expect(uploadTargets(userMeta).servers).toEqual(["https://mine.example/"]);
+  });
+});
+
+describe("lookupBlossomServers", () => {
+  it("looks on the user's servers first, then the app's, deduped", () => {
+    const userMeta = { servers: ["https://mine.example/", "https://BLOSSOM.PRIMAL.NET"], updatedAt: 0 };
+    expect(lookupBlossomServers(userMeta)).toEqual([
       "https://mine.example/",
+      "https://BLOSSOM.PRIMAL.NET",
+      ...APP_BLOSSOM_SERVERS.filter((url) => url !== "https://blossom.primal.net/"),
     ]);
-  });
-
-  it("dedupes case- and trailing-slash-insensitively", () => {
-    const userMeta = {
-      servers: ["HTTPS://BLOSSOM.PRIMAL.NET///", "https://mine.example/"],
-      updatedAt: 0,
-    };
-    const effective = getEffectiveBlossomServers(APP_BLOSSOM_SERVERS, userMeta, true);
-    expect(effective).toEqual([...APP_BLOSSOM_SERVERS, "https://mine.example/"]);
-  });
-
-  it("returns only user servers when app servers are disabled", () => {
-    const userMeta = { servers: ["https://mine.example/"], updatedAt: 0 };
-    expect(getEffectiveBlossomServers(APP_BLOSSOM_SERVERS, userMeta, false)).toEqual([
-      "https://mine.example/",
-    ]);
-  });
-
-  it("keeps an intentional empty set when app servers are disabled", () => {
-    expect(getEffectiveBlossomServers(APP_BLOSSOM_SERVERS, { servers: [], updatedAt: 0 }, false))
-      .toEqual([]);
-  });
-
-  it("uses a synchronized app-server replacement instead of build defaults", () => {
-    expect(getEffectiveBlossomServers(
-      ["https://custom.example/"],
-      { servers: [], updatedAt: 0 },
-      true,
-    )).toEqual(["https://custom.example/"]);
-  });
-
-  it("puts the preferred server first, moving it out of the lists", () => {
-    const userMeta = { servers: ["https://mine.example/"], updatedAt: 0 };
-    expect(getEffectiveBlossomServers(
-      ["https://a.example/", "https://b.example/"],
-      userMeta,
-      true,
-      "https://B.example",
-    )).toEqual(["https://b.example/", "https://a.example/", "https://mine.example/"]);
-  });
-
-  it("adds a preferred server neither list names, even with app servers off", () => {
-    expect(getEffectiveBlossomServers(
-      ["https://a.example/"],
-      { servers: ["https://mine.example/"], updatedAt: 0 },
-      false,
-      "https://self.example/",
-    )).toEqual(["https://self.example/", "https://mine.example/"]);
-  });
-
-  it("ignores an empty or unusable preferred server", () => {
-    const userMeta = { servers: [], updatedAt: 0 };
-    expect(getEffectiveBlossomServers(["https://a.example/"], userMeta, true, "")).toEqual(["https://a.example/"]);
-    expect(getEffectiveBlossomServers(["https://a.example/"], userMeta, true, "ftp://x")).toEqual(["https://a.example/"]);
   });
 });
 

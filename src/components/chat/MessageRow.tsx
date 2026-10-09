@@ -176,6 +176,8 @@ export const MessageRow = memo(function MessageRow({
       }}
       className={cn(
         "group relative flex items-start gap-3 px-3 rounded hover:bg-secondary/40 transition-colors hover:z-10 focus-within:z-10",
+        // A toolbar picker/menu is portalled out of the row, so it holds the row's hover state itself.
+        "has-[[data-message-actions]_[aria-expanded=true]]:bg-secondary/40 has-[[data-message-actions]_[aria-expanded=true]]:z-10",
         continuation ? "py-0.5" : "pt-1.5 pb-0.5",
         pending && "animate-pulse",
         // Native text selection/callout fires `pointercancel` around 500ms and eats the
@@ -317,8 +319,8 @@ export const MessageRow = memo(function MessageRow({
         {actions && actionsArmed && (
           // Floated above the top-right so long names aren't crushed. Pointer only;
           // touch uses the long-press sheet.
-          <div className={cn(
-            "absolute right-2.5 z-20 flex flex-wrap justify-end items-center max-w-[calc(100%-1.25rem)] gap-0.5 vessel [--vessel-cut:0.45rem] px-1 py-0.5 select-none opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity",
+          <div data-message-actions className={cn(
+            "absolute right-2.5 z-20 flex flex-wrap justify-end items-center max-w-[calc(100%-1.25rem)] gap-0.5 vessel [--vessel-cut:0.45rem] px-1 py-0.5 select-none opacity-0 group-hover:opacity-100 focus-within:opacity-100 has-[[aria-expanded=true]]:opacity-100 transition-opacity",
             // Overlap the row so it stays inside its hover region.
             continuation ? "-top-3" : "-top-2.5",
           )}>

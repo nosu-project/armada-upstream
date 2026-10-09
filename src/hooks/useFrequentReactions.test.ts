@@ -13,6 +13,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
   getFrequentReactions,
   hydrateFrequentReactions,
+  quickReactionRow,
   recordReaction,
   resetFrequentReactionsCache,
   subscribeFrequentReactions,
@@ -151,5 +152,34 @@ describe("useFrequentReactions — cross-device merge", () => {
       ),
     );
     expect(getFrequentReactions(SELF).length).toBeLessThanOrEqual(32);
+  });
+});
+
+describe("quickReactionRow", () => {
+  const used = (key: string, count: number, url?: string) => ({ key, url, count, usedAt: 0 });
+
+  it("puts pinned reactions first, in their order, then the most-used", () => {
+    const row = quickReactionRow([used("🔥", 9), used("🚀", 5)], [{ key: "🐸" }, { key: "🙏" }], 4);
+    expect(row).toEqual([
+      { key: "🐸", pinned: true },
+      { key: "🙏", pinned: true },
+      { key: "🔥", pinned: false },
+      { key: "🚀", pinned: false },
+    ]);
+  });
+
+  it("lists a pinned reaction that is also most-used once, as pinned", () => {
+    const row = quickReactionRow([used("🔥", 9)], [{ key: "🐸" }, { key: "🔥" }], 3);
+    expect(row.map((s) => [s.key, s.pinned])).toEqual([["🐸", true], ["🔥", true], ["👍", false]]);
+  });
+
+  it("cuts the pins to the row length", () => {
+    const row = quickReactionRow([], [{ key: "a" }, { key: "b" }, { key: "c" }], 2);
+    expect(row.map((s) => s.key)).toEqual(["a", "b"]);
+  });
+
+  it("keeps a pinned custom emoji's image", () => {
+    const [slot] = quickReactionRow([], [{ key: ":cat:", url: "https://e/cat.png" }], 1);
+    expect(slot).toEqual({ key: ":cat:", url: "https://e/cat.png", pinned: true });
   });
 });

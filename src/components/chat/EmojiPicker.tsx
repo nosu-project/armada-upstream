@@ -33,6 +33,8 @@ interface EmojiPickerProps {
   onBrowsePacks?: () => void;
   /** The host has its own packs link; keep the footer only as the no-custom-emoji empty state. */
   packsLinkInHost?: boolean;
+  /** Count picks toward the frequent reactions (default). Off where picking isn't using. */
+  recordUsage?: boolean;
 }
 
 interface EmojiMartCustomEmoji {
@@ -64,7 +66,7 @@ function lucideMask(body: string): string {
 const EMOJI_CELL = 40;
 const EMOJI_TILE = 34;
 
-export function EmojiPicker({ onSelect, customEmojis, onBrowsePacks, packsLinkInHost }: EmojiPickerProps) {
+export function EmojiPicker({ onSelect, customEmojis, onBrowsePacks, packsLinkInHost, recordUsage = true }: EmojiPickerProps) {
   const isMobile = useIsMobile();
   const { user } = useCurrentUser();
   const containerRef = useRef<HTMLDivElement>(null);
@@ -75,20 +77,20 @@ export function EmojiPicker({ onSelect, customEmojis, onBrowsePacks, packsLinkIn
 
   const handleSelect = useCallback((emoji: EmojiMartEmoji) => {
     if (emoji.src) {
-      recordReaction(user?.pubkey, `:${emoji.id}:`, emoji.src, emoji.id);
+      if (recordUsage) recordReaction(user?.pubkey, `:${emoji.id}:`, emoji.src, emoji.id);
       onSelectRef.current({
         type: "custom",
         shortcode: emoji.id,
         url: emoji.src,
       });
     } else if (emoji.native) {
-      recordReaction(user?.pubkey, emoji.native, undefined, emoji.id);
+      if (recordUsage) recordReaction(user?.pubkey, emoji.native, undefined, emoji.id);
       onSelectRef.current({
         type: "native",
         emoji: emoji.native,
       });
     }
-  }, [user?.pubkey]);
+  }, [user?.pubkey, recordUsage]);
 
   // One custom category PER SOURCE PACK (like Discord per server); list-inlined
   // emojis go in a generic "Custom" group.

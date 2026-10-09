@@ -19,6 +19,7 @@ const spies = vi.hoisted(() => ({
   follows: [] as { pubkey: string; metadata: { name: string }; event: { tags: string[][] } }[],
 }));
 
+vi.mock("@/components/DmInboxNotice", () => ({ DmInboxNotice: () => null }));
 vi.mock("@/hooks/useAuthor", () => ({
   useAuthor: (pubkey?: string) => {
     spies.useAuthor(pubkey);
@@ -39,8 +40,6 @@ vi.mock("@/hooks/useAppContext", () => ({
   useAppContext: () => ({
     config: {
       showDmRequests: true,
-      useAppDmRelays: false,
-      useOwnDmRelays: false,
       appRelays: [],
       dmRelays: [],
     },
@@ -81,7 +80,6 @@ vi.mock("@/hooks/useDm17", () => ({
   useDm17Backfill: () => ({ hasMore: false, isLoading: false, loadOlder: async () => [] }),
   useDm17Conversations: () => ({ rows: [], isLoading: false }),
   useDm17Support: () => true,
-  useAdoptDmInbox: () => {},
 }));
 vi.mock("@/components/auth/LoginArea", () => ({ LoginArea: () => null }));
 vi.mock("@/components/DisplayName", () => ({

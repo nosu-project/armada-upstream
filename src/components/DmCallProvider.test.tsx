@@ -409,7 +409,7 @@ describe("DmCallProvider signaling", () => {
     vi.clearAllMocks();
     activeCall.current = null;
     known.peers = [realPeer, lowPeer];
-    app.config = { useOwnDmRelays: true, dmRelays: ["wss://dm.example"] };
+    app.config = { useAppRelays: false, dmRelays: ["wss://dm.example"] };
     probe.fn.mockImplementation(async () => true);
     sessionStorage.removeItem("armada:dm-call-own-ids");
     _resetDmCallBusForTests();

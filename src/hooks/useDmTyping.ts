@@ -4,7 +4,7 @@
  * - RECEIVE: a live `{kinds:[21059], "#p":[me]}` sub on the inbox relay set (shared via
  *   `ephemeralInbox.ts`) feeding a decaying in-memory map; nothing is persisted.
  * - SEND: throttled, sealed to the peer ONLY, to their 10050 inbox ∪ our DM relays.
- * Gated only by `config.dmTypingIndicators`.
+ * Gated only by `config.dmTypingIndicators` (the app-wide typing toggle).
  */
 
 import { useNostr } from "@nostrify/react";

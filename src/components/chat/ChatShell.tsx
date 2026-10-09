@@ -14,7 +14,7 @@ export function ChatShell({
   scope,
   children,
 }: {
-  reveal: Pick<ComponentProps<typeof SwipeReveal>, "open" | "onReveal" | "onClose" | "underlay">;
+  reveal: Pick<ComponentProps<typeof SwipeReveal>, "open" | "onReveal" | "onClose" | "canClose" | "underlay">;
   /** `ChatScopeContext` for the open room; undefined when nothing is open. */
   scope: AppScope | undefined;
   children: ReactNode;

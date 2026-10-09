@@ -4,6 +4,7 @@ import { Fragment, lazy, Suspense, useCallback, useContext, useEffect, useRef, u
 import { CustomEmojiImg } from "@/components/chat/CustomEmoji";
 import { EmojiSourceFooter } from "@/components/chat/EmojiSourceFooter";
 import { MediaHoldContext } from "@/components/chat/mediaHold";
+import { usePointerOpened } from "@/components/chat/usePointerOpened";
 import { DisplayName } from "@/components/DisplayName";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -13,7 +14,8 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { useAuthor } from "@/hooks/useAuthor";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useCustomEmojis } from "@/hooks/useCustomEmojis";
-import { recordReaction, useFrequentReactions } from "@/hooks/useFrequentReactions";
+import { recordReaction } from "@/hooks/useFrequentReactions";
+import { useQuickReactions } from "@/hooks/useQuickReactionList";
 import { useIsTouch } from "@/hooks/useIsMobile";
 import { getAvatarShape } from "@/lib/avatarShape";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
@@ -385,26 +387,64 @@ interface ReactionActionsProps {
 
 const NO_TALLIES: ReactionTally[] = [];
 
+/**
+ * Toggle-react with `key`, counting it toward the frequent reactions. Pass
+ * `recorded` for a picker selection: the picker has already counted it.
+ */
+export function useToggleReact(onReact: (input: ReactInput) => void, tallies: ReactionTally[]) {
+  const { user } = useCurrentUser();
+  return useCallback(
+    (key: string, url?: string, recorded = false) => {
+      const input = toggleInput(key, url, tallies);
+      if (!input.mineEventId && !recorded) recordReaction(user?.pubkey, input.key, input.emojiUrl);
+      onReact(input);
+    },
+    [onReact, tallies, user?.pubkey],
+  );
+}
+
+/** The emoji picker as a reaction chooser; `onPick` gets what the picker already counted. */
+export function ReactionPickerPanel({
+  onPick,
+  onBrowsePacks,
+  recordUsage,
+}: {
+  onPick: (key: string, url?: string) => void;
+  onBrowsePacks: () => void;
+  recordUsage?: boolean;
+}) {
+  const { emojis: customEmojis } = useCustomEmojis();
+  return (
+    <Suspense fallback={<div className="w-full" />}>
+      <LazyEmojiPicker
+        customEmojis={customEmojis}
+        onBrowsePacks={onBrowsePacks}
+        recordUsage={recordUsage}
+        onSelect={(selection) => {
+          if (selection.type === "native") onPick(selection.emoji);
+          else onPick(`:${selection.shortcode}:`, selection.url);
+        }}
+      />
+    </Suspense>
+  );
+}
+
+/** Sizing shared by every popover that hosts {@link ReactionPickerPanel}. */
+export const REACTION_PICKER_CLASS =
+  "flex w-[min(20rem,90vw)] h-[min(360px,55dvh)] max-h-[var(--radix-popover-content-available-height)] p-0 overflow-hidden";
+
 /** Toolbar reaction controls: most-used emoji for one-click reacting, then the picker. */
 export function ReactionActions({
   onReact,
   tallies = NO_TALLIES,
   quickSlots = QUICK_SLOTS_POINTER,
 }: ReactionActionsProps) {
-  const { emojis: customEmojis } = useCustomEmojis();
   const { user } = useCurrentUser();
   const [open, setOpen] = useState(false);
+  const pointerOpened = usePointerOpened();
 
-  const frequent = useFrequentReactions(user?.pubkey, quickSlots);
-
-  const react = useCallback(
-    (key: string, url?: string) => {
-      const input = toggleInput(key, url, tallies);
-      if (!input.mineEventId) recordReaction(user?.pubkey, input.key, input.emojiUrl);
-      onReact(input);
-    },
-    [onReact, tallies, user?.pubkey],
-  );
+  const frequent = useQuickReactions(user?.pubkey, quickSlots);
+  const react = useToggleReact(onReact, tallies);
 
   return (
     <>
@@ -447,6 +487,7 @@ export function ReactionActions({
                 size="icon"
                 aria-label="Add reaction"
                 className="size-9 md:size-7 touch:size-11 touch:md:size-11 text-muted-foreground hover:text-primary"
+                {...pointerOpened.triggerProps}
               >
                 <SmilePlus className="size-[18px] md:size-3.5" />
               </Button>
@@ -458,22 +499,16 @@ export function ReactionActions({
           side="top"
           align="end"
           sideOffset={8}
-          className="flex w-[min(20rem,90vw)] h-[min(360px,55dvh)] max-h-[var(--radix-popover-content-available-height)] p-0 overflow-hidden"
+          className={REACTION_PICKER_CLASS}
+          onCloseAutoFocus={pointerOpened.onCloseAutoFocus}
         >
-          <Suspense fallback={<div className="w-full" />}>
-            <LazyEmojiPicker
-              customEmojis={customEmojis}
-              onBrowsePacks={() => setOpen(false)}
-              onSelect={(selection) => {
-                if (selection.type === "native") {
-                  react(selection.emoji);
-                } else {
-                  react(`:${selection.shortcode}:`, selection.url);
-                }
-                setOpen(false);
-              }}
-            />
-          </Suspense>
+          <ReactionPickerPanel
+            onBrowsePacks={() => setOpen(false)}
+            onPick={(key, url) => {
+              react(key, url, true);
+              setOpen(false);
+            }}
+          />
         </PopoverContent>
       </Popover>
     </>

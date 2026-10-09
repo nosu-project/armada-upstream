@@ -1,3 +1,4 @@
+import { useBlossomReachable } from "@/hooks/useBlossomReachable";
 import { useRelayReachable } from "@/hooks/useRelayReachable";
 import { cn } from "@/lib/utils";
 
@@ -8,11 +9,27 @@ function phase(url: string): number {
   return (h >>> 0) % 7;
 }
 
-/** Relay status light (keyframes in index.css): grey while checking, blinking green when up, a red fault pulse when down. */
 export function RelayLed({ url, phase: phaseIndex, className }: { url: string; phase?: number; className?: string }) {
   const alive = useRelayReachable(url);
+  return <StatusLed alive={alive} url={url} phase={phaseIndex} noun="Relay" className={className} />;
+}
+
+export function BlossomLed({ url, className }: { url: string; className?: string }) {
+  const alive = useBlossomReachable(url);
+  return <StatusLed alive={alive} url={url} noun="Server" className={className} />;
+}
+
+/** Status light (keyframes in index.css): grey while checking, blinking green when up, a red fault pulse when down. */
+export function StatusLed({ alive, url, phase: phaseIndex, noun, className }: {
+  alive: boolean | undefined;
+  /** Seeds the blink phase, so lights in one list don't blink in step. */
+  url: string;
+  phase?: number;
+  noun: string;
+  className?: string;
+}) {
   const p = phaseIndex ?? phase(url);
-  const label = alive === undefined ? "Checking relay" : alive ? "Relay reachable" : "Relay unreachable";
+  const label = alive === undefined ? `Checking ${noun.toLowerCase()}` : alive ? `${noun} reachable` : `${noun} unreachable`;
 
   return (
     <span

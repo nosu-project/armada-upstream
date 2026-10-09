@@ -119,14 +119,8 @@ export const AppConfigSchema = z.object({
   useAppRelays: z.boolean().catch(defaultConfig.useAppRelays),
   useUserRelays: z.boolean().catch(defaultConfig.useUserRelays),
   relayMetadata: RelayMetadataSchema.catch(defaultConfig.relayMetadata),
-  useAppDmRelays: z.boolean().catch(defaultConfig.useAppDmRelays),
-  appDmRelays: z.array(z.string()).catch(defaultConfig.appDmRelays),
-  useOwnDmRelays: z.boolean().catch(defaultConfig.useOwnDmRelays),
   dmRelays: z.array(z.string()).catch(defaultConfig.dmRelays),
   blossomServerMetadata: BlossomServerMetadataSchema.catch(defaultConfig.blossomServerMetadata),
-  useAppBlossomServers: z.boolean().catch(defaultConfig.useAppBlossomServers),
-  appBlossomServers: z.array(z.string()).catch(defaultConfig.appBlossomServers),
-  preferredBlossomServer: z.string().catch(defaultConfig.preferredBlossomServer),
   lastChannelByServer: z.record(z.string(), z.string()).catch({}),
   mutedCommunities: z.array(z.string()).catch([]),
   mutedChannels: z.array(z.string()).catch([]),
@@ -180,15 +174,6 @@ export const MetadataDocSchema = z.looseObject({
   /** Whether app relays are in the general pool (foot-gun when off). */
   useAppRelays: z.boolean().optional(),
   useUserRelays: z.boolean().optional(),
-  useAppDmRelays: z.boolean().optional(),
-  /** Complete app-provided DM relay set; replaces the build defaults. */
-  appDmRelays: z.array(z.string()).optional(),
-  useOwnDmRelays: z.boolean().optional(),
-  useAppBlossomServers: z.boolean().optional(),
-  /** Complete app-provided Blossom server set; replaces the build defaults. */
-  appBlossomServers: z.array(z.string()).optional(),
-  /** Blossom server whose URL uploads embed; empty = first to answer. */
-  preferredBlossomServer: z.string().optional(),
   dmTypingIndicators: z.boolean().optional(),
   dmsDisabled: z.boolean().optional(),
   showDmRequests: z.boolean().optional(),

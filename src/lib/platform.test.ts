@@ -67,7 +67,13 @@ describe("RELAYS", () => {
 
   it("leaves Armada's public relays and the stock set when unset", async () => {
     const relays = await load();
-    expect(relays.APP_RELAYS).toEqual(["wss://relay.ditto.pub", "wss://relay.dreamith.to"]);
+    expect(relays.APP_RELAYS).toEqual([
+      "wss://relay.ditto.pub",
+      "wss://relay.dreamith.to",
+      "wss://jskitty.com/nostr",
+      "wss://asia.vectorapp.io/nostr",
+    ]);
+    expect(relays.SEARCH_RELAYS).toEqual(["wss://relay.ditto.pub", "wss://relay.dreamith.to"]);
     expect(relays.COMMUNITY_RELAYS).toEqual(relays.STOCK_RELAYS);
     expect(relays.RESCUE_RELAYS).toEqual(relays.STOCK_RELAYS);
     expect(relays.BROADCAST_RELAYS).toEqual(["wss://relay.primal.net"]);
@@ -77,7 +83,7 @@ describe("RELAYS", () => {
 
   it("counts empty as unset", async () => {
     const relays = await load(" ");
-    expect(relays.APP_RELAYS).toEqual(["wss://relay.ditto.pub", "wss://relay.dreamith.to"]);
+    expect(relays.APP_RELAYS).toContain("wss://relay.ditto.pub");
     expect(relays.RESCUE_RELAYS).toEqual(relays.STOCK_RELAYS);
   });
 
@@ -85,6 +91,7 @@ describe("RELAYS", () => {
     const relays = await load("wss://armada.example.com/, relay.ditto.pub");
     const own = ["wss://armada.example.com", "wss://relay.ditto.pub"];
     expect(relays.APP_RELAYS).toEqual(own);
+    expect(relays.SEARCH_RELAYS).toEqual(own);
     expect(relays.COMMUNITY_RELAYS).toEqual(own);
     expect(relays.RESCUE_RELAYS).toEqual(own);
     expect(relays.RELEASE_RELAYS).toEqual(own);

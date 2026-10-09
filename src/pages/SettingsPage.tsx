@@ -35,12 +35,12 @@ import { lazy, Suspense } from "react";
 
 import { LoginArea } from "@/components/auth/LoginArea";
 import { BlossomServerListEditor } from "@/components/BlossomServerListEditor";
-import { PreferredBlossomServerField } from "@/components/PreferredBlossomServerField";
 import { AccountStandingDialog } from "@/components/settings/AccountStandingDialog";
 import { EmojiPackSettings } from "@/components/settings/EmojiPackSettings";
 import { FontScaleSettings } from "@/components/settings/FontScaleSettings";
 import { ProfileSettings } from "@/components/ProfileSettings";
 import { NotificationSettings } from "@/components/NotificationSettings";
+import { DmInboxNotice } from "@/components/DmInboxNotice";
 import { RelayListEditor } from "@/components/RelayListEditor";
 import { RelayBootstrapForm } from "@/components/RelayBootstrapForm";
 import { DesktopSettings } from "@/components/settings/DesktopSettings";
@@ -49,6 +49,7 @@ import { KeyBackupSettings } from "@/components/settings/KeyBackupSettings";
 import { MediaPrivacySettings } from "@/components/settings/MediaPrivacySettings";
 import { MutedPeopleSettings } from "@/components/settings/MutedPeopleSettings";
 import { ChatSearchBar } from "@/components/chat/ChatSearchBar";
+import { QuickReactionsSettings } from "@/components/settings/QuickReactionsSettings";
 import { SettingsRow } from "@/components/settings/SettingsSection";
 import { useSettingsFilter } from "@/components/settings/settingsSearch";
 import { WalletSettings } from "@/components/settings/WalletSettings";
@@ -61,6 +62,7 @@ import { useAppContext } from "@/hooks/useAppContext";
 import { useBackOrHome } from "@/hooks/useBackOrHome";
 import { useBlossomServerList } from "@/hooks/useBlossomServerList";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { recommendedDmInbox } from "@/hooks/useDmInboxSetup";
 import { useDmRelayList } from "@/hooks/useDmRelayList";
 import { useInstallPrompt } from "@/hooks/useInstallPrompt";
 import { useIsTouch } from "@/hooks/useIsMobile";
@@ -69,9 +71,8 @@ import { usePublishPortableSetup } from "@/hooks/usePublishPortableSetup";
 import { useSearchRelayList } from "@/hooks/useSearchRelayList";
 import { toast } from "@/hooks/useToast";
 import { isDesktop } from "@/lib/desktop";
-import { APP_BLOSSOM_SERVERS } from "@/lib/blossom";
-import { effectiveDmRelays } from "@/contexts/AppContext";
-import { APP_RELAYS, BROADCAST_RELAYS, COMMUNITY_RELAYS } from "@/lib/platform";
+import { APP_BLOSSOM_SERVERS, uploadTargets } from "@/lib/blossom";
+import { APP_RELAYS, BROADCAST_RELAYS, COMMUNITY_RELAYS, SEARCH_RELAYS } from "@/lib/platform";
 import {
   getAudioProcessing,
   setAudioProcessing,
@@ -79,6 +80,7 @@ import {
 } from "@/lib/voiceDevices";
 import { rnnoiseSupported } from "@/lib/rnnoiseSupport";
 import { sendsOnEnter } from "@/lib/sendOnEnter";
+import { cn } from "@/lib/utils";
 
 import type { LucideIcon } from "lucide-react";
 import type { ReactNode } from "react";
@@ -98,8 +100,6 @@ type SectionId =
   | "desktop"
   | "voice"
   | "app-relays"
-  | "community-relays"
-  | "search-relays"
   | "dms"
   | "chat"
   | "media"
@@ -185,6 +185,9 @@ export function SettingsPage({
     });
   }, []);
   const [standingOpen, setStandingOpen] = useState(false);
+  // Searching mounts the advanced rows so settings search can match them.
+  const [relaysAdvancedOpen, setRelaysAdvancedOpen] = useState(false);
+  const showAdvanced = relaysAdvancedOpen || searching;
 
   /** Retire Account Standing's nag dot on open (not close). */
   const openStanding = useCallback(() => {
@@ -214,14 +217,6 @@ export function SettingsPage({
     updateConfig((current) => ({ ...current, broadcastRelays: relays }));
   };
 
-  const setAppDmRelays = (relays: string[]) => {
-    updateConfig((current) => ({ ...current, appDmRelays: relays }));
-  };
-
-  const setAppBlossomServers = (servers: string[]) => {
-    updateConfig((current) => ({ ...current, appBlossomServers: servers }));
-  };
-
   const setAutomaticSettingsSync = (automaticSettingsSync: boolean) => {
     updateConfig((current) => ({ ...current, automaticSettingsSync }));
   };
@@ -236,18 +231,6 @@ export function SettingsPage({
       searchRelayList.publish(relays).catch((err) =>
         console.warn("Search relay list (kind 10007) publish failed:", err));
     }
-  };
-
-  /**
-   * Toggle the app's default DM relays for THIS client (`effectiveDmRelays`).
-   * Local-only: app defaults must NEVER enter the user's published kind 10050.
-   */
-  const setUseAppDmRelays = (value: boolean) => {
-    updateConfig((current) => ({ ...current, useAppDmRelays: value }));
-  };
-
-  const setUseOwnDmRelays = (value: boolean) => {
-    updateConfig((current) => ({ ...current, useOwnDmRelays: value }));
   };
 
   /** Off is a foot-gun: with no other relays the pool is empty. */
@@ -284,9 +267,9 @@ export function SettingsPage({
   };
 
   /**
-   * Publish the user's kind 10050 with exactly the edited personal list (never
-   * app defaults) — the one legitimate reason to write it. No refetch, so an
-   * in-flight fetch can't clobber the edit.
+   * Publish the user's kind 10050 with exactly the edited list — the one
+   * legitimate reason to write it. No refetch, so an in-flight fetch can't
+   * clobber the edit.
    */
   const setDmRelays = (relays: string[]) => {
     updateConfig((current) => ({ ...current, dmRelays: relays }));
@@ -306,10 +289,6 @@ export function SettingsPage({
       blossomServerList.publish(servers).catch((err) =>
         console.warn("Blossom server list (kind 10063) publish failed:", err));
     }
-  };
-
-  const setUseAppBlossomServers = (value: boolean) => {
-    updateConfig((current) => ({ ...current, useAppBlossomServers: value }));
   };
 
   const setStripTrackingParams = (value: boolean) => {
@@ -362,9 +341,7 @@ export function SettingsPage({
     }
     appItems.push(
       { id: "voice", title: "Voice", icon: Mic },
-      { id: "app-relays", title: "App relays", icon: Waypoints },
-      { id: "community-relays", title: "Community relays", icon: ShieldCheck },
-      { id: "search-relays", title: "Search relays", icon: Search },
+      { id: "app-relays", title: "Relays", icon: Waypoints },
       { id: "dms", title: "Direct messages", icon: MessageSquareLock },
       { id: "chat", title: "Chat", icon: MessageSquare },
       { id: "media", title: "Media privacy", icon: EyeOff },
@@ -453,12 +430,6 @@ export function SettingsPage({
                 account data.
               </p>
             </SettingsRow>
-            <SettingsRow
-              label="Use app relays"
-              description="Keep account data on the relays below."
-            >
-              <Switch checked={config.useAppRelays} onCheckedChange={setUseAppRelays} />
-            </SettingsRow>
             {!config.useAppRelays && !(config.useUserRelays && userRelayUrls.length > 0) && (
               <SettingsRow>
                 <p className="text-sm text-destructive leading-snug">
@@ -474,27 +445,6 @@ export function SettingsPage({
                 onReset={() => setAppRelays([...APP_RELAYS])}
                 emptyText="No app relays yet. Configure personal NIP-65 relays to keep account data available."
               />
-            </SettingsRow>
-            <SettingsRow>
-              <p className="text-xs text-muted-foreground leading-snug">
-                Broadcast relays. Your public profile is also published here
-                for other Nostr apps. Armada never reads from them, and never
-                sends messages here.
-              </p>
-            </SettingsRow>
-            <SettingsRow>
-              <RelayListEditor
-                relays={config.broadcastRelays}
-                onChange={setBroadcastRelays}
-                onReset={() => setBroadcastRelays([...BROADCAST_RELAYS])}
-                emptyText="No broadcast relays. Your public data goes only to the relays above."
-              />
-            </SettingsRow>
-            <SettingsRow
-              label="Use my own relays (NIP-65)"
-              description="Also use the relays in your NIP-65 relay list."
-            >
-              <Switch checked={config.useUserRelays} onCheckedChange={setUseUserRelays} />
             </SettingsRow>
             {user && (
               <SettingsRow
@@ -599,49 +549,73 @@ export function SettingsPage({
                 </div>
               </SettingsRow>
             )}
+            <SettingsRow>
+              <button
+                type="button"
+                aria-expanded={showAdvanced}
+                className="flex w-full items-center gap-2 text-sm font-medium text-muted-foreground hover:text-foreground"
+                onClick={() => setRelaysAdvancedOpen((open) => !open)}
+              >
+                Advanced
+                <ChevronDown className={cn("size-4 transition-transform duration-200", showAdvanced && "rotate-180")} />
+              </button>
+            </SettingsRow>
+            {showAdvanced && (
+              <>
+                <SettingsRow
+                  label="Use app relays"
+                  description="Keep account data on the app relays."
+                >
+                  <Switch checked={config.useAppRelays} onCheckedChange={setUseAppRelays} />
+                </SettingsRow>
+                <SettingsRow
+                  label="Use my own relays (NIP-65)"
+                  description="Also use the relays in your NIP-65 relay list."
+                >
+                  <Switch checked={config.useUserRelays} onCheckedChange={setUseUserRelays} />
+                </SettingsRow>
+                <SettingsRow
+                  stack
+                  label="Broadcast relays"
+                  description="Your public profile is also published here for other Nostr apps. Armada never reads from them or sends messages here."
+                >
+                  <RelayListEditor
+                    relays={config.broadcastRelays}
+                    onChange={setBroadcastRelays}
+                    onReset={() => setBroadcastRelays([...BROADCAST_RELAYS])}
+                    emptyText="No broadcast relays. Your public data goes only to your app relays."
+                  />
+                </SettingsRow>
+                <SettingsRow
+                  stack
+                  label="Search relays"
+                  description="Queried when you search for people or communities by name (NIP-50)."
+                >
+                  <RelayListEditor
+                    relays={config.searchRelays}
+                    onChange={setSearchRelays}
+                    onReset={() => setSearchRelays([...SEARCH_RELAYS])}
+                    emptyText="No search relays. Search uses your app relays."
+                  />
+                </SettingsRow>
+                <SettingsRow
+                  stack
+                  label="Community relays"
+                  description="Defaults for communities you create. Each community can change its own."
+                >
+                  <RelayListEditor
+                    relays={config.communityRelays}
+                    onChange={setCommunityRelays}
+                    onReset={() => setCommunityRelays([...COMMUNITY_RELAYS])}
+                    emptyText="No community relays. New communities use the shared Concord relays."
+                  />
+                </SettingsRow>
+              </>
+            )}
           </>
         );
       }
-      case "community-relays":
-        return (
-          <>
-            <SettingsRow>
-              <p className="text-xs text-muted-foreground leading-snug">
-                Default relays for communities you create. Each community can
-                override them in its own settings.
-              </p>
-            </SettingsRow>
-            <SettingsRow>
-              <RelayListEditor
-                relays={config.communityRelays}
-                onChange={setCommunityRelays}
-                onReset={() => setCommunityRelays([...COMMUNITY_RELAYS])}
-                emptyText="No community relays. New communities use the shared Concord relays."
-              />
-            </SettingsRow>
-          </>
-        );
-      case "search-relays":
-        return (
-          <>
-            <SettingsRow>
-              <p className="text-xs text-muted-foreground leading-snug">
-                Relays queried when you search for people or communities by name
-                (NIP-50). Leave empty to fall back to your app relays.
-              </p>
-            </SettingsRow>
-            <SettingsRow>
-              <RelayListEditor
-                relays={config.searchRelays}
-                onChange={setSearchRelays}
-                onReset={() => setSearchRelays([...APP_RELAYS])}
-                emptyText="No search relays. Search uses your app relays."
-              />
-            </SettingsRow>
-          </>
-        );
-      case "dms": {
-        const effective = effectiveDmRelays(config);
+      case "dms":
         return (
           <>
             <SettingsRow
@@ -653,35 +627,17 @@ export function SettingsPage({
             {/* With DMs disabled, only the master toggle remains. */}
             {!config.dmsDisabled && (
               <>
-                <SettingsRow
-                  label="Use app DM relays"
-                  description="Use your app relays and the DM relays below."
-                >
-                  <Switch checked={config.useAppDmRelays} onCheckedChange={setUseAppDmRelays} />
-                </SettingsRow>
+                <DmInboxNotice className="mx-4 my-3.5" />
                 <SettingsRow
                   stack
-                  label="Additional app DM relays"
+                  label="DM inbox relays"
+                  description="Where other apps deliver your private messages. Armada also checks your app relays."
                 >
-                  <RelayListEditor
-                    relays={config.appDmRelays}
-                    onChange={setAppDmRelays}
-                    onReset={() => setAppDmRelays([])}
-                    emptyText="No additional app DM relays. Legacy DMs still use your general app relays."
-                    placeholder="wss://dm-relay.example.com"
-                  />
-                </SettingsRow>
-                <SettingsRow
-                  label="Use my own DM relays"
-                  description="Also use your own DM relays below."
-                >
-                  <Switch checked={config.useOwnDmRelays} onCheckedChange={setUseOwnDmRelays} />
-                </SettingsRow>
-                <SettingsRow>
                   <RelayListEditor
                     relays={config.dmRelays}
                     onChange={setDmRelays}
-                    emptyText="No personal DM relays yet. Add one, or rely on the app DM relays above."
+                    onReset={() => setDmRelays(recommendedDmInbox(config))}
+                    emptyText="No DM inbox yet. Armada users can still reach you on your app relays."
                     placeholder="wss://dm-relay.example.com"
                   />
                 </SettingsRow>
@@ -697,85 +653,33 @@ export function SettingsPage({
                 >
                   <Switch checked={config.showRecentRailDms} onCheckedChange={setShowRecentRailDms} />
                 </SettingsRow>
-                <SettingsRow
-                  label="Typing indicators"
-                  description="Share and see typing status in DMs."
-                >
-                  <Switch checked={config.dmTypingIndicators} onCheckedChange={setDmTypingIndicators} />
-                </SettingsRow>
-                {effective.length > 0 ? (
-                  <SettingsRow>
-                    <div className="space-y-2">
-                      <div className="text-sm font-medium leading-tight">DMs currently use</div>
-                      <RelayListEditor readOnly relays={effective} />
-                    </div>
-                  </SettingsRow>
-                ) : (
-                  <SettingsRow>
-                    <p className="text-sm text-destructive">
-                      No DM relays. Turn on an option above to send and
-                      receive DMs.
-                    </p>
-                  </SettingsRow>
-                )}
               </>
             )}
           </>
         );
-      }
       case "media":
         return <MediaPrivacySettings />;
-      case "uploads":
+      case "uploads": {
+        const ownServers = config.blossomServerMetadata.servers.length > 0;
         return (
           <>
-            <SettingsRow
-              label="Use app media servers"
-              description="Also upload to the app media servers."
-            >
-              <Switch
-                checked={config.useAppBlossomServers}
-                onCheckedChange={setUseAppBlossomServers}
-              />
-            </SettingsRow>
-            <SettingsRow
-              stack
-              label="App media servers"
-            >
-              <BlossomServerListEditor
-                servers={config.appBlossomServers}
-                onChange={setAppBlossomServers}
-                onReset={() => setAppBlossomServers([...APP_BLOSSOM_SERVERS])}
-                emptyText="No app media servers configured."
-              />
+            <SettingsRow>
+              <p className="text-xs text-muted-foreground leading-snug">
+                {ownServers
+                  ? "Your files are stored on these servers. Links point to the primary one."
+                  : "Your files are stored on Armada's servers. Change the list to make it your own."}
+              </p>
             </SettingsRow>
             <SettingsRow>
               <BlossomServerListEditor
-                servers={config.blossomServerMetadata.servers}
+                servers={uploadTargets(config.blossomServerMetadata).servers}
                 onChange={setBlossomServers}
-                emptyText="No personal media servers configured."
+                onReset={() => setBlossomServers([...APP_BLOSSOM_SERVERS])}
               />
             </SettingsRow>
-            <SettingsRow
-              stack
-              label="Preferred media server"
-              description="Links point here when it accepts the file."
-            >
-              <PreferredBlossomServerField
-                value={config.preferredBlossomServer}
-                onChange={(server) => updateConfig((current) => ({ ...current, preferredBlossomServer: server }))}
-              />
-            </SettingsRow>
-            {!config.useAppBlossomServers
-              && !config.preferredBlossomServer
-              && config.blossomServerMetadata.servers.length === 0 && (
-              <SettingsRow>
-                <p className="text-sm text-destructive">
-                  No media servers. Add one to upload files.
-                </p>
-              </SettingsRow>
-            )}
           </>
         );
+      }
       case "chat":
         return (
           <>
@@ -792,10 +696,17 @@ export function SettingsPage({
                 onCheckedChange={setSendOnEnter}
               />
             </SettingsRow>
+            {user && <QuickReactionsSettings />}
+            <SettingsRow
+              label="Typing indicators"
+              description="Share and see typing status in DMs and channels."
+            >
+              <Switch checked={config.dmTypingIndicators} onCheckedChange={setDmTypingIndicators} />
+            </SettingsRow>
             {Capacitor.getPlatform() === "android" && (
               <SettingsRow
                 label="Back leaves the app"
-                description="Off, back steps through recent chats."
+                description="Off, back switches between the channel list and the chat."
               >
                 <Switch
                   checked={config.androidBackLeavesApp}

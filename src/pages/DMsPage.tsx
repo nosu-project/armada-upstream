@@ -31,6 +31,7 @@ import { ModerationMenuSection } from "@/components/chat/ModerationMenuSection";
 import { SearchField } from "@/components/ui/search-field";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
+import { DmInboxNotice } from "@/components/DmInboxNotice";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -81,7 +82,7 @@ import {
   useHasUnreadDMs,
 } from "@/hooks/useDirectMessages";
 import { useBotManifests } from "@/hooks/useBotManifests";
-import { useAdoptDmInbox, useDm17Backfill, useDm17Conversations, useDm17Support } from "@/hooks/useDm17";
+import { useDm17Backfill, useDm17Conversations, useDm17Support } from "@/hooks/useDm17";
 import { useDmConversationName } from "@/hooks/useDmConversationName";
 import {
   recordDmConversationIndex,
@@ -2197,6 +2198,7 @@ export function ConversationList({
       </div>
 
       <div className="flex-1 overflow-y-auto px-3 py-2 sidebar:pt-2.5" onScroll={handleListScroll}>
+        {dmSupported && !requesting && <DmInboxNotice dismissible className="mb-2" />}
         {!dmSupported ? (
           <p className="text-sm text-muted-foreground p-3">
             Your signer doesn't support encryption, so direct messages are unavailable.
@@ -2333,8 +2335,6 @@ export function DMsPage() {
   const { conversations: dm17Conversations, isLoading: dm17Loading } = useDm17Conversations({
     interactive: true,
   });
-  // Adopt the published kind 10050 inbox locally; NEVER publishes.
-  useAdoptDmInbox();
   const indexedConversations = useDmConversationIndex();
   const indexReady = useDmConversationIndexReady();
   const { isKnown, isLoading: followsLoading } = useKnownDmPeers();
@@ -2356,6 +2356,11 @@ export function DMsPage() {
   // Tell the native notification service this thread is on screen. Must match
   // its `enqueueRoomMessage` key: `dm:<conversationKey>`.
   useActiveRoom(activePeer ? `dm:${activePeer}` : undefined);
+
+  // The last thread opened, which Android back from the list returns to; unlike
+  // `renderedPeer` it outlives the slid-out thread's unmount.
+  const [returnPeer, setReturnPeer] = useState(activePeer);
+  if (activePeer && returnPeer !== activePeer) setReturnPeer(activePeer);
 
   // Lags `activePeer` so the thread stays mounted while sliding out on mobile.
   const [renderedPeer, setRenderedPeer] = useState(activePeer);
@@ -2692,7 +2697,7 @@ export function DMsPage() {
     return <Navigate to="/" replace />;
   }
   const returnToThread = () => {
-    if (renderedPeer) navigate(chatRoute({ kind: "dm", peer: dmRouteParam(renderedPeer) }));
+    if (returnPeer) navigate(chatRoute({ kind: "dm", peer: dmRouteParam(returnPeer) }));
   };
   const startComposing = () => {
     navigate("/dm");
@@ -2709,6 +2714,7 @@ export function DMsPage() {
         open: listRevealed,
         onReveal: revealList,
         onClose: returnToThread,
+        canClose: !!returnPeer,
         underlay: (
         <>
           <ServerRail />

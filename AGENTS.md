@@ -808,13 +808,14 @@ to fail a run:
   (e.g. by Flotilla) stays public; encrypted private items stay encrypted.
   This rule has been violated twice with user-visible data loss — do not
   reintroduce any automatic list publish, however well-intentioned. The ONE
-  sanctioned exception is signup: when the account wizard generates a key
-  ITSELF, it publishes a default kind-10002 for that key
-  (`handleContinue` in `WelcomePage.tsx`). This is safe precisely because the
-  rule's hazard cannot arise — a key minted moments ago has provably never
-  published a list, so there is no existing/failed-read list to clobber. It is
-  scoped structurally to the generate path (existing-key logins never reach it)
-  and is the only place an unsolicited list publish is allowed.
+  sanctioned exception is signup: when a signup flow (`SignupWizard`,
+  `SignupDialog`) generates a key ITSELF, it publishes that key's default
+  kind 10002, 10050, 10007 and 10063 (`buildSignupLists` in
+  `src/lib/signupLists.ts`, via `useSignupLists`). This is safe precisely
+  because the rule's hazard cannot arise — a key minted moments ago has
+  provably never published a list, so there is no existing/failed-read list to
+  clobber. It is scoped structurally to the generate path (existing-key logins
+  never reach it) and is the only place an unsolicited list publish is allowed.
 - **No Google Play Services in the Android build.** The APK ships zero
   `com.google.android.gms` / `googleid` artifacts, and the merged manifest has
   zero Google components — verify with

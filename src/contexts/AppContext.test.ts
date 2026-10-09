@@ -14,22 +14,23 @@ describe("portable network configuration", () => {
     expect(defaultConfig.automaticSettingsSync).toBe(true);
   });
 
-  it("starts a fresh config with no additional app DM relays", () => {
-    expect(defaultConfig.appDmRelays).toEqual([]);
-  });
-
-  it("uses synchronized app DM relays instead of adding build defaults back", () => {
+  it("receives DMs on the published inbox plus the app relays", () => {
     const effective = effectiveDmRelays({
       ...defaultConfig,
       appRelays: ["wss://account.example"],
-      appDmRelays: ["wss://custom-dm.example"],
-      useAppDmRelays: true,
-      useOwnDmRelays: false,
+      dmRelays: ["wss://inbox.example"],
     });
-    expect(effective).toEqual([
-      "wss://account.example",
-      "wss://custom-dm.example",
-    ]);
+    expect(effective).toEqual(["wss://inbox.example", "wss://account.example"]);
+  });
+
+  it("drops the app relays from the DM set when they are switched off", () => {
+    const effective = effectiveDmRelays({
+      ...defaultConfig,
+      useAppRelays: false,
+      appRelays: ["wss://account.example"],
+      dmRelays: ["wss://inbox.example"],
+    });
+    expect(effective).toEqual(["wss://inbox.example"]);
   });
 
   it("keeps NIP-65 write relays in the self-sync set when general use is off", () => {
@@ -87,7 +88,6 @@ describe("portable network configuration", () => {
     const config = {
       ...defaultConfig,
       appRelays: ["wss://account.example"],
-      appDmRelays: [],
       broadcastRelays: ["wss://broadcast.example"],
       relayMetadata: {
         pubkey: "a".repeat(64),

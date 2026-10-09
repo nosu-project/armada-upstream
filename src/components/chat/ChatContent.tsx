@@ -483,6 +483,10 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
 
     const cleanUrl = (url: string) => (cleanLinks ? stripTrackingParams(url) : url);
 
+    // Invites already carded in place, and mid-sentence ones whose card goes after the text.
+    const cardedInvites = new Set<string>();
+    const trailingInvites: string[] = [];
+
     const tokenizeSegment = (segment: string): ContentToken[] => {
       const regex = SEGMENT_RE;
       regex.lastIndex = 0;
@@ -647,10 +651,12 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
           } else if (selfTarget?.kind === "chat") {
             out.push({ type: "self-link", url, path: selfTarget.path });
           } else if (isEndOfLine && isInvite) {
+            cardedInvites.add(url);
             out.push({ type: "invite-embed", url });
           } else if (isInvite) {
             // Never a generic naddr card: an invite's naddr points at encrypted content.
             out.push({ type: "inline-link", url });
+            trailingInvites.push(url);
           } else if (isEndOfLine && isBuzzInviteUrl(url)) {
             // Buzz / NIP-29 invite (`/invite/<code>`); never collides with Concord's naddr.
             out.push({ type: "buzz-invite-embed", url });
@@ -841,6 +847,12 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
           renderedUrls.add(url);
         }
       }
+    }
+
+    for (const url of trailingInvites) {
+      if (cardedInvites.has(url)) continue;
+      cardedInvites.add(url);
+      result.push({ type: "invite-embed", url });
     }
 
     collapseAroundBlocks(result);

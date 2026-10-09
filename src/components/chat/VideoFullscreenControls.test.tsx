@@ -14,9 +14,7 @@ import type { ReactNode } from "react";
 
 const context = {
   config: {
-    appBlossomServers: [],
     blossomServerMetadata: { servers: [] },
-    useAppBlossomServers: false,
     mediaProxies: [],
   },
   updateConfig: vi.fn(),

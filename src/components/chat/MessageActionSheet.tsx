@@ -6,7 +6,8 @@ import { Drawer, DrawerContent, DrawerTitle } from "@/components/ui/drawer";
 import { useOverlayBack } from "@/hooks/useAndroidBack";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useCustomEmojis } from "@/hooks/useCustomEmojis";
-import { recordReaction, useFrequentReactions } from "@/hooks/useFrequentReactions";
+import { recordReaction } from "@/hooks/useFrequentReactions";
+import { useQuickReactions } from "@/hooks/useQuickReactionList";
 import { QUICK_SLOTS_SHEET, toggleInput } from "@/lib/reactionToggle";
 import { cn } from "@/lib/utils";
 
@@ -48,7 +49,7 @@ export function MessageActionSheet({
   const [pickerOpen, setPickerOpen] = useState(false);
   const { user } = useCurrentUser();
   const { emojis: customEmojis } = useCustomEmojis();
-  const frequent = useFrequentReactions(user?.pubkey, QUICK_SLOTS_SHEET);
+  const frequent = useQuickReactions(user?.pubkey, QUICK_SLOTS_SHEET);
   const [moderationOpen, setModerationOpen] = useState(false);
   const main = actions.filter((a) => !a.moderation);
   const moderation = actions.filter((a) => a.moderation);
@@ -77,10 +78,10 @@ export function MessageActionSheet({
   }
 
   const react = useCallback(
-    (key: string, url?: string) => {
+    (key: string, url?: string, recorded = false) => {
       if (!reactions) return;
       const input = toggleInput(key, url, reactions.tallies);
-      if (!input.mineEventId) recordReaction(user?.pubkey, input.key, input.emojiUrl);
+      if (!input.mineEventId && !recorded) recordReaction(user?.pubkey, input.key, input.emojiUrl);
       reactions.react(input);
       onOpenChange(false);
     },
@@ -108,8 +109,9 @@ export function MessageActionSheet({
                 customEmojis={customEmojis}
                 onBrowsePacks={() => onOpenChange(false)}
                 onSelect={(selection) => {
-                  if (selection.type === "native") react(selection.emoji);
-                  else react(`:${selection.shortcode}:`, selection.url);
+                  // The picker has already counted it toward the frequent reactions.
+                  if (selection.type === "native") react(selection.emoji, undefined, true);
+                  else react(`:${selection.shortcode}:`, selection.url, true);
                 }}
               />
             </Suspense>

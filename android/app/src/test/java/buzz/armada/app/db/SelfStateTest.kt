@@ -21,8 +21,8 @@ class SelfStateTest {
     @Test
     fun `keeps every bare replaceable kind in the catalogue`() {
         // Follow, mute, NIP-65 pointer, search relays, NIP-29 servers/channels,
-        // DM relays, Blossom, emoji, and current Concord community + invites.
-        for (kind in listOf(3, 10000, 10002, 10007, 10009, 10050, 10063, 10030, 33302, 13303)) {
+        // DM relays, Blossom, emoji, quick reactions, and current Concord community + invites.
+        for (kind in listOf(3, 10000, 10002, 10007, 10009, 10050, 10063, 10030, 10077, 33302, 13303)) {
             assertTrue("kind $kind", SelfState.storable(self, rumor(kind = kind)))
         }
     }
@@ -33,7 +33,7 @@ class SelfStateTest {
         // still syncs, and only ever show up as "that one setting doesn't
         // travel between my devices".
         assertEquals(
-            setOf(3, 10000, 10002, 10007, 10009, 10050, 10063, 10030, 33302, 13303),
+            setOf(3, 10000, 10002, 10007, 10009, 10050, 10063, 10030, 10077, 33302, 13303),
             SelfState.KINDS,
         )
         assertEquals(
@@ -156,7 +156,7 @@ class SelfStateTest {
 
     @Test
     fun `pre-filter admits exactly the catalogue's kinds`() {
-        for (kind in listOf(3, 10000, 10002, 10007, 10009, 10050, 10063, 10030, 33302, 13303, 30078)) {
+        for (kind in listOf(3, 10000, 10002, 10007, 10009, 10050, 10063, 10030, 10077, 33302, 13303, 30078)) {
             assertTrue("kind $kind", SelfState.isSelfKind(kind))
         }
         for (kind in listOf(0, 1, 9, 1059, 13302, 39000)) {
