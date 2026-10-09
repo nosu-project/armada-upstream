@@ -41,6 +41,7 @@ import { EmojiPackSettings } from "@/components/settings/EmojiPackSettings";
 import { FontScaleSettings } from "@/components/settings/FontScaleSettings";
 import { ProfileSettings } from "@/components/ProfileSettings";
 import { NotificationSettings } from "@/components/NotificationSettings";
+import { DmInboxNotice } from "@/components/DmInboxNotice";
 import { RelayListEditor } from "@/components/RelayListEditor";
 import { RelayBootstrapForm } from "@/components/RelayBootstrapForm";
 import { DesktopSettings } from "@/components/settings/DesktopSettings";
@@ -654,6 +655,7 @@ export function SettingsPage({
             {/* With DMs disabled, only the master toggle remains. */}
             {!config.dmsDisabled && (
               <>
+                <DmInboxNotice className="mx-4 my-3.5" />
                 <SettingsRow
                   label="Use app DM relays"
                   description="Use your app relays and the DM relays below."

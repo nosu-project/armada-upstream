@@ -31,6 +31,7 @@ import { ModerationMenuSection } from "@/components/chat/ModerationMenuSection";
 import { SearchField } from "@/components/ui/search-field";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
+import { DmInboxNotice } from "@/components/DmInboxNotice";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -2197,6 +2198,7 @@ export function ConversationList({
       </div>
 
       <div className="flex-1 overflow-y-auto px-3 py-2 sidebar:pt-2.5" onScroll={handleListScroll}>
+        {dmSupported && !requesting && <DmInboxNotice dismissible className="mb-2" />}
         {!dmSupported ? (
           <p className="text-sm text-muted-foreground p-3">
             Your signer doesn't support encryption, so direct messages are unavailable.

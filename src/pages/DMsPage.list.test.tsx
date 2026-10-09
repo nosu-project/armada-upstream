@@ -19,6 +19,7 @@ const spies = vi.hoisted(() => ({
   follows: [] as { pubkey: string; metadata: { name: string }; event: { tags: string[][] } }[],
 }));
 
+vi.mock("@/components/DmInboxNotice", () => ({ DmInboxNotice: () => null }));
 vi.mock("@/hooks/useAuthor", () => ({
   useAuthor: (pubkey?: string) => {
     spies.useAuthor(pubkey);
