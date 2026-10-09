@@ -697,12 +697,6 @@ export function SettingsPage({
                 >
                   <Switch checked={config.showRecentRailDms} onCheckedChange={setShowRecentRailDms} />
                 </SettingsRow>
-                <SettingsRow
-                  label="Typing indicators"
-                  description="Share and see typing status in DMs."
-                >
-                  <Switch checked={config.dmTypingIndicators} onCheckedChange={setDmTypingIndicators} />
-                </SettingsRow>
                 {effective.length > 0 ? (
                   <SettingsRow>
                     <div className="space-y-2">
@@ -791,6 +785,12 @@ export function SettingsPage({
                 checked={sendsOnEnter(config.sendOnEnter, isTouch)}
                 onCheckedChange={setSendOnEnter}
               />
+            </SettingsRow>
+            <SettingsRow
+              label="Typing indicators"
+              description="Share and see typing status in DMs and channels."
+            >
+              <Switch checked={config.dmTypingIndicators} onCheckedChange={setDmTypingIndicators} />
             </SettingsRow>
             {Capacitor.getPlatform() === "android" && (
               <SettingsRow

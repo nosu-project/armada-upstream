@@ -172,9 +172,10 @@ export interface AppConfig {
    */
   dmProtocol: Record<string, "auto" | "nip17" | "nip04">;
   /**
-   * DM typing indicators (kind-23311 in 21059 wraps; `useDmTyping`), default on.
-   * They reveal a conversation is live right now; off stops sending AND receiving.
-   * Synced.
+   * Typing indicators everywhere — DMs (`useDmTyping`), Concord channels
+   * (`useTyping`) and Buzz channels (`useBuzzTyping`) — default on. They reveal a
+   * conversation is live right now; off stops sending AND receiving. Synced; the
+   * key keeps its `dm` spelling so existing settings documents still apply.
    */
   dmTypingIndicators: boolean;
   /**

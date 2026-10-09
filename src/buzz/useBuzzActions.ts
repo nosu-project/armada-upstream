@@ -8,6 +8,7 @@ import {
   KIND_TYPING_INDICATOR,
 } from "@/buzz/kinds";
 import { buildBuzzReplyTags, buzzThreadRef } from "@/buzz/protocol";
+import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useNostrPublish } from "@/hooks/useNostrPublish";
 
@@ -86,6 +87,7 @@ export function useBuzzTyping(
 ): { typers: string[]; publishTyping: () => void } {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
+  const enabled = useAppContext().config.dmTypingIndicators;
   const [typers, setTypers] = useState<string[]>([]);
   const seen = useRef(new Map<string, number>());
   const lastSent = useRef(0);
@@ -93,7 +95,7 @@ export function useBuzzTyping(
   useEffect(() => {
     seen.current = new Map();
     setTypers([]);
-    if (!relayUrl || !channelId) return;
+    if (!enabled || !relayUrl || !channelId) return;
     const controller = new AbortController();
 
     const recompute = () => {
@@ -131,10 +133,10 @@ export function useBuzzTyping(
       clearInterval(decay);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nostr, relayUrl, channelId, user?.pubkey]);
+  }, [nostr, relayUrl, channelId, user?.pubkey, enabled]);
 
   const publishTyping = useCallback(() => {
-    if (!user || !relayUrl || !channelId) return;
+    if (!enabled || !user || !relayUrl || !channelId) return;
     const now = Date.now();
     if (now - lastSent.current < TYPING_THROTTLE_MS) return;
     lastSent.current = now;
@@ -151,7 +153,7 @@ export function useBuzzTyping(
         // Best-effort; typing is ephemeral.
       }
     })();
-  }, [nostr, user, relayUrl, channelId]);
+  }, [nostr, user, relayUrl, channelId, enabled]);
 
   return { typers, publishTyping };
 }
