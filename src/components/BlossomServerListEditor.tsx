@@ -1,7 +1,8 @@
 import { ArrowUpToLine, Plus, RotateCcw, X } from "lucide-react";
 import { useState } from "react";
 
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { BlossomLed } from "@/components/RelayLed";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { toast } from "@/hooks/useToast";
@@ -15,19 +16,46 @@ function serverHost(url: string): string {
   }
 }
 
-/** One server row, shaped like RelayListEditor's RelayIdentity minus NIP-11 bits. */
+/**
+ * Favicon candidates for a server: its own host, then its root domain (a
+ * `cdn.` or `blossom.` host often serves no icon of its own).
+ */
+export function serverFavicons(url: string): string[] {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return [];
+  }
+  const host = parsed.hostname;
+  const out = [`${parsed.origin}/favicon.ico`];
+  const labels = host.split(".");
+  const isIp = /^[\d.]+$/.test(host) || host.includes(":");
+  if (!isIp && labels.length > 2) out.push(`https://${labels.slice(-2).join(".")}/favicon.ico`);
+  return out;
+}
+
 function ServerIdentity({ url }: { url: string }) {
   const host = serverHost(url);
+  const favicons = serverFavicons(url);
+  const [attempt, setAttempt] = useState(0);
+  const icon = favicons[attempt];
   return (
     <div className="flex items-center gap-2.5 min-w-0">
       <Avatar className="size-7 rounded-md shrink-0">
+        {icon && (
+          <AvatarImage key={icon} src={icon} alt={host} onError={() => setAttempt((n) => n + 1)} />
+        )}
         <AvatarFallback className="rounded-md bg-secondary text-secondary-foreground text-xs">
           {host.charAt(0).toUpperCase()}
         </AvatarFallback>
       </Avatar>
       <div className="min-w-0">
         <div className="text-sm font-medium truncate leading-tight">{host}</div>
-        <div className="text-xs text-muted-foreground font-mono truncate leading-tight">{url}</div>
+        <div className="flex items-center gap-1.5 text-xs text-muted-foreground font-mono leading-tight">
+          <BlossomLed url={url} />
+          <span className="truncate">{url}</span>
+        </div>
       </div>
     </div>
   );
