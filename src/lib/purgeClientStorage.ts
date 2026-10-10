@@ -16,6 +16,7 @@ import { clearOutgoingVerifyMemory } from "@/concord/lib/outgoingVerify";
 import { clearPendingGuestbookJoinMemory } from "@/concord/lib/pendingGuestbookJoin";
 import { clearPendingJoins } from "@/concord/lib/pendingJoins";
 import { clearRumorStoreMemory } from "@/concord/lib/rumorStore";
+import { clearSettingsRootMemory } from "@/lib/settingsRootStore";
 import { clearShareShortcuts } from "@/lib/shareTarget";
 import { writePushDisabledFlag } from "@/lib/swPushDisabled";
 import { WEB_PUSH_RETIREMENT_KEY } from "@/lib/webPushEndpoint";
@@ -131,6 +132,8 @@ export async function purgeClientStorage(): Promise<void> {
   clearOutgoingVerifyMemory();
   clearPendingGuestbookJoinMemory();
   clearRevealedMedia();
+  // The settings root and every key derived from it.
+  clearSettingsRootMemory();
   resetDecryptConsent();
   // Shared DM ephemeral REQs linger past their last consumer; close them.
   closeDmEphemeralSubs();
@@ -159,4 +162,5 @@ export async function purgeClientStorage(): Promise<void> {
   clearOutgoingVerifyMemory();
   clearPendingGuestbookJoinMemory();
   clearRevealedMedia();
+  clearSettingsRootMemory();
 }

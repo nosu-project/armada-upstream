@@ -32,12 +32,16 @@ import {
   type DmRelayListQuery,
 } from "@/hooks/useDmRelayList";
 import {
-  decodeSettingsDoc,
+  derivedDocFilter,
+  isSettingsDocEvent,
   nextSettingsDoc,
-  readSettingsDoc,
+  readSettingsDocChecked,
   settingsDocQueryKey,
+  signDerivedSettingsDoc,
   useSettingsDoc,
+  type SettingsDocQueryData,
 } from "@/hooks/useSettingsDoc";
+import { useSettingsKeys } from "@/hooks/useSettingsKeys";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useEventStore } from "@/hooks/useEventStore";
 import { signCurrentDmConversationIndexEvents } from "@/hooks/useDmConversationIndexSync";
@@ -51,7 +55,7 @@ import {
   queryExplicitRelaysWithStatus,
   uniqueRelayUrls,
 } from "@/lib/nip65";
-import { APP_NAME, RELAY_LIST_DISCOVERY_RELAYS, RESCUE_RELAYS } from "@/lib/platform";
+import { RELAY_LIST_DISCOVERY_RELAYS, RESCUE_RELAYS } from "@/lib/platform";
 import {
   KIND_SEARCH_RELAYS,
   readSearchRelayList,
@@ -61,16 +65,18 @@ import {
   SETTINGS_DOC_NAMES,
   SETTINGS_DTAGS,
   SETTINGS_KIND,
-  settingsDTag,
   type SettingsDocName,
 } from "@/lib/settingsDocs";
+import { derivedDocOf, type DerivedDoc } from "@/lib/settingsKeys";
+import type { SettingsKeys } from "@/lib/settingsRootStore";
+import { newestSettingsRoot } from "@/lib/settingsRoot";
 import {
   CONFIG_KEYS_BY_DOC,
   configSnapshot,
   docToConfigPatch,
   type ConfigDocName,
 } from "@/lib/syncedConfig";
-import { SELF_SYNC_TOPIC_TAGS, T_ARMADA_DM_CONVERSATIONS } from "@/lib/selfSyncKinds";
+import { SELF_SYNC_DTAGS, SELF_SYNC_TOPIC_TAGS, T_ARMADA_DM_CONVERSATIONS } from "@/lib/selfSyncKinds";
 import { isSigned } from "@/lib/nostrRumor";
 import {
   queueSignedEvent,
@@ -124,6 +130,8 @@ export async function fetchPortableWireState(
   requiredSourceRelays: Iterable<string> = [],
   requireEverySource = true,
   localCommunityEvents: Iterable<NostrRumor> = [],
+  /** The settings root's derived authors, when the caller holds the root. */
+  derivedAuthors: readonly string[] = [],
 ): Promise<PortableWireState> {
   const sources = uniqueRelayUrls(sourceRelays);
   const [response, inviteRescue] = await Promise.all([
@@ -142,7 +150,10 @@ export async function fetchPortableWireState(
           ],
           authors: [user.pubkey],
         },
-        { kinds: [SETTINGS_KIND], authors: [user.pubkey], "#d": SETTINGS_DTAGS },
+        { kinds: [SETTINGS_KIND], authors: [user.pubkey], "#d": SELF_SYNC_DTAGS },
+        ...(derivedAuthors.length > 0
+          ? [{ kinds: [SETTINGS_KIND], authors: [...derivedAuthors], limit: derivedAuthors.length * 4 }]
+          : []),
         {
           kinds: [SETTINGS_KIND],
           authors: [user.pubkey],
@@ -339,6 +350,7 @@ export async function mirrorPortableStateBeforeRelayChange(
   requiredSourceRelays: Iterable<string> = sourceRelays,
   requireEverySource = true,
   localSingletons: NostrRumor[] = [],
+  keys: SettingsKeys = { keyring: null, previous: [] },
 ): Promise<PortableMirrorResult> {
   const proposed = uniqueRelayUrls(proposedWriteRelays);
   const readRelays = uniqueRelayUrls([...sourceRelays, ...proposed]);
@@ -350,6 +362,7 @@ export async function mirrorPortableStateBeforeRelayChange(
     requiredSourceRelays,
     requireEverySource,
     localSingletons.filter((event) => event.kind === KIND_COMMUNITY_LIST_FRAG),
+    keys.keyring?.authors,
   );
   if (!proposed.every((url) => wire.answered.includes(url))) {
     throw new Error(
@@ -393,45 +406,8 @@ export async function mirrorPortableStateBeforeRelayChange(
       : undefined;
     if (event) records.push(event);
   }
-  const fixedAddressableEditions = [...wire.events, ...localSingletons].filter((event) =>
-    event.kind === SETTINGS_KIND
-    && SETTINGS_DTAGS.includes(dTagOf(event) ?? ""));
-  const addressableHeads = await Promise.all(
-    newestPortableAddressableEvents(fixedAddressableEditions, SETTINGS_KIND)
-      .map((event) => signedPortableRumor(user, event)),
-  );
-  const topicEditions = [...wire.events, ...localSingletons].filter((event) =>
-    event.kind === SETTINGS_KIND
-    && event.tags.some(
-      ([name, value]) => name === "t" && SELF_SYNC_TOPIC_TAGS.includes(value),
-    ));
-  const repairedTopics = [
-    ...await signCurrentDmConversationIndexEvents(
-      topicEditions.filter((event) => event.tags.some(
-        ([name, value]) => name === "t" && value === T_ARMADA_DM_CONVERSATIONS,
-      )),
-      user.signer,
-      user.pubkey,
-    ),
-    ...await signCurrentFavoriteGifEvents(
-      topicEditions.filter((event) => event.tags.some(
-        ([name, value]) => name === "t" && value !== T_ARMADA_DM_CONVERSATIONS,
-      )),
-      user.signer,
-      user.pubkey,
-    ),
-  ];
-  const repairedTopicCoordinates = new Set(repairedTopics.map((event) => dTagOf(event)));
-  const untouchedTopicHeads = await Promise.all(
-    newestPortableAddressableEvents(topicEditions, SETTINGS_KIND)
-      .filter((event) => !repairedTopicCoordinates.has(dTagOf(event)))
-      .map((event) => signedPortableRumor(user, event)),
-  );
-  records.push(
-    ...addressableHeads,
-    ...untouchedTopicHeads,
-    ...repairedTopics,
-  );
+  const nip78 = await portableNip78Records(user, keys, [...wire.events, ...localSingletons], true);
+  records.push(...nip78.records);
   records.push(...communityRecords);
 
   const inviteEvents = [...wire.events, ...localSingletons]
@@ -559,6 +535,84 @@ function nextCreatedAt(prev: NostrRumor | undefined): number {
   return prev ? Math.max(now, prev.created_at + 1) : now;
 }
 
+/** The exact signed bytes of `rumor`, if any copy kept them. */
+async function exactSignature(rumor: NostrRumor): Promise<NostrEvent | undefined> {
+  try {
+    return await withSignature(rumor);
+  } catch {
+    return undefined;
+  }
+}
+
+/** A derived document's exact bytes, or the same content re-signed under its own key. */
+async function signedDerivedRumor(doc: DerivedDoc, rumor: NostrRumor): Promise<NostrEvent> {
+  return (await exactSignature(rumor)) ?? doc.signer.signEvent({
+    kind: rumor.kind,
+    content: rumor.content,
+    tags: rumor.tags,
+    created_at: nextCreatedAt(rumor),
+  });
+}
+
+function hasTopic(event: NostrRumor, topic?: string): boolean {
+  return event.tags.some(([name, value]) =>
+    name === "t" && (topic === undefined ? SELF_SYNC_TOPIC_TAGS.includes(value) : value === topic));
+}
+
+/**
+ * The NIP-78 records to mirror: the settings root (re-signed only if no copy kept its
+ * signature), legacy account-signed documents only as exact bytes (this build never
+ * writes one), and the derived documents, with the shared GIF/DM documents folded
+ * over every readable edition first.
+ */
+async function portableNip78Records(
+  user: NonNullable<ReturnType<typeof useCurrentUser>["user"]>,
+  keys: SettingsKeys,
+  editions: NostrRumor[],
+  includeDerivedSettings: boolean,
+): Promise<{ records: NostrEvent[]; topicEvents: NostrEvent[] }> {
+  const own = editions.filter((event) => event.kind === SETTINGS_KIND && event.pubkey === user.pubkey);
+  const records: NostrEvent[] = [];
+  const root = newestSettingsRoot(own, user.pubkey);
+  if (root) records.push(await signedPortableRumor(user, root));
+  const legacyHeads = newestPortableAddressableEvents(
+    own.filter((event) => SETTINGS_DTAGS.includes(dTagOf(event) ?? "") || hasTopic(event)),
+    SETTINGS_KIND,
+  );
+  for (const head of legacyHeads) {
+    const exact = await exactSignature(head);
+    if (exact) records.push(exact);
+  }
+
+  const keyring = keys.keyring;
+  if (!keyring) return { records, topicEvents: [] };
+  const ctx = { signer: user.signer, pubkey: user.pubkey, keys };
+  const derived = editions.filter((event) => derivedDocOf(keyring, event));
+  const ofFamily = (family: DerivedDoc["ref"]["family"]) =>
+    derived.filter((event) => derivedDocOf(keyring, event)!.ref.family === family);
+  const repaired = [
+    ...await signCurrentDmConversationIndexEvents(
+      [...ofFamily("dm-conversations"), ...own.filter((event) => hasTopic(event, T_ARMADA_DM_CONVERSATIONS))],
+      ctx,
+    ),
+    ...await signCurrentFavoriteGifEvents(
+      [...ofFamily("gif-favorites"), ...own.filter((event) => hasTopic(event) && !hasTopic(event, T_ARMADA_DM_CONVERSATIONS))],
+      ctx,
+    ),
+  ];
+  const repairedAuthors = new Set(repaired.map((event) => event.pubkey));
+  const untouched: NostrEvent[] = [];
+  for (const head of newestPortableAddressableEvents(derived, SETTINGS_KIND)) {
+    const doc = derivedDocOf(keyring, head)!;
+    if (repairedAuthors.has(doc.pubkey)) continue;
+    if (doc.ref.family === "settings" && !includeDerivedSettings) continue;
+    untouched.push(await signedDerivedRumor(doc, head));
+  }
+  const topicEvents = [...repaired, ...untouched.filter((event) =>
+    derivedDocOf(keyring, event)!.ref.family !== "settings")];
+  return { records: [...records, ...untouched, ...repaired], topicEvents };
+}
+
 /**
  * Additive DM fields must union with the decrypted relay base before re-signing, or a stale
  * device erases others' pins/hides/accepts.
@@ -592,6 +646,7 @@ export function usePublishPortableSetup() {
   const eventStore = useEventStore();
   const [isPending, setIsPending] = useState(false);
   const metadataDoc = useSettingsDoc("metadata");
+  const { ensure: ensureSettingsKeys } = useSettingsKeys();
   const ownsRelayList = !!user && config.relayMetadata.pubkey === user.pubkey;
   const hasSyncRelay = ownsRelayList
     && config.relayMetadata.relays.some((relay) => relay.write);
@@ -622,6 +677,9 @@ export function usePublishPortableSetup() {
         ...RELAY_LIST_DISCOVERY_RELAYS,
       ]);
       const store = await eventStore;
+      // An explicit Sync now is the action that may create the account's settings root.
+      const keys = await ensureSettingsKeys(true);
+      const keyring = keys.keyring!;
       let localPortableRumors: NostrRumor[] = [];
       try {
         localPortableRumors = await store.query([{
@@ -636,7 +694,7 @@ export function usePublishPortableSetup() {
             KIND_COMMUNITY_LIST_FRAG,
           ],
           authors: [user.pubkey],
-        }]);
+        }, { kinds: [SETTINGS_KIND], authors: keyring.authors }]);
       } catch {
         // Wire + folded plaintext remain available when ArmadaDB is not.
       }
@@ -654,6 +712,10 @@ export function usePublishPortableSetup() {
         user,
         sources,
         AbortSignal.timeout(PUBLISH_TIMEOUT_MS),
+        [],
+        true,
+        [],
+        keyring.authors,
       );
       const localSingletons = localPortableRumors.filter(
         (event) => event.kind !== KIND_COMMUNITY_LIST_FRAG,
@@ -734,44 +796,9 @@ export function usePublishPortableSetup() {
       }
       if (blossomEvent) toPublish.push(blossomEvent);
 
-      // Per-installation NIP-78 shards are exact signed mirrors; `t` is the catalogue, `d` the coordinate.
-      const topicEditions = [...events, ...localSingletons].filter((event) =>
-        event.kind === SETTINGS_KIND
-        && event.tags.some(
-          ([name, value]) => name === "t" && SELF_SYNC_TOPIC_TAGS.includes(value),
-        ));
-      const topicHeads = newestPortableAddressableEvents(topicEditions, SETTINGS_KIND);
-      const remoteDmIndexEvents = topicEditions.filter((event) => event.tags.some(
-        ([name, value]) => name === "t" && value === T_ARMADA_DM_CONVERSATIONS,
-      ));
-      const signedDmIndexEvents = await signCurrentDmConversationIndexEvents(
-        remoteDmIndexEvents,
-        user.signer,
-        user.pubkey,
-      );
-      const remoteFavoriteGifEvents = topicEditions.filter((event) => event.tags.some(
-        ([name, value]) => name === "t" && value !== T_ARMADA_DM_CONVERSATIONS,
-      ));
-      const signedFavoriteGifEvents = await signCurrentFavoriteGifEvents(
-        remoteFavoriteGifEvents,
-        user.signer,
-        user.pubkey,
-      );
-      const replacedTopicCoordinates = new Set([
-        ...signedDmIndexEvents,
-        ...signedFavoriteGifEvents,
-      ].map((event) => dTagOf(event)));
-      const untouchedTopicEvents = await Promise.all(
-        topicHeads
-          .filter((event) => !replacedTopicCoordinates.has(dTagOf(event)))
-          .map((event) => signedPortableRumor(user, event)),
-      );
-      const portableTopicEvents = [
-        ...untouchedTopicEvents,
-        ...signedDmIndexEvents,
-        ...signedFavoriteGifEvents,
-      ];
-      toPublish.push(...portableTopicEvents);
+      const nip78 = await portableNip78Records(user, keys, [...events, ...localSingletons], false);
+      const portableTopicEvents = nip78.topicEvents;
+      toPublish.push(...nip78.records);
 
       // Invite bookkeeping holds revocation secrets/tombstones: consolidate divergent copies into
       // one fresh event instead of mirroring the newest lossy one.
@@ -820,82 +847,61 @@ export function usePublishPortableSetup() {
         inviteSeed = { event, list: inviteList, newestCreatedAt: event.created_at };
       }
 
+      // Wire copies into the store first, so one read arbitrates store vs wire across every
+      // source (derived, a superseded root's, legacy).
+      for (const event of events) {
+        if (event.kind !== SETTINGS_KIND) continue;
+        if (event.pubkey !== user.pubkey && !derivedDocOf(keyring, event)) continue;
+        await store.event(event).catch(() => undefined);
+      }
+      const ctx = { store, signer: user.signer, pubkey: user.pubkey, keys };
+
       // A document never written is fine; one that exists locally but came back from NO relay is
       // skipped, not rebuilt.
       const settingsSeeds: { name: SettingsDocName; event: NostrEvent; doc: unknown }[] = [];
       const unrefreshed: SettingsDocName[] = [];
 
       for (const name of SETTINGS_DOC_NAMES) {
-        // ArmadaDB may hold a newer version than the relays (standing REQ, Android service); merge
-        // over the newer of the two.
-        const stored = await readSettingsDoc(store, user.signer, user.pubkey, name);
-        const dTag = settingsDTag(name);
-        const fromRelays = events
-          .filter((event) =>
-            event.kind === SETTINGS_KIND
-            && event.tags.some(([tag, value]) => tag === "d" && value === dTag))
-          .sort((a, b) => b.created_at - a.created_at || a.id.localeCompare(b.id))[0];
-
+        const { stored, unreadable } = await readSettingsDocChecked(ctx, name);
+        if (unreadable) {
+          throw new Error(
+            `Could not decrypt your existing private settings (${name}); nothing was published`,
+          );
+        }
+        const onWire = events.some((event) => isSettingsDocEvent(keys, user.pubkey, name, event));
         // Known document not found: publishing an unconfirmed base would drop data everywhere. Skip
         // only this one.
-        if (!fromRelays && stored) {
+        if (!onWire && stored) {
           unrefreshed.push(name);
           continue;
         }
 
+        const derived = keyring.settings[name];
+        const head = (await store.query([derivedDocFilter(derived)]).catch((): NostrRumor[] => []))
+          .sort((a, b) => b.created_at - a.created_at)[0];
+        const floor = Math.max(stored?.event.created_at ?? 0, head?.created_at ?? 0) || undefined;
         const configKeys = name in CONFIG_KEYS_BY_DOC ? (name as ConfigDocName) : undefined;
-        // Module-owned docs (read-state, reactions): arbitrate store vs wire by NIP-01 order; reuse the
-        // exact signature when possible, else report unrefreshed.
+        // Module-owned docs (read-state, reactions): mirror the derived copy exactly; an older
+        // source's newest copy is rewritten under the derived key.
         if (!configKeys) {
-          try {
-            const winner = await signedPortableSingletonWinner(
-              fromRelays ? [fromRelays] : [],
-              stored ? [stored.event] : [],
-              SETTINGS_KIND,
-            );
-            if (winner) toPublish.push(winner);
-          } catch {
-            unrefreshed.push(name);
+          if (!stored) continue;
+          if (stored.event.pubkey === derived.pubkey) {
+            toPublish.push(await signedDerivedRumor(derived, stored.event));
+            continue;
           }
+          const event = await signDerivedSettingsDoc(derived, stored.doc, floor);
+          toPublish.push(event);
+          settingsSeeds.push({ name, event, doc: stored.doc });
           continue;
         }
 
-        let previous: NostrRumor | undefined = fromRelays;
-        let base: Record<string, unknown> = {};
-        const storedWins = stored && (
-          !fromRelays
-          || stored.event.created_at > fromRelays.created_at
-          || (
-            stored.event.created_at === fromRelays.created_at
-            && stored.event.id < fromRelays.id
-          )
-        );
-        if (stored && storedWins) {
-          previous = stored.event;
-          base = stored.doc as Record<string, unknown>;
-        } else if (fromRelays) {
-          const decoded = await decodeSettingsDoc(fromRelays, user.signer, user.pubkey, name);
-          if (!decoded) {
-            throw new Error(
-              `Could not decrypt your existing private settings (${name}); nothing was published`,
-            );
-          }
-          base = decoded.doc as Record<string, unknown>;
-        }
-
+        const base = (stored?.doc ?? {}) as Record<string, unknown>;
         const next = nextSettingsDoc(
           name,
           base as never,
           portableConfigSnapshot(configKeys, base, config) as never,
         );
-        const settingsEvent = await user.signer.signEvent({
-          kind: SETTINGS_KIND,
-          content: await user.signer.nip44.encrypt(user.pubkey, JSON.stringify(next)),
-          tags: previous
-            ? previous.tags.filter(([tag]) => tag !== "client")
-            : [["d", dTag], ["title", `${APP_NAME} Settings`]],
-          created_at: nextCreatedAt(previous),
-        });
+        const settingsEvent = await signDerivedSettingsDoc(derived, next, floor);
         toPublish.push(settingsEvent);
         settingsSeeds.push({ name, event: settingsEvent, doc: next });
       }
@@ -903,7 +909,9 @@ export function usePublishPortableSetup() {
       toPublish.push(relayList);
       const uniqueToPublish = [...new Map(toPublish.map((event) => [event.id, event])).values()];
       for (const event of uniqueToPublish) {
-        if (event.pubkey !== user.pubkey) throw new Error("The signer returned a different account");
+        if (event.pubkey !== user.pubkey && !keyring.byPubkey.has(event.pubkey)) {
+          throw new Error("The signer returned a different account");
+        }
       }
 
       const portableResult = await publishSignedPortableRecords(
@@ -948,7 +956,10 @@ export function usePublishPortableSetup() {
       // Store what we published so the next read (here or in the notification service) sees it.
       for (const { name, event, doc } of settingsSeeds) {
         await store.event(event);
-        queryClient.setQueryData(settingsDocQueryKey(name, user.pubkey), { event, doc });
+        queryClient.setQueryData<SettingsDocQueryData<typeof name>>(
+          settingsDocQueryKey(name, user.pubkey),
+          { event, doc: doc as never, sources: [{ event, doc: doc as never }] },
+        );
       }
       for (const event of [...wire.communityEvents, ...portableTopicEvents, ...(inviteSeed ? [inviteSeed.event] : [])]) {
         await store.event(event).catch(() => undefined);
@@ -963,13 +974,9 @@ export function usePublishPortableSetup() {
       if (wire.communityEvents.length > 0) {
         await queryClient.invalidateQueries({ queryKey: ["concord", "list", user.pubkey] });
       }
-      for (const topic of SELF_SYNC_TOPIC_TAGS) {
-        if (!portableTopicEvents.some((event) => event.tags.some(([name, value]) => name === "t" && value === topic))) continue;
-        queryClient.invalidateQueries({
-          queryKey: topic === T_ARMADA_DM_CONVERSATIONS
-            ? ["dm-conversations-sync"]
-            : ["favorite-gifs-sync"],
-        });
+      if (portableTopicEvents.length > 0) {
+        void queryClient.invalidateQueries({ queryKey: ["dm-conversations-sync"] });
+        void queryClient.invalidateQueries({ queryKey: ["favorite-gifs-sync"] });
       }
 
       return {
@@ -981,7 +988,7 @@ export function usePublishPortableSetup() {
     } finally {
       setIsPending(false);
     }
-  }, [config, eventStore, nostr, queryClient, updateConfig, user]);
+  }, [config, ensureSettingsKeys, eventStore, nostr, queryClient, updateConfig, user]);
 
   return {
     publish,

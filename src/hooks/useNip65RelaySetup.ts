@@ -7,6 +7,7 @@ import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useEventStore } from "@/hooks/useEventStore";
 import { selfStateRelays } from "@/contexts/AppContext";
 import { mirrorPortableStateBeforeRelayChange } from "@/hooks/usePublishPortableSetup";
+import { useSettingsKeys } from "@/hooks/useSettingsKeys";
 import {
   buildRelayListTags,
   discoverRelayList,
@@ -92,6 +93,7 @@ export function useNip65RelaySetup() {
   const { config, updateConfig } = useAppContext();
   const queryClient = useQueryClient();
   const eventStore = useEventStore();
+  const { keys: settingsKeys } = useSettingsKeys();
 
   const discoveryRelays = useMemo(
     () => uniqueRelayUrls([...config.appRelays, ...RELAY_LIST_DISCOVERY_RELAYS]),
@@ -218,7 +220,9 @@ export function useNip65RelaySetup() {
               33302,
             ],
             authors: [user.pubkey],
-          }]);
+          }, ...(settingsKeys.keyring
+            ? [{ kinds: [SETTINGS_KIND], authors: settingsKeys.keyring.authors }]
+            : [])]);
         } catch {
           // Wire-only preseed remains possible when the local store is unavailable.
           return [];
@@ -233,6 +237,7 @@ export function useNip65RelaySetup() {
         oldDeclaredWrites.length > 0 ? oldDeclaredWrites : sourceRelays,
         oldDeclaredWrites.length > 0,
         localSingletons,
+        settingsKeys,
       );
 
       // Re-read until two consecutive snapshots agree, so a sibling write during phase one is
@@ -288,6 +293,7 @@ export function useNip65RelaySetup() {
           oldDeclaredWrites.length > 0 ? oldDeclaredWrites : sourceRelays,
           oldDeclaredWrites.length > 0,
           localSingletons,
+          settingsKeys,
         );
         refreshed = await refreshPointer();
         if (next.fingerprint === mirrored.fingerprint) {
@@ -372,7 +378,7 @@ export function useNip65RelaySetup() {
       write: tag[2] !== "read",
     })) });
     return result;
-  }, [adopt, config, eventStore, nostr, user]);
+  }, [adopt, config, eventStore, nostr, settingsKeys, user]);
 
   return {
     discoveryRelays,

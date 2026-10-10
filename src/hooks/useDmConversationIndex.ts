@@ -6,28 +6,24 @@ import { KvPrefixCache } from "@/lib/db/kvCache";
 import {
   DM_CONVERSATION_INDEX_BUCKETS,
   dmConversationIndexBucket,
-  fitDmConversationIndexShard,
+  fitDmConversationIndexBucket,
   isDmConversationIndexRecord,
-  isDmConversationDeviceId,
   MAX_MERGED_DM_CONVERSATIONS,
   mergeDmConversationIndexRecords,
-  parseDmConversationIndexShard,
+  type DmConversationIndexBucketDoc,
   type DmConversationIndexRecord,
-  type DmConversationIndexShard,
 } from "@/lib/dmConversationIndex";
-import { APP_ID } from "@/lib/platform";
 
-const DEVICE_ID_PREFIX = `${APP_ID}:dm-conversations:device-id:`;
-const SHARD_STORE_PREFIX = "dm-conversations-shard:";
 const MERGED_STORE_PREFIX = "dm-conversations-merged:";
 
-const shardStore = new KvPrefixCache<unknown>({ prefix: SHARD_STORE_PREFIX });
+/**
+ * The account's whole index, as this device knows it. It is also what this device
+ * publishes: the eight shared bucket documents are this set, split by bucket.
+ */
 const mergedStore = new KvPrefixCache<unknown>({ prefix: MERGED_STORE_PREFIX });
 
-const ownShardCache = new Map<string, Map<number, DmConversationIndexShard>>();
 const mergedCache = new Map<string, DmConversationIndexRecord[]>();
 const snapshotCache = new Map<string, DmConversationIndexRecord[]>();
-const deviceIdMemory = new Map<string, string>();
 const listeners = new Set<() => void>();
 const dirtyListeners = new Set<(pubkey: string, buckets: readonly number[]) => void>();
 const EMPTY: DmConversationIndexRecord[] = [];
@@ -39,9 +35,8 @@ function notify(): void {
 }
 
 export function readyDmConversationIndex(): Promise<void> {
-  if (shardStore.warmed && mergedStore.warmed) return Promise.resolve();
-  warmPromise ??= Promise.all([shardStore.ready(), mergedStore.ready()]).then(() => {
-    ownShardCache.clear();
+  if (mergedStore.warmed) return Promise.resolve();
+  warmPromise ??= mergedStore.ready().then(() => {
     mergedCache.clear();
     snapshotCache.clear();
     notify();
@@ -51,87 +46,16 @@ export function readyDmConversationIndex(): Promise<void> {
   return warmPromise;
 }
 
-function randomDeviceId(): string {
-  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-    return crypto.randomUUID();
-  }
-  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`
-    .slice(0, 64);
-}
-
-/** Account-scoped so account switching cannot alias shards. */
-export function dmConversationDeviceId(pubkey: string): string {
-  const held = deviceIdMemory.get(pubkey);
-  if (held) return held;
-  const key = `${DEVICE_ID_PREFIX}${pubkey}`;
-  try {
-    const existing = localStorage.getItem(key);
-    if (existing && isDmConversationDeviceId(existing)) {
-      deviceIdMemory.set(pubkey, existing);
-      return existing;
-    }
-    const created = randomDeviceId();
-    localStorage.setItem(key, created);
-    deviceIdMemory.set(pubkey, created);
-    return created;
-  } catch {
-    const created = randomDeviceId();
-    deviceIdMemory.set(pubkey, created);
-    return created;
-  }
-}
-
-function ownShardStoreId(pubkey: string, bucket: number): string {
-  return `${pubkey}:${dmConversationDeviceId(pubkey)}:${bucket}`;
-}
-
-function loadOwn(pubkey: string, bucket: number): DmConversationIndexShard {
-  const held = ownShardCache.get(pubkey)?.get(bucket);
-  if (held) return held;
-  const deviceId = dmConversationDeviceId(pubkey);
-  const parsed = parseDmConversationIndexShard(shardStore.get(ownShardStoreId(pubkey, bucket)));
-  const shard = parsed?.deviceId === deviceId && parsed.bucket === bucket
-    ? parsed
-    : { version: 1, deviceId, bucket, records: [] } satisfies DmConversationIndexShard;
-  if (shardStore.warmed) {
-    const byBucket = ownShardCache.get(pubkey) ?? new Map();
-    byBucket.set(bucket, shard);
-    ownShardCache.set(pubkey, byBucket);
-  }
-  return shard;
-}
-
-function loadOwnShards(pubkey: string): DmConversationIndexShard[] {
-  return Array.from(
-    { length: DM_CONVERSATION_INDEX_BUCKETS },
-    (_, bucket) => loadOwn(pubkey, bucket),
-  );
-}
-
 function loadMerged(pubkey: string): DmConversationIndexRecord[] {
   const held = mergedCache.get(pubkey);
   if (held) return held;
   const stored = mergedStore.get(pubkey);
-  const storedRecords = Array.isArray(stored)
-    ? stored.filter(isDmConversationIndexRecord)
-    : [];
   const records = mergeDmConversationIndexRecords(
-    [storedRecords, ...loadOwnShards(pubkey).map((shard) => shard.records)],
+    [Array.isArray(stored) ? stored.filter(isDmConversationIndexRecord) : []],
     MAX_MERGED_DM_CONVERSATIONS,
   );
-  if (mergedStore.warmed && shardStore.warmed) mergedCache.set(pubkey, records);
+  if (mergedStore.warmed) mergedCache.set(pubkey, records);
   return records;
-}
-
-async function saveOwn(pubkey: string, shard: DmConversationIndexShard): Promise<void> {
-  const fitted = fitDmConversationIndexShard(shard.deviceId, shard.bucket, shard.records);
-  const byBucket = ownShardCache.get(pubkey) ?? new Map();
-  byBucket.set(shard.bucket, fitted);
-  ownShardCache.set(pubkey, byBucket);
-  const id = ownShardStoreId(pubkey, shard.bucket);
-  shardStore.set(id, fitted);
-  // Await a direct copy too: this shard is the durable dirty state after signer refusal.
-  await getArmadaDB().kv.set(`${SHARD_STORE_PREFIX}${id}`, fitted).catch(() => undefined);
 }
 
 async function saveMerged(
@@ -141,14 +65,27 @@ async function saveMerged(
   const next = mergeDmConversationIndexRecords([records], MAX_MERGED_DM_CONVERSATIONS);
   mergedCache.set(pubkey, next);
   mergedStore.set(pubkey, next);
+  // Awaited too: this is the durable dirty state if a publish never lands.
   await getArmadaDB().kv.set(`${MERGED_STORE_PREFIX}${pubkey}`, next).catch(() => undefined);
 }
 
-function sameRecords(
-  left: readonly DmConversationIndexRecord[],
-  right: readonly DmConversationIndexRecord[],
-): boolean {
-  return JSON.stringify(left) === JSON.stringify(right);
+function bucketsOf(records: readonly DmConversationIndexRecord[]): Set<number> {
+  return new Set(records.map((record) => dmConversationIndexBucket(record.key)));
+}
+
+/** Records whose addition changes `bucket`'s published form. */
+function changedBuckets(
+  before: readonly DmConversationIndexRecord[],
+  after: readonly DmConversationIndexRecord[],
+  candidates: Iterable<number>,
+): number[] {
+  const changed: number[] = [];
+  for (const bucket of candidates) {
+    const a = fitDmConversationIndexBucket(bucket, before);
+    const b = fitDmConversationIndexBucket(bucket, after);
+    if (JSON.stringify(a.records) !== JSON.stringify(b.records)) changed.push(bucket);
+  }
+  return changed;
 }
 
 export async function getDmConversationIndexRecords(
@@ -158,14 +95,18 @@ export async function getDmConversationIndexRecords(
   return loadMerged(pubkey);
 }
 
-export async function loadOwnDmConversationIndexShards(
+/** The eight documents this device would publish, from what it knows. */
+export async function dmConversationIndexBuckets(
   pubkey: string,
-): Promise<DmConversationIndexShard[]> {
-  await readyDmConversationIndex();
-  return loadOwnShards(pubkey);
+): Promise<DmConversationIndexBucketDoc[]> {
+  const records = await getDmConversationIndexRecords(pubkey);
+  return Array.from(
+    { length: DM_CONVERSATION_INDEX_BUCKETS },
+    (_, bucket) => fitDmConversationIndexBucket(bucket, records),
+  );
 }
 
-/** Main-inbox rows only (classified by DMsPage); never request-tier rows. */
+/** Main-inbox rows only (classified by DMsPage); never request-tier rows. Marks buckets dirty. */
 export async function recordDmConversationIndex(
   pubkey: string,
   records: readonly DmConversationIndexRecord[],
@@ -173,92 +114,27 @@ export async function recordDmConversationIndex(
   await readyDmConversationIndex();
   const valid = records.filter(isDmConversationIndexRecord);
   if (valid.length === 0) return false;
-
-  const byBucket = new Map<number, DmConversationIndexRecord[]>();
-  for (const record of valid) {
-    const bucket = dmConversationIndexBucket(record.key);
-    const held = byBucket.get(bucket) ?? [];
-    held.push(record);
-    byBucket.set(bucket, held);
-  }
-  const changedBuckets: number[] = [];
-  const changedRecords: DmConversationIndexRecord[][] = [];
-  for (const [bucket, additions] of byBucket) {
-    const previousOwn = loadOwn(pubkey, bucket);
-    const nextOwn = fitDmConversationIndexShard(
-      previousOwn.deviceId,
-      bucket,
-      mergeDmConversationIndexRecords([previousOwn.records, additions]),
-    );
-    if (sameRecords(previousOwn.records, nextOwn.records)) continue;
-    await saveOwn(pubkey, nextOwn);
-    changedBuckets.push(bucket);
-    changedRecords.push(nextOwn.records);
-  }
-  if (changedBuckets.length === 0) return false;
-
-  await saveMerged(pubkey, mergeDmConversationIndexRecords([loadMerged(pubkey), ...changedRecords]));
+  const previous = loadMerged(pubkey);
+  const next = mergeDmConversationIndexRecords([previous, valid], MAX_MERGED_DM_CONVERSATIONS);
+  const dirty = changedBuckets(previous, next, bucketsOf(valid));
+  if (dirty.length === 0) return false;
+  await saveMerged(pubkey, next);
   notify();
-  for (const listener of dirtyListeners) listener(pubkey, changedBuckets);
+  for (const listener of dirtyListeners) listener(pubkey, dirty);
   return true;
 }
 
-export async function hydrateDmConversationIndexShards(
+/** Fold remote records in. Not a local edit: whether to republish is the sync's call. */
+export async function hydrateDmConversationIndexRecords(
   pubkey: string,
-  shards: readonly DmConversationIndexShard[],
+  sets: readonly (readonly DmConversationIndexRecord[])[],
 ): Promise<void> {
   await readyDmConversationIndex();
-  const valid = shards
-    .map(parseDmConversationIndexShard)
-    .filter((shard): shard is DmConversationIndexShard => shard !== null);
-  if (valid.length === 0) return;
-
-  const deviceId = dmConversationDeviceId(pubkey);
-  const nextOwnShards: DmConversationIndexShard[] = [];
-  for (let bucket = 0; bucket < DM_CONVERSATION_INDEX_BUCKETS; bucket++) {
-    const previousOwn = loadOwn(pubkey, bucket);
-    const remoteOwn = valid.filter(
-      (shard) => shard.deviceId === deviceId && shard.bucket === bucket,
-    );
-    const nextOwn = fitDmConversationIndexShard(
-      deviceId,
-      bucket,
-      mergeDmConversationIndexRecords([
-        previousOwn.records,
-        ...remoteOwn.map((shard) => shard.records),
-      ]),
-    );
-    if (!sameRecords(previousOwn.records, nextOwn.records)) await saveOwn(pubkey, nextOwn);
-    nextOwnShards.push(nextOwn);
-  }
-
-  const previousMerged = loadMerged(pubkey);
-  const nextMerged = mergeDmConversationIndexRecords([
-    previousMerged,
-    ...nextOwnShards.map((shard) => shard.records),
-    ...valid.map((shard) => shard.records),
-  ]);
-  if (sameRecords(previousMerged, nextMerged)) return;
-  await saveMerged(pubkey, nextMerged);
+  const previous = loadMerged(pubkey);
+  const next = mergeDmConversationIndexRecords([previous, ...sets], MAX_MERGED_DM_CONVERSATIONS);
+  if (JSON.stringify(previous) === JSON.stringify(next)) return;
+  await saveMerged(pubkey, next);
   notify();
-}
-
-/** Compare canonical contents, not event ids, after the pull-before-publish merge. */
-export async function ownDmConversationIndexNeedsPublish(
-  pubkey: string,
-  remoteOwn: ReadonlyMap<number, DmConversationIndexShard>,
-): Promise<number[]> {
-  const ownShards = await loadOwnDmConversationIndexShards(pubkey);
-  const dirty: number[] = [];
-  for (const own of ownShards) {
-    if (own.records.length === 0) continue;
-    const remote = remoteOwn.get(own.bucket);
-    if (!remote || remote.deviceId !== own.deviceId || !sameRecords(
-      own.records,
-      fitDmConversationIndexShard(remote.deviceId, remote.bucket, remote.records).records,
-    )) dirty.push(own.bucket);
-  }
-  return dirty;
 }
 
 export function subscribeDmConversationIndexChanges(
@@ -272,7 +148,7 @@ function snapshot(pubkey: string | undefined): DmConversationIndexRecord[] {
   if (!pubkey) return EMPTY;
   const held = snapshotCache.get(pubkey);
   if (held) return held;
-  if (!shardStore.warmed || !mergedStore.warmed) {
+  if (!mergedStore.warmed) {
     void readyDmConversationIndex();
     return EMPTY;
   }
@@ -302,16 +178,14 @@ export function useDmConversationIndexReady(): boolean {
       void readyDmConversationIndex();
       return () => listeners.delete(listener);
     },
-    () => shardStore.warmed && mergedStore.warmed,
+    () => mergedStore.warmed,
     () => false,
   );
 }
 
 /** Test seam; account data is normally cleared by ArmadaDB logout. */
 export async function resetDmConversationIndexCache(): Promise<void> {
-  ownShardCache.clear();
   mergedCache.clear();
   snapshotCache.clear();
-  deviceIdMemory.clear();
-  await Promise.all([shardStore.clear(), mergedStore.clear()]);
+  await mergedStore.clear();
 }

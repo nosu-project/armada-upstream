@@ -14,6 +14,9 @@ vi.mock("@/hooks/useCurrentUser", () => ({
 vi.mock("@/hooks/useAppContext", () => ({ useAppContext: () => ({ config: h.config }) }));
 vi.mock("@/contexts/AppContext", () => ({ accountDataRelays: () => ["wss://one.example"] }));
 vi.mock("@/lib/notificationSettingsProof", () => ({ proveNotificationSettingsAbsence: h.prove }));
+vi.mock("@/hooks/useSettingsKeys", () => ({
+  useSettingsKeys: () => ({ keys: { keyring: null, previous: [] }, isFetched: true, ensure: vi.fn() }),
+}));
 
 const { useNotificationSettingsAbsenceProof } = await import("./useNotificationSettingsAbsenceProof");
 const { _resetNotificationSettingsAuthorityForTests, notificationSettingsReady } = await import(

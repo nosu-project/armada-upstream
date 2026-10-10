@@ -56,9 +56,16 @@ export function ReadStateProvider({ children }: { children: React.ReactNode }) {
   const { user } = useCurrentUser();
   const { config } = useAppContext();
   const automaticSettingsSync = config.automaticSettingsSync !== false;
-  const { doc, isFetched: baseFetched, update, hasNip44Support } = useSettingsDoc("read-state");
+  const {
+    doc,
+    sources: baseSources,
+    isFetched: baseFetched,
+    update,
+    hasNip44Support,
+  } = useSettingsDoc("read-state");
   const {
     doc: recentDoc,
+    sources: recentSources,
     isFetched: recentFetched,
     update: updateRecent,
   } = useSettingsDoc("read-state-recent");
@@ -181,12 +188,18 @@ export function ReadStateProvider({ children }: { children: React.ReactNode }) {
     };
     if (doc?.readState) absorb(doc.readState);
     if (recentDoc?.readState) absorb(recentDoc.readState);
+    // Older copies (legacy account-signed, a superseded root) still hold reads.
+    for (const source of [...baseSources, ...recentSources]) {
+      if (source.doc.readState) absorb(source.doc.readState);
+    }
     if (metadata?.readState) absorb(metadata.readState);
   }, [
     automaticSettingsSync,
     pubkey,
     doc?.readState,
     recentDoc?.readState,
+    baseSources,
+    recentSources,
     metadata?.readState,
     hydrate,
   ]);

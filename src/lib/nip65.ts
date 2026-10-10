@@ -20,7 +20,7 @@ export interface RelayPreference {
   write: boolean;
 }
 
-interface RelayQueryClient {
+export interface RelayQueryClient {
   relay(url: string): {
     query(
       filters: NostrFilter[],

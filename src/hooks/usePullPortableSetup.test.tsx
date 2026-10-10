@@ -8,6 +8,10 @@ import { settingsDTag } from "@/lib/settingsDocs";
 import { fragment, serializeFragList } from "@/concord/lib/listFrag";
 import type { NostrRumor } from "@/lib/nostrRumor";
 
+import { settingsKeyring } from "@/lib/settingsKeys";
+import { encodeSettingsRoot } from "@/lib/settingsRoot";
+import { clearSettingsRootMemory } from "@/lib/settingsRootStore";
+
 import { usePullPortableSetup } from "./usePullPortableSetup";
 
 const PUBKEY = "a".repeat(64);
@@ -32,7 +36,10 @@ class FakeStore {
       this.rumors.push(rumor);
       return;
     }
-    if (rumor.created_at > this.rumors[index]!.created_at) this.rumors[index] = rumor;
+    const held = this.rumors[index]!;
+    // NIP-01: newer wins, and the lower id breaks an equal-second tie.
+    if (rumor.created_at > held.created_at
+      || (rumor.created_at === held.created_at && rumor.id < held.id)) this.rumors[index] = rumor;
   }
 
   async query([filter]: NostrFilter[]): Promise<NostrRumor[]> {
@@ -236,13 +243,14 @@ describe("usePullPortableSetup", () => {
     expect(h.discoverRelayList.mock.calls[0]?.[2]).toContain(OLD_RELAY);
     expect(h.queryExplicitRelays.mock.calls[0]?.[1]).toEqual([OLD_RELAY, NEW_RELAY]);
 
-    // Every settings document in one filter, with no `limit` — which caps the
-    // filter rather than each `d`, so all but one could come back missing.
+    // The settings root and every legacy settings document in one filter, with no
+    // `limit` — which caps the filter rather than each `d`, so all but one could
+    // come back missing.
     const settingsFilter = (h.queryExplicitRelays.mock.calls[0]?.[2] as NostrFilter[])
       .find((filter) => filter.kinds?.includes(30078));
-    expect(settingsFilter?.["#d"]).toEqual([
+    expect(settingsFilter?.["#d"]).toEqual(["armada", ...[
       "metadata", "rail", "read-state", "read-state-recent", "notifications", "dms", "reactions",
-    ].map((name) => settingsDTag(name as never)));
+    ].map((name) => settingsDTag(name as never))]);
     expect(settingsFilter?.limit).toBeUndefined();
 
     // The caches the app actually reads.
@@ -588,5 +596,37 @@ describe("usePullPortableSetup", () => {
       doc: { theme: "dark" },
     });
     expect(appliedConfig().theme).toBe("dark");
+  });
+
+  it("decrypts a settings root new to this device and restores the documents it addresses", async () => {
+    clearSettingsRootMemory();
+    const rootHex = "09".repeat(32);
+    const keyring = settingsKeyring(rootHex);
+    const root = event(30078, "root", [["d", "armada"]], `sealed:${encodeSettingsRoot({ v: 1, root: rootHex })}`, 40);
+    const metadata = keyring.settings.metadata;
+    const derivedMetadata = {
+      ...event(30078, "derived-metadata", [["d", metadata.d]], "", 50),
+      pubkey: metadata.pubkey,
+      content: await metadata.signer.nip44!.encrypt(
+        metadata.pubkey,
+        JSON.stringify({ theme: "light", preferredVoiceServer: "derived.example" }),
+      ),
+    };
+    h.queryExplicitRelays.mockImplementation(async (_nostr: unknown, _relays: unknown, filters: NostrFilter[]) =>
+      filters.some((filter) => filter.authors?.includes(metadata.pubkey))
+        ? [derivedMetadata]
+        : [...fullSetup(), root]);
+    const { view, client } = render();
+
+    await act(async () => {
+      await view.result.current.pull();
+    });
+
+    expect(client.getQueryData(["settings-doc", "metadata", PUBKEY])).toMatchObject({
+      event: { id: "derived-metadata" },
+      doc: { theme: "light" },
+    });
+    expect(appliedConfig().theme).toBe("light");
+    clearSettingsRootMemory();
   });
 });

@@ -31,13 +31,13 @@ import {
 import { readFolded, writeFolded } from "@/lib/foldedCache";
 import { groupListFoldKey, type PersistedGroupList } from "@/lib/nip29ServerCache";
 import {
-  SETTINGS_DTAGS,
+  SETTINGS_DOC_NAMES,
   SETTINGS_KIND,
   hasMigratedKeys,
-  parseSettingsDoc,
-  settingsDTag,
-  settingsDocForDTag,
 } from "@/lib/settingsDocs";
+import { SELF_SYNC_DTAGS } from "@/lib/selfSyncKinds";
+import { resolveSettingsKeys, type SettingsKeys } from "@/lib/settingsRootStore";
+import { settingsKeysQueryKey } from "@/hooks/useSettingsKeys";
 import { parseBlossomServerList } from "@/lib/blossom";
 import {
   newestCanonicalSelfList,
@@ -52,11 +52,15 @@ import {
 import type { SearchRelayListQuery } from "@/hooks/useSearchRelayList";
 import { logSync, sinceMs } from "@/lib/syncLog";
 import {
-  decodeSettingsDoc,
+  readSettingsDocSources,
+  settingsDocExists,
   settingsDocQueryKey,
-  type StoredSettingsDoc,
+  type SettingsDocQueryData,
 } from "@/hooks/useSettingsDoc";
-import { decodeAndHydrateDmConversationIndex } from "@/hooks/useDmConversationIndexSync";
+import {
+  decodeAndHydrateDmConversationIndex,
+  dmConversationIndexFilters,
+} from "@/hooks/useDmConversationIndexSync";
 import { dmConversationIndexFilter } from "@/lib/dmConversationIndex";
 import {
   discoverRelayList,
@@ -70,7 +74,7 @@ import {
 import { markNotificationSettingsReady } from "@/lib/notificationSettingsAuthority";
 import { RELAY_LIST_DISCOVERY_RELAYS } from "@/lib/platform";
 
-import type { NostrEvent } from "@nostrify/nostrify";
+import type { NostrFilter } from "@nostrify/nostrify";
 import type { NostrRumor } from "@/lib/nostrRumor";
 
 /** NIP-88 poll kind — polls render inline in the group timeline. */
@@ -468,114 +472,111 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
         const automaticSettingsSync = configRef.current.automaticSettingsSync !== false;
         try {
           if (user.signer.nip44 && automaticSettingsSync) {
-            // No `limit`: it caps the whole filter, not each `d`.
-            const settingsFilter = {
-              kinds: [SETTINGS_KIND],
-              authors: [pubkey],
-              "#d": SETTINGS_DTAGS,
+            const store = await eventStore;
+            const derivedFilters = (keys: SettingsKeys) => keys.keyring
+              ? [{ kinds: [SETTINGS_KIND], authors: keys.keyring.authors }]
+              : [];
+            // Store what a read found: every reader below reads the store, not this response.
+            const readInto = async (filters: NostrFilter[]) => {
+              const read = await queryExplicitRelaysWithStatus(
+                nostr,
+                accountRelays,
+                filters,
+                settingsStepSignal(),
+                { graceMs: STEP_GRACE_MS },
+              );
+              await Promise.allSettled(read.events.map((event) => store.event(event)));
+              settingsStep(
+                `read ${read.events.length} event(s); answered ${read.answered.length}, failed ${read.failed.length} of ${accountRelays.length}`,
+              );
+              return read;
             };
-            const settingsRead = await queryExplicitRelaysWithStatus(
-              nostr,
-              accountRelays,
-              [
-                settingsFilter,
-                // The DM index must never widen to the general-pool fallback; with no explicit destination,
-                // stay local and retry after discovery.
-                ...(accountRelays.length > 0 ? [dmConversationIndexFilter(pubkey)] : []),
-              ],
-              settingsStepSignal(),
-              { graceMs: STEP_GRACE_MS },
-            );
-            const events = settingsRead.events;
-            settingsStep(
-              `read ${events.length} event(s); answered ${settingsRead.answered.length}, failed ${settingsRead.failed.length} of ${accountRelays.length}`,
-            );
+
+            // A held root reads every document in one round trip; a fresh device first
+            // needs the root from the wire, then the documents it addresses.
+            let keys = await resolveSettingsKeys(store, user.signer, pubkey);
+            const reads = [await readInto([
+              // No `limit`: it caps the whole filter, not each `d`.
+              { kinds: [SETTINGS_KIND], authors: [pubkey], "#d": SELF_SYNC_DTAGS },
+              ...derivedFilters(keys),
+              // The DM index must never widen to the general-pool fallback; with no explicit destination,
+              // stay local and retry after discovery.
+              ...(accountRelays.length > 0 ? [dmConversationIndexFilter(pubkey)] : []),
+            ])];
+            const heldKeyring = keys.keyring?.id;
+            keys = await resolveSettingsKeys(store, user.signer, pubkey);
+            if (keys.keyring && keys.keyring.id !== heldKeyring) {
+              settingsStep("settings root decrypted");
+              reads.push(await readInto(derivedFilters(keys)));
+            }
+            if (!cancelled) queryClient.setQueryData(settingsKeysQueryKey(pubkey), keys);
             const expectedSettingsRelays = uniqueRelayUrls(accountRelays);
             const settingsAbsenceAuthoritative = expectedSettingsRelays.length > 0
-              && settingsRead.failed.length === 0
-              && settingsRead.answered.length === expectedSettingsRelays.length;
+              && reads.every((read) => read.failed.length === 0
+                && read.answered.length === expectedSettingsRelays.length);
 
-            // Seed each split document's cache to spare hooks the store round-trip on first render.
-            const newestByDTag = new Map<string, NostrEvent>();
-            for (const candidate of events) {
-              const dTag = candidate.tags.find(([name]) => name === "d")?.[1];
-              if (dTag === undefined) continue;
-              const held = newestByDTag.get(dTag);
-              if (
-                !held
-                || candidate.created_at > held.created_at
-                || (candidate.created_at === held.created_at && candidate.id < held.id)
-              ) {
-                newestByDTag.set(dTag, candidate);
-              }
-            }
-            settingsStep(
-              `documents: ${[...newestByDTag.keys()].filter((d) => settingsDocForDTag(d)).join(", ") || "none"}`,
-            );
-            for (const [dTag, candidate] of newestByDTag) {
-              const name = settingsDocForDTag(dTag);
-              if (!name || name === "metadata") continue; // metadata is seeded below
-              const decoded = await decodeSettingsDoc(candidate, user.signer, pubkey, name);
-              settingsStep(`${name} ${decoded ? "decoded" : "undecodable"}`);
-              if (decoded && !cancelled) {
-                queryClient.setQueryData(settingsDocQueryKey(name, pubkey), decoded);
-              }
-            }
-
-            let legacyNotificationsPresent = false;
-            const event = newestByDTag.get(settingsDTag("metadata"));
-            if (event?.content) {
-              const decrypted = await user.signer.nip44.decrypt(pubkey, event.content);
-              settingsStep("metadata decrypted");
-              const parsed = parseSettingsDoc("metadata", JSON.parse(decrypted));
-              if (parsed && parsed.dropped.length > 0) {
-                settingsStep(`metadata: ignored invalid field(s) ${parsed.dropped.join(", ")}`);
-              }
-              if (parsed && !cancelled) {
-                legacyNotificationsPresent = hasMigratedKeys(parsed.doc, "notifications");
-                // Fold this run's canonical relay lists (NIP-65, 10007/10050/10063) over the NIP-78 blob.
-                const merged = {
-                  ...parsed.doc,
-                  ...(canonicalSearch && !canonicalSearch.decryptFailed
-                    ? { searchRelays: canonicalSearch.relays }
-                    : {}),
-                  ...(canonicalDm ? { dmRelays: canonicalDm.relays } : {}),
-                  ...(canonicalBlossom
-                    ? {
-                        blossomServerMetadata: {
-                          servers: canonicalBlossom.servers,
-                          updatedAt: canonicalBlossom.event.created_at,
-                          eventId: canonicalBlossom.event.id,
-                        },
-                      }
-                    : {}),
-                };
-                // Seeded for `merged`, which exists only in memory (the event itself is already in ArmadaDB).
-                queryClient.setQueryData<StoredSettingsDoc<"metadata">>(
-                  settingsDocQueryKey("metadata", pubkey),
-                  { event, doc: merged },
+            // Seed each document's cache to spare hooks the store round-trip on first render.
+            const ctx = { store, signer: user.signer, pubkey, keys };
+            for (const name of SETTINGS_DOC_NAMES) {
+              if (name === "metadata") continue; // metadata is seeded below
+              const sources = await readSettingsDocSources(ctx, name);
+              settingsStep(`${name} ${sources.length > 0 ? "decoded" : "absent"}`);
+              if (sources[0] && !cancelled) {
+                queryClient.setQueryData<SettingsDocQueryData<typeof name>>(
+                  settingsDocQueryKey(name, pubkey),
+                  { ...sources[0], sources },
                 );
-                settingsFound = true;
+              }
+            }
 
-                // Migration: pre-migration clients stored 10007/10050/10063 only in the NIP-78 blob. Keep the
-                // blob's value locally until an explicit publish; nothing is published here.
-                const legacySearch = !canonicalSearch && Array.isArray(parsed.doc.searchRelays)
-                  ? parsed.doc.searchRelays
-                  : undefined;
-                const legacyDm = !canonicalDm && Array.isArray(parsed.doc.dmRelays)
-                  ? parsed.doc.dmRelays
-                  : undefined;
-                const legacyBlossom = !canonicalBlossom && parsed.doc.blossomServerMetadata
-                  ? parsed.doc.blossomServerMetadata
-                  : undefined;
-                if (legacySearch || legacyDm || legacyBlossom) {
-                  updateConfigRef.current((current) => ({
-                    ...current,
-                    ...(legacySearch ? { searchRelays: legacySearch } : {}),
-                    ...(legacyDm ? { dmRelays: legacyDm } : {}),
-                    ...(legacyBlossom ? { blossomServerMetadata: legacyBlossom } : {}),
-                  }));
-                }
+            const metadataSources = await readSettingsDocSources(ctx, "metadata");
+            const stored = metadataSources[0];
+            const legacyNotificationsPresent = metadataSources.some((source) =>
+              hasMigratedKeys(source.doc, "notifications"));
+            if (stored && !cancelled) {
+              settingsStep("metadata decrypted");
+              // Fold this run's canonical relay lists (NIP-65, 10007/10050/10063) over the NIP-78 blob.
+              const merged = {
+                ...stored.doc,
+                ...(canonicalSearch && !canonicalSearch.decryptFailed
+                  ? { searchRelays: canonicalSearch.relays }
+                  : {}),
+                ...(canonicalDm ? { dmRelays: canonicalDm.relays } : {}),
+                ...(canonicalBlossom
+                  ? {
+                      blossomServerMetadata: {
+                        servers: canonicalBlossom.servers,
+                        updatedAt: canonicalBlossom.event.created_at,
+                        eventId: canonicalBlossom.event.id,
+                      },
+                    }
+                  : {}),
+              };
+              // Seeded for `merged`, which exists only in memory (the event itself is already in ArmadaDB).
+              queryClient.setQueryData<SettingsDocQueryData<"metadata">>(
+                settingsDocQueryKey("metadata", pubkey),
+                { event: stored.event, doc: merged, sources: metadataSources },
+              );
+              settingsFound = true;
+
+              // Migration: pre-migration clients stored 10007/10050/10063 only in the NIP-78 blob. Keep the
+              // blob's value locally until an explicit publish; nothing is published here.
+              const legacySearch = !canonicalSearch && Array.isArray(stored.doc.searchRelays)
+                ? stored.doc.searchRelays
+                : undefined;
+              const legacyDm = !canonicalDm && Array.isArray(stored.doc.dmRelays)
+                ? stored.doc.dmRelays
+                : undefined;
+              const legacyBlossom = !canonicalBlossom && stored.doc.blossomServerMetadata
+                ? stored.doc.blossomServerMetadata
+                : undefined;
+              if (legacySearch || legacyDm || legacyBlossom) {
+                updateConfigRef.current((current) => ({
+                  ...current,
+                  ...(legacySearch ? { searchRelays: legacySearch } : {}),
+                  ...(legacyDm ? { dmRelays: legacyDm } : {}),
+                  ...(legacyBlossom ? { blossomServerMetadata: legacyBlossom } : {}),
+                }));
               }
             }
 
@@ -583,16 +584,17 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
             if (
               !cancelled
               && settingsAbsenceAuthoritative
-              && !newestByDTag.has(settingsDTag("notifications"))
               && !legacyNotificationsPresent
+              && !(await settingsDocExists(ctx, "notifications"))
             ) {
               markNotificationSettingsReady(pubkey);
             }
 
-            // Off the settings phase: one sequential signer decrypt per shard could hold theme/relay
-            // config past the hard cap. Decryptions are cached.
+            // Off the settings phase: one sequential signer decrypt per legacy shard could hold
+            // theme/relay config past the hard cap. Decryptions are cached.
             if (accountRelays.length > 0) {
-              void decodeAndHydrateDmConversationIndex(events, user.signer, pubkey)
+              void store.query(dmConversationIndexFilters(pubkey, keys))
+                .then((events) => decodeAndHydrateDmConversationIndex(events, ctx))
                 .then(() => settingsStep("DM conversation index hydrated"))
                 .catch(() => undefined);
             }

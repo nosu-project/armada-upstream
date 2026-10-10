@@ -28,6 +28,7 @@ vi.mock("@/hooks/useSettingsDoc", () => ({
     h.docs[name] ?? {
       doc: { theme: "light" },
       event: { id: "settings-v1", created_at: 1 },
+      sources: [],
       update: h.publish,
       hasNip44Support: true,
     },

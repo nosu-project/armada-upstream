@@ -45,20 +45,20 @@ import {
   dmConversationIndexSyncQueryKey,
   type DecodedDmConversationIndex,
 } from "@/hooks/useDmConversationIndexSync";
-import { hydrateDmConversationIndexShards } from "@/hooks/useDmConversationIndex";
+import { hydrateDmConversationIndexRecords } from "@/hooks/useDmConversationIndex";
 import {
   decodeFavoriteGifEvents,
   favoriteGifsSyncQueryKey,
+  type DecodedFavoriteGifs,
 } from "@/hooks/useFavoriteGifsSync";
+import { hydrateFavoriteGifRecords } from "@/hooks/useFavoriteGifs";
 import {
-  FAVORITE_GIFS_D_PREFIX,
-  FAVORITE_GIFS_EVENT_TAG,
-  hydrateFavoriteGifShards,
-} from "@/hooks/useFavoriteGifs";
-import {
-  settingsDocFilter,
+  readSettingsDocChecked,
+  readSettingsDocSources,
   settingsDocQueryKey,
+  type SettingsDocQueryData,
 } from "@/hooks/useSettingsDoc";
+import { settingsKeysQueryKey } from "@/hooks/useSettingsKeys";
 import {
   resolveGroupListRead,
   type UserGroupListQuery,
@@ -79,16 +79,14 @@ import {
 import {
   SETTINGS_DOC_NAMES,
   SETTINGS_KIND,
-  parseSettingsDoc,
-  settingsDTag,
   type SettingsDocName,
 } from "@/lib/settingsDocs";
 import { docToConfigPatch, CONFIG_KEYS_BY_DOC, type ConfigDocName } from "@/lib/syncedConfig";
-import {
-  DM_CONVERSATIONS_EVENT_TAG,
-  newestDmConversationIndexEvents,
-} from "@/lib/dmConversationIndex";
 import { SELF_SYNC_TOPIC_TAGS } from "@/lib/selfSyncKinds";
+import { derivedDocOf, type SettingsKeyring } from "@/lib/settingsKeys";
+import { newestSettingsRoot } from "@/lib/settingsRoot";
+import { resolveSettingsKeys, type SettingsKeys } from "@/lib/settingsRootStore";
+import type { NostrRumor } from "@/lib/nostrRumor";
 
 import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
 import type { SearchRelayListQuery } from "@/hooks/useSearchRelayList";
@@ -210,16 +208,44 @@ export function usePullPortableSetup() {
       let communityEvents: NostrEvent[] = [];
       let communitySet: FragSet | null = null;
       let events: NostrEvent[];
+      let keys: SettingsKeys = { keyring: null, previous: [] };
+      let settingsEditions: NostrEvent[] = [];
       if (canDecrypt) {
+        keys = await resolveSettingsKeys(store, signer, user.pubkey);
         const wire = await fetchPortableWireState(
           nostr,
           user,
           sources,
           AbortSignal.timeout(PULL_TIMEOUT_MS),
+          [],
+          true,
+          [],
+          keys.keyring?.authors,
         );
         events = wire.events;
         communityEvents = wire.communityEvents;
         communitySet = wire.communitySet;
+        // The root may be new to this device, and it addresses documents not yet read.
+        const root = newestSettingsRoot(events, user.pubkey);
+        if (root) {
+          await store.event(root).catch(() => undefined);
+          const heldKeyring = keys.keyring?.id;
+          keys = await resolveSettingsKeys(store, signer, user.pubkey);
+          if (!keys.keyring) {
+            throw new Error("Your settings root could not be decrypted; nothing was restored");
+          }
+          if (keys.keyring.id !== heldKeyring) {
+            events = [...events, ...await queryExplicitRelays(
+              nostr,
+              sources,
+              [{ kinds: [SETTINGS_KIND], authors: keys.keyring.authors }],
+              AbortSignal.timeout(PULL_TIMEOUT_MS),
+            )];
+          }
+        }
+        const keyrings = [keys.keyring, ...keys.previous].filter((k): k is SettingsKeyring => !!k);
+        settingsEditions = events.filter((event) => event.kind === SETTINGS_KIND
+          && (event.pubkey === user.pubkey || keyrings.some((keyring) => derivedDocOf(keyring, event))));
       } else {
         const filters: NostrFilter[] = [{
           kinds: [KIND_DM_RELAYS, KIND_BLOSSOM_SERVERS],
@@ -254,43 +280,27 @@ export function usePullPortableSetup() {
         throw new Error("Your creator invite records could not be decrypted; nothing was restored");
       }
 
-      const topicEditions = canDecrypt
-        ? events.filter((event) => event.tags.some(
-            ([name, value]) => name === "t" && SELF_SYNC_TOPIC_TAGS.includes(value),
-          ))
-        : [];
+      const ctx = { signer, pubkey: user.pubkey, keys };
+      const familyOf = (event: NostrRumor) => [keys.keyring, ...keys.previous]
+        .map((keyring) => keyring && derivedDocOf(keyring, event))
+        .find(Boolean)?.ref.family;
+      const topicEditions = settingsEditions.filter((event) =>
+        (event.pubkey === user.pubkey && event.tags.some(
+          ([name, value]) => name === "t" && SELF_SYNC_TOPIC_TAGS.includes(value),
+        ))
+        || (familyOf(event) !== undefined && familyOf(event) !== "settings"));
       const topicHeads = newestPortableAddressableEvents(topicEditions, SETTINGS_KIND);
-      const dmIndexEvents = topicEditions.filter((event) => event.tags.some(
-        ([name, value]) => name === "t" && value === DM_CONVERSATIONS_EVENT_TAG,
-      ));
       let decodedDmIndex: DecodedDmConversationIndex | undefined;
-      if (dmIndexEvents.length > 0) {
-        decodedDmIndex = await decodeDmConversationIndexEvents(
-          dmIndexEvents,
-          signer,
-          user.pubkey,
-        );
-        if (decodedDmIndex.heads.size !== newestDmConversationIndexEvents(dmIndexEvents, user.pubkey).length) {
+      let decodedFavoriteGifs: DecodedFavoriteGifs | undefined;
+      if (topicEditions.length > 0) {
+        decodedDmIndex = await decodeDmConversationIndexEvents(topicEditions, ctx);
+        if (decodedDmIndex.unreadable.size > 0) {
           throw new Error("Your DM conversation index could not be decrypted completely; nothing was restored");
         }
-      }
-      const favoriteGifEvents = topicEditions.filter((event) => event.tags.some(
-        ([name, value]) => name === "t" && value === FAVORITE_GIFS_EVENT_TAG,
-      ));
-      const decodedFavoriteGifs = favoriteGifEvents.length > 0
-        ? await decodeFavoriteGifEvents(
-            user.pubkey,
-            (pubkey, content) => signer.nip44!.decrypt(pubkey, content),
-            favoriteGifEvents,
-          )
-        : undefined;
-      const expectedFavoriteCoordinates = new Set(
-        favoriteGifEvents
-          .map((event) => event.tags.find(([name]) => name === "d")?.[1])
-          .filter((d): d is string => Boolean(d?.startsWith(FAVORITE_GIFS_D_PREFIX))),
-      ).size;
-      if (decodedFavoriteGifs && decodedFavoriteGifs.ownEvents.size !== expectedFavoriteCoordinates) {
-        throw new Error("Your GIF favorites could not be decrypted completely; nothing was restored");
+        decodedFavoriteGifs = await decodeFavoriteGifEvents(topicEditions, ctx);
+        if (decodedFavoriteGifs.headUnreadable) {
+          throw new Error("Your GIF favorites could not be decrypted completely; nothing was restored");
+        }
       }
 
       // Decode every private record before changing any cache (atomicity).
@@ -319,62 +329,37 @@ export function usePullPortableSetup() {
         throw new Error("Your search-relay list could not be decrypted; nothing was restored");
       }
 
-      // Drop relay copies not strictly newer than what's on disk.
-      const storedVersions = new Map<SettingsDocName, Pick<NostrEvent, "created_at" | "id">>();
+      // What was on disk before this pull: a document is applied only if the pull brought a newer one.
+      const storedBefore = new Set<string>();
       if (canDecrypt) {
+        const settingsCtx = { store, signer, pubkey: user.pubkey, keys };
         for (const name of SETTINGS_DOC_NAMES) {
-          try {
-            for (const rumor of await store.query([settingsDocFilter(user.pubkey, name)])) {
-              const held = storedVersions.get(name);
-              if (nip01VersionIsNewer(rumor, held)) {
-                storedVersions.set(name, rumor);
-              }
-            }
-          } catch {
-            // Store unavailable; treat as "nothing on disk".
-          }
+          const before = await readSettingsDocChecked(settingsCtx, name).catch(() => undefined);
+          if (before?.stored) storedBefore.add(before.stored.event.id);
         }
       }
-
-      const newestByDTag = new Map<string, NostrEvent>();
-      for (const candidate of events) {
-        if (candidate.kind !== SETTINGS_KIND || candidate.pubkey !== user.pubkey) continue;
-        const dTag = candidate.tags.find(([name]) => name === "d")?.[1];
-        if (dTag === undefined) continue;
-        const held = newestByDTag.get(dTag);
-        if (!held
-          || candidate.created_at > held.created_at
-          || (candidate.created_at === held.created_at && candidate.id < held.id)) {
-          newestByDTag.set(dTag, candidate);
-        }
+      // Into the store so one read arbitrates every source; the caches still change only below.
+      for (const event of settingsEditions) {
+        if (event.tags.some(([name]) => name === "t")) continue; // topic editions, persisted later
+        await store.event(event).catch(() => undefined);
       }
 
       const settingsDocs: PulledSettingsDoc[] = [];
+      const settingsSources = new Map<SettingsDocName, SettingsDocQueryData<SettingsDocName>>();
       let settingsFound = 0;
       for (const name of canDecrypt ? SETTINGS_DOC_NAMES : []) {
-        const event = newestByDTag.get(settingsDTag(name));
-        if (!event) continue;
-        settingsFound += 1;
-        if (!nip01VersionIsNewer(event, storedVersions.get(name))) continue;
-
-        // Not `decodeSettingsDoc`, which conflates a refusal (abort) with an unparseable doc (skip).
-        let plaintext: string;
-        try {
-          plaintext = await signer.nip44!.decrypt(user.pubkey, event.content);
-        } catch {
+        const settingsCtx = { store, signer, pubkey: user.pubkey, keys };
+        const { stored, unreadable } = await readSettingsDocChecked(settingsCtx, name);
+        if (unreadable) {
           throw new Error(
             `Your private Armada settings (${name}) could not be decrypted; nothing was restored`,
           );
         }
-        let value: unknown;
-        try {
-          value = JSON.parse(plaintext);
-        } catch {
-          continue; // Not JSON at all — same class as a schema miss.
-        }
-        const parsed = parseSettingsDoc(name, value);
-        if (!parsed) continue;
-        settingsDocs.push({ name, event, doc: parsed.doc as Record<string, unknown> });
+        if (!stored) continue;
+        settingsFound += 1;
+        if (storedBefore.has(stored.event.id)) continue;
+        settingsDocs.push({ name, event: stored.event as NostrEvent, doc: stored.doc as Record<string, unknown> });
+        settingsSources.set(name, { ...stored, sources: await readSettingsDocSources(settingsCtx, name) });
       }
 
       let pulledCommunity: ListData | undefined;
@@ -476,26 +461,18 @@ export function usePullPortableSetup() {
         queryClient.setQueryData(inviteListKey(user.pubkey), pulledInvites);
       }
       if (decodedDmIndex) {
-        await hydrateDmConversationIndexShards(user.pubkey, decodedDmIndex.shards);
-        queryClient.setQueryData(
-          [...dmConversationIndexSyncQueryKey, user.pubkey, sources.slice().sort().join("\u0000")],
-          decodedDmIndex,
-        );
+        await hydrateDmConversationIndexRecords(user.pubkey, decodedDmIndex.sets);
+        void queryClient.invalidateQueries({ queryKey: [...dmConversationIndexSyncQueryKey, user.pubkey] });
       }
       if (decodedFavoriteGifs) {
-        hydrateFavoriteGifShards(user.pubkey, decodedFavoriteGifs.shards);
-        queryClient.setQueryData([...favoriteGifsSyncQueryKey, user.pubkey], decodedFavoriteGifs);
+        hydrateFavoriteGifRecords(user.pubkey, decodedFavoriteGifs.sets);
+        void queryClient.invalidateQueries({ queryKey: [...favoriteGifsSyncQueryKey, user.pubkey] });
       }
 
-      // Durable first, then visible; otherwise a refetch reads the pre-pull version back.
-      for (const { name, event, doc } of settingsDocs) {
-        try {
-          await store.event(event);
-        } catch {
-          // Superseded or unwritable; the cache seed below still applies it
-          // for this session.
-        }
-        queryClient.setQueryData(settingsDocQueryKey(name, user.pubkey), { event, doc });
+      // Stored above; now visible.
+      queryClient.setQueryData(settingsKeysQueryKey(user.pubkey), keys);
+      for (const [name, data] of settingsSources) {
+        queryClient.setQueryData(settingsDocQueryKey(name, user.pubkey), data);
       }
 
       // One AppConfig update; `useConfigDocSync` only applies docs while auto sync is on, which is
