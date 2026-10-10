@@ -50,14 +50,26 @@ public class NotificationRelayServiceAuthTest {
     }
 
     @Test
-    public void selfCoordinateIsTheKindForReplaceablesAndKindPlusDForAddressables() throws Exception {
+    public void selfCoordinateIsTheKindForReplaceablesAndKindAuthorDForAddressables() throws Exception {
         JSONObject follow = new JSONObject().put("kind", 3).put("tags", new JSONArray());
         assertEquals("3", NotificationRelayService.selfCoordinateOf(follow, 3));
-        JSONObject doc = new JSONObject().put("kind", 30078)
+        JSONObject doc = new JSONObject().put("kind", 30078).put("pubkey", "me")
                 .put("tags", new JSONArray().put(new JSONArray().put("d").put("armada/read-state")));
-        assertEquals("30078:armada/read-state", NotificationRelayService.selfCoordinateOf(doc, 30078));
-        JSONObject noD = new JSONObject().put("kind", 33302).put("tags", new JSONArray());
-        assertEquals("33302:", NotificationRelayService.selfCoordinateOf(noD, 33302));
+        assertEquals("30078:me:armada/read-state", NotificationRelayService.selfCoordinateOf(doc, 30078));
+        // A derived settings key's document must not share a floor with the user's.
+        JSONObject derived = new JSONObject().put("kind", 30078).put("pubkey", "derived")
+                .put("tags", new JSONArray().put(new JSONArray().put("d").put("armada/read-state")));
+        assertEquals("30078:derived:armada/read-state", NotificationRelayService.selfCoordinateOf(derived, 30078));
+        JSONObject noD = new JSONObject().put("kind", 33302).put("pubkey", "me").put("tags", new JSONArray());
+        assertEquals("33302:me:", NotificationRelayService.selfCoordinateOf(noD, 33302));
+    }
+
+    @Test
+    public void selfDocsFingerprintIsOrderIndependentAndEmptyForNone() {
+        assertEquals("", NotificationRelayService.selfDocsFingerprintOf(java.util.List.of()));
+        assertEquals(
+                NotificationRelayService.selfDocsFingerprintOf(java.util.List.of("a", "b")),
+                NotificationRelayService.selfDocsFingerprintOf(java.util.List.of("b", "a")));
     }
 
     @Test

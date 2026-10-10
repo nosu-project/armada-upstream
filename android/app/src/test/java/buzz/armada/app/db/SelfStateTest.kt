@@ -38,6 +38,7 @@ class SelfStateTest {
         )
         assertEquals(
             setOf(
+                "armada",
                 "armada/metadata",
                 "armada/rail",
                 "armada/read-state",
@@ -56,9 +57,8 @@ class SelfStateTest {
 
     @Test
     fun `keeps every one of Armada's own NIP-78 documents`() {
-        // Six documents, not one: the rail's arrangement, the read state and
-        // the mutes each have their own, and a service that mirrored only
-        // `metadata` would leave five of them to arrive on next app open.
+        // The settings root and every legacy document: a service that mirrored
+        // only `metadata` would leave the rest to arrive on next app open.
         for (dTag in SelfState.DEFAULT_D_TAGS) {
             assertTrue(dTag, SelfState.storable(self, rumor(kind = 30078, tags = listOf(listOf("d", dTag)))))
         }
@@ -122,6 +122,31 @@ class SelfStateTest {
         assertFalse(SelfState.storable(self, rumor(kind = 30078, tags = listOf(listOf("d", "snort/settings")))))
         assertFalse(SelfState.storable(self, rumor(kind = 30078, tags = listOf(listOf("t", "other-app")))))
         assertFalse(SelfState.storable(self, rumor(kind = 30078)))
+    }
+
+    @Test
+    fun `keeps a document under a derived key only at its one coordinate`() {
+        val derived = mapOf("derived" to "opaque-d")
+        assertTrue(
+            SelfState.storable(
+                self,
+                rumor(kind = 30078, pubkey = "derived", tags = listOf(listOf("d", "opaque-d"))),
+                derivedDocs = derived,
+            ),
+        )
+        // Anything else the key signs is not one of our documents.
+        assertFalse(
+            SelfState.storable(
+                self,
+                rumor(kind = 30078, pubkey = "derived", tags = listOf(listOf("d", "other"))),
+                derivedDocs = derived,
+            ),
+        )
+        assertFalse(SelfState.storable(self, rumor(kind = 10009, pubkey = "derived"), derivedDocs = derived))
+        // …and without the configuration, a derived author is a stranger.
+        assertFalse(
+            SelfState.storable(self, rumor(kind = 30078, pubkey = "derived", tags = listOf(listOf("d", "opaque-d")))),
+        )
     }
 
     @Test

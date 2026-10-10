@@ -17,6 +17,7 @@ import { hmac } from "@noble/hashes/hmac.js";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
 import { NSecSigner } from "@nostrify/nostrify";
+import { getConversationKey } from "nostr-tools/nip44";
 
 import { DM_CONVERSATION_INDEX_BUCKETS } from "@/lib/dmConversationIndex";
 import { SETTINGS_DOC_NAMES, type SettingsDocName } from "@/lib/settingsDocNames";
@@ -130,6 +131,30 @@ export function derivedDocOf(
   const doc = keyring?.byPubkey.get(event.pubkey);
   if (!doc) return undefined;
   return event.tags.some(([name, value]) => name === "d" && value === doc.d) ? doc : undefined;
+}
+
+/** One derived document, as the Android service is told about it. */
+export interface NativeSelfDoc {
+  pubkey: string;
+  d: string;
+  /**
+   * Only for read-state: the document's NIP-44 conversation key, so the service
+   * can dismiss notifications read elsewhere. It can open that document, not sign one.
+   */
+  readStateKey?: string;
+}
+
+export function nativeSelfDocs(keyring: SettingsKeyring | null | undefined): NativeSelfDoc[] {
+  if (!keyring) return [];
+  return [...keyring.byPubkey.values()].map((doc) => {
+    const readState = doc.ref.family === "settings"
+      && (doc.ref.name === "read-state" || doc.ref.name === "read-state-recent");
+    return {
+      pubkey: doc.pubkey,
+      d: doc.d,
+      ...(readState ? { readStateKey: bytesToHex(getConversationKey(doc.secretKey, doc.pubkey)) } : {}),
+    };
+  });
 }
 
 /** A fresh 32-byte root secret. */

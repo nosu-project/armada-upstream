@@ -2,6 +2,7 @@ import { Capacitor, registerPlugin, type PluginListenerHandle } from "@capacitor
 
 import type { ConcordLevelPolicy } from "@/hooks/useNotifLevels";
 import type { MediaPolicyConfig } from "@/lib/mediaPolicy";
+import type { NativeSelfDoc } from "@/lib/settingsKeys";
 import type { NostrEvent } from "@nostrify/nostrify";
 
 // Bridge to the Android background notification service
@@ -194,6 +195,11 @@ export interface ArmadaNotificationPlugin {
      * built-in defaults, never "none".
      */
     selfDTags?: string[];
+    /**
+     * The documents under keys derived from the settings root, which the
+     * service subscribes to and stores. Absent until this device holds the root.
+     */
+    selfDocs?: NativeSelfDoc[];
     /** Per-type notification prefs (mentions/reactions/replies/directMessages/allGroupMessages). */
     prefs?: Record<string, boolean>;
     /**

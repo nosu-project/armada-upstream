@@ -21,7 +21,9 @@ import {
   ArmadaNotification,
   type NativeNotificationHealth,
 } from "@/lib/nativeNotifications";
-import { SETTINGS_DTAGS } from "@/lib/settingsDocs";
+import { SELF_SYNC_DTAGS } from "@/lib/selfSyncKinds";
+import { nativeSelfDocs } from "@/lib/settingsKeys";
+import { useSettingsKeys } from "@/hooks/useSettingsKeys";
 import { useConcordSubsState } from "@/concord/hooks/useConcordSubs";
 import { withoutNudge } from "@/lib/signerWithNudge";
 import { signStreamAuthsChunked } from "@/concord/lib/streamAuth";
@@ -244,6 +246,9 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
     return [...set].sort();
   }, [groupList]);
 
+  // The documents under keys derived from the settings root, for the self-state watch.
+  const { keys: settingsKeys } = useSettingsKeys();
+  const selfDocs = useMemo(() => nativeSelfDocs(settingsKeys.keyring), [settingsKeys.keyring]);
   // Where the user's own documents live (app relays + NIP-65 read, like `poolGeneralRelays`),
   // for the self-state watch. Separate from `relayUrls`, which is NIP-29 only.
   const selfRelays = useMemo(
@@ -495,7 +500,8 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
         dmKnownConversations,
         dmMutedPeers,
         selfRelays,
-        selfDTags: SETTINGS_DTAGS,
+        selfDTags: SELF_SYNC_DTAGS,
+        selfDocs,
         signer: signerCfg,
         ...(notificationSettingsReady ? {
           relayUrls,
@@ -521,7 +527,7 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
     configureNative(payload, nativeNeedsRepair).catch((err) => {
       console.warn("[native-notif] configure failed:", err);
     });
-  }, [supported, enablement, user, notificationSettingsReady, relayUrls, groupIds, groupSubs, mentionOnlyGroupIds, prefsRecord, concordSubs, concordLevels, concordSubsReady, concordLeftCommunities, dmRelays, dmRelaysReady, dmFollows, dmKnownPeers, dmKnownConversations, dmLevels, dmMutedPeers, dmPeersConfigReady, prefs.dmRequests, selfRelays, signerCfg, gitSubs, mediaPolicy, groupList, gitRepositories.length, gitAnnouncements.data, health]);
+  }, [supported, enablement, user, notificationSettingsReady, selfDocs, relayUrls, groupIds, groupSubs, mentionOnlyGroupIds, prefsRecord, concordSubs, concordLevels, concordSubsReady, concordLeftCommunities, dmRelays, dmRelaysReady, dmFollows, dmKnownPeers, dmKnownConversations, dmLevels, dmMutedPeers, dmPeersConfigReady, prefs.dmRequests, selfRelays, signerCfg, gitSubs, mediaPolicy, groupList, gitRepositories.length, gitAnnouncements.data, health]);
 
   // Auto-enable on launch only if intended AND already granted; never prompts here (LoginSetup
   // and Settings do).
