@@ -1,5 +1,6 @@
 import { queryExplicitRelaysWithStatus, uniqueRelayUrls } from "@/lib/nip65";
 import { hasMigratedKeys, parseSettingsDoc, SETTINGS_KIND, settingsDTag } from "@/lib/settingsDocs";
+import { settingsRootDTag } from "@/lib/settingsRoot";
 
 import type { NostrEvent } from "@nostrify/nostrify";
 
@@ -21,7 +22,9 @@ function newestWithDTag(events: NostrEvent[], dTag: string): NostrEvent | undefi
  * The same proof `useInitialSync` attempts at login, without its grace cut-off:
  * every account relay must answer (EOSE) before "no notifications document" is
  * believed, since an unanswered relay may hold one. A legacy `metadata` document
- * still carrying notification fields counts as present.
+ * still carrying notification fields counts as present. With a settings root on
+ * the relays, the derived notifications document must be asked for too, so a
+ * caller that does not hold the root (`derived` absent) can prove nothing.
  */
 export async function proveNotificationSettingsAbsence(
   nostr: RelayClient,
@@ -29,6 +32,7 @@ export async function proveNotificationSettingsAbsence(
   pubkey: string,
   decryptSelf: (ciphertext: string) => Promise<string>,
   signal: AbortSignal,
+  derived?: { pubkey: string; d: string },
 ): Promise<NotificationSettingsVerdict> {
   const expected = uniqueRelayUrls(relays);
   if (expected.length === 0) return "unknown";
@@ -38,14 +42,19 @@ export async function proveNotificationSettingsAbsence(
     [{
       kinds: [SETTINGS_KIND],
       authors: [pubkey],
-      "#d": [settingsDTag("notifications"), settingsDTag("metadata")],
-    }],
+      "#d": [settingsDTag("notifications"), settingsDTag("metadata"), settingsRootDTag()],
+    }, ...(derived ? [{ kinds: [SETTINGS_KIND], authors: [derived.pubkey], "#d": [derived.d] }] : [])],
     signal,
   );
   if (read.failed.length > 0 || read.answered.length !== expected.length) return "unknown";
-  if (newestWithDTag(read.events, settingsDTag("notifications"))) return "present";
+  const own = read.events.filter((event) => event.pubkey === pubkey);
+  if (newestWithDTag(own, settingsDTag("notifications"))) return "present";
+  if (derived && newestWithDTag(read.events.filter((event) => event.pubkey === derived.pubkey), derived.d)) {
+    return "present";
+  }
+  if (!derived && newestWithDTag(own, settingsRootDTag())) return "unknown";
+  const metadata = newestWithDTag(own, settingsDTag("metadata"));
 
-  const metadata = newestWithDTag(read.events, settingsDTag("metadata"));
   if (!metadata?.content) return "absent";
   try {
     const parsed = parseSettingsDoc("metadata", JSON.parse(await decryptSelf(metadata.content)));

@@ -758,6 +758,9 @@ public class ArmadaNotificationPlugin extends Plugin {
         }
         String selfRelaysRaw = arrayToString(call.getArray("selfRelays"));
         String selfDTagsRaw = arrayToString(call.getArray("selfDTags"));
+        // The documents under keys derived from the settings root, with the
+        // read-state ones' conversation keys (see NotificationRelayService.selfDocs).
+        String selfDocsRaw = arrayToString(call.getArray("selfDocs"));
         String concordSubsRaw = arrayToString(call.getArray("concordSubs"));
         String gitSubsRaw = arrayToString(call.getArray("gitSubs"));
         java.util.Set<String> concordLeft =
@@ -919,6 +922,7 @@ public class ArmadaNotificationPlugin extends Plugin {
             // drop the kind-30078 subscription entirely. That is also what an
             // older WebView (which doesn't send this) gets.
             putOrRemove(editor, "selfDTags", selfDTagsRaw);
+            putOrRemove(editor, "selfDocs", selfDocsRaw);
             // The "concord2Subs" PREF key keeps its old spelling on purpose:
             // the service reads it on boot, before the WebView can re-register.
             // Respelling it would leave an upgraded device with no Concord

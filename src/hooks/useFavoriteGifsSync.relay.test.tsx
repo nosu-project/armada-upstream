@@ -1,9 +1,12 @@
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { settingsKeyring } from "@/lib/settingsKeys";
+
 const SELF = "f".repeat(64);
 const OLD_RELAY = "wss://old.example";
 const NEW_RELAY = "wss://new.example";
+const KEYS = { keyring: settingsKeyring("05".repeat(32)), previous: [] };
 
 interface QueryOptions {
   queryFn: (context: { signal: AbortSignal }) => Promise<unknown>;
@@ -14,16 +17,13 @@ const h = vi.hoisted(() => ({
   nip65Relays: ["wss://old.example"] as string[],
   queryData: undefined as unknown,
   queryOptions: undefined as QueryOptions | undefined,
-  ownShard: { version: 1, deviceId: "test-device", records: [] } as {
-    version: 1;
-    deviceId: string;
-    records: Array<Record<string, unknown>>;
-  },
+  records: [] as Array<Record<string, unknown>>,
   dirtyListeners: new Set<(pubkey: string) => void>(),
   publish: vi.fn(),
   relayQuery: vi.fn(),
   storeQuery: vi.fn(async () => []),
-  invalidate: vi.fn(),
+  keys: undefined as unknown,
+  ensure: vi.fn(),
 }));
 
 vi.mock("@nostrify/react", () => ({
@@ -41,7 +41,6 @@ vi.mock("@tanstack/react-query", () => ({
     h.queryOptions = options;
     return { data: h.queryData };
   },
-  useQueryClient: () => ({ invalidateQueries: h.invalidate }),
 }));
 
 vi.mock("@/contexts/AppContext", () => ({
@@ -66,7 +65,7 @@ vi.mock("@/hooks/useCurrentUser", () => ({
       pubkey: "f".repeat(64),
       signer: {
         nip44: {
-          encrypt: async (_pubkey: string, plaintext: string) => `encrypted:${plaintext}`,
+          encrypt: async (_pubkey: string, plaintext: string) => plaintext,
           decrypt: async (_pubkey: string, ciphertext: string) => ciphertext,
         },
       },
@@ -75,11 +74,15 @@ vi.mock("@/hooks/useCurrentUser", () => ({
 }));
 
 vi.mock("@/hooks/useEventStore", () => ({
-  useEventStore: () => Promise.resolve({ query: h.storeQuery }),
+  useEventStore: () => Promise.resolve({ query: h.storeQuery, event: vi.fn() }),
 }));
 
-vi.mock("@/hooks/useNostrPublish", () => ({
-  useNostrPublish: () => ({ mutateAsync: h.publish }),
+vi.mock("@/hooks/useSettingsKeys", () => ({
+  useSettingsKeys: () => ({ keys: h.keys, isFetched: true, ensure: h.ensure }),
+}));
+
+vi.mock("@/lib/selfStatePublish", () => ({
+  publishSelfStateEvent: (...args: unknown[]) => h.publish(...args),
 }));
 
 vi.mock("@/hooks/useFavoriteGifs", () => ({
@@ -88,10 +91,11 @@ vi.mock("@/hooks/useFavoriteGifs", () => ({
   FAVORITE_GIFS_D_PREFIX: "armada/gif-favorites/",
   FAVORITE_GIFS_EVENT_KIND: 30078,
   FAVORITE_GIFS_EVENT_TAG: "armada-gif-favorites",
-  getFavoriteGifShardDTag: () => "armada/gif-favorites/test-device",
-  hydrateFavoriteGifShards: vi.fn(),
-  loadOwnFavoriteGifShard: () => h.ownShard,
+  getFavoriteGifRecords: () => h.records,
+  hydrateFavoriteGifRecords: vi.fn(),
+  parseFavoriteGifDoc: (value: unknown) => value,
   parseFavoriteGifShard: (value: unknown) => value,
+  readyFavoriteGifShards: async () => undefined,
   subscribeFavoriteGifChanges: (listener: (pubkey: string) => void) => {
     h.dirtyListeners.add(listener);
     return () => h.dirtyListeners.delete(listener);
@@ -103,23 +107,8 @@ import {
   useFavoriteGifsSync,
 } from "@/hooks/useFavoriteGifsSync";
 
-function baseKey(relays: readonly string[], nip65Relays = relays): string {
-  return `${SELF}\u0001${[...relays].sort().join("\u0000")}`
-    + `\u0002${[...nip65Relays].sort().join("\u0000")}`;
-}
-
-function emptyPull(relays: readonly string[], nip65Relays = relays) {
-  return {
-    shards: [],
-    ownEvents: new Map(),
-    unreadable: new Set(),
-    baseKey: baseKey(relays, nip65Relays),
-    publishRelays: [...relays],
-  };
-}
-
 function changeFavorite(): void {
-  h.ownShard.records = [{
+  h.records = [{
     gif: { id: "gif", title: "GIF", url: "https://example.com/gif", width: 1, height: 1 },
     favorite: true,
     updatedAt: 1,
@@ -128,18 +117,25 @@ function changeFavorite(): void {
   for (const listener of h.dirtyListeners) listener(SELF);
 }
 
+async function pull(view: { rerender: () => void }): Promise<void> {
+  h.queryData = await h.queryOptions!.queryFn({ signal: new AbortController().signal });
+  view.rerender();
+  await act(async () => Promise.resolve());
+}
+
 beforeEach(() => {
   vi.useFakeTimers();
   h.relays = [OLD_RELAY];
   h.nip65Relays = [OLD_RELAY];
-  h.queryData = emptyPull(h.relays);
+  h.queryData = undefined;
   h.queryOptions = undefined;
-  h.ownShard.records = [];
+  h.records = [];
+  h.keys = KEYS;
   h.dirtyListeners.clear();
   h.publish.mockReset().mockResolvedValue(undefined);
   h.relayQuery.mockReset().mockResolvedValue([]);
   h.storeQuery.mockClear();
-  h.invalidate.mockReset().mockResolvedValue(undefined);
+  h.ensure.mockReset().mockRejectedValue(new Error("Settings sync has not been set up for this account"));
 });
 
 afterEach(() => {
@@ -149,9 +145,7 @@ afterEach(() => {
 
 describe("favorite GIF self-state relay cohort", () => {
   it("uses an answered app relay when the account has no NIP-65 writer yet", async () => {
-    h.relays = [OLD_RELAY];
     h.nip65Relays = [];
-    h.queryData = undefined;
     renderHook(() => useFavoriteGifsSync());
 
     await expect(h.queryOptions!.queryFn({ signal: new AbortController().signal }))
@@ -161,7 +155,6 @@ describe("favorite GIF self-state relay cohort", () => {
   it("requires a declared NIP-65 writer to answer", async () => {
     h.relays = [OLD_RELAY, NEW_RELAY];
     h.nip65Relays = [NEW_RELAY];
-    h.queryData = undefined;
     h.relayQuery.mockImplementation(async (relay: string) => {
       if (relay === NEW_RELAY) throw new Error("offline");
       return [];
@@ -172,38 +165,60 @@ describe("favorite GIF self-state relay cohort", () => {
       .rejects.toThrow(/declared NIP-65 write relay/);
   });
 
-  it("publishes only to the relays that answered the canonical pull", async () => {
+  it("reads the shared derived document and the legacy shards", async () => {
+    renderHook(() => useFavoriteGifsSync());
+    await h.queryOptions!.queryFn({ signal: new AbortController().signal });
+    expect(h.relayQuery).toHaveBeenCalledWith(OLD_RELAY, [
+      expect.objectContaining({ authors: [KEYS.keyring.gifFavorites.pubkey] }),
+      expect.objectContaining({ authors: [SELF], "#t": ["armada-gif-favorites"] }),
+    ], expect.anything());
+  });
+
+  it("publishes the shared document, under its derived key, only to the relays that answered", async () => {
     h.relays = [OLD_RELAY, NEW_RELAY];
     h.nip65Relays = [OLD_RELAY, NEW_RELAY];
-    h.queryData = undefined;
     h.relayQuery.mockImplementation(async (relay: string) => {
       if (relay === NEW_RELAY) throw new Error("offline");
       return [];
     });
     const view = renderHook(() => useFavoriteGifsSync());
-    h.queryData = await h.queryOptions!.queryFn({ signal: new AbortController().signal });
-    view.rerender();
-    await act(async () => Promise.resolve());
+    await pull(view);
 
     await act(async () => {
       changeFavorite();
       await vi.advanceTimersByTimeAsync(FAVORITE_GIFS_PUBLISH_DEBOUNCE_MS);
     });
 
-    expect(h.publish).toHaveBeenCalledWith(expect.objectContaining({
-      relays: [OLD_RELAY],
-      inheritPendingTargets: false,
-    }));
+    expect(h.publish).toHaveBeenCalledOnce();
+    const [, , event, relays] = h.publish.mock.calls[0]!;
+    expect(relays).toEqual([OLD_RELAY]);
+    expect(event).toMatchObject({
+      pubkey: KEYS.keyring.gifFavorites.pubkey,
+      tags: [["d", KEYS.keyring.gifFavorites.d]],
+    });
+    view.unmount();
+  });
+
+  it("publishes nothing and asks for no root when the account has not set up sync", async () => {
+    h.keys = { keyring: null, previous: [] };
+    const view = renderHook(() => useFavoriteGifsSync());
+    await pull(view);
+    await act(async () => {
+      changeFavorite();
+      await vi.advanceTimersByTimeAsync(FAVORITE_GIFS_PUBLISH_DEBOUNCE_MS);
+    });
+
+    expect(h.ensure).toHaveBeenCalled();
+    expect(h.publish).not.toHaveBeenCalled();
     view.unmount();
   });
 
   it("does not reuse an old pull after the relay set changes", async () => {
     const view = renderHook(() => useFavoriteGifsSync());
-    await act(async () => Promise.resolve());
+    await pull(view);
 
     h.relays = [NEW_RELAY];
     h.nip65Relays = [NEW_RELAY];
-    h.queryData = emptyPull([OLD_RELAY]);
     view.rerender();
     await act(async () => {
       changeFavorite();

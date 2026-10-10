@@ -6,9 +6,11 @@ import type { NostrEvent, NostrSigner } from "@nostrify/nostrify";
 import {
   decodeDmConversationIndexEvents,
   signCurrentDmConversationIndexEvents,
+  signDmConversationIndexBucket,
   verifiedDmConversationIndexEvents,
 } from "@/hooks/useDmConversationIndexSync";
 import {
+  getDmConversationIndexRecords,
   recordDmConversationIndex,
   resetDmConversationIndexCache,
 } from "@/hooks/useDmConversationIndex";
@@ -17,14 +19,19 @@ import {
   DM_CONVERSATIONS_EVENT_TAG,
   dmConversationIndexBucket,
   dmConversationIndexDTag,
+  fitDmConversationIndexBucket,
   serializeDmConversationIndexShard,
+  type DmConversationIndexBucketDoc,
   type DmConversationIndexRecord,
   type DmConversationIndexShard,
 } from "@/lib/dmConversationIndex";
 import type { NostrRumor } from "@/lib/nostrRumor";
+import { settingsKeyring } from "@/lib/settingsKeys";
 
 const SELF_SK = new Uint8Array(32).fill(7);
 const SELF = getPublicKey(SELF_SK);
+const KEYRING = settingsKeyring("04".repeat(32));
+const KEYS = { keyring: KEYRING, previous: [] };
 
 function hex(value: number): string {
   return value.toString(16).padStart(64, "0");
@@ -43,13 +50,14 @@ function shard(deviceId: string, entry: DmConversationIndexRecord): DmConversati
   };
 }
 
-function event(id: string, payload: DmConversationIndexShard, content?: string): NostrRumor {
+/** A legacy, account-signed per-installation shard. */
+function legacyEvent(id: string, payload: DmConversationIndexShard, createdAt = 100): NostrRumor {
   return {
     id,
     pubkey: SELF,
     kind: DM_CONVERSATIONS_EVENT_KIND,
-    created_at: 100,
-    content: content ?? serializeDmConversationIndexShard(payload),
+    created_at: createdAt,
+    content: serializeDmConversationIndexShard(payload),
     tags: [
       ["d", dmConversationIndexDTag(payload.deviceId, payload.bucket)],
       ["t", DM_CONVERSATIONS_EVENT_TAG],
@@ -57,7 +65,7 @@ function event(id: string, payload: DmConversationIndexShard, content?: string):
   };
 }
 
-function signedEvent(payload: DmConversationIndexShard, createdAt: number): NostrEvent {
+function signedLegacyEvent(payload: DmConversationIndexShard, createdAt: number): NostrEvent {
   return finalizeEvent({
     kind: DM_CONVERSATIONS_EVENT_KIND,
     created_at: createdAt,
@@ -69,15 +77,34 @@ function signedEvent(payload: DmConversationIndexShard, createdAt: number): Nost
   }, SELF_SK);
 }
 
-function signer(decrypt: (content: string) => Promise<string>): NostrSigner {
+function derivedEvent(bucket: DmConversationIndexBucketDoc, createdAt: number): Promise<NostrEvent> {
+  // Stamped at max(now, createdAt): signed, so the stamp cannot be edited afterwards.
+  return signDmConversationIndexBucket(KEYRING.dmConversations[bucket.bucket]!, bucket, createdAt - 1);
+}
+
+async function decryptDerived(event: NostrEvent): Promise<DmConversationIndexBucketDoc> {
+  const doc = KEYRING.byPubkey.get(event.pubkey)!;
+  return JSON.parse(await doc.signer.nip44!.decrypt(doc.pubkey, event.content));
+}
+
+/** The account signer, with an identity "encryption" for the legacy shards. */
+function signer(decrypt: (content: string) => Promise<string> = async (content) => content): NostrSigner {
   return {
     getPublicKey: async () => SELF,
-    signEvent: vi.fn(),
+    signEvent: vi.fn(async () => {
+      throw new Error("the account key must not sign a derived document");
+    }),
     nip44: {
       encrypt: vi.fn(),
       decrypt: async (_pubkey: string, content: string) => decrypt(content),
     },
   } as unknown as NostrSigner;
+}
+
+function sameBucketPeer(first: string, from: number): string {
+  let seed = from;
+  while (dmConversationIndexBucket(hex(seed)) !== dmConversationIndexBucket(first)) seed++;
+  return hex(seed);
 }
 
 beforeEach(async () => {
@@ -86,54 +113,38 @@ beforeEach(async () => {
 });
 
 describe("DM conversation index decoding", () => {
-  it("signs this installation's dirty local buckets for explicit Setup Sync", async () => {
+  it("signs dirty local buckets under their derived keys for explicit Setup Sync", async () => {
     const entry = record(hex(8), 80);
     await recordDmConversationIndex(SELF, [entry]);
-    const signEvent = vi.fn(async (template: Omit<NostrEvent, "id" | "pubkey" | "sig">) => ({
-      ...template,
-      id: "e".repeat(64),
-      pubkey: SELF,
-      sig: "1".repeat(128),
-    }));
-    const explicitSigner = {
-      getPublicKey: async () => SELF,
-      signEvent,
-      nip44: {
-        decrypt: async (_pubkey: string, content: string) => content,
-        encrypt: async (_pubkey: string, content: string) => `encrypted:${content}`,
-      },
-    } as unknown as NostrSigner;
 
-    const signed = await signCurrentDmConversationIndexEvents([], explicitSigner, SELF);
+    const signed = await signCurrentDmConversationIndexEvents([], { signer: signer(), pubkey: SELF, keys: KEYS });
     expect(signed).toHaveLength(1);
+    const bucket = dmConversationIndexBucket(entry.key);
     expect(signed[0]).toMatchObject({
-      pubkey: SELF,
+      pubkey: KEYRING.dmConversations[bucket]!.pubkey,
       kind: 30078,
-      content: expect.stringMatching(/^encrypted:/),
-      tags: expect.arrayContaining([
-        ["t", DM_CONVERSATIONS_EVENT_TAG],
-      ]),
+      tags: [["d", KEYRING.dmConversations[bucket]!.d]],
     });
-    expect(signEvent).toHaveBeenCalledOnce();
+    expect(await decryptDerived(signed[0]!)).toEqual({ version: 2, bucket, records: [entry] });
   });
 
   it("rejects an invalidly signed relay result before winner selection", () => {
     const payload = shard("forged-device", record(hex(9), 9));
     const forged = {
-      ...event(hex(99), payload),
+      ...legacyEvent(hex(99), payload),
       sig: "0".repeat(128),
     } as NostrEvent;
-    const cached = event(hex(98), payload);
+    const cached = legacyEvent(hex(98), payload);
 
     expect(verifiedDmConversationIndexEvents([forged], [cached])).toEqual([cached]);
     expect(verifiedDmConversationIndexEvents([forged], [])).toEqual([]);
   });
 
-  it("decrypts, validates and binds plaintext to its exact public coordinate", async () => {
+  it("binds a legacy plaintext to its exact public coordinate", async () => {
     const payload = shard("phone-device", record(hex(1), 10));
-    const valid = event(hex(101), payload);
+    const valid = legacyEvent(hex(101), payload);
     const mismatched = {
-      ...event(hex(102), payload),
+      ...legacyEvent(hex(102), payload),
       tags: [
         ["d", dmConversationIndexDTag(payload.deviceId, (payload.bucket + 1) % 8)],
         ["t", DM_CONVERSATIONS_EVENT_TAG],
@@ -141,107 +152,63 @@ describe("DM conversation index decoding", () => {
     };
     const result = await decodeDmConversationIndexEvents(
       [valid, mismatched],
-      signer(async (content) => content),
-      SELF,
+      { signer: signer(), pubkey: SELF, keys: KEYS },
     );
-
-    expect(result.shards).toEqual([payload]);
-    expect(result.heads.get(dmConversationIndexDTag(payload.deviceId, payload.bucket))?.event.id)
-      .toBe(valid.id);
-    expect(result.unreadable).toContain(mismatched.tags[0]![1]);
+    expect(result.sets).toEqual([payload.records]);
   });
 
-  it("recovers the add-only union from divergent editions of one coordinate", async () => {
-    const first = record(hex(10), 10);
-    let secondSeed = 11;
-    while (dmConversationIndexBucket(hex(secondSeed)) !== dmConversationIndexBucket(first.key)) {
-      secondSeed++;
-    }
-    const second = record(hex(secondSeed), 20);
-    const olderShard: DmConversationIndexShard = {
-      version: 1,
-      deviceId: "divergent-device",
-      bucket: dmConversationIndexBucket(first.key),
-      records: [first],
-    };
-    const newerShard: DmConversationIndexShard = {
-      ...olderShard,
-      records: [second],
-    };
-    const older = { ...event(hex(110), olderShard), created_at: 100 };
-    const newer = { ...event(hex(111), newerShard), created_at: 200 };
-
+  it("binds a derived bucket document to its own bucket", async () => {
+    const entry = record(hex(30), 30);
+    const bucket = dmConversationIndexBucket(entry.key);
+    const valid = await derivedEvent(fitDmConversationIndexBucket(bucket, [entry]), 300);
+    // A payload naming another bucket, signed under this bucket's key.
+    const wrong = await signDmConversationIndexBucket(
+      KEYRING.dmConversations[(bucket + 1) % 8]!,
+      { version: 2, bucket, records: [entry] },
+      0,
+    );
     const result = await decodeDmConversationIndexEvents(
-      [newer, older],
-      signer(async (content) => content),
-      SELF,
+      [valid, wrong],
+      { signer: signer(), pubkey: SELF, keys: KEYS },
     );
-
-    expect(result.shards).toHaveLength(1);
-    expect(result.shards[0]?.records.map((entry) => entry.key).sort())
-      .toEqual([first.key, second.key].sort());
-    expect(result.heads.values().next().value?.event.id).toBe(newer.id);
-    // The head stays the actual newer partial edition. Comparing it with the
-    // hydrated union is what schedules a consolidating rewrite.
-    expect(result.heads.values().next().value?.shard.records).toEqual([second]);
+    expect(result.heads.get(bucket)?.event.id).toBe(valid.id);
+    expect(result.unreadable).toEqual(new Set([(bucket + 1) % 8]));
   });
 
-  it("consolidates a departed device's newer partial and older richer copies", async () => {
+  it("folds legacy installations' shards and a partial derived head into one document", async () => {
     const first = record(hex(20), 20);
-    let secondSeed = 21;
-    while (dmConversationIndexBucket(hex(secondSeed)) !== dmConversationIndexBucket(first.key)) {
-      secondSeed++;
-    }
-    const second = record(hex(secondSeed), 30);
-    const deviceId = "departed-device";
-    const olderShard: DmConversationIndexShard = {
-      version: 1,
-      deviceId,
-      bucket: dmConversationIndexBucket(first.key),
-      records: [first],
-    };
-    const newerShard = { ...olderShard, records: [second] };
-    const signEvent = vi.fn(async (template: Omit<NostrEvent, "id" | "pubkey" | "sig">) => ({
-      ...template,
-      id: "e".repeat(64),
-      pubkey: SELF,
-      sig: "1".repeat(128),
-    }));
-    const explicitSigner = {
-      getPublicKey: async () => SELF,
-      signEvent,
-      nip44: {
-        decrypt: async (_pubkey: string, content: string) => content,
-        encrypt: async (_pubkey: string, content: string) => `encrypted:${content}`,
-      },
-    } as unknown as NostrSigner;
+    const second = record(sameBucketPeer(first.key, 21), 30);
+    const third = record(sameBucketPeer(first.key, Number.parseInt(second.key, 16) + 1), 40);
+    const bucket = dmConversationIndexBucket(first.key);
+    const head = await derivedEvent(fitDmConversationIndexBucket(bucket, [third]), 500);
 
     const signed = await signCurrentDmConversationIndexEvents([
-      signedEvent(newerShard, 200),
-      signedEvent(olderShard, 100),
-    ], explicitSigner, SELF);
+      signedLegacyEvent(shard("departed-device", first), 200),
+      signedLegacyEvent(shard("phone-device", second), 100),
+      head,
+    ], { signer: signer(), pubkey: SELF, keys: KEYS });
 
     expect(signed).toHaveLength(1);
-    const plaintext = (signed[0]!.content).replace(/^encrypted:/, "");
-    const consolidated = JSON.parse(plaintext) as DmConversationIndexShard;
+    const consolidated = await decryptDerived(signed[0]!);
     expect(consolidated.records.map((entry) => entry.key).sort())
-      .toEqual([first.key, second.key].sort());
-    expect(signed[0]!.created_at).toBeGreaterThan(200);
+      .toEqual([first.key, second.key, third.key].sort());
+    expect(signed[0]!.created_at).toBeGreaterThan(head.created_at);
+    expect((await getDmConversationIndexRecords(SELF)).length).toBe(3);
   });
 
-  it("marks decrypt failures unreadable instead of treating the coordinate as absent", async () => {
-    const payload = shard("desktop-device", record(hex(2), 20));
-    const encrypted = event(hex(103), payload, "bad-ciphertext");
-    const result = await decodeDmConversationIndexEvents(
-      [encrypted],
-      signer(async () => { throw new Error("denied"); }),
-      SELF,
-    );
-
-    expect(result.shards).toEqual([]);
-    expect(result.unreadable).toEqual(new Set([
-      dmConversationIndexDTag(payload.deviceId, payload.bucket),
-    ]));
+  it("never overwrites a derived head it cannot read", async () => {
+    const entry = record(hex(40), 40);
+    await recordDmConversationIndex(SELF, [entry]);
+    const bucket = dmConversationIndexBucket(entry.key);
+    const doc = KEYRING.dmConversations[bucket]!;
+    const unreadable = await doc.signer.signEvent({
+      kind: DM_CONVERSATIONS_EVENT_KIND,
+      content: "not-ciphertext",
+      tags: [["d", doc.d]],
+      created_at: 100,
+    });
+    await expect(signCurrentDmConversationIndexEvents([unreadable], { signer: signer(), pubkey: SELF, keys: KEYS }))
+      .rejects.toThrow(/could not be decrypted/);
   });
 
   it("serializes remote-signer decrypt requests rather than prompting in parallel", async () => {
@@ -260,11 +227,10 @@ describe("DM conversation index decoding", () => {
     });
 
     const result = await decodeDmConversationIndexEvents(
-      [event(hex(104), first), event(hex(105), second)],
-      remoteSigner,
-      SELF,
+      [legacyEvent(hex(104), first), legacyEvent(hex(105), second)],
+      { signer: remoteSigner, pubkey: SELF, keys: KEYS },
     );
-    expect(result.shards).toHaveLength(2);
+    expect(result.sets).toHaveLength(2);
     expect(maxActive).toBe(1);
   });
 });

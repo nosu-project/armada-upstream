@@ -8,9 +8,20 @@ import type { NostrRumor } from "@/lib/nostrRumor";
 import { settingsDTag, type SettingsDocName } from "@/lib/settingsDocs";
 import * as publishOutbox from "@/lib/publishOutbox";
 
+import { settingsKeyring } from "@/lib/settingsKeys";
+import type { SettingsKeys } from "@/lib/settingsRootStore";
+
 import { readSettingsDoc, useSettingsDoc } from "./useSettingsDoc";
 
 const PUBKEY = "a".repeat(64);
+const KEYRING = settingsKeyring("01".repeat(32));
+const KEYS: SettingsKeys = { keyring: KEYRING, previous: [] };
+
+vi.mock("@/hooks/useSettingsKeys", () => ({
+  useSettingsKeys: () => ({ keys: KEYS, isFetched: true, ensure: async () => KEYS }),
+}));
+
+const ctx = () => ({ store: store as never, signer: signer as never, pubkey: PUBKEY, keys: KEYS });
 
 /**
  * A store with the one behaviour these hooks lean on: NIP-01 addressable
@@ -135,8 +146,10 @@ function render<N extends SettingsDocName>(name: N) {
 }
 
 /** The plaintext of the settings event published by the n-th write. */
-function publishedDoc(index = 0): Record<string, unknown> {
-  return JSON.parse(published[index]!.content.replace(/^sealed:/, ""));
+async function publishedDoc(index = 0): Promise<Record<string, unknown>> {
+  const event = published[index]!;
+  const doc = KEYRING.byPubkey.get(event.pubkey)!;
+  return JSON.parse(await doc.signer.nip44!.decrypt(doc.pubkey, event.content));
 }
 
 beforeEach(() => {
@@ -163,14 +176,14 @@ describe("readSettingsDoc", () => {
     await seedStore("metadata", { theme: "light" }, 100);
     await seedStore("metadata", { theme: "dark" }, 200);
 
-    const read = await readSettingsDoc(store as never, signer as never, PUBKEY, "metadata");
+    const read = await readSettingsDoc(ctx(), "metadata");
     expect(read?.doc).toEqual({ theme: "dark" });
     expect(read?.event.created_at).toBe(200);
   });
 
   it("returns null when the store holds nothing", async () => {
     expect(
-      await readSettingsDoc(store as never, signer as never, PUBKEY, "metadata"),
+      await readSettingsDoc(ctx(), "metadata"),
     ).toBeNull();
   });
 
@@ -186,7 +199,7 @@ describe("readSettingsDoc", () => {
     });
 
     expect(
-      await readSettingsDoc(store as never, signer as never, PUBKEY, "metadata"),
+      await readSettingsDoc(ctx(), "metadata"),
     ).toBeNull();
   });
 
@@ -198,16 +211,54 @@ describe("readSettingsDoc", () => {
     await seedStore("metadata", { theme: "dark" }, 100);
     await seedStore("rail", { railLayout: [{ type: "item", key: "wss://a" }] }, 100);
 
-    const rail = await readSettingsDoc(store as never, signer as never, PUBKEY, "rail");
+    const rail = await readSettingsDoc(ctx(), "rail");
     expect(rail?.doc).toEqual({ railLayout: [{ type: "item", key: "wss://a" }] });
 
-    const readState = await readSettingsDoc(
-      store as never,
-      signer as never,
-      PUBKEY,
-      "read-state",
-    );
+    const readState = await readSettingsDoc(ctx(), "read-state");
     expect(readState).toBeNull();
+  });
+});
+
+describe("readSettingsDoc sources", () => {
+  async function seedDerived(name: SettingsDocName, doc: Record<string, unknown>, createdAt: number) {
+    const derived = KEYRING.settings[name];
+    await store.event({
+      id: `derived-${name}-${createdAt}`,
+      pubkey: derived.pubkey,
+      kind: 30078,
+      created_at: createdAt,
+      content: await derived.signer.nip44!.encrypt(derived.pubkey, JSON.stringify(doc)),
+      tags: [["d", derived.d]],
+      sig: "sig",
+    });
+  }
+
+  it("prefers the derived document over an older legacy one", async () => {
+    await seedStore("metadata", { theme: "light" }, 100);
+    await seedDerived("metadata", { theme: "dark" }, 200);
+    expect((await readSettingsDoc(ctx(), "metadata"))?.doc).toEqual({ theme: "dark" });
+  });
+
+  it("lets a newer legacy document win: only an older build writes one", async () => {
+    await seedDerived("metadata", { theme: "dark" }, 100);
+    await seedStore("metadata", { theme: "light" }, 200);
+    expect((await readSettingsDoc(ctx(), "metadata"))?.doc).toEqual({ theme: "light" });
+  });
+
+  it("reads a superseded root's document as one more source", async () => {
+    const previous = settingsKeyring("02".repeat(32));
+    const doc = previous.settings.rail;
+    await store.event({
+      id: "previous-rail",
+      pubkey: doc.pubkey,
+      kind: 30078,
+      created_at: 100,
+      content: await doc.signer.nip44!.encrypt(doc.pubkey, JSON.stringify({ railLayout: [] })),
+      tags: [["d", doc.d]],
+      sig: "sig",
+    });
+    const read = await readSettingsDoc({ ...ctx(), keys: { keyring: KEYRING, previous: [previous] } }, "rail");
+    expect(read?.event.id).toBe("previous-rail");
   });
 });
 
@@ -234,7 +285,7 @@ describe("useSettingsDoc", () => {
       await result.current.update({ theme: "dark" });
     });
 
-    expect(publishedDoc()).toMatchObject({ theme: "dark", currencyDisplay: "sats" });
+    expect(await publishedDoc()).toMatchObject({ theme: "dark", currencyDisplay: "sats" });
   });
 
   it("publishes to NIP-65 write relays even when general user-relay routing is off", async () => {
@@ -264,7 +315,7 @@ describe("useSettingsDoc", () => {
     });
 
     expect(published[0]!.created_at).toBe(ahead + 1);
-    const onDisk = await readSettingsDoc(store as never, signer as never, PUBKEY, "metadata");
+    const onDisk = await readSettingsDoc(ctx(), "metadata");
     expect(onDisk?.doc).toMatchObject({ theme: "dark" });
   });
 
@@ -272,7 +323,7 @@ describe("useSettingsDoc", () => {
     await seedStore("metadata", { theme: "light" }, 100);
     h.nostrEvent.mockImplementation(async (event: NostrEvent) => {
       // Whatever a relay does with it, it is already durable here.
-      const onDisk = await readSettingsDoc(store as never, signer as never, PUBKEY, "metadata");
+      const onDisk = await readSettingsDoc(ctx(), "metadata");
       expect(onDisk?.event.id).toBe(event.id);
       if (!published.some((held) => held.id === event.id)) published.push(event);
       throw new Error("relay unreachable");
@@ -325,7 +376,7 @@ describe("useSettingsDoc", () => {
       await result.current.update({ theme: "dark" });
     });
 
-    const { lastSync: _lastSync, ...rest } = publishedDoc();
+    const { lastSync: _lastSync, ...rest } = await publishedDoc();
     expect(rest).toEqual({ theme: "dark" });
   });
 
@@ -337,8 +388,10 @@ describe("useSettingsDoc", () => {
       await result.current.update({ railLayout: [{ type: "item", key: "wss://a" }] });
     });
 
-    expect(dTagOf(published[0]! as NostrRumor)).toBe(settingsDTag("rail"));
-    expect(publishedDoc()).toEqual({ railLayout: [{ type: "item", key: "wss://a" }] });
+    // The derived key and opaque `d`, and nothing else that would name the document.
+    expect(published[0]!.pubkey).toBe(KEYRING.settings.rail.pubkey);
+    expect(published[0]!.tags).toEqual([["d", KEYRING.settings.rail.d]]);
+    expect(await publishedDoc()).toEqual({ railLayout: [{ type: "item", key: "wss://a" }] });
   });
 
   /**
@@ -352,14 +405,14 @@ describe("useSettingsDoc", () => {
     await act(async () => {
       await metadata.result.current.update({ theme: "dark" });
     });
-    expect(publishedDoc()).toHaveProperty("lastSync");
+    expect(await publishedDoc()).toHaveProperty("lastSync");
 
     const rail = render("rail");
     await waitFor(() => expect(rail.result.current.isFetched).toBe(true));
     await act(async () => {
       await rail.result.current.update({ railLayout: [] });
     });
-    expect(publishedDoc(1)).not.toHaveProperty("lastSync");
+    expect(await publishedDoc(1)).not.toHaveProperty("lastSync");
   });
 
   /**
@@ -390,7 +443,7 @@ describe("useSettingsDoc", () => {
       await result.current.update({ theme: "dark" });
     });
 
-    const out = publishedDoc();
+    const out = await publishedDoc();
     expect(out).toMatchObject({ theme: "dark" });
     for (const key of [
       "railLayout",

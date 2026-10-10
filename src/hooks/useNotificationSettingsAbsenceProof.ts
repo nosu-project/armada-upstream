@@ -10,6 +10,7 @@ import {
   useNotificationSettingsReady,
 } from "@/lib/notificationSettingsAuthority";
 import { proveNotificationSettingsAbsence } from "@/lib/notificationSettingsProof";
+import { useSettingsKeys } from "@/hooks/useSettingsKeys";
 
 /** Delays between attempts; the first leaves a fresh login's own pass room to finish. */
 const RETRY_MS = [10_000, 60_000, 5 * 60_000, 15 * 60_000];
@@ -30,6 +31,9 @@ export function useNotificationSettingsAbsenceProof(): void {
   const automaticSettingsSync = config.automaticSettingsSync !== false;
   const configRef = useRef(config);
   configRef.current = config;
+  const { keys } = useSettingsKeys();
+  const derivedRef = useRef(keys.keyring?.settings.notifications);
+  derivedRef.current = keys.keyring?.settings.notifications;
 
   const pubkey = user?.pubkey;
   const nip44 = user?.signer.nip44;
@@ -58,6 +62,7 @@ export function useNotificationSettingsAbsenceProof(): void {
           pubkey!,
           (ciphertext) => nip44!.decrypt(pubkey!, ciphertext),
           AbortSignal.timeout(ATTEMPT_TIMEOUT_MS),
+          derivedRef.current,
         );
         if (cancelled) return;
         if (verdict === "absent") {

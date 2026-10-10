@@ -155,9 +155,10 @@ object ServiceStore {
         event: JSONObject,
         self: String,
         dTags: Set<String> = SelfState.DEFAULT_D_TAGS,
+        derivedDocs: Map<String, String> = emptyMap(),
     ): Boolean {
         val rumor = Rumor.parse(event) ?: return false
-        if (!SelfState.storable(self, rumor, dTags)) return false
+        if (!SelfState.storable(self, rumor, dTags, derivedDocs)) return false
         return profiled("db.cacheSelfState") { try {
             ArmadaDb.get(context).event(ArmadaDb.TENANT_MAIN, rumor)
             true

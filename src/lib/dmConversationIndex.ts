@@ -3,7 +3,11 @@ import type { NostrFilter } from "@nostrify/nostrify";
 import type { NostrRumor } from "@/lib/nostrRumor";
 import { APP_ID } from "@/lib/platform";
 
-/** Encrypted NIP-78 application data, one addressable shard per installation. */
+/**
+ * Encrypted NIP-78 application data. The legacy (account-signed, per-installation)
+ * shards described here are read-only; the index now lives in eight shared derived
+ * documents (`settingsKeys.ts`).
+ */
 export const DM_CONVERSATIONS_EVENT_KIND = 30078;
 /** Public discovery tag. It deliberately reveals no peer or conversation id. */
 export const DM_CONVERSATIONS_EVENT_TAG = "armada-dm-conversations";
@@ -191,6 +195,57 @@ export function fitDmConversationIndexShard(
     shard.records.pop();
   }
   return shard;
+}
+
+/**
+ * One bucket of the shared index, the payload of a derived document (`settingsKeys.ts`).
+ * Every installation writes the same eight documents; the `bucket` is checked against
+ * the document it was found in.
+ */
+export interface DmConversationIndexBucketDoc {
+  version: 2;
+  bucket: number;
+  records: DmConversationIndexRecord[];
+}
+
+export function fitDmConversationIndexBucket(
+  bucket: number,
+  records: readonly DmConversationIndexRecord[],
+): DmConversationIndexBucketDoc {
+  if (!isBucket(bucket)) throw new Error("Invalid DM index bucket");
+  const canonical = mergeDmConversationIndexRecords(
+    [records.filter((record) => isDmConversationIndexRecord(record)
+      && dmConversationIndexBucket(record.key) === bucket)],
+    MAX_DM_CONVERSATIONS_PER_SHARD,
+  );
+  const doc: DmConversationIndexBucketDoc = { version: 2, bucket, records: canonical };
+  while (doc.records.length > 0 && utf8Bytes(JSON.stringify(doc)) > MAX_DM_CONVERSATION_PLAINTEXT_BYTES) {
+    doc.records.pop();
+  }
+  return doc;
+}
+
+/** Decode a derived bucket document; null unless it is exactly the `bucket` expected. */
+export function parseDmConversationIndexBucketPlaintext(
+  plaintext: string,
+  bucket: number,
+): DmConversationIndexBucketDoc | null {
+  if (utf8Bytes(plaintext) > MAX_DM_CONVERSATION_PLAINTEXT_BYTES) return null;
+  try {
+    const value = JSON.parse(plaintext) as Partial<DmConversationIndexBucketDoc>;
+    if (
+      !value
+      || value.version !== 2
+      || value.bucket !== bucket
+      || !Array.isArray(value.records)
+      || value.records.length > MAX_DM_CONVERSATIONS_PER_SHARD
+      || value.records.some((record) => !isDmConversationIndexRecord(record)
+        || dmConversationIndexBucket(record.key) !== bucket)
+    ) return null;
+    return fitDmConversationIndexBucket(bucket, value.records);
+  } catch {
+    return null;
+  }
 }
 
 export function serializeDmConversationIndexShard(shard: DmConversationIndexShard): string {

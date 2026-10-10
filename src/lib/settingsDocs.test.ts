@@ -213,13 +213,13 @@ describe("railLayoutOf", () => {
  * workflows.
  */
 describe("SelfState.kt default `d` tags", () => {
-  it("matches the default-APP_ID document set", () => {
+  it("matches the default-APP_ID root plus the legacy document set", () => {
     const kotlin = readFileSync("android/app/src/main/java/buzz/armada/app/db/SelfState.kt", "utf8");
     const block = kotlin.match(/DEFAULT_D_TAGS[^=]*=\s*setOf\(([^)]*)\)/s);
     expect(block, "SelfState.DEFAULT_D_TAGS not found").not.toBeNull();
 
     const tags = [...block![1]!.matchAll(/"([^"]+)"/g)].map((m) => m[1]!);
-    expect(tags.sort()).toEqual(SETTINGS_DOC_NAMES.map((n) => `armada/${n}`).sort());
+    expect(tags.sort()).toEqual(["armada", ...SETTINGS_DOC_NAMES.map((n) => `armada/${n}`)].sort());
   });
 });
 

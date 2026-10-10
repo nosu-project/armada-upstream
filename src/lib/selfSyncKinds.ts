@@ -8,6 +8,8 @@
 
 import { KIND_RELAY_LIST } from "@/lib/nip65";
 import { SETTINGS_DTAGS, SETTINGS_KIND, settingsDocForDTag } from "@/lib/settingsDocs";
+import { settingsRootDTag } from "@/lib/settingsRoot";
+import type { DerivedDoc } from "@/lib/settingsKeys";
 import { DM_CONVERSATIONS_EVENT_TAG } from "@/lib/dmConversationIndex";
 
 /** NIP-02 contact/follow list. */
@@ -36,14 +38,14 @@ export const KIND_INVITE_LIST = 13303;
 /** NIP-78 application-specific data (30078) — vault, settings, and private app data. */
 export const KIND_APP_SPECIFIC = SETTINGS_KIND;
 
-/** Tag shared by per-installation encrypted GIF-favorite shards. */
+/** Tag shared by the legacy per-installation encrypted GIF-favorite shards (read-only). */
 export const T_ARMADA_GIF_FAVORITES = "armada-gif-favorites";
-/** Tag shared by per-installation encrypted DM-conversation index shards. */
+/** Tag shared by the legacy per-installation encrypted DM-conversation index shards (read-only). */
 export const T_ARMADA_DM_CONVERSATIONS = DM_CONVERSATIONS_EVENT_TAG;
 
 /**
- * Topic-scoped kind-30078 documents with dynamic per-installation `d` tags;
- * their public `t` marker bounds the subscription.
+ * Legacy topic-scoped kind-30078 documents with dynamic per-installation `d`
+ * tags; their public `t` marker bounds the subscription. Read for migration only.
  */
 export const SELF_SYNC_TOPIC_TAGS: string[] = [
   T_ARMADA_GIF_FAVORITES,
@@ -145,8 +147,20 @@ export const SELF_SYNC_REPLACEABLE_KINDS: number[] = [
   KIND_INVITE_LIST,
 ];
 
-/** Armada's settings-document `d` tags on kind 30078. */
-export const SELF_SYNC_DTAGS: string[] = SETTINGS_DTAGS;
+/**
+ * The account-signed kind-30078 `d` tags: the settings root, plus the legacy
+ * settings documents read during migration. Everything else is under derived keys.
+ */
+export const SELF_SYNC_DTAGS: string[] = [settingsRootDTag(), ...SETTINGS_DTAGS];
+
+/** Query-key prefixes for a document under a derived key. */
+export function queryKeysForDerivedDoc(doc: DerivedDoc): readonly (readonly string[])[] {
+  switch (doc.ref.family) {
+    case "settings": return [["settings-doc", doc.ref.name]];
+    case "gif-favorites": return [["favorite-gifs-sync"]];
+    case "dm-conversations": return [["dm-conversations-sync"]];
+  }
+}
 
 /** Query-key prefixes to invalidate for an incoming self event; empty if unrecognised. */
 export function queryKeysForSelfEvent(
@@ -176,6 +190,7 @@ export function queryKeysForSelfEvent(
     case KIND_INVITE_LIST:
       return [["concord", "invite-list"]];
     case KIND_APP_SPECIFIC: {
+      if (dTag === settingsRootDTag()) return [["settings-root"]];
       const doc = dTag !== undefined ? settingsDocForDTag(dTag) : undefined;
       if (doc) return [["settings-doc", doc]];
       if (topicTag === T_ARMADA_GIF_FAVORITES) return [["favorite-gifs-sync"]];

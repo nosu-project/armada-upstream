@@ -3,9 +3,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { NostrEvent } from "@nostrify/nostrify";
 
+import { settingsKeyring } from "@/lib/settingsKeys";
+
 const SELF = "f".repeat(64);
 const OLD_RELAY = "wss://old.example";
 const NEW_RELAY = "wss://new.example";
+const KEYS = { keyring: settingsKeyring("06".repeat(32)), previous: [] };
 
 interface QueryOptions {
   enabled?: boolean;
@@ -17,21 +20,15 @@ const h = vi.hoisted(() => ({
   nip65Relays: ["wss://old.example"] as string[],
   automaticSettingsSync: true,
   queryData: undefined as unknown,
-  queryDataUpdatedAt: 0,
-  queryFetchStatus: "idle" as "fetching" | "idle" | "paused",
   queryOptions: undefined as QueryOptions | undefined,
-  refetch: vi.fn(),
   publish: vi.fn(),
   relayQuery: vi.fn(),
   closedRelays: new Set<string>(),
   storeQuery: vi.fn(async () => [] as NostrEvent[]),
-  encrypt: vi.fn(async (_pubkey: string, plaintext: string) => `encrypted:${plaintext}`),
-  decrypt: vi.fn(async (_pubkey: string, ciphertext: string) =>
-    ciphertext.startsWith("encrypted:") ? ciphertext.slice("encrypted:".length) : ciphertext),
-  hydrate: vi.fn(async (..._args: unknown[]) => undefined),
-  needsPublish: vi.fn(async () => [] as number[]),
-  shards: [] as unknown[],
+  records: [] as unknown[],
   dirtyListeners: new Set<(pubkey: string, buckets: readonly number[]) => void>(),
+  keys: undefined as unknown,
+  ensure: vi.fn(),
 }));
 
 vi.mock("@nostrify/react", () => ({
@@ -54,18 +51,8 @@ vi.mock("@nostrify/react", () => ({
 vi.mock("@tanstack/react-query", () => ({
   useQuery: (options: QueryOptions) => {
     h.queryOptions = options;
-    return {
-      data: h.queryData,
-      dataUpdatedAt: h.queryDataUpdatedAt,
-      fetchStatus: h.queryFetchStatus,
-      refetch: h.refetch,
-    };
+    return { data: h.queryData };
   },
-}));
-
-vi.mock("@/lib/verifyCache", async (importOriginal) => ({
-  ...await importOriginal<typeof import("@/lib/verifyCache")>(),
-  verifyEventOnce: () => true,
 }));
 
 vi.mock("@/contexts/AppContext", () => ({
@@ -88,37 +75,40 @@ vi.mock("@/hooks/useCurrentUser", () => ({
   useCurrentUser: () => ({
     user: {
       pubkey: "f".repeat(64),
-      signer: {
-        nip44: {
-          encrypt: h.encrypt,
-          decrypt: h.decrypt,
-        },
-      },
+      signer: { nip44: { encrypt: vi.fn(), decrypt: vi.fn() } },
     },
   }),
 }));
 
 vi.mock("@/hooks/useEventStore", () => ({
-  useEventStore: () => Promise.resolve({ query: h.storeQuery }),
+  useEventStore: () => Promise.resolve({ query: h.storeQuery, event: vi.fn() }),
 }));
 
-vi.mock("@/hooks/useNostrPublish", () => ({
-  useNostrPublish: () => ({ mutateAsync: h.publish }),
+vi.mock("@/hooks/useSettingsKeys", () => ({
+  useSettingsKeys: () => ({ keys: h.keys, isFetched: true, ensure: h.ensure }),
 }));
 
-vi.mock("@/hooks/useDmConversationIndex", () => ({
-  dmConversationDeviceId: () => "test-device",
-  hydrateDmConversationIndexShards: (...args: unknown[]) => h.hydrate(...args),
-  loadOwnDmConversationIndexShards: async () => h.shards,
-  ownDmConversationIndexNeedsPublish: () => h.needsPublish(),
-  recordDmConversationIndex: async () => false,
-  subscribeDmConversationIndexChanges: (
-    listener: (pubkey: string, buckets: readonly number[]) => void,
-  ) => {
-    h.dirtyListeners.add(listener);
-    return () => h.dirtyListeners.delete(listener);
-  },
+vi.mock("@/lib/selfStatePublish", () => ({
+  publishSelfStateEvent: (...args: unknown[]) => h.publish(...args),
 }));
+
+vi.mock("@/hooks/useDmConversationIndex", async () => {
+  const lib = await import("@/lib/dmConversationIndex");
+  return {
+    dmConversationIndexBuckets: async () => Array.from(
+      { length: lib.DM_CONVERSATION_INDEX_BUCKETS },
+      (_, bucket) => lib.fitDmConversationIndexBucket(bucket, h.records as never),
+    ),
+    hydrateDmConversationIndexRecords: async () => undefined,
+    recordDmConversationIndex: async () => false,
+    subscribeDmConversationIndexChanges: (
+      listener: (pubkey: string, buckets: readonly number[]) => void,
+    ) => {
+      h.dirtyListeners.add(listener);
+      return () => h.dirtyListeners.delete(listener);
+    },
+  };
+});
 
 // These imports support the recorder exported from the same module. They are
 // inert in this suite, so keep the sync-owner test independent of DM queries.
@@ -133,122 +123,52 @@ vi.mock("@/hooks/useKnownDmPeers", () => ({
 }));
 
 import {
-  DM_CONVERSATION_INDEX_PULL_RETRY_MS,
   DM_CONVERSATION_INDEX_PUBLISH_DEBOUNCE_MS,
   DM_CONVERSATION_INDEX_RETRY_MS,
   useDmConversationIndexSync,
 } from "@/hooks/useDmConversationIndexSync";
-import {
-  DM_CONVERSATIONS_EVENT_KIND,
-  DM_CONVERSATIONS_EVENT_TAG,
-  dmConversationIndexBucket,
-  dmConversationIndexDTag,
-  serializeDmConversationIndexShard,
-  type DmConversationIndexRecord,
-  type DmConversationIndexShard,
-} from "@/lib/dmConversationIndex";
-
-function baseKey(relays: readonly string[], nip65Relays = relays): string {
-  return `${SELF}\u0001${[...relays].sort().join("\u0000")}`
-    + `\u0002${[...nip65Relays].sort().join("\u0000")}`;
-}
-
-function emptyPull(relays: readonly string[], nip65Relays = relays) {
-  return {
-    shards: [],
-    heads: new Map(),
-    unreadable: new Set(),
-    baseKey: baseKey(relays, nip65Relays),
-    publishRelays: [...relays],
-    relayReads: new Map(relays.map((relay) => [relay, {
-      heads: new Map(),
-      unreadable: new Set(),
-    }])),
-    repairTargets: new Map(),
-    departedRepairs: new Map(),
-    repairPending: false,
-  };
-}
+import { dmConversationIndexBucket } from "@/lib/dmConversationIndex";
 
 function localRecord(seed: number) {
   return {
     key: seed.toString(16).padStart(64, "0"),
-    latest: {
-      createdAt: seed,
-      id: (seed + 10_000).toString(16).padStart(64, "0"),
-    },
+    latest: { createdAt: seed, id: (seed + 10_000).toString(16).padStart(64, "0") },
     mine: true,
   };
 }
 
-function setLocalRecords(records: DmConversationIndexRecord[]): DmConversationIndexShard {
-  const bucket = dmConversationIndexBucket(records[0]!.key);
-  if (records.some((entry) => dmConversationIndexBucket(entry.key) !== bucket)) {
-    throw new Error("test records must share a bucket");
-  }
-  const shard = {
-    version: 1,
-    deviceId: "test-device",
-    bucket,
-    records,
-  } satisfies DmConversationIndexShard;
-  h.shards = [shard];
-  return shard;
+async function pull(view: { rerender: () => void }): Promise<void> {
+  h.queryData = await h.queryOptions!.queryFn({ signal: new AbortController().signal });
+  view.rerender();
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+  });
 }
 
-function eventForShard(
-  shard: DmConversationIndexShard,
-  idSeed: string,
-  createdAt: number,
-): NostrEvent {
-  return {
-    id: idSeed.repeat(64).slice(0, 64),
-    pubkey: SELF,
-    kind: DM_CONVERSATIONS_EVENT_KIND,
-    created_at: createdAt,
-    content: serializeDmConversationIndexShard(shard),
-    tags: [
-      ["d", dmConversationIndexDTag(shard.deviceId, shard.bucket)],
-      ["t", DM_CONVERSATIONS_EVENT_TAG],
-    ],
-    sig: "1".repeat(128),
-  };
-}
-
-function nextRecordInBucket(seed: number, bucket: number): DmConversationIndexRecord {
-  let candidate = seed;
-  while (dmConversationIndexBucket(localRecord(candidate).key) !== bucket) candidate++;
-  return localRecord(candidate);
-}
-
-function changeLocalRecord(seed: number): number {
+function recordLocally(seed: number): number {
   const entry = localRecord(seed);
-  const { bucket } = setLocalRecords([entry]);
+  h.records = [...h.records, entry];
+  const bucket = dmConversationIndexBucket(entry.key);
   for (const listener of h.dirtyListeners) listener(SELF, [bucket]);
   return bucket;
 }
 
 beforeEach(() => {
   vi.useFakeTimers();
-  localStorage.clear();
   h.relays = [OLD_RELAY];
   h.nip65Relays = [OLD_RELAY];
   h.automaticSettingsSync = true;
-  h.shards = [];
-  h.dirtyListeners.clear();
-  h.queryData = emptyPull(h.relays);
-  h.queryDataUpdatedAt = 1;
-  h.queryFetchStatus = "idle";
+  h.queryData = undefined;
   h.queryOptions = undefined;
-  h.refetch.mockReset().mockResolvedValue({ data: h.queryData });
+  h.records = [];
+  h.keys = KEYS;
+  h.dirtyListeners.clear();
+  h.closedRelays.clear();
   h.publish.mockReset().mockResolvedValue(undefined);
   h.relayQuery.mockReset().mockResolvedValue([]);
-  h.storeQuery.mockReset().mockResolvedValue([]);
-  h.encrypt.mockClear();
-  h.decrypt.mockReset().mockImplementation(async (_pubkey: string, ciphertext: string) =>
-    ciphertext.startsWith("encrypted:") ? ciphertext.slice("encrypted:".length) : ciphertext);
-  h.hydrate.mockReset().mockResolvedValue(undefined);
-  h.needsPublish.mockReset().mockResolvedValue([]);
+  h.storeQuery.mockClear();
+  h.ensure.mockReset().mockRejectedValue(new Error("Settings sync has not been set up for this account"));
 });
 
 afterEach(() => {
@@ -258,722 +178,117 @@ afterEach(() => {
 
 describe("DM index relay-set publication base", () => {
   it("uses an answered app relay when the account has no NIP-65 writer yet", async () => {
-    h.relays = [OLD_RELAY];
     h.nip65Relays = [];
-    h.queryData = undefined;
     renderHook(() => useDmConversationIndexSync());
-
     await expect(h.queryOptions!.queryFn({ signal: new AbortController().signal }))
       .resolves.toEqual(expect.objectContaining({ publishRelays: [OLD_RELAY] }));
   });
 
-  it("requires a declared NIP-65 write relay to answer before the pull can publish", async () => {
+  it("requires a declared NIP-65 write relay to answer", async () => {
     h.relays = [OLD_RELAY, NEW_RELAY];
     h.nip65Relays = [NEW_RELAY];
-    h.queryData = undefined;
-    h.relayQuery.mockImplementation(async (relay: string) => {
-      if (relay === NEW_RELAY) throw new Error("offline");
-      return [];
-    });
+    h.closedRelays.add(NEW_RELAY);
     renderHook(() => useDmConversationIndexSync());
-
     await expect(h.queryOptions!.queryFn({ signal: new AbortController().signal }))
       .rejects.toThrow(/declared NIP-65 write relay/);
-    expect(h.relayQuery).toHaveBeenCalledTimes(2);
-  });
-
-  it("targets only relays that participated in a partial but canonical pull", async () => {
-    h.relays = [OLD_RELAY, NEW_RELAY];
-    h.nip65Relays = [OLD_RELAY, NEW_RELAY];
-    h.queryData = undefined;
-    h.relayQuery.mockImplementation(async (relay: string) => {
-      if (relay === NEW_RELAY) throw new Error("offline");
-      return [];
-    });
-    const view = renderHook(() => useDmConversationIndexSync());
-    h.queryData = await h.queryOptions!.queryFn({ signal: new AbortController().signal });
-    view.rerender();
-    await act(async () => Promise.resolve());
-
-    await act(async () => {
-      changeLocalRecord(3);
-      await vi.advanceTimersByTimeAsync(DM_CONVERSATION_INDEX_PUBLISH_DEBOUNCE_MS);
-    });
-
-    expect(h.publish).toHaveBeenCalledOnce();
-    expect(h.publish).toHaveBeenCalledWith(expect.objectContaining({
-      relays: [OLD_RELAY],
-      inheritPendingTargets: false,
-    }));
-    view.unmount();
-  });
-
-  it("repairs a returning empty relay exactly, then stops after read-back", async () => {
-    h.relays = [OLD_RELAY, NEW_RELAY];
-    h.nip65Relays = [OLD_RELAY, NEW_RELAY];
-    h.queryData = undefined;
-    const ownShard = setLocalRecords([localRecord(30)]);
-    const headA = eventForShard(ownShard, "a", 100);
-    let headB: NostrEvent | undefined;
-    let relayBOnline = false;
-    h.relayQuery.mockImplementation(async (relay: string) => {
-      if (relay === NEW_RELAY) {
-        if (!relayBOnline) throw new Error("temporarily offline");
-        return headB ? [headB] : [];
-      }
-      return [headA];
-    });
-    h.publish.mockImplementation(async (template: {
-      kind: number;
-      content: string;
-      tags: string[][];
-      created_at: number;
-      relays: string[];
-      onSigned?: (event: NostrEvent) => void;
-    }) => {
-      const event: NostrEvent = {
-        id: "b".repeat(64),
-        pubkey: SELF,
-        kind: template.kind,
-        content: template.content,
-        tags: template.tags,
-        created_at: template.created_at,
-        sig: "2".repeat(128),
-      };
-      template.onSigned?.(event);
-      if (template.relays.includes(NEW_RELAY)) headB = event;
-    });
-    const view = renderHook(() => useDmConversationIndexSync());
-
-    const partial = await h.queryOptions!.queryFn({ signal: new AbortController().signal }) as {
-      repairPending: boolean;
-      repairTargets: Map<number, string[]>;
-    };
-    expect(partial.repairPending).toBe(true);
-    expect(partial.repairTargets.size).toBe(0);
-    h.queryData = partial;
-    h.queryDataUpdatedAt++;
-    view.rerender();
-    await act(async () => Promise.resolve());
-    expect(h.publish).not.toHaveBeenCalled();
-
-    relayBOnline = true;
-    let retryFinished = Promise.resolve<unknown>(undefined);
-    h.refetch.mockImplementation(() => {
-      h.queryFetchStatus = "fetching";
-      view.rerender();
-      retryFinished = h.queryOptions!.queryFn({ signal: new AbortController().signal })
-        .then((data) => {
-          h.queryData = data;
-          h.queryDataUpdatedAt++;
-          h.queryFetchStatus = "idle";
-          view.rerender();
-          return { data };
-        });
-      return retryFinished;
-    });
-
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(DM_CONVERSATION_INDEX_PULL_RETRY_MS);
-      await retryFinished;
-    });
-    await act(async () => Promise.resolve());
-
-    expect(h.publish).toHaveBeenCalledOnce();
-    expect(h.publish).toHaveBeenCalledWith(expect.objectContaining({
-      relays: [NEW_RELAY],
-      inheritPendingTargets: false,
-    }));
-    const repaired = h.publish.mock.calls[0]![0] as { content: string };
-    expect(repaired.content).toBe(`encrypted:${serializeDmConversationIndexShard(ownShard)}`);
-
-    // EVENT acceptance is followed by one relay-local read-back. Once B shows
-    // the exact head, repairPending clears and the idle hook stops polling.
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(DM_CONVERSATION_INDEX_PULL_RETRY_MS);
-      await retryFinished;
-    });
-    await act(async () => Promise.resolve());
-    expect(h.refetch).toHaveBeenCalledTimes(2);
-    expect(h.publish).toHaveBeenCalledOnce();
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(DM_CONVERSATION_INDEX_PULL_RETRY_MS * 2);
-    });
-    expect(h.refetch).toHaveBeenCalledTimes(2);
-    view.unmount();
-  });
-
-  it("merges a returning relay's richer own shard before repairing the stale relay", async () => {
-    h.relays = [OLD_RELAY, NEW_RELAY];
-    h.nip65Relays = [OLD_RELAY, NEW_RELAY];
-    h.queryData = undefined;
-    const first = localRecord(40);
-    const bucket = dmConversationIndexBucket(first.key);
-    const second = nextRecordInBucket(41, bucket);
-    const shardA = setLocalRecords([first]);
-    const shardB = { ...shardA, records: [first, second] } satisfies DmConversationIndexShard;
-    const headA = eventForShard(shardA, "c", 100);
-    const headB = eventForShard(shardB, "d", 110);
-    h.relayQuery.mockImplementation(async (relay: string) =>
-      relay === NEW_RELAY ? [headB] : [headA]);
-    h.hydrate.mockImplementation(async (_pubkey: unknown, value: unknown) => {
-      const own = (value as DmConversationIndexShard[])
-        .find((shard) => shard.deviceId === "test-device" && shard.bucket === bucket);
-      if (own) h.shards = [own];
-    });
-    const view = renderHook(() => useDmConversationIndexSync());
-
-    const pull = await h.queryOptions!.queryFn({ signal: new AbortController().signal }) as {
-      repairPending: boolean;
-      repairTargets: Map<number, string[]>;
-    };
-    expect(pull.repairPending).toBe(true);
-    expect(pull.repairTargets.get(bucket)).toEqual([OLD_RELAY]);
-    h.queryData = pull;
-    h.queryDataUpdatedAt++;
-    view.rerender();
-    await act(async () => Promise.resolve());
-
-    expect(h.publish).toHaveBeenCalledOnce();
-    const published = h.publish.mock.calls[0]![0] as { content: string; relays: string[] };
-    expect(published.relays).toEqual([OLD_RELAY]);
-    const merged = JSON.parse(published.content.slice("encrypted:".length)) as DmConversationIndexShard;
-    expect(merged.records.map((entry) => entry.key).sort())
-      .toEqual([first.key, second.key].sort());
-    view.unmount();
-  });
-
-  it("backfills a departed installation coordinate when an empty relay returns", async () => {
-    h.relays = [OLD_RELAY, NEW_RELAY];
-    h.nip65Relays = [OLD_RELAY, NEW_RELAY];
-    h.queryData = undefined;
-    h.shards = [];
-    const entry = localRecord(60);
-    const departed = {
-      version: 1,
-      deviceId: "departed-device",
-      bucket: dmConversationIndexBucket(entry.key),
-      records: [entry],
-    } satisfies DmConversationIndexShard;
-    const headA = eventForShard(departed, "7", 100);
-    let headB: NostrEvent | undefined;
-    let relayBOnline = false;
-    h.relayQuery.mockImplementation(async (relay: string) => {
-      if (relay === NEW_RELAY) {
-        if (!relayBOnline) throw new Error("temporarily offline");
-        return headB ? [headB] : [];
-      }
-      return [headA];
-    });
-    h.publish.mockImplementation(async (template: {
-      kind: number;
-      content: string;
-      tags: string[][];
-      created_at: number;
-      relays: string[];
-    }) => {
-      if (!template.relays.includes(NEW_RELAY)) return;
-      headB = {
-        id: "8".repeat(64),
-        pubkey: SELF,
-        kind: template.kind,
-        content: template.content,
-        tags: template.tags,
-        created_at: template.created_at,
-        sig: "3".repeat(128),
-      };
-    });
-    const view = renderHook(() => useDmConversationIndexSync());
-
-    const partial = await h.queryOptions!.queryFn({ signal: new AbortController().signal }) as {
-      repairPending: boolean;
-      departedRepairs: Map<string, unknown>;
-    };
-    expect(partial.repairPending).toBe(true);
-    expect(partial.departedRepairs.size).toBe(0);
-    h.queryData = partial;
-    h.queryDataUpdatedAt++;
-    view.rerender();
-    await act(async () => Promise.resolve());
-
-    relayBOnline = true;
-    let retryFinished = Promise.resolve<unknown>(undefined);
-    h.refetch.mockImplementation(() => {
-      h.queryFetchStatus = "fetching";
-      view.rerender();
-      retryFinished = h.queryOptions!.queryFn({ signal: new AbortController().signal })
-        .then((data) => {
-          h.queryData = data;
-          h.queryDataUpdatedAt++;
-          h.queryFetchStatus = "idle";
-          view.rerender();
-          return { data };
-        });
-      return retryFinished;
-    });
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(DM_CONVERSATION_INDEX_PULL_RETRY_MS);
-      await retryFinished;
-    });
-    await act(async () => Promise.resolve());
-
-    expect(h.publish).toHaveBeenCalledOnce();
-    const published = h.publish.mock.calls[0]![0] as {
-      content: string;
-      tags: string[][];
-      relays: string[];
-    };
-    expect(published.relays).toEqual([NEW_RELAY]);
-    expect(published.tags).toContainEqual([
-      "d",
-      dmConversationIndexDTag(departed.deviceId, departed.bucket),
-    ]);
-    expect(published.content).toBe(`encrypted:${serializeDmConversationIndexShard(departed)}`);
-
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(DM_CONVERSATION_INDEX_PULL_RETRY_MS);
-      await retryFinished;
-    });
-    await act(async () => Promise.resolve());
-    expect(h.refetch).toHaveBeenCalledTimes(2);
-    expect(h.publish).toHaveBeenCalledOnce();
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(DM_CONVERSATION_INDEX_PULL_RETRY_MS * 2);
-    });
-    expect(h.refetch).toHaveBeenCalledTimes(2);
-    view.unmount();
-  });
-
-  it("never treats a coordinate as missing from a relay whose answer hit the limit", async () => {
-    // A relay answers with its newest `limit` events. With more coordinates
-    // than that, one it left out is not one it lacks — and republishing it
-    // pushes another coordinate out of the window, forever.
-    h.relays = [OLD_RELAY, NEW_RELAY];
-    h.nip65Relays = [OLD_RELAY, NEW_RELAY];
-    h.queryData = undefined;
-    const x = localRecord(70);
-    const departedX = {
-      version: 1,
-      deviceId: "departed-x",
-      bucket: dmConversationIndexBucket(x.key),
-      records: [x],
-    } satisfies DmConversationIndexShard;
-    const y = localRecord(90);
-    const departedY = {
-      version: 1,
-      deviceId: "departed-y",
-      bucket: dmConversationIndexBucket(y.key),
-      records: [y],
-    } satisfies DmConversationIndexShard;
-    // NEW answers with a full page (the filter's limit) that happens not to
-    // include X; OLD's short answer is complete. Ids are unique to this test:
-    // decoded editions are memoized by id across the module, and a reused id
-    // decodes to another test's shard, leaving the relay unreadable and the
-    // assertions below vacuous.
-    const fullPage = Array.from({ length: 128 }, (_, i) => ({
-      ...eventForShard(departedY, "c", 200),
-      id: `9c${i.toString(16).padStart(62, "0")}`,
-    }));
-    h.relayQuery.mockImplementation(async (relay: string) =>
-      relay === NEW_RELAY ? fullPage : [eventForShard(departedX, "4", 100)]);
-    renderHook(() => useDmConversationIndexSync());
-
-    const pull = await h.queryOptions!.queryFn({ signal: new AbortController().signal }) as {
-      departedRepairs: Map<string, { relays: string[] }>;
-    };
-    const xId = dmConversationIndexDTag(departedX.deviceId, departedX.bucket);
-    const yId = dmConversationIndexDTag(departedY.deviceId, departedY.bucket);
-    expect(pull.departedRepairs.get(xId)?.relays ?? []).not.toContain(NEW_RELAY);
-    // Control: OLD's answer was complete, so Y's absence there IS a gap.
-    expect(pull.departedRepairs.get(yId)?.relays).toEqual([OLD_RELAY]);
   });
 
   it("treats a relay that CLOSED the pull as unanswered, not as empty", async () => {
-    // A relay that refuses the REQ (auth-required, rate-limited) ends the
-    // stream with no EOSE. Read as an empty answer it lacked every coordinate,
-    // and each pull republished all of them to it, forever.
     h.relays = [OLD_RELAY, NEW_RELAY];
     h.nip65Relays = [OLD_RELAY, NEW_RELAY];
-    h.queryData = undefined;
     h.closedRelays.add(NEW_RELAY);
-    try {
-      const x = localRecord(110);
-      const departedX = {
-        version: 1,
-        deviceId: "departed-closed",
-        bucket: dmConversationIndexBucket(x.key),
-        records: [x],
-      } satisfies DmConversationIndexShard;
-      h.relayQuery.mockImplementation(async () => [{
-        ...eventForShard(departedX, "d", 100),
-        id: `9d${"0".repeat(62)}`,
-      }]);
-      renderHook(() => useDmConversationIndexSync());
-
-      const pull = await h.queryOptions!.queryFn({ signal: new AbortController().signal }) as {
-        publishRelays: string[];
-        relayReads: Map<string, unknown>;
-        departedRepairs: Map<string, { relays: string[] }>;
-        repairPending: boolean;
-      };
-      expect(pull.publishRelays).toEqual([OLD_RELAY]);
-      expect(pull.relayReads.has(NEW_RELAY)).toBe(false);
-      expect(pull.departedRepairs.size).toBe(0);
-      // Still a read obligation: the bounded retry keeps asking until it answers.
-      expect(pull.repairPending).toBe(true);
-    } finally {
-      h.closedRelays.clear();
-    }
-  });
-
-  it("still repairs an own shard a relay truly lacks when its answer hit the limit", async () => {
-    // The truncation guard must not cost this installation its own shards: a
-    // relay holding more coordinates than the limit that really is missing one
-    // of ours would otherwise never be sent it.
-    h.relays = [OLD_RELAY, NEW_RELAY];
-    h.nip65Relays = [OLD_RELAY, NEW_RELAY];
-    h.queryData = undefined;
-    const own = setLocalRecords([localRecord(50)]);
-    const other = {
-      version: 1,
-      deviceId: "other-device",
-      bucket: dmConversationIndexBucket(localRecord(51).key),
-      records: [localRecord(51)],
-    } satisfies DmConversationIndexShard;
-    const fullPage = Array.from({ length: 128 }, (_, i) => ({
-      ...eventForShard(other, "e", 200),
-      id: `9a${i.toString(16).padStart(62, "0")}`,
-    }));
-    h.relayQuery.mockImplementation(async (relay: string) =>
-      relay === NEW_RELAY ? fullPage : [eventForShard(own, "5", 100)]);
     renderHook(() => useDmConversationIndexSync());
-
-    const pull = await h.queryOptions!.queryFn({ signal: new AbortController().signal }) as {
-      repairTargets: Map<number, string[]>;
-    };
-    expect(pull.repairTargets.get(own.bucket)).toEqual([NEW_RELAY]);
+    await expect(h.queryOptions!.queryFn({ signal: new AbortController().signal }))
+      .resolves.toEqual(expect.objectContaining({ publishRelays: [OLD_RELAY] }));
   });
 
-  it("asks each relay for this installation's own coordinates by exact d-tag", async () => {
-    // A relay whose newest-`limit` window leaves an own shard out still
-    // returns it to the exact read, so it is not republished there.
-    h.relays = [OLD_RELAY, NEW_RELAY];
-    h.nip65Relays = [OLD_RELAY, NEW_RELAY];
-    h.queryData = undefined;
-    const own = setLocalRecords([localRecord(60)]);
-    const ownHead = eventForShard(own, "6", 100);
-    const other = {
-      version: 1,
-      deviceId: "other-device",
-      bucket: dmConversationIndexBucket(localRecord(61).key),
-      records: [localRecord(61)],
-    } satisfies DmConversationIndexShard;
-    const fullPage = Array.from({ length: 128 }, (_, i) => ({
-      ...eventForShard(other, "b", 200),
-      id: `9b${i.toString(16).padStart(62, "0")}`,
-    }));
-    h.relayQuery.mockImplementation(async (relay: string, filters: Array<Record<string, unknown>>) => {
-      if (relay !== NEW_RELAY) return [ownHead];
-      const exact = filters.some((filter) =>
-        (filter["#d"] as string[] | undefined)?.includes(dmConversationIndexDTag("test-device", own.bucket)));
-      return exact ? [...fullPage, ownHead] : fullPage;
-    });
+  it("reads the eight derived buckets and the legacy shards", async () => {
     renderHook(() => useDmConversationIndexSync());
-
-    const pull = await h.queryOptions!.queryFn({ signal: new AbortController().signal }) as {
-      repairTargets: Map<number, string[]>;
-    };
-    expect(pull.repairTargets.get(own.bucket) ?? []).not.toContain(NEW_RELAY);
-  });
-
-  it("consolidates divergent departed-installation editions before repairing either relay", async () => {
-    h.relays = [OLD_RELAY, NEW_RELAY];
-    h.nip65Relays = [OLD_RELAY, NEW_RELAY];
-    h.queryData = undefined;
-    h.shards = [];
-    const first = localRecord(70);
-    const bucket = dmConversationIndexBucket(first.key);
-    const second = nextRecordInBucket(71, bucket);
-    const shardA = {
-      version: 1,
-      deviceId: "departed-device",
-      bucket,
-      records: [first],
-    } satisfies DmConversationIndexShard;
-    const shardB = { ...shardA, records: [second] } satisfies DmConversationIndexShard;
-    h.relayQuery.mockImplementation(async (relay: string) => [
-      relay === NEW_RELAY
-        ? eventForShard(shardB, "1", 110)
-        : eventForShard(shardA, "0", 100),
+    await h.queryOptions!.queryFn({ signal: new AbortController().signal });
+    const filters = h.relayQuery.mock.calls[0]![1];
+    expect(filters).toEqual([
+      expect.objectContaining({ authors: KEYS.keyring.dmConversations.map((doc) => doc.pubkey) }),
+      expect.objectContaining({ authors: [SELF], "#t": ["armada-dm-conversations"] }),
     ]);
-    const view = renderHook(() => useDmConversationIndexSync());
+  });
 
-    const pull = await h.queryOptions!.queryFn({ signal: new AbortController().signal }) as {
-      departedRepairs: Map<string, { relays: string[] }>;
-    };
-    const identifier = dmConversationIndexDTag("departed-device", bucket);
-    expect(new Set(pull.departedRepairs.get(identifier)?.relays))
-      .toEqual(new Set([OLD_RELAY, NEW_RELAY]));
-    h.queryData = pull;
-    h.queryDataUpdatedAt++;
-    view.rerender();
-    await act(async () => Promise.resolve());
+  it("republishes a bucket the pulled head lacks, under that bucket's derived key", async () => {
+    const bucket = dmConversationIndexBucket(localRecord(1).key);
+    h.records = [localRecord(1)];
+    const view = renderHook(() => useDmConversationIndexSync());
+    await pull(view);
 
     expect(h.publish).toHaveBeenCalledOnce();
-    const published = h.publish.mock.calls[0]![0] as {
-      content: string;
-      created_at: number;
-      relays: string[];
-    };
-    expect(new Set(published.relays)).toEqual(new Set([OLD_RELAY, NEW_RELAY]));
-    expect(published.created_at).toBeGreaterThan(110);
-    const merged = JSON.parse(published.content.slice("encrypted:".length)) as DmConversationIndexShard;
-    expect(merged.records.map((record) => record.key).sort())
-      .toEqual([first.key, second.key].sort());
+    const [, , event, relays] = h.publish.mock.calls[0]!;
+    expect(relays).toEqual([OLD_RELAY]);
+    expect(event).toMatchObject({
+      pubkey: KEYS.keyring.dmConversations[bucket]!.pubkey,
+      tags: [["d", KEYS.keyring.dmConversations[bucket]!.d]],
+    });
     view.unmount();
   });
 
-  it("retries a cached-only unreadable departed head until decryption succeeds", async () => {
-    h.relays = [OLD_RELAY];
-    h.nip65Relays = [OLD_RELAY];
-    h.queryData = undefined;
-    h.shards = [];
-    const first = localRecord(80);
-    const bucket = dmConversationIndexBucket(first.key);
-    const second = nextRecordInBucket(81, bucket);
-    const relayShard = {
-      version: 1,
-      deviceId: "departed-device",
-      bucket,
-      records: [first],
-    } satisfies DmConversationIndexShard;
-    const cachedShard = {
-      ...relayShard,
-      records: [first, second],
-    } satisfies DmConversationIndexShard;
-    const relayHead = eventForShard(relayShard, "2", 100);
-    const cachedHead = {
-      ...eventForShard(cachedShard, "3", 200),
-      content: "cached-ciphertext",
-    };
-    let cachedDecrypts = false;
-    h.decrypt.mockImplementation(async (_pubkey: string, ciphertext: string) => {
-      if (ciphertext === "cached-ciphertext") {
-        if (!cachedDecrypts) throw new Error("remote signer temporarily denied");
-        return serializeDmConversationIndexShard(cachedShard);
-      }
-      return ciphertext.startsWith("encrypted:")
-        ? ciphertext.slice("encrypted:".length)
-        : ciphertext;
-    });
-    h.relayQuery.mockResolvedValue([relayHead]);
-    h.storeQuery.mockResolvedValue([cachedHead]);
+  it("debounces a local change into one publish of its bucket", async () => {
     const view = renderHook(() => useDmConversationIndexSync());
-
-    const firstPull = await h.queryOptions!.queryFn({ signal: new AbortController().signal }) as {
-      repairPending: boolean;
-      departedRepairs: Map<string, unknown>;
-    };
-    expect(firstPull.departedRepairs.size).toBe(0);
-    expect(firstPull.repairPending).toBe(true);
-    h.queryData = firstPull;
-    h.queryDataUpdatedAt++;
-    view.rerender();
-    await act(async () => Promise.resolve());
-    expect(h.publish).not.toHaveBeenCalled();
-
-    cachedDecrypts = true;
-    let retryFinished = Promise.resolve<unknown>(undefined);
-    h.refetch.mockImplementation(() => {
-      h.queryFetchStatus = "fetching";
-      view.rerender();
-      retryFinished = h.queryOptions!.queryFn({ signal: new AbortController().signal })
-        .then((data) => {
-          h.queryData = data;
-          h.queryDataUpdatedAt++;
-          h.queryFetchStatus = "idle";
-          view.rerender();
-          return { data };
-        });
-      return retryFinished;
-    });
+    await pull(view);
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(DM_CONVERSATION_INDEX_PULL_RETRY_MS);
-      await retryFinished;
-    });
-    await act(async () => Promise.resolve());
-
-    expect(h.refetch).toHaveBeenCalledOnce();
-    expect(h.publish).toHaveBeenCalledOnce();
-    const published = h.publish.mock.calls[0]![0] as { content: string; relays: string[] };
-    expect(published.relays).toEqual([OLD_RELAY]);
-    const merged = JSON.parse(published.content.slice("encrypted:".length)) as DmConversationIndexShard;
-    expect(merged.records.map((record) => record.key).sort())
-      .toEqual([first.key, second.key].sort());
-    view.unmount();
-  });
-
-  it("keeps a relay with an unreadable local head out of every write cohort", async () => {
-    h.relays = [OLD_RELAY, NEW_RELAY];
-    h.nip65Relays = [OLD_RELAY, NEW_RELAY];
-    h.queryData = undefined;
-    const first = localRecord(50);
-    const bucket = dmConversationIndexBucket(first.key);
-    const second = nextRecordInBucket(51, bucket);
-    const shard = setLocalRecords([first]);
-    const readableA = eventForShard(shard, "e", 200);
-    const unreadableB = {
-      ...eventForShard(shard, "f", 100),
-      content: "unreadable",
-    };
-    h.decrypt.mockImplementation(async (_pubkey: string, ciphertext: string) => {
-      if (ciphertext === "unreadable") throw new Error("signer denied");
-      return ciphertext.startsWith("encrypted:")
-        ? ciphertext.slice("encrypted:".length)
-        : ciphertext;
-    });
-    h.relayQuery.mockImplementation(async (relay: string) =>
-      relay === NEW_RELAY ? [unreadableB] : [readableA]);
-    const view = renderHook(() => useDmConversationIndexSync());
-
-    const pull = await h.queryOptions!.queryFn({ signal: new AbortController().signal }) as {
-      publishRelays: string[];
-      repairPending: boolean;
-    };
-    expect(pull.publishRelays).toEqual([OLD_RELAY]);
-    expect(pull.repairPending).toBe(true);
-
-    // A local edit after the read may publish to readable A, but must not let
-    // aggregate A's newer valid head disguise B as a safe target.
-    setLocalRecords([first, second]);
-    h.needsPublish.mockResolvedValue([bucket]);
-    h.queryData = pull;
-    h.queryDataUpdatedAt++;
-    view.rerender();
-    await act(async () => Promise.resolve());
-
-    expect(h.publish).toHaveBeenCalledOnce();
-    expect(h.publish).toHaveBeenCalledWith(expect.objectContaining({
-      relays: [OLD_RELAY],
-    }));
-    view.unmount();
-  });
-
-  it("invalidates the pull-before-publish latch when the relay set changes", async () => {
-    const view = renderHook(() => useDmConversationIndexSync());
-    await act(async () => Promise.resolve());
-
-    h.relays = [NEW_RELAY];
-    h.nip65Relays = [NEW_RELAY];
-    // React Query can retain the prior key's data for a render. It must never
-    // establish the new relay set's write base.
-    h.queryData = emptyPull([OLD_RELAY]);
-    view.rerender();
-    await act(async () => {
-      changeLocalRecord(1);
+      recordLocally(2);
+      recordLocally(2);
       await vi.advanceTimersByTimeAsync(DM_CONVERSATION_INDEX_PUBLISH_DEBOUNCE_MS);
     });
-
-    expect(h.publish).not.toHaveBeenCalled();
+    expect(h.publish).toHaveBeenCalledOnce();
     view.unmount();
   });
 
-  it("retries when onSigned ran but neither delivery nor durable queueing succeeded", async () => {
-    h.publish.mockImplementation(async (template: { onSigned?: (event: NostrEvent) => void }) => {
-      template.onSigned?.({
-        id: "e".repeat(64),
-        pubkey: SELF,
-        kind: 30078,
-        created_at: 100,
-        content: "ciphertext",
-        tags: [],
-        sig: "1".repeat(128),
-      });
-      throw new Error("relay and outbox unavailable");
-    });
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  it("retries a bucket whose delivery failed outright", async () => {
+    h.publish.mockRejectedValueOnce(new Error("signer offline"));
     const view = renderHook(() => useDmConversationIndexSync());
-    await act(async () => Promise.resolve());
-
+    await pull(view);
     await act(async () => {
-      changeLocalRecord(2);
+      recordLocally(3);
       await vi.advanceTimersByTimeAsync(DM_CONVERSATION_INDEX_PUBLISH_DEBOUNCE_MS);
     });
     expect(h.publish).toHaveBeenCalledTimes(1);
-
     await act(async () => {
       await vi.advanceTimersByTimeAsync(DM_CONVERSATION_INDEX_RETRY_MS);
     });
     expect(h.publish).toHaveBeenCalledTimes(2);
-    expect(warn).toHaveBeenCalled();
     view.unmount();
   });
 
-  it("recovers a failed base pull and publishes local changes without Sync Now", async () => {
-    h.queryData = undefined;
-    h.relayQuery.mockRejectedValue(new Error("relay offline"));
+  it("publishes nothing when the account has not set up sync", async () => {
+    h.keys = { keyring: null, previous: [] };
+    h.records = [localRecord(4)];
     const view = renderHook(() => useDmConversationIndexSync());
-
-    await expect(h.queryOptions!.queryFn({ signal: new AbortController().signal }))
-      .rejects.toThrow(/No self-state relay completed/);
-    const bucket = changeLocalRecord(6);
-    h.needsPublish.mockResolvedValue([bucket]);
+    await pull(view);
+    expect(h.ensure).toHaveBeenCalled();
     expect(h.publish).not.toHaveBeenCalled();
-
-    h.relayQuery.mockResolvedValue([]);
-    let retryFinished = Promise.resolve<unknown>(undefined);
-    h.refetch.mockImplementation(() => {
-      retryFinished = h.queryOptions!.queryFn({ signal: new AbortController().signal })
-        .then((data) => {
-          h.queryData = data;
-          view.rerender();
-          return { data };
-        });
-      return retryFinished;
-    });
-
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(DM_CONVERSATION_INDEX_PULL_RETRY_MS);
-      await retryFinished;
-    });
-    await act(async () => Promise.resolve());
-
-    expect(h.refetch).toHaveBeenCalledOnce();
-    expect(h.publish).toHaveBeenCalledOnce();
     view.unmount();
   });
 
-  it("does not retry or publish while automatic settings sync is off", async () => {
+  it("does not pull or publish while automatic settings sync is off", async () => {
     h.automaticSettingsSync = false;
-    h.queryData = undefined;
     const view = renderHook(() => useDmConversationIndexSync());
-
-    expect(h.queryOptions?.enabled).toBe(false);
-    changeLocalRecord(7);
+    expect(h.queryOptions!.enabled).toBe(false);
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(
-        DM_CONVERSATION_INDEX_PULL_RETRY_MS * 2
-          + DM_CONVERSATION_INDEX_PUBLISH_DEBOUNCE_MS,
-      );
+      recordLocally(5);
+      await vi.advanceTimersByTimeAsync(DM_CONVERSATION_INDEX_PUBLISH_DEBOUNCE_MS);
     });
-
-    expect(h.refetch).not.toHaveBeenCalled();
     expect(h.publish).not.toHaveBeenCalled();
     view.unmount();
   });
 
-  it("does not retry without a canonical relay in the target set", async () => {
-    h.relays = [OLD_RELAY];
-    h.nip65Relays = [NEW_RELAY];
-    h.queryData = undefined;
+  it("does not reuse an old pull after the relay set changes", async () => {
     const view = renderHook(() => useDmConversationIndexSync());
-
-    expect(h.queryOptions?.enabled).toBe(false);
+    await pull(view);
+    h.relays = [NEW_RELAY];
+    h.nip65Relays = [NEW_RELAY];
+    view.rerender();
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(DM_CONVERSATION_INDEX_PULL_RETRY_MS * 2);
+      recordLocally(6);
+      await vi.advanceTimersByTimeAsync(DM_CONVERSATION_INDEX_PUBLISH_DEBOUNCE_MS);
     });
-
-    expect(h.refetch).not.toHaveBeenCalled();
+    expect(h.publish).not.toHaveBeenCalled();
     view.unmount();
   });
 });

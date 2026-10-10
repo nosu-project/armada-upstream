@@ -19,6 +19,33 @@ import {
 const PUBKEY = "a".repeat(64);
 const RELAY = "wss://relay.example.com";
 
+type StoredEvent = { kind: number; pubkey: string; tags: string[][] };
+type TestFilter = { kinds?: number[]; authors?: string[] } & Record<string, unknown>;
+
+function matches(filter: TestFilter, event: StoredEvent): boolean {
+  if (filter.kinds && !filter.kinds.includes(event.kind)) return false;
+  if (filter.authors && !filter.authors.includes(event.pubkey)) return false;
+  for (const [key, values] of Object.entries(filter)) {
+    if (!key.startsWith("#") || !Array.isArray(values)) continue;
+    if (!event.tags.some(([name, value]) => name === key.slice(1) && values.includes(value!))) return false;
+  }
+  return true;
+}
+
+/** Holds what the sync stores, beside whatever `h.storeQuery` is primed with. */
+function memoryStore() {
+  const held: StoredEvent[] = [];
+  return {
+    event: async (event: StoredEvent) => {
+      held.push(event);
+    },
+    query: async (filters: TestFilter[]) => [
+      ...((await h.storeQuery(filters)) ?? []),
+      ...held.filter((event) => filters.some((filter) => matches(filter, event))),
+    ],
+  };
+}
+
 const h = vi.hoisted(() => ({
   config: {
     appRelays: [] as string[],
@@ -168,7 +195,7 @@ describe("useInitialSync", () => {
     h.readFolded.mockReset().mockResolvedValue(undefined);
     h.writeFolded.mockReset().mockResolvedValue(undefined);
     h.storeQuery.mockReset().mockResolvedValue([]);
-    h.eventStore = Promise.resolve({ query: h.storeQuery });
+    h.eventStore = Promise.resolve(memoryStore());
     h.user.signer = {};
   });
 

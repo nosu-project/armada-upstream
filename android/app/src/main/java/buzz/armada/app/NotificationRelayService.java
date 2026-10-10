@@ -379,6 +379,20 @@ public class NotificationRelayService extends Service {
     // the app has ever been opened, and for an older WebView that doesn't send
     // it. Empty is never a valid value: it would drop the subscription.
     private Set<String> selfDTags = SelfState.DEFAULT_D_TAGS;
+    /**
+     * The documents under keys derived from the settings root: author → its one
+     * {@code d}. Supplied by the WebView (which holds the root); empty until it has
+     * one, and for an older WebView.
+     */
+    private Map<String, String> selfDocs = java.util.Collections.emptyMap();
+    /**
+     * Read-state documents' NIP-44 conversation keys, by author: enough to open
+     * them for {@link #applyReadStateDismiss}, not to sign anything.
+     */
+    private Map<String, byte[]> readStateKeys = java.util.Collections.emptyMap();
+    private static final Pattern HEX64 = Pattern.compile("^[0-9a-f]{64}$");
+    /** Identifies the {@link #selfDocs} set a self-state cursor was taken over. */
+    private String selfDocsFingerprint = "";
     private JSONObject prefs = new JSONObject();
     // Concord (CORD-02) channel subscriptions, keyed for fast lookup:
     //   pkToStream2: stream pubkey (the kind-1059 wrap's author, hex) → decrypt
@@ -1263,23 +1277,31 @@ public class NotificationRelayService extends Service {
     private void applyReadStateDismiss(JSONObject event) {
         NativeSigner signer = nativeSigner;
         if (signer == null || userPubkey == null) return;
-        signer.decrypt44(userPubkey, event.optString("content"), (plain, unavailable) -> {
-            if (plain == null) return;
-            try {
-                JSONObject readState = new JSONObject(plain).optJSONObject("readState");
-                if (readState == null) return;
-                java.util.HashMap<String, Long> map = new java.util.HashMap<>();
-                for (java.util.Iterator<String> it = readState.keys(); it.hasNext(); ) {
-                    String key = it.next();
-                    long ts = readState.optLong(key, 0);
-                    if (ts > 0) map.put(key, ts);
-                }
-                // Hops to the handler thread, where roomNotifs is confined.
-                dismissRead(map);
-            } catch (JSONException e) {
-                if (BuildConfig.DEBUG) Log.d(TAG, "read-state parse failed: " + e.getMessage());
+        signer.decrypt44(userPubkey, event.optString("content"), (plain, unavailable) ->
+                applyReadStateDismiss(plain));
+    }
+
+    /**
+     * The same for a decrypted read-state plaintext. A document under a derived
+     * key is opened with the conversation key the WebView configured, so it needs
+     * no signer at all.
+     */
+    private void applyReadStateDismiss(String plain) {
+        if (plain == null) return;
+        try {
+            JSONObject readState = new JSONObject(plain).optJSONObject("readState");
+            if (readState == null) return;
+            java.util.HashMap<String, Long> map = new java.util.HashMap<>();
+            for (java.util.Iterator<String> it = readState.keys(); it.hasNext(); ) {
+                String key = it.next();
+                long ts = readState.optLong(key, 0);
+                if (ts > 0) map.put(key, ts);
             }
-        });
+            // Hops to the handler thread, where roomNotifs is confined.
+            dismissRead(map);
+        } catch (JSONException e) {
+            if (BuildConfig.DEBUG) Log.d(TAG, "read-state parse failed: " + e.getMessage());
+        }
     }
 
     private void deliverAuth(String relayUrl, String eventJson) {
@@ -1631,6 +1653,7 @@ public class NotificationRelayService extends Service {
         selfDTags = configuredDTags.isEmpty()
                 ? SelfState.DEFAULT_D_TAGS
                 : new LinkedHashSet<>(configuredDTags);
+        parseSelfDocs(sp.getString("selfDocs", null));
         try {
             String p = sp.getString("prefs", null);
             prefs = p != null ? new JSONObject(p) : new JSONObject();
@@ -2570,25 +2593,48 @@ public class NotificationRelayService extends Service {
                 topicDocuments.put("authors", me);
                 topicDocuments.put("#t", topics);
 
+                // The documents under derived keys: every 30078 such a key signs is
+                // ours (SelfState.storable still pins each to its one `d`).
+                JSONObject derivedDocuments = null;
+                if (!selfDocs.isEmpty()) {
+                    JSONArray authors = new JSONArray();
+                    for (String pk : selfDocs.keySet()) authors.put(pk);
+                    derivedDocuments = new JSONObject();
+                    derivedDocuments.put("kinds", new JSONArray().put(SelfState.KIND_APP_SPECIFIC));
+                    derivedDocuments.put("authors", authors);
+                }
+
+                SharedPreferences cursorPrefs = getSharedPreferences(CURSOR_PREFS, Context.MODE_PRIVATE);
+                long nowSec = System.currentTimeMillis() / 1000;
                 Long selfSince = selfSinceByUrl.get(relayUrl);
                 if (selfSince == null) {
                     selfSince = persistedSelfSince(
-                            getSharedPreferences(CURSOR_PREFS, Context.MODE_PRIVATE)
-                                    .getLong(selfCursorKey(userPubkey, relayUrl), 0L),
-                            System.currentTimeMillis() / 1000);
+                            cursorPrefs.getLong(selfCursorKey(userPubkey, relayUrl), 0L), nowSec);
                 }
                 if (selfSince != null) {
                     bare.put("since", selfSince);
                     documents.put("since", selfSince);
                     topicDocuments.put("since", selfSince);
                 }
+                // Its own cursor: a newly configured set of authors has never been
+                // read in full, whatever the account's cursor says.
+                if (derivedDocuments != null) {
+                    Long derivedSince = persistedSelfSince(
+                            cursorPrefs.getLong(selfCursorKey(derivedCursorOwner(), relayUrl), 0L), nowSec);
+                    if (derivedSince != null) derivedDocuments.put("since", derivedSince);
+                }
                 if (resuming) {
                     bare.put("limit", FloodBreaker.RESUME_LIMIT);
                     documents.put("limit", FloodBreaker.RESUME_LIMIT);
                     topicDocuments.put("limit", FloodBreaker.RESUME_LIMIT);
+                    if (derivedDocuments != null) derivedDocuments.put("limit", FloodBreaker.RESUME_LIMIT);
                 }
                 selfLive = false;
-                sendReq(webSocket, subSelf, bare, documents, topicDocuments);
+                if (derivedDocuments != null) {
+                    sendReq(webSocket, subSelf, bare, documents, topicDocuments, derivedDocuments);
+                } else {
+                    sendReq(webSocket, subSelf, bare, documents, topicDocuments);
+                }
             }
         }
 
@@ -3110,8 +3156,13 @@ public class NotificationRelayService extends Service {
                         long since = System.currentTimeMillis() / 1000 - SELF_SINCE_SLACK_SEC;
                         selfSinceByUrl.put(relayUrl, since);
                         if (userPubkey != null) {
-                            getSharedPreferences(CURSOR_PREFS, Context.MODE_PRIVATE).edit()
-                                    .putLong(selfCursorKey(userPubkey, relayUrl), since).apply();
+                            SharedPreferences.Editor editor =
+                                    getSharedPreferences(CURSOR_PREFS, Context.MODE_PRIVATE).edit()
+                                            .putLong(selfCursorKey(userPubkey, relayUrl), since);
+                            if (!selfDocs.isEmpty()) {
+                                editor.putLong(selfCursorKey(derivedCursorOwner(), relayUrl), since);
+                            }
+                            editor.apply();
                         }
                     }
                 }
@@ -3626,6 +3677,11 @@ public class NotificationRelayService extends Service {
         return "self|" + pubkey + "|" + relayUrl;
     }
 
+    /** The cursor owner of the derived-document filter: the account plus its author set. */
+    private String derivedCursorOwner() {
+        return userPubkey + "#" + selfDocsFingerprint;
+    }
+
     /** A persisted self-state cursor to resume from, or null for a full read. */
     static Long persistedSelfSince(long savedSec, long nowSec) {
         if (savedSec <= 0 || savedSec > nowSec || nowSec - savedSec > SELF_SINCE_MAX_AGE_SEC) return null;
@@ -3701,19 +3757,20 @@ public class NotificationRelayService extends Service {
 
     /**
      * The replaceable coordinate of one of the user's own documents: the kind,
-     * plus the `d` tag for an addressable kind. The author is always the user
-     * (SelfState.storable refuses anything else), so it is left out.
+     * plus author and `d` for an addressable kind. The author matters there: a
+     * settings document may be signed by a key derived from the settings root.
      */
     static String selfCoordinateOf(JSONObject event, int kind) {
         if (kind < 30000 || kind >= 40000) return Integer.toString(kind);
+        String prefix = kind + ":" + event.optString("pubkey") + ":";
         JSONArray tags = event.optJSONArray("tags");
         if (tags != null) {
             for (int i = 0; i < tags.length(); i++) {
                 JSONArray t = tags.optJSONArray(i);
-                if (t != null && "d".equals(t.optString(0))) return kind + ":" + t.optString(1);
+                if (t != null && "d".equals(t.optString(0))) return prefix + t.optString(1);
             }
         }
-        return kind + ":";
+        return prefix;
     }
 
     /** `pubkey|challenge` of a kind-22242, or null when it has neither. */
@@ -4826,7 +4883,7 @@ public class NotificationRelayService extends Service {
             // authorizing against another either stores documents we never
             // asked for or discards ones we did.
             boolean filed = userPubkey != null
-                    && ServiceStore.cacheSelfState(this, event, userPubkey, selfDTags);
+                    && ServiceStore.cacheSelfState(this, event, userPubkey, selfDTags, selfDocs);
             rememberBoundedId(selfSeenIds, id, MAX_SELF_SEEN_IDS);
             // Only a version the store actually took raises the floor: one it
             // refused (not ours, not a synced kind) must not shadow a later one.
@@ -4841,8 +4898,12 @@ public class NotificationRelayService extends Service {
             // NativeReadDismiss, which otherwise runs only on the next WebView
             // resume. Everything else here stays verbatim ciphertext for the
             // WebView to open.
-            if (kind == SelfState.KIND_APP_SPECIFIC && isReadStateDoc(event)) {
-                applyReadStateDismiss(event);
+            if (kind == SelfState.KIND_APP_SPECIFIC && userPubkey != null) {
+                byte[] key = readStateKeys.get(event.optString("pubkey"));
+                if (key != null) applyReadStateDismiss(ConcordCrypto.decrypt(key, event.optString("content")));
+                else if (userPubkey.equals(event.optString("pubkey")) && isReadStateDoc(event)) {
+                    applyReadStateDismiss(event);
+                }
             }
             return;
         }
@@ -5503,7 +5564,9 @@ public class NotificationRelayService extends Service {
                 // verified, stored, or counted.
                 if (SelfState.isSelfKind(kind)
                         && userPubkey != null
-                        && userPubkey.equals(event.optString("pubkey"))) {
+                        && (userPubkey.equals(event.optString("pubkey"))
+                            || (kind == SelfState.KIND_APP_SPECIFIC
+                                && selfDocs.containsKey(event.optString("pubkey"))))) {
                     return shouldSyncSelfStateFromRelay(relayUrl, selfRelays);
                 }
                 return false;
@@ -7543,6 +7606,39 @@ public class NotificationRelayService extends Service {
         for (RelayConnection rc : connections) rc.close();
         connections.clear();
         updateSocketHealth();
+    }
+
+    /** `[{pubkey, d, readStateKey?}]` from the plugin config; malformed entries are skipped. */
+    private void parseSelfDocs(String json) {
+        Map<String, String> docs = new LinkedHashMap<>();
+        Map<String, byte[]> keys = new HashMap<>();
+        if (json != null) {
+            try {
+                JSONArray arr = new JSONArray(json);
+                for (int i = 0; i < arr.length(); i++) {
+                    JSONObject entry = arr.optJSONObject(i);
+                    if (entry == null) continue;
+                    String pubkey = entry.optString("pubkey", "");
+                    String d = entry.optString("d", "");
+                    if (!HEX64.matcher(pubkey).matches() || d.isEmpty()) continue;
+                    docs.put(pubkey, d);
+                    String key = entry.optString("readStateKey", "");
+                    if (HEX64.matcher(key).matches()) keys.put(pubkey, ConcordCrypto.hexToBytes(key));
+                }
+            } catch (JSONException e) {
+                Log.w(TAG, "selfDocs config unreadable");
+            }
+        }
+        selfDocs = docs;
+        readStateKeys = keys;
+        selfDocsFingerprint = selfDocsFingerprintOf(docs.keySet());
+    }
+
+    static String selfDocsFingerprintOf(java.util.Collection<String> authors) {
+        if (authors.isEmpty()) return "";
+        java.util.List<String> sorted = new ArrayList<>(authors);
+        java.util.Collections.sort(sorted);
+        return Integer.toHexString(String.join(",", sorted).hashCode());
     }
 
     private static List<String> parseStringArray(String json) {

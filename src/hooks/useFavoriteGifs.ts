@@ -11,28 +11,20 @@ export const FAVORITE_GIFS_EVENT_KIND = KIND_APP_SPECIFIC;
 export const FAVORITE_GIFS_EVENT_TAG = T_ARMADA_GIF_FAVORITES;
 export const FAVORITE_GIFS_D_PREFIX = "armada/gif-favorites/";
 
-/**
- * Stays in localStorage: `ownShardKey` embeds it and needs a SYNCHRONOUS read, or an empty
- * async read would mint a second id and fork the shard.
- */
-const DEVICE_ID_PREFIX = "armada:favorite-gifs:device-id:";
-
-/** Shards live in ArmadaDB KV; `device-id:` must stay in localStorage. */
-const shardStore = new KvPrefixCache<unknown>({ prefix: "favorite-gifs-shard:" });
+/** The account's favorites in ArmadaDB KV; also exactly what this device publishes. */
 const mergedStore = new KvPrefixCache<unknown>({ prefix: "favorite-gifs-merged:" });
 
 /**
- * Load both stores, then drop the derived memos and re-render. Fires on the cold→warm
+ * Load the store, then drop the derived memos and re-render. Fires on the cold→warm
  * transition only: re-arming per miss would loop forever (the notify causes the misses).
  */
 let warmDrop: Promise<void> | undefined;
 
 function warmFavoriteGifStores(): Promise<void> {
-  if (storesWarm()) return warmDrop ?? Promise.resolve();
-  warmDrop ??= Promise.all([shardStore.ready(), mergedStore.ready()]).then(() => {
+  if (mergedStore.warmed) return warmDrop ?? Promise.resolve();
+  warmDrop ??= mergedStore.ready().then(() => {
     warmDrop = undefined;
     mergedCache.clear();
-    ownShardCache.clear();
     notify();
   });
   return warmDrop;
@@ -40,10 +32,6 @@ function warmFavoriteGifStores(): Promise<void> {
 
 export function readyFavoriteGifShards(): Promise<void> {
   return warmFavoriteGifStores();
-}
-
-function storesWarm(): boolean {
-  return shardStore.warmed && mergedStore.warmed;
 }
 
 export interface FavoriteGifRecord {
@@ -54,15 +42,20 @@ export interface FavoriteGifRecord {
   operationId: string;
 }
 
-/** One encrypted NIP-78 document per installation. Devices only rewrite their own shard. */
+/** A legacy, account-signed per-installation shard. Read-only. */
 export interface FavoriteGifShard {
   version: 1;
   deviceId: string;
   records: FavoriteGifRecord[];
 }
 
+/** The shared document every installation writes, under its derived key. */
+export interface FavoriteGifDoc {
+  version: 2;
+  records: FavoriteGifRecord[];
+}
+
 const mergedCache = new Map<string, FavoriteGifRecord[]>();
-const ownShardCache = new Map<string, FavoriteGifShard>();
 const snapshotCache = new Map<string, FavoriteGifRecord[]>();
 const listeners = new Set<() => void>();
 const dirtyListeners = new Set<(pubkey: string) => void>();
@@ -73,19 +66,6 @@ function randomId(): string {
     return crypto.randomUUID();
   }
   return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-}
-
-export function favoriteGifsDeviceId(pubkey: string): string {
-  try {
-    const key = `${DEVICE_ID_PREFIX}${pubkey}`;
-    const existing = localStorage.getItem(key);
-    if (existing) return existing;
-    const created = randomId();
-    localStorage.setItem(key, created);
-    return created;
-  } catch {
-    return randomId();
-  }
 }
 
 function isGifResult(value: unknown): value is GifResult {
@@ -121,6 +101,13 @@ export function parseFavoriteGifShard(value: unknown): FavoriteGifShard | null {
   };
 }
 
+export function parseFavoriteGifDoc(value: unknown): FavoriteGifDoc | null {
+  if (!value || typeof value !== "object") return null;
+  const doc = value as Partial<FavoriteGifDoc>;
+  if (doc.version !== 2 || !Array.isArray(doc.records)) return null;
+  return { version: 2, records: doc.records.filter(isRecord) };
+}
+
 function parseLegacyFavorites(): GifResult[] {
   try {
     const parsed: unknown = JSON.parse(localStorage.getItem(LEGACY_FAVORITE_GIFS_KEY) ?? "");
@@ -154,20 +141,14 @@ export function mergeFavoriteGifRecords(
   return mergeRecords(...sets);
 }
 
-function ownShardId(pubkey: string): string {
-  return `${pubkey}:${favoriteGifsDeviceId(pubkey)}`;
-}
-
 function loadMerged(pubkey: string): FavoriteGifRecord[] {
   const hit = mergedCache.get(pubkey);
   if (hit) return hit;
   void warmFavoriteGifStores();
-  let records: FavoriteGifRecord[] = [];
   const parsed = mergedStore.get(pubkey);
-  if (Array.isArray(parsed)) records = mergeRecords(parsed.filter(isRecord));
-  records = mergeRecords(records, loadOwnFavoriteGifShard(pubkey).records);
-  // Only memoise once the stores are warm; an earlier empty read would outlive the load.
-  if (storesWarm()) mergedCache.set(pubkey, records);
+  const records = Array.isArray(parsed) ? mergeRecords(parsed.filter(isRecord)) : [];
+  // Only memoise once the store is warm; an earlier empty read would outlive the load.
+  if (mergedStore.warmed) mergedCache.set(pubkey, records);
   return records;
 }
 
@@ -187,39 +168,10 @@ function notify(): void {
   for (const listener of listeners) listener();
 }
 
-export function loadOwnFavoriteGifShard(pubkey: string): FavoriteGifShard {
-  const hit = ownShardCache.get(pubkey);
-  if (hit) return hit;
-  void warmFavoriteGifStores();
-  const empty: FavoriteGifShard = { version: 1, deviceId: favoriteGifsDeviceId(pubkey), records: [] };
-  const parsed = parseFavoriteGifShard(shardStore.get(ownShardId(pubkey)));
-  const shard = parsed?.deviceId === empty.deviceId ? parsed : empty;
-  // As in `loadMerged`: don't remember a pre-load empty read.
-  if (storesWarm()) ownShardCache.set(pubkey, shard);
-  return shard;
-}
-
-function saveOwnShard(pubkey: string, shard: FavoriteGifShard): void {
-  const stored = parseFavoriteGifShard(shardStore.get(ownShardId(pubkey)));
-  const next: FavoriteGifShard = {
-    ...shard,
-    records: mergeRecords(shard.records, stored?.deviceId === shard.deviceId ? stored.records : []),
-  };
-  ownShardCache.set(pubkey, next);
-  shardStore.set(ownShardId(pubkey), next);
-}
-
-export function hydrateFavoriteGifShards(pubkey: string, shards: FavoriteGifShard[]): void {
+/** Fold remote records in. Not a local edit: whether to republish is the sync's call. */
+export function hydrateFavoriteGifRecords(pubkey: string, sets: readonly FavoriteGifRecord[][]): void {
   const previous = loadMerged(pubkey);
-  const own = loadOwnFavoriteGifShard(pubkey);
-  const remoteOwnRecords = shards
-    .filter((shard) => shard.deviceId === own.deviceId)
-    .flatMap((shard) => shard.records);
-  const ownRecords = mergeRecords(own.records, remoteOwnRecords);
-  if (JSON.stringify(ownRecords) !== JSON.stringify(own.records)) {
-    saveOwnShard(pubkey, { ...own, records: ownRecords });
-  }
-  const next = mergeRecords(previous, ownRecords, ...shards.map((s) => s.records));
+  const next = mergeRecords(previous, ...sets);
   if (JSON.stringify(next) === JSON.stringify(previous)) return;
   saveMerged(pubkey, next);
   notify();
@@ -234,8 +186,6 @@ export function claimLegacyFavoriteGifs(pubkey: string): { hadLegacy: boolean; c
   if (legacy.length === 0) return { hadLegacy: false, changed: false };
 
   const known = new Map(loadMerged(pubkey).map((record) => [record.gif.id, record]));
-  const own = loadOwnFavoriteGifShard(pubkey);
-  const ownById = new Map(own.records.map((record) => [record.gif.id, record]));
   let changed = false;
 
   for (const [index, gif] of legacy.entries()) {
@@ -248,13 +198,10 @@ export function claimLegacyFavoriteGifs(pubkey: string): { hadLegacy: boolean; c
       operationId: randomId(),
     };
     known.set(gif.id, record);
-    ownById.set(gif.id, record);
     changed = true;
   }
 
   if (changed) {
-    const shard = { ...own, records: [...ownById.values()] };
-    saveOwnShard(pubkey, shard);
     saveMerged(pubkey, [...known.values()]);
     notify();
   }
@@ -267,10 +214,6 @@ export function completeLegacyFavoriteGifMigration(): void {
   } catch {
     // A later run will harmlessly retry the same merge.
   }
-}
-
-export function getFavoriteGifShardDTag(pubkey: string): string {
-  return `${FAVORITE_GIFS_D_PREFIX}${favoriteGifsDeviceId(pubkey)}`;
 }
 
 export function subscribeFavoriteGifChanges(listener: (pubkey: string) => void): () => void {
@@ -286,8 +229,6 @@ export function toggleFavoriteGif(pubkey: string, gif: GifResult): void {
   const merged = loadMerged(pubkey);
   const current = merged.find((record) => record.gif.id === gif.id);
   const legacyFavorite = !current && parseLegacyFavorites().some((entry) => entry.id === gif.id);
-  const own = loadOwnFavoriteGifShard(pubkey);
-  const ownById = new Map(own.records.map((record) => [record.gif.id, record]));
   const updatedAt = Math.max(Date.now(), ...merged.map((record) => record.updatedAt + 1));
   const record: FavoriteGifRecord = {
     gif,
@@ -295,8 +236,6 @@ export function toggleFavoriteGif(pubkey: string, gif: GifResult): void {
     updatedAt,
     operationId: randomId(),
   };
-  ownById.set(gif.id, record);
-  saveOwnShard(pubkey, { ...own, records: [...ownById.values()] });
   saveMerged(pubkey, mergeRecords(merged, [record]));
   notify();
   for (const listener of dirtyListeners) listener(pubkey);
@@ -344,10 +283,7 @@ function subscribe(pubkey: string | undefined, listener: () => void): () => void
   listeners.add(listener);
   const onStorage = (event: StorageEvent) => {
     if (!event.key || event.key === LEGACY_FAVORITE_GIFS_KEY || (pubkey && event.key.includes(pubkey))) {
-      if (pubkey) {
-        mergedCache.delete(pubkey);
-        ownShardCache.delete(pubkey);
-      }
+      if (pubkey) mergedCache.delete(pubkey);
       snapshotCache.clear();
       listener();
     }
@@ -391,8 +327,7 @@ export function useFavoriteGifs() {
 /** Test seam. */
 export async function resetFavoriteGifsCache(): Promise<void> {
   mergedCache.clear();
-  ownShardCache.clear();
   snapshotCache.clear();
-  // The shards are in KV, so they outlive `localStorage.clear()`.
-  await Promise.all([shardStore.clear(), mergedStore.clear()]);
+  // The store is in KV, so it outlives `localStorage.clear()`.
+  await mergedStore.clear();
 }

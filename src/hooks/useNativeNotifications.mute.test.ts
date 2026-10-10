@@ -76,6 +76,9 @@ vi.mock("@/hooks/useDmRelayList", () => ({
   useDmRelayList: () => ({ relays: [], isReady: true }),
 }));
 vi.mock("@/hooks/useMediaPolicy", () => ({ useMediaPolicyConfig: () => undefined }));
+vi.mock("@/hooks/useSettingsKeys", () => ({
+  useSettingsKeys: () => ({ keys: { keyring: null, previous: [] }, isFetched: true, ensure: async () => undefined }),
+}));
 vi.mock("@nostrify/react/login", () => ({ useNostrLogin: () => ({ logins: [] }) }));
 vi.mock("@/hooks/useWireGitTicketRoots", () => ({ useWireGitTicketRoots: () => [] }));
 vi.mock("@/hooks/useEventStore", () => ({ useEventStore: () => new Promise(() => {}) }));

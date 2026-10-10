@@ -26,21 +26,9 @@ import type { NostrRumor } from "@/lib/nostrRumor";
 /** NIP-78 application-specific data. */
 export const SETTINGS_KIND = 30078;
 
-/**
- * Adding one needs: a name here, a schema in `schemas.ts`, a key list in
- * `AppContext.ts` if it mirrors AppConfig, and the Android service's default set.
- */
-export const SETTINGS_DOC_NAMES = [
-  "metadata",
-  "rail",
-  "read-state",
-  "read-state-recent",
-  "notifications",
-  "dms",
-  "reactions",
-] as const;
+import { SETTINGS_DOC_NAMES, type SettingsDocName } from "@/lib/settingsDocNames";
 
-export type SettingsDocName = (typeof SETTINGS_DOC_NAMES)[number];
+export { SETTINGS_DOC_NAMES, type SettingsDocName };
 
 /** `${APP_ID}/<name>` keeps forks and other NIP-78 clients from colliding. */
 export function settingsDTag(name: SettingsDocName): string {

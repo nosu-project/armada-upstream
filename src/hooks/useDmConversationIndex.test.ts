@@ -3,10 +3,9 @@ import { act, renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
-  dmConversationDeviceId,
+  dmConversationIndexBuckets,
   getDmConversationIndexRecords,
-  hydrateDmConversationIndexShards,
-  loadOwnDmConversationIndexShards,
+  hydrateDmConversationIndexRecords,
   recordDmConversationIndex,
   resetDmConversationIndexCache,
   subscribeDmConversationIndexChanges,
@@ -16,7 +15,6 @@ import {
 import {
   dmConversationIndexBucket,
   type DmConversationIndexRecord,
-  type DmConversationIndexShard,
 } from "@/lib/dmConversationIndex";
 
 vi.mock("@/hooks/useCurrentUser", () => ({
@@ -33,34 +31,22 @@ function record(peer: string, createdAt: number, mine = false): DmConversationIn
   return { key: peer, latest: { createdAt, id: hex(createdAt + 1_000) }, mine };
 }
 
-function shard(deviceId: string, records: DmConversationIndexRecord[]): DmConversationIndexShard {
-  if (records.length === 0) throw new Error("test shard needs one bucket");
-  return {
-    version: 1,
-    deviceId,
-    bucket: dmConversationIndexBucket(records[0]!.key),
-    records,
-  };
-}
-
 beforeEach(async () => {
   localStorage.clear();
   await resetDmConversationIndexCache();
   vi.restoreAllMocks();
 });
 describe("local DM conversation index", () => {
-  it("unions different installation shards without copying them into one coordinate", async () => {
+  it("unions remote record sets, and publishes the union", async () => {
     const phone = record(hex(1), 10);
     const desktop = record(hex(2), 20, true);
-    await hydrateDmConversationIndexShards(SELF, [
-      shard("phone-device", [phone]),
-      shard("desktop-device", [desktop]),
-    ]);
+    await hydrateDmConversationIndexRecords(SELF, [[phone], [desktop]]);
 
     expect((await getDmConversationIndexRecords(SELF)).map((entry) => entry.key))
       .toEqual([desktop.key, phone.key]);
-    expect((await loadOwnDmConversationIndexShards(SELF)).flatMap((item) => item.records))
-      .toEqual([]);
+    // The shared documents are this device's whole knowledge, split by bucket.
+    expect((await dmConversationIndexBuckets(SELF)).flatMap((item) => item.records).map((entry) => entry.key).sort())
+      .toEqual([desktop.key, phone.key].sort());
   });
 
   it("persists changed rows in stable local buckets and emits only real changes", async () => {
@@ -73,21 +59,23 @@ describe("local DM conversation index", () => {
 
     expect(await recordDmConversationIndex(SELF, [entry])).toBe(true);
     expect(await recordDmConversationIndex(SELF, [entry])).toBe(false);
-    const own = await loadOwnDmConversationIndexShards(SELF);
-    expect(own.find((item) => item.bucket === dmConversationIndexBucket(entry.key))?.records)
+    const buckets = await dmConversationIndexBuckets(SELF);
+    expect(buckets.find((item) => item.bucket === dmConversationIndexBucket(entry.key))?.records)
       .toEqual([entry]);
     expect(changed).toEqual([[dmConversationIndexBucket(entry.key)]]);
     unsubscribe();
   });
 
-  it("merges the remote copy of this installation before the next local rewrite", async () => {
-    const deviceId = dmConversationDeviceId(SELF);
-    const restored = record(hex(4), 40);
-    await hydrateDmConversationIndexShards(SELF, [shard(deviceId, [restored])]);
+  it("does not report hydrated records as local edits", async () => {
+    const changed: number[][] = [];
+    const unsubscribe = subscribeDmConversationIndexChanges((_pubkey, buckets) => changed.push([...buckets]));
+    await hydrateDmConversationIndexRecords(SELF, [[record(hex(4), 40)]]);
     await recordDmConversationIndex(SELF, [record(hex(5), 50)]);
 
-    expect((await loadOwnDmConversationIndexShards(SELF)).flatMap((item) => item.records)
-      .map((entry) => entry.key).sort()).toEqual([hex(4), hex(5)].sort());
+    expect((await getDmConversationIndexRecords(SELF)).map((entry) => entry.key).sort())
+      .toEqual([hex(4), hex(5)].sort());
+    expect(changed).toEqual([[dmConversationIndexBucket(hex(5))]]);
+    unsubscribe();
   });
 
   it("publishes a stable readiness signal after the ArmadaDB warm", async () => {

@@ -19,10 +19,10 @@ import {
 } from "@/hooks/useFrequentReactions";
 import { useFavoriteGifsSync } from "@/hooks/useFavoriteGifsSync";
 import {
-  decodeAndHydrateDmConversationIndex,
   useDmConversationIndexSync,
   useRecordDmConversationIndex,
 } from "@/hooks/useDmConversationIndexSync";
+import { useSettingsKeys } from "@/hooks/useSettingsKeys";
 import { useResumeEpoch } from "@/hooks/useResumeEpoch";
 import { useBlossomServerList } from "@/hooks/useBlossomServerList";
 import { useDmRelayList } from "@/hooks/useDmRelayList";
@@ -36,19 +36,18 @@ import {
 } from "@/lib/nip65";
 import {
   admitSelfSyncEvent,
-  isNewerSelfSyncVersion,
   KIND_APP_SPECIFIC,
   KIND_COMMUNITY_LIST_FRAG,
+  queryKeysForDerivedDoc,
   queryKeysForSelfEvent,
   selfSyncTopicOf,
   SELF_SYNC_DTAGS,
   SELF_SYNC_OWNER_QUERY_KEYS,
   SELF_SYNC_REPLACEABLE_KINDS,
   SELF_SYNC_TOPIC_TAGS,
-  stageNewestPerCoordinate,
-  T_ARMADA_DM_CONVERSATIONS,
   type SelfSyncEventVersion,
 } from "@/lib/selfSyncKinds";
+import { derivedDocOf } from "@/lib/settingsKeys";
 import type { CachingReqOpts } from "@/lib/NostrBatcher";
 import { ACTIVE_THEME_KIND, parseDittoTheme } from "@/lib/themeEvent";
 import { savePushPrefs } from "@/lib/pushPrefs";
@@ -70,15 +69,6 @@ const SELF_SYNC_FLUSH_MS = 60;
  */
 const SELF_SYNC_KEY_MIN_GAP_MS = 15_000;
 
-/**
- * Coalescing window (ms) for live DM index editions, merged once per piece at
- * its newest version; installations republishing in a loop are otherwise costly.
- */
-const DM_INDEX_MERGE_MS = 10_000;
-
-/** Above the real piece count (8 per installation); bounds a flood of invented pieces. */
-const DM_INDEX_MERGE_MAX_PIECES = 512;
-
 /** Background time before the self-state REQ is rebuilt on return (half-open sockets never reconnect). */
 const SELF_SYNC_RESUBSCRIBE_AFTER_AWAY_MS = 30_000;
 
@@ -98,11 +88,12 @@ function dTagOf(event: NostrEvent): string | undefined {
  * Self-state sync for the logged-in user's own replaceable/addressable events,
  * both directions across devices. ({@link ../wire/WireSync} owns timelines.)
  *
- * A. A standing REQ `{ authors:[me], kinds:[…] }` (plus scoped 30078 filters)
+ * A. A standing REQ `{ authors:[me], kinds:[…] }` (plus scoped 30078 filters,
+ *    and one for the documents under keys derived from the settings root)
  *    streams new versions into the cache, then invalidates the owning hook's
  *    query so it reconciles through its own merge / decrypt guards.
  * B. Application, adapted from Ditto's NostrSync:
- *    1. Encrypted settings docs (30078, `d=${APP_ID}/…`) ↔ AppConfig via
+ *    1. Encrypted settings docs (30078, derived keys) ↔ AppConfig via
  *       {@link useConfigDocSync}; see `docs/settings-documents.md`.
  *    1a. Quick-reaction frequency table ↔ its own document.
  *    1c. Blossom server list (10063) → config.
@@ -124,6 +115,9 @@ function NostrSyncInner() {
   const reactionsDoc = useSettingsDoc("reactions");
   const { update: updateReactions } = reactionsDoc;
   const eventStore = useEventStore();
+  const { keys: settingsKeys } = useSettingsKeys();
+  const keyring = settingsKeys.keyring;
+  const derivedAuthorKey = keyring?.authors.join(",") ?? "";
 
   // One instance per document, each with its own guards, so they can't race.
   useConfigDocSync("metadata");
@@ -183,8 +177,8 @@ function NostrSyncInner() {
     }
   }, [queryClient, selfRelayKey]);
 
-  const signerRef = useRef(user?.signer);
-  signerRef.current = user?.signer;
+  const keyringRef = useRef(keyring);
+  keyringRef.current = keyring;
 
   // A. Standing self-state subscription. Echoes suppressed by created_at;
   // invalidations coalesced. The first REQ per relay in a process is a full
@@ -224,56 +218,27 @@ function NostrSyncInner() {
       }
       armFlush();
     };
-    // Live DM-index editions: only the newest per piece per window is stored and
-    // merged (add-only union, so skipping intermediates just delays). Verified
-    // when contested (see stageNewestPerCoordinate), otherwise at flush.
-    let pendingIndex = new Map<string, NostrEvent>();
-    let indexTimer: ReturnType<typeof setTimeout> | undefined;
-    const flushIndexMerge = () => {
-      indexTimer = undefined;
-      const batch = [...pendingIndex.values()];
-      pendingIndex = new Map();
-      if (controller.signal.aborted) return;
-      const admitted = batch.filter((event) =>
-        verifyEventOnce(event) && admitSelfSyncEvent(seen, event, dTagOf(event)));
-      if (admitted.length === 0) return;
-      void eventStore
-        .then((store) => Promise.allSettled(admitted.map((event) => store.event(event))))
-        .catch(() => undefined)
-        .finally(() => {
-          const signer = signerRef.current;
-          if (!signer?.nip44 || controller.signal.aborted) return;
-          void decodeAndHydrateDmConversationIndex(admitted, signer, pubkey)
-            .catch(() => undefined);
-        });
-    };
-    const scheduleIndexMerge = (event: NostrEvent, dTag: string) => {
-      const coordinate = `${event.kind}:${dTag}`;
-      if (!isNewerSelfSyncVersion(seen.get(coordinate), event)) return;
-      if (!stageNewestPerCoordinate(pendingIndex, coordinate, event, DM_INDEX_MERGE_MAX_PIECES, verifyEventOnce)) {
-        return;
-      }
-      indexTimer ??= setTimeout(flushIndexMerge, DM_INDEX_MERGE_MS);
-    };
     const scheduleInvalidate = (keys: readonly (readonly string[])[]) => {
       for (const key of keys) pendingKeys.add(key.join("\u0000"), key);
       armFlush();
     };
 
     const onEvent = (event: NostrEvent) => {
+      // A document under a derived key: right author AND right `d`, or nothing.
+      const derived = event.pubkey === pubkey ? undefined : derivedDocOf(keyringRef.current, event);
       // Relays can violate the author filter; don't poison the echo guard.
-      if (event.pubkey !== pubkey) return;
-      // Merge a DM index edition on its own rather than re-running the full pull
-      // (~128 events per relay on many-install accounts).
-      if (
-        event.kind === KIND_APP_SPECIFIC
-        && selfSyncTopicOf(event.tags) === T_ARMADA_DM_CONVERSATIONS
-      ) {
-        const dTag = dTagOf(event);
-        if (dTag !== undefined) scheduleIndexMerge(event, dTag);
+      if (event.pubkey !== pubkey && !derived) return;
+      if (!verifyEventOnce(event)) return;
+      if (derived) {
+        if (event.kind !== KIND_APP_SPECIFIC || !admitSelfSyncEvent(seen, event, `${event.pubkey}:${derived.d}`)) return;
+        void eventStore
+          .then((store) => store.event(event))
+          .catch(() => undefined)
+          .finally(() => {
+            if (!controller.signal.aborted) scheduleInvalidate(queryKeysForDerivedDoc(derived));
+          });
         return;
       }
-      if (!verifyEventOnce(event)) return;
       if (event.kind === KIND_RELAY_LIST) {
         const previous = relayListSeenVersion.current;
         // Verifies sig/kind, rejects an empty map, applies NIP-01 timestamp/lower-id order.
@@ -347,6 +312,9 @@ function NostrSyncInner() {
               kinds: [KIND_APP_SPECIFIC],
               "#t": SELF_SYNC_TOPIC_TAGS,
             },
+            ...(derivedAuthorKey
+              ? [{ authors: derivedAuthorKey.split(","), kinds: [KIND_APP_SPECIFIC] }]
+              : []),
           ]
         : []),
     ];
@@ -354,7 +322,8 @@ function NostrSyncInner() {
     // `onEvent` stores each version it admits itself; see CachingReqOpts.
     const reqOpts: CachingReqOpts = { signal: controller.signal, cache: false };
     for (const url of relayUrls) {
-      const readKey = `${pubkey}\u0000${url}`;
+      // A new filter set is a new read: a resume would miss documents older than its `since`.
+      const readKey = `${pubkey}\u0000${url}\u0000${derivedAuthorKey}`;
       const completeAt = selfReadCompleteAt.current.get(readKey);
       const relayFilters = completeAt === undefined
         ? filters
@@ -376,7 +345,6 @@ function NostrSyncInner() {
     return () => {
       controller.abort();
       if (flushTimer !== undefined) clearTimeout(flushTimer);
-      if (indexTimer !== undefined) clearTimeout(indexTimer);
     };
     // `resumeEpoch`: half-open sockets and relay CLOSED leave the sub silently
     // dead, so rebuild after backgrounding. `selfRelayKey` follows relay-set changes.
@@ -388,6 +356,7 @@ function NostrSyncInner() {
     resumeEpoch,
     selfRelayKey,
     automaticSettingsSync,
+    derivedAuthorKey,
     config.relayMetadata,
     updateConfig,
   ]);
@@ -409,6 +378,9 @@ function NostrSyncInner() {
     if (reactionsDoc.doc?.frequentReactions) {
       hydrateFrequentReactions(user.pubkey, reactionsDoc.doc.frequentReactions);
     }
+    for (const source of reactionsDoc.sources) {
+      if (source.doc.frequentReactions) hydrateFrequentReactions(user.pubkey, source.doc.frequentReactions);
+    }
     if (metadata?.frequentReactions) {
       hydrateFrequentReactions(user.pubkey, metadata.frequentReactions);
     }
@@ -416,6 +388,7 @@ function NostrSyncInner() {
     automaticSettingsSync,
     user?.pubkey,
     reactionsDoc.doc?.frequentReactions,
+    reactionsDoc.sources,
     metadata?.frequentReactions,
   ]);
 

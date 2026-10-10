@@ -18,15 +18,20 @@ package buzz.armada.app.db
  * already on disk, with no relay round-trip in the critical path.
  *
  * Nothing here decrypts, and this object stays pure/Context-free. A 10009's
- * private items and the 30078 settings blobs are NIP-44-encrypted to the user;
- * storing the raw event verbatim is the whole job, and the WebView decrypts on
- * read exactly as it does for an event it fetched itself.
+ * private items and the 30078 settings blobs are NIP-44-encrypted; storing the
+ * raw event verbatim is the whole job, and the WebView decrypts on read exactly
+ * as it does for an event it fetched itself.
+ *
+ * Armada's settings now live under keys derived from the settings root (the
+ * one `d = armada` document the user signs; see docs/settings-documents.md), so
+ * most kind-30078 documents are authored by a key that is not the user's. The
+ * WebView hands the service those (pubkey, `d`) pairs; nothing here derives them.
  *
  * The one document the service opens for itself — in [NotificationRelayService],
- * not here — is `armada/read-state`: a read advanced on another device has to
- * dismiss the matching tray notification while the app is dead, and the stamps
- * to do it live inside that encrypted blob. The decryption is the service's,
- * so this catalogue remains a pure set of rules with no crypto of its own.
+ * not here — is read-state: a read advanced on another device has to dismiss the
+ * matching tray notification while the app is dead, and the stamps to do it live
+ * inside that encrypted blob. The decryption is the service's, so this catalogue
+ * remains a pure set of rules with no crypto of its own.
  *
  * Pure and Context-free so the rules can be tested on the JVM without an
  * emulator, matching [Dm17] and [Concord].
@@ -67,6 +72,8 @@ object SelfState {
      */
     @JvmField
     val DEFAULT_D_TAGS: Set<String> = setOf(
+        // The settings root, then the legacy documents read during migration.
+        "armada",
         "armada/metadata",
         "armada/rail",
         "armada/read-state",
@@ -76,9 +83,9 @@ object SelfState {
         "armada/reactions",
     )
 
-    /** Tag shared by the per-installation encrypted GIF-favorite shards. */
+    /** Tag shared by the legacy per-installation encrypted GIF-favorite shards. */
     const val TOPIC_GIF_FAVORITES = "armada-gif-favorites"
-    /** Tag shared by the per-installation encrypted DM-conversation shards. */
+    /** Tag shared by the legacy per-installation encrypted DM-conversation shards. */
     const val TOPIC_DM_CONVERSATIONS = "armada-dm-conversations"
 
     /**
@@ -103,15 +110,27 @@ object SelfState {
      * able to write into that. The caller verifies the signature; this refuses
      * anything not authored by [self].
      *
-     * [dTags] must be the SAME set the REQ was built from. Subscribing to one
-     * set and authorizing against another means either storing documents we
-     * never asked for, or discarding ones we did.
+     * [dTags] and [derivedDocs] must be the SAME sets the REQ was built from.
+     * Subscribing to one set and authorizing against another means either
+     * storing documents we never asked for, or discarding ones we did.
+     *
+     * A document under a derived key ([derivedDocs], author → its one `d`) is
+     * admitted only at exactly that coordinate: each derived key writes a single
+     * kind-30078 document, so anything else it signs is not ours to keep.
      */
     @JvmStatic
     @JvmOverloads
-    fun storable(self: String, rumor: Rumor, dTags: Set<String> = DEFAULT_D_TAGS): Boolean {
+    fun storable(
+        self: String,
+        rumor: Rumor,
+        dTags: Set<String> = DEFAULT_D_TAGS,
+        derivedDocs: Map<String, String> = emptyMap(),
+    ): Boolean {
         if (self.isEmpty()) return false
-        if (rumor.pubkey != self) return false
+        if (rumor.pubkey != self) {
+            val d = derivedDocs[rumor.pubkey] ?: return false
+            return rumor.kind == KIND_APP_SPECIFIC && rumor.tagValue("d") == d
+        }
         if (rumor.kind in KINDS) return true
         if (rumor.kind != KIND_APP_SPECIFIC) return false
         // Addressable: keep only Armada's own documents.

@@ -9,9 +9,12 @@ import {
   signedPortableSingletonWinner,
 } from "@/hooks/usePublishPortableSetup";
 
+import { settingsKeyring } from "@/lib/settingsKeys";
+
 import type { NostrEvent } from "@nostrify/nostrify";
 
 const SELF = "a".repeat(64);
+const KEYS = { keyring: settingsKeyring("07".repeat(32)), previous: [] };
 const h = vi.hoisted(() => ({
   events: [] as NostrEvent[],
   queryStatus: vi.fn(),
@@ -236,20 +239,25 @@ describe("portable Concord exact mirroring", () => {
     expect(delivered.some(({ id }) => id === oldSearch.id)).toBe(false);
   });
 
-  it("re-signs newer local group, fixed-setting, and topic rumors before rotation", async () => {
+  it("re-signs a newer local group and derived document, but never a legacy account-signed one", async () => {
     const staleGroup = event(10009, "b", "stale-groups", []);
     const staleSetting = event(30078, "c", "stale-setting", [["d", "armada/read-state"]]);
     const { sig: _groupSig, ...localGroup } = {
       ...event(10009, "d", "local-groups", []),
       created_at: 20,
     };
+    // A legacy document whose signature was not kept: this build never writes one.
     const { sig: _settingSig, ...localSetting } = {
       ...event(30078, "e", "local-setting", [["d", "armada/read-state"]]),
       created_at: 20,
     };
-    const topicD = "armada/dm-conversations/local/0";
-    const { sig: _topicSig, ...localTopic } = {
-      ...event(30078, "f", "local-topic", [["d", topicD], ["t", "armada-dm-conversations"]]),
+    const derived = KEYS.keyring.settings["read-state"];
+    const localDerived = {
+      kind: 30078,
+      id: "1".repeat(64),
+      pubkey: derived.pubkey,
+      content: "derived-setting",
+      tags: [["d", derived.d]],
       created_at: 20,
     };
     h.events.push(staleGroup, staleSetting);
@@ -285,34 +293,28 @@ describe("portable Concord exact mirroring", () => {
       },
     };
 
-    const first = await mirrorPortableStateBeforeRelayChange(
+    const mirror = () => mirrorPortableStateBeforeRelayChange(
       nostr as never,
       user as never,
       ["wss://old.example"],
       ["wss://new.example"],
       ["wss://old.example"],
       true,
-      [localGroup, localSetting, localTopic],
+      [localGroup, localSetting, localDerived],
+      KEYS,
     );
-    const second = await mirrorPortableStateBeforeRelayChange(
-      nostr as never,
-      user as never,
-      ["wss://old.example"],
-      ["wss://new.example"],
-      ["wss://old.example"],
-      true,
-      [localGroup, localSetting, localTopic],
-    );
+    const first = await mirror();
+    const second = await mirror();
 
     expect(delivered).toEqual(expect.arrayContaining([
       expect.objectContaining({ kind: 10009, content: "local-groups" }),
-      expect.objectContaining({ kind: 30078, content: "local-setting" }),
-      expect.objectContaining({ kind: 30078, content: "local-topic" }),
+      expect.objectContaining({ kind: 30078, pubkey: derived.pubkey, content: "derived-setting" }),
     ]));
+    expect(delivered.some(({ content }) => content === "local-setting")).toBe(false);
     expect(delivered.some(({ id }) => id === staleGroup.id || id === staleSetting.id)).toBe(false);
-    expect(h.signDmTopics.mock.calls[0]?.[0]).toEqual(expect.arrayContaining([localTopic]));
     expect(second.fingerprint).toBe(first.fingerprint);
-    expect(signed).toBe(3);
+    // Only the group list went through the account signer.
+    expect(signed).toBe(1);
   });
 
   it("does not switch when a proposed relay ACKs but retains a newer coordinate head", async () => {
@@ -665,7 +667,7 @@ describe("portable Concord exact mirroring", () => {
     expect(relayEvent).not.toHaveBeenCalled();
   });
 
-  it("passes every divergent topic edition to consolidation and mirrors the repair, not the partial head", async () => {
+  it("passes every legacy and derived topic edition to consolidation and mirrors the repair", async () => {
     const topicD = "armada/dm-conversations/departed/0";
     const older = {
       ...event(30078, "5", "older-richer", [["d", topicD], ["t", "armada-dm-conversations"]]),
@@ -677,8 +679,10 @@ describe("portable Concord exact mirroring", () => {
       "newer-partial",
       [["d", topicD], ["t", "armada-dm-conversations"]],
     );
+    const bucket = KEYS.keyring.dmConversations[0]!;
     const repair = {
-      ...event(30078, "7", "semantic-union", [["d", topicD], ["t", "armada-dm-conversations"]]),
+      ...event(30078, "7", "semantic-union", [["d", bucket.d]]),
+      pubkey: bucket.pubkey,
       created_at: 11,
     };
     h.events.push(older, head);
@@ -709,10 +713,15 @@ describe("portable Concord exact mirroring", () => {
       user as never,
       ["wss://old.example"],
       ["wss://new.example"],
+      ["wss://old.example"],
+      true,
+      [],
+      KEYS,
     );
 
     expect(h.signDmTopics.mock.calls[0]?.[0]).toEqual(expect.arrayContaining([older, head]));
     expect(delivered.some(({ id }) => id === repair.id)).toBe(true);
-    expect(delivered.some(({ id }) => id === head.id)).toBe(false);
+    // The legacy head still travels as exact bytes, for builds that read only it.
+    expect(delivered.some(({ id }) => id === head.id)).toBe(true);
   });
 });

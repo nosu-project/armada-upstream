@@ -47,7 +47,7 @@ needs no Armada-specific server at all: any NIP-29 relay serves it.
 | `ios/ArmadaDB/` | ArmadaDB in Swift: the SQLite engine the iOS build runs, with SQLite vendored. A SwiftPM package so it builds on **Linux**, where its conformance suite runs without a Mac |
 | `ios/ArmadaNotify/` | The decrypt/store/present pipeline the iOS Notification Service Extension runs (NIP-44/NIP-17/Concord, libsecp256k1 vendored). A SwiftPM package for the same reason — its suite runs on **Linux** |
 | `electron/`  | Electron desktop shell (loads the bundled web build; Linux/Windows/macOS installers built in CI) |
-| `docs/`      | Design notes too long for this file — `settings-documents.md` (the NIP-78 settings split) and `releases.md` (kind 30622, the NIP-34 release event `/downloads` reads) |
+| `docs/`      | Design notes too long for this file — `settings-documents.md` (the NIP-78 settings root, its derived documents, and the split) and `releases.md` (kind 30622, the NIP-34 release event `/downloads` reads) |
 | `scripts/`   | Repo tooling, incl. two Concord-aware moderation-UX harnesses that mirror the same CORD-01/02/05 derivations: `scripts/spambot.mjs` (WRITES — chat spam with flood-fold evasion, plus kind-3313 direct-invite spam via `--invite-spam`) and `scripts/dump-community.mjs` (READS — resolves an invite and pages the decrypted Chat Plane out of the relays in `OpenedChat` shape, for feeding `floodCluster.ts`); see each file's header comment |
 
 ## Build / test
@@ -816,6 +816,16 @@ to fail a run:
   provably never published a list, so there is no existing/failed-read list to
   clobber. It is scoped structurally to the generate path (existing-key logins
   never reach it) and is the only place an unsolicited list publish is allowed.
+- **The account key signs exactly one NIP-78 document: the settings root**
+  (`d = ${APP_ID}`, fixed-length plaintext, no other tags). Every other piece of
+  private state — settings, GIF favorites, the DM index — is signed by a key
+  derived from the root's secret under an opaque `d` (`settingsKeys.ts`), so
+  nothing on the wire ties it to the account. Don't add a tag or a variable-length
+  field to the root, don't add an account-signed or per-installation 30078
+  document, and never write a legacy `${APP_ID}/<name>` one: the migration reads
+  them as evidence of an older build. A root is created only by an account that
+  already keeps settings, or by an explicit Sync now, after a relay confirms it
+  has none. See `docs/settings-documents.md`.
 - **No Google Play Services in the Android build.** The APK ships zero
   `com.google.android.gms` / `googleid` artifacts, and the merged manifest has
   zero Google components — verify with

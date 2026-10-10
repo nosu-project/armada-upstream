@@ -3,7 +3,7 @@ import { useCallback, useEffect, useReducer, useRef } from "react";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useSettingsDoc } from "@/hooks/useSettingsDoc";
-import { resolveLegacy } from "@/lib/settingsDocs";
+import { hasMigratedKeys, resolveLegacy } from "@/lib/settingsDocs";
 import { markNotificationSettingsReady } from "@/lib/notificationSettingsAuthority";
 import { configSnapshot, docToConfigPatch, type ConfigDocName } from "@/lib/syncedConfig";
 
@@ -107,9 +107,11 @@ export function useConfigDocSync(name: ConfigDocName): void {
   }, [name]);
 
   const split = doc && event ? { doc, event } : null;
-  const legacy = metadata.doc && metadata.event
-    ? { doc: metadata.doc, event: metadata.event }
-    : null;
+  // The newest metadata copy still carrying this slice's fields: an older build wrote it.
+  const legacy = (name === "metadata"
+    ? undefined
+    : metadata.sources.find((source) => hasMigratedKeys(source.doc, name)))
+    ?? (metadata.doc && metadata.event ? { doc: metadata.doc, event: metadata.event } : null);
   const resolved = name === "metadata" ? split : resolveLegacy(name, split, legacy);
 
   useEffect(() => {

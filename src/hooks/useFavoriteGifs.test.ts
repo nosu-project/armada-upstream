@@ -6,11 +6,10 @@ import {
   useFavoriteGifs,
   claimLegacyFavoriteGifs,
   completeLegacyFavoriteGifMigration,
-  favoriteGifsDeviceId,
   getFavoriteGifRecords,
-  hydrateFavoriteGifShards,
+  hydrateFavoriteGifRecords,
   LEGACY_FAVORITE_GIFS_KEY,
-  loadOwnFavoriteGifShard,
+  parseFavoriteGifDoc,
   parseFavoriteGifShard,
   resetFavoriteGifsCache,
   subscribeFavoriteGifChanges,
@@ -44,6 +43,10 @@ function shard(deviceId: string, records: FavoriteGifRecord[]): FavoriteGifShard
   return { version: 1, deviceId, records };
 }
 
+function hydrateFavoriteGifShards(pubkey: string, shards: FavoriteGifShard[]): void {
+  hydrateFavoriteGifRecords(pubkey, shards.map((entry) => entry.records));
+}
+
 beforeEach(async () => {
   localStorage.clear();
   // The shards live in ArmadaDB's KV now, which `localStorage.clear()` doesn't
@@ -72,13 +75,11 @@ describe("favorite GIF cross-device merge", () => {
     expect(getFavoriteGifRecords(SELF)).toEqual([record("same", false, 20, "remove")]);
   });
 
-  it("restores this installation's relay shard before its next rewrite", () => {
-    const deviceId = favoriteGifsDeviceId(SELF);
-    hydrateFavoriteGifShards(SELF, [shard(deviceId, [record("restored", true, 30)])]);
-
-    expect(loadOwnFavoriteGifShard(SELF).records).toEqual([record("restored", true, 30)]);
+  // The shared document is the whole set, so a local toggle keeps what was restored.
+  it("keeps restored records through the next local toggle", () => {
+    hydrateFavoriteGifShards(SELF, [shard("other", [record("restored", true, 30)])]);
     toggleFavoriteGif(SELF, gif("new"));
-    expect(loadOwnFavoriteGifShard(SELF).records.map((entry) => entry.gif.id).sort())
+    expect(getFavoriteGifRecords(SELF).map((entry) => entry.gif.id).sort())
       .toEqual(["new", "restored"]);
   });
 
@@ -103,7 +104,6 @@ describe("legacy favorite GIF migration", () => {
     expect(claimLegacyFavoriteGifs(SELF)).toEqual({ hadLegacy: true, changed: true });
     expect(getFavoriteGifRecords(SELF).filter((entry) => entry.favorite).map((entry) => entry.gif.id))
       .toEqual(["remote", "old-local"]);
-    expect(loadOwnFavoriteGifShard(SELF).records.map((entry) => entry.gif.id)).toEqual(["old-local"]);
 
     // Keep the source until the encrypted shard is signed and placed in the
     // durable publish outbox; a signer cancellation must remain retryable.
@@ -118,7 +118,6 @@ describe("legacy favorite GIF migration", () => {
 
     expect(claimLegacyFavoriteGifs(SELF)).toEqual({ hadLegacy: true, changed: false });
     expect(getFavoriteGifRecords(SELF)[0].favorite).toBe(false);
-    expect(loadOwnFavoriteGifShard(SELF).records).toEqual([]);
   });
 
   it("lets a post-sync unfavorite beat a late migration that missed it on first pull", () => {
@@ -158,11 +157,15 @@ describe("local favorite GIF operations", () => {
     expect(claimLegacyFavoriteGifs(SELF)).toEqual({ hadLegacy: true, changed: false });
   });
 
-  it("validates decrypted shards before hydration", () => {
-    const valid = shard(favoriteGifsDeviceId(SELF), [record("ok", true, 1)]);
+  it("validates decrypted documents before hydration", () => {
+    const valid = shard("device", [record("ok", true, 1)]);
     expect(parseFavoriteGifShard(valid)).toEqual(valid);
     expect(parseFavoriteGifShard({ ...valid, version: 2 })).toBeNull();
     expect(parseFavoriteGifShard({ ...valid, records: [{ nope: true }] })?.records).toEqual([]);
+    const doc = { version: 2, records: [record("ok", true, 1)] };
+    expect(parseFavoriteGifDoc(doc)).toEqual(doc);
+    expect(parseFavoriteGifDoc({ ...doc, version: 1 })).toBeNull();
+    expect(parseFavoriteGifDoc({ ...doc, records: [{ nope: true }] })?.records).toEqual([]);
   });
 
   it("settles after the KV stores warm rather than re-rendering forever", async () => {
