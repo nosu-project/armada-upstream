@@ -4,6 +4,26 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.64.12] - 2026-10-10
+
+Incoming calls on Android now ring instead of joining by themselves, with a
+proper lock-screen ringer. You can copy highlighted text from the message menu,
+and Armada uses less memory over long sessions and leaves less behind in memory
+after you log out.
+
+### Added
+- Copy selection in the message right-click menu when text is highlighted
+- Saving your profile adds image details to your picture and banner so other apps can show a preview while they load
+
+### Changed
+- Microphone auto gain control is off by default
+- The profile preview card no longer has a Follow button
+
+### Fixed
+- Incoming calls on Android ring on a lock-screen ringer and join only when you tap Answer
+- Lower memory use over long sessions, in the app and in the Android notification service
+- Decrypted messages and community keys are cleared from memory on logout
+
 ## [0.64.11] - 2026-10-09
 
 Private settings are harder to trace back to you. Your synced settings, GIF
