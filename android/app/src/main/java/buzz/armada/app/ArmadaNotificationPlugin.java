@@ -188,10 +188,15 @@ public class ArmadaNotificationPlugin extends Plugin {
 
     /**
      * Record the parameters of a ring being posted, replacing any previous one
-     * — the service rings one call at a time.
+     * — the service rings one call at a time. Returns the answer token that
+     * only the Answer action's PendingIntent carries, or null on failure.
      */
-    static void setCallAnswer(Context ctx, String callId, String peer, String secret, String broker) {
-        if (ctx == null || callId == null || peer == null || secret == null || broker == null) return;
+    static String setCallAnswer(Context ctx, String callId, String peer, String secret,
+                                String broker, long createdAtMs) {
+        if (ctx == null || callId == null || peer == null || secret == null || broker == null) return null;
+        byte[] raw = new byte[32];
+        new java.security.SecureRandom().nextBytes(raw);
+        String token = NostrCrypto.bytesToHex(raw);
         synchronized (CALL_ANSWER_LOCK) {
             try {
                 JSONObject entry = new JSONObject();
@@ -199,12 +204,22 @@ public class ArmadaNotificationPlugin extends Plugin {
                 entry.put("peer", peer);
                 entry.put("secret", secret);
                 entry.put("broker", broker);
+                entry.put("createdAtMs", createdAtMs);
+                entry.put("token", token);
                 ctx.getSharedPreferences(CALL_ANSWER_PREFS, Context.MODE_PRIVATE)
                         .edit().putString(CALL_ANSWER_KEY, entry.toString()).apply();
+                return token;
             } catch (Exception e) {
                 Log.w(TAG, "setCallAnswer failed", e);
+                return null;
             }
         }
+    }
+
+    /** A ring whose "end" was lost keeps its ticket; it must not outlive the window. */
+    private static boolean callTicketFresh(JSONObject entry) {
+        long at = entry.optLong("createdAtMs", 0);
+        return at > 0 && System.currentTimeMillis() - at <= NotificationRelayService.CALL_RING_WINDOW_MS;
     }
 
     /**
@@ -214,6 +229,7 @@ public class ArmadaNotificationPlugin extends Plugin {
      */
     static void clearCallAnswer(Context ctx, String callId) {
         if (ctx == null) return;
+        IncomingCallActivity.dismiss(callId);
         synchronized (CALL_ANSWER_LOCK) {
             SharedPreferences sp = ctx.getSharedPreferences(CALL_ANSWER_PREFS, Context.MODE_PRIVATE);
             if (callId != null) {
@@ -405,7 +421,8 @@ public class ArmadaNotificationPlugin extends Plugin {
      * This is the authorization to join a DM call from a notification tap: the
      * service only records a call it decided to RING, which means it was fresh,
      * from a peer the user follows, and carried a well-formed secret and an
-     * https broker. A URL naming any other call id gets nothing back.
+     * https broker. A URL naming any other call id, or this one without the
+     * answer token only the Answer action carries, gets nothing back.
      *
      * Consumed once — a second tap, or a revisit of the same history entry,
      * must not re-answer a call that has already been answered or has ended.
@@ -413,8 +430,9 @@ public class ArmadaNotificationPlugin extends Plugin {
     @PluginMethod
     public void consumeCallAnswer(PluginCall call) {
         String callId = call.getString("callId");
+        String token = call.getString("token");
         JSObject ret = new JSObject();
-        if (callId == null || callId.isEmpty()) {
+        if (callId == null || callId.isEmpty() || token == null || token.isEmpty()) {
             call.resolve(ret);
             return;
         }
@@ -425,7 +443,13 @@ public class ArmadaNotificationPlugin extends Plugin {
             if (raw != null) {
                 try {
                     JSONObject entry = new JSONObject(raw);
-                    if (callId.equals(entry.optString("callId"))) {
+                    String expected = entry.optString("token", "");
+                    if (callId.equals(entry.optString("callId"))
+                            && callTicketFresh(entry)
+                            && !expected.isEmpty()
+                            && java.security.MessageDigest.isEqual(
+                                    expected.getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                                    token.getBytes(java.nio.charset.StandardCharsets.UTF_8))) {
                         ret.put("peer", entry.optString("peer"));
                         ret.put("secret", entry.optString("secret"));
                         ret.put("broker", entry.optString("broker"));
@@ -433,6 +457,36 @@ public class ArmadaNotificationPlugin extends Plugin {
                     }
                 } catch (Exception e) {
                     Log.w(TAG, "consumeCallAnswer parse failed", e);
+                }
+            }
+        }
+        call.resolve(ret);
+    }
+
+    /** The ring for `callId`, unconsumed and without its token: enough to ring, not to join. */
+    @PluginMethod
+    public void peekCallRing(PluginCall call) {
+        String callId = call.getString("callId");
+        JSObject ret = new JSObject();
+        if (callId == null || callId.isEmpty()) {
+            call.resolve(ret);
+            return;
+        }
+        synchronized (CALL_ANSWER_LOCK) {
+            String raw = getContext()
+                    .getSharedPreferences(CALL_ANSWER_PREFS, Context.MODE_PRIVATE)
+                    .getString(CALL_ANSWER_KEY, null);
+            if (raw != null) {
+                try {
+                    JSONObject entry = new JSONObject(raw);
+                    if (callId.equals(entry.optString("callId")) && callTicketFresh(entry)) {
+                        ret.put("peer", entry.optString("peer"));
+                        ret.put("secret", entry.optString("secret"));
+                        ret.put("broker", entry.optString("broker"));
+                        ret.put("createdAtMs", entry.optLong("createdAtMs", 0));
+                    }
+                } catch (Exception e) {
+                    Log.w(TAG, "peekCallRing parse failed", e);
                 }
             }
         }

@@ -183,7 +183,10 @@ export function VoiceDeviceSettings() {
       source.connect(analyser);
       const data = new Uint8Array(analyser.fftSize);
 
+      // Bromite strips AnalyserNode reads.
+      const readable = typeof analyser.getByteTimeDomainData === "function";
       const tick = () => {
+        if (!readable) return;
         analyser.getByteTimeDomainData(data);
         let sum = 0;
         for (let i = 0; i < data.length; i++) {

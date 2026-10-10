@@ -106,6 +106,17 @@ describe("useDetectedSpeakers", () => {
     expect(result.current).toEqual([]);
   });
 
+  it("defers to the server when the analyser can't be read (Bromite)", () => {
+    const ctx = runtime.room.audioContext as { createAnalyser: () => object };
+    const make = ctx.createAnalyser;
+    ctx.createAnalyser = () => ({ ...make(), getFloatTimeDomainData: undefined });
+    runtime.mics = [mic("ana")];
+    levels.set("ana", 0.1);
+    const { result } = renderHook(() => useDetectedSpeakers());
+    act(() => void vi.advanceTimersByTime(100));
+    expect(result.current).toBeNull();
+  });
+
   it("defers to the server while the call's audio is suspended", () => {
     (runtime.room.audioContext as { state: string }).state = "suspended";
     runtime.mics = [mic("ana")];

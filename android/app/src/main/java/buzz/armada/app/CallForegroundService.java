@@ -84,11 +84,18 @@ public class CallForegroundService extends Service {
     @Nullable
     private static CallForegroundService live;
 
+    /** Set before stopService(): a CallStyle notify() before onDestroy throws. */
+    private static volatile boolean stopping;
+
+    static void markStopping() {
+        stopping = true;
+    }
+
     static void updateMic(boolean muted, boolean published) {
         micMuted = muted;
         micPublished = published;
         new Handler(Looper.getMainLooper()).post(() -> {
-            if (live != null && live.foregrounded) live.refreshNotification();
+            if (live != null && live.foregrounded && !stopping) live.refreshNotification();
         });
     }
 
@@ -130,6 +137,7 @@ public class CallForegroundService extends Service {
         // startForeground() deadline runs through the gap (the same reasoning
         // as MeshForegroundService).
         live = this;
+        stopping = false;
         enterForeground();
         acquireWakeLock();
         acquireWifiLock();
@@ -150,6 +158,7 @@ public class CallForegroundService extends Service {
             return START_NOT_STICKY;
         }
         if (intent != null) {
+            stopping = false;
             String t = intent.getStringExtra(EXTRA_TITLE);
             String s = intent.getStringExtra(EXTRA_TEXT);
             if (t != null && !t.isEmpty()) title = t;
@@ -218,7 +227,7 @@ public class CallForegroundService extends Service {
         if (nm == null) return;
         try {
             nm.notify(NOTIF_ID, buildNotification(micTyped));
-        } catch (SecurityException e) {
+        } catch (SecurityException | IllegalArgumentException e) {
             Log.w(TAG, "Could not refresh the call notification", e);
         }
     }

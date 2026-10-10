@@ -164,7 +164,8 @@ export function useVoiceRecorder(): UseVoiceRecorderReturn {
     }, 100);
 
     samplerRef.current = setInterval(() => {
-      if (!analyserRef.current) return;
+      // Bromite strips AnalyserNode reads.
+      if (typeof analyserRef.current?.getByteTimeDomainData !== "function") return;
       const dataArray = new Uint8Array(analyserRef.current.frequencyBinCount);
       analyserRef.current.getByteTimeDomainData(dataArray);
 

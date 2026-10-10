@@ -13,7 +13,11 @@ import {
   mintDmCall,
 } from "@/lib/dmCall";
 import { startIncomingRing, startRingback } from "@/lib/callSounds";
-import { consumeNativeCallAnswer, dismissNativeCallRing } from "@/lib/nativeNotifications";
+import {
+  consumeNativeCallAnswer,
+  dismissNativeCallRing,
+  peekNativeCallRing,
+} from "@/lib/nativeNotifications";
 import { KIND_DM_CALL, type OpenedDm } from "@/lib/nip17/protocol";
 
 /**
@@ -103,8 +107,14 @@ vi.mock("@/lib/callSounds", () => ({
 }));
 vi.mock("@/lib/nativeNotifications", () => ({
   consumeNativeCallAnswer: vi.fn(),
+  peekNativeCallRing: vi.fn(),
   dismissNativeCallRing: vi.fn(),
   setNativeCallPeer: vi.fn(),
+}));
+const platform = vi.hoisted(() => ({ nativeService: false }));
+vi.mock("@/lib/platform", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/platform")>()),
+  hasNativeNotificationService: () => platform.nativeService,
 }));
 // The incoming-call overlay's identity surface pulls TanStack Query / the event
 // store; stub it so a ringing test doesn't need those providers.
@@ -118,10 +128,14 @@ vi.mock("@/hooks/useCall", () => ({
 }));
 
 const consume = vi.mocked(consumeNativeCallAnswer);
+const peek = vi.mocked(peekNativeCallRing);
 
 /** A real secret/room pair, so the integrity check is exercised, not stubbed. */
 const { secretHex, callId } = mintDmCall();
 const broker = "https://broker.example";
+/** The answer token only the Android Answer action's link carries. */
+const token = "7".repeat(64);
+const answerPath = (peer: string, id: string) => `/dm/${peer}?call=${id}&answer=${token}`;
 
 function renderAt(path: string) {
   return render(
@@ -143,25 +157,27 @@ describe("DmCallProvider Answer deep link", () => {
     activeCall.current = null;
     known.peers = [];
     consume.mockResolvedValue(null);
+    peek.mockResolvedValue(null);
+    _resetDmCallBusForTests();
   });
 
   it("does not join a call the service never rang", async () => {
     // The whole attack: a URL alone, with no offer in hand and no ticket —
     // which is also what every non-Android platform answers.
-    renderAt(`/dm/${pathPeer}?call=${callId}`);
+    renderAt(answerPath(pathPeer, callId));
     await settle();
     expect(joinDmCall).not.toHaveBeenCalled();
     expect(publish).not.toHaveBeenCalled();
   });
 
   it("asks the service about the call the URL names, and nothing else", async () => {
-    renderAt(`/dm/${pathPeer}?call=${callId}`);
+    renderAt(answerPath(pathPeer, callId));
     await settle();
-    expect(consume).toHaveBeenCalledWith(callId);
+    expect(consume).toHaveBeenCalledWith(callId, token);
   });
 
   it("ignores a call id that is not a room id", async () => {
-    renderAt(`/dm/${pathPeer}?call=not-hex`);
+    renderAt(`/dm/${pathPeer}?call=not-hex&answer=${token}`);
     await new Promise((r) => setTimeout(r, 0));
     expect(consume).not.toHaveBeenCalled();
     expect(joinDmCall).not.toHaveBeenCalled();
@@ -172,7 +188,7 @@ describe("DmCallProvider Answer deep link", () => {
     // identity-spoofing fix in one: the path names `pathPeer`, the ticket names
     // `realPeer`, and the call bar must name the latter.
     consume.mockResolvedValue({ peer: realPeer, secretHex, broker });
-    renderAt(`/dm/${pathPeer}?call=${callId}`);
+    renderAt(answerPath(pathPeer, callId));
     await waitFor(() => expect(joinDmCall).toHaveBeenCalledTimes(1));
     expect(joinDmCall).toHaveBeenCalledWith({
       peer: realPeer,
@@ -186,14 +202,14 @@ describe("DmCallProvider Answer deep link", () => {
     // The integrity check survives as a check — it is no longer the decision.
     const other = mintDmCall();
     consume.mockResolvedValue({ peer: realPeer, secretHex: other.secretHex, broker });
-    renderAt(`/dm/${pathPeer}?call=${callId}`);
+    renderAt(answerPath(pathPeer, callId));
     await settle();
     expect(joinDmCall).not.toHaveBeenCalled();
   });
 
   it("refuses a secret that is not 32 bytes of hex", async () => {
     consume.mockResolvedValue({ peer: realPeer, secretHex: "nope", broker });
-    renderAt(`/dm/${pathPeer}?call=${callId}`);
+    renderAt(answerPath(pathPeer, callId));
     await settle();
     expect(joinDmCall).not.toHaveBeenCalled();
   });
@@ -201,7 +217,7 @@ describe("DmCallProvider Answer deep link", () => {
   it("refuses a peer that is not a pubkey", async () => {
     // It would become a `p` tag on an event we seal and publish.
     consume.mockResolvedValue({ peer: "not-a-pubkey", secretHex, broker });
-    renderAt(`/dm/${pathPeer}?call=${callId}`);
+    renderAt(answerPath(pathPeer, callId));
     await settle();
     expect(joinDmCall).not.toHaveBeenCalled();
   });
@@ -212,14 +228,14 @@ describe("DmCallProvider Answer deep link", () => {
     ["not a URL", "broker.example"],
   ])("refuses a %s broker origin", async (_label, bad) => {
     consume.mockResolvedValue({ peer: realPeer, secretHex, broker: bad });
-    renderAt(`/dm/${pathPeer}?call=${callId}`);
+    renderAt(answerPath(pathPeer, callId));
     await settle();
     expect(joinDmCall).not.toHaveBeenCalled();
   });
 
   it("normalizes a broker carrying a path down to its origin", async () => {
     consume.mockResolvedValue({ peer: realPeer, secretHex, broker: "https://Broker.Example/rtc" });
-    renderAt(`/dm/${pathPeer}?call=${callId}`);
+    renderAt(answerPath(pathPeer, callId));
     await waitFor(() => expect(joinDmCall).toHaveBeenCalledTimes(1));
     expect(joinDmCall.mock.calls[0][0].broker).toBe("https://broker.example");
   });
@@ -227,9 +243,63 @@ describe("DmCallProvider Answer deep link", () => {
   it("is inert while another call is up", async () => {
     activeCall.current = { dm: { callId: "d".repeat(64), peer: realPeer } };
     consume.mockResolvedValue({ peer: realPeer, secretHex, broker });
-    renderAt(`/dm/${pathPeer}?call=${callId}`);
+    renderAt(answerPath(pathPeer, callId));
     await settle();
     expect(joinDmCall).not.toHaveBeenCalled();
+  });
+
+  describe("without the Answer action's token", () => {
+    const ring = vi.mocked(startIncomingRing);
+    const ticket = () => ({ peer: realPeer, secretHex, broker, createdAtMs: Date.now() });
+
+    it("rings the call the service is ringing instead of joining it", async () => {
+      // The full-screen intent fires untapped on a locked phone.
+      peek.mockResolvedValue(ticket());
+      renderAt(`/dm/${pathPeer}?call=${callId}`);
+      await waitFor(() => expect(ring).toHaveBeenCalledTimes(1));
+      expect(consume).not.toHaveBeenCalled();
+      expect(joinDmCall).not.toHaveBeenCalled();
+      expect(publish).not.toHaveBeenCalled();
+    });
+
+    it("joins only on Accept, as the peer the service verified", async () => {
+      peek.mockResolvedValue(ticket());
+      renderAt(`/dm/${pathPeer}?call=${callId}`);
+      fireEvent.click(await screen.findByRole("button", { name: "Accept call" }));
+      expect(joinDmCall).toHaveBeenCalledWith({ peer: realPeer, callId, secretHex, broker });
+    });
+
+    it("does not ring a ticket whose ring window has closed", async () => {
+      peek.mockResolvedValue({ ...ticket(), createdAtMs: Date.now() - DM_CALL_RING_MS - 1_000 });
+      renderAt(`/dm/${pathPeer}?call=${callId}`);
+      await waitFor(() => expect(peek).toHaveBeenCalled());
+      await new Promise((r) => setTimeout(r, 0));
+      expect(ring).not.toHaveBeenCalled();
+    });
+
+    it("does not answer an offer that arrives after the link", async () => {
+      // A caller knows their own call id: a link naming it, then the call.
+      known.peers = [realPeer];
+      renderAt(`/dm/${realPeer}?call=${callId}`);
+      await waitFor(() => expect(peek).toHaveBeenCalled());
+      act(() =>
+        deliverDmCallRumors([
+          {
+            rumorId: "e".repeat(64),
+            author: realPeer,
+            kind: KIND_DM_CALL,
+            content: "offer",
+            tags: [["call", callId], ["secret", secretHex], ["broker", broker]],
+            createdAt: Math.floor(Date.now() / 1000),
+            peers: [realPeer],
+            wrapId: "f".repeat(64),
+          },
+        ]),
+      );
+      await new Promise((r) => setTimeout(r, 20));
+      expect(ring).toHaveBeenCalledTimes(1);
+      expect(joinDmCall).not.toHaveBeenCalled();
+    });
   });
 });
 
@@ -304,6 +374,36 @@ describe("DmCallProvider ring gate", () => {
       act(() => deliverDmCallRumors([makeOffer(realPeer)]));
       expect(ring).toHaveBeenCalledTimes(1);
       expect(dismiss).not.toHaveBeenCalled();
+    });
+
+    describe("with the Android notification service", () => {
+      beforeEach(() => {
+        platform.nativeService = true;
+      });
+      afterEach(() => {
+        platform.nativeService = false;
+      });
+
+      it("rings only in the tray while the app is hidden", () => {
+        visibility = "hidden";
+        known.peers = [realPeer];
+        renderAt("/settings");
+        act(() => deliverDmCallRumors([makeOffer(realPeer)]));
+        expect(ring).not.toHaveBeenCalled();
+        expect(dismiss).not.toHaveBeenCalled();
+        expect(screen.getByRole("button", { name: "Accept call" })).toBeTruthy();
+      });
+
+      it("takes the ring over from the tray when the app comes on screen", () => {
+        visibility = "hidden";
+        known.peers = [realPeer];
+        renderAt("/settings");
+        act(() => deliverDmCallRumors([makeOffer(realPeer)]));
+        visibility = "visible";
+        act(() => void document.dispatchEvent(new Event("visibilitychange")));
+        expect(ring).toHaveBeenCalledTimes(1);
+        expect(dismiss).toHaveBeenCalledWith(callId);
+      });
     });
 
     it.each(["Accept call", "Decline call"])("is dropped on %s, without waiting for the relays", (name) => {

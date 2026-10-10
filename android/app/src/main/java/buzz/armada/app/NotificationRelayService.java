@@ -239,7 +239,7 @@ public class NotificationRelayService extends Service {
     // Ring only while the offer is at most this old (the rumor's REAL
     // created_at); an older — but NIP-40-unexpired — offer surfaces as a
     // "Missed call" line in the conversation's notification instead.
-    private static final long CALL_RING_WINDOW_MS = 60_000;
+    static final long CALL_RING_WINDOW_MS = 60_000;
     // Dedicated channel: IMPORTANCE_HIGH with the device RINGTONE, not the
     // message blip, so an incoming call sounds like a call.
     static final String CALL_CHANNEL_ID = "armada_calls";
@@ -4339,7 +4339,8 @@ public class NotificationRelayService extends Service {
         // the router is reachable on can produce one. The vetting that makes
         // this an authorization already happened above — fresh, a known peer, with
         // a well-formed secret and an https broker.
-        ArmadaNotificationPlugin.setCallAnswer(this, callId, peer, secret, broker);
+        final String answerToken =
+                ArmadaNotificationPlugin.setCallAnswer(this, callId, peer, secret, broker, tsMs);
         resolveAuthor(peer, relayUrl, profile -> {
             // Cancelled (or replaced) while the profile resolved.
             if (!callId.equals(ringingCallId)) return;
@@ -4353,10 +4354,21 @@ public class NotificationRelayService extends Service {
             // this app can read, rather than in the URL. A tap is then a
             // request to answer a specific call; whether that call is one the
             // service actually rang is answered by the ticket, not by the link.
-            Intent answer = deepLinkIntent(dmRoute(peer) + "?call=" + uriEncode(callId));
+            // Only this action carries the answer token.
+            String ringPath = dmRoute(peer) + "?call=" + uriEncode(callId);
+            Intent answer = deepLinkIntent(answerToken != null
+                    ? ringPath + "&answer=" + uriEncode(answerToken)
+                    : ringPath);
             answer.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
             PendingIntent answerPi = PendingIntent.getActivity(
                     this, INCOMING_CALL_NOTIF_ID, answer,
+                    PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+
+            // Body tap: rings in-app, no token.
+            Intent open = deepLinkIntent(ringPath);
+            open.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+            PendingIntent openPi = PendingIntent.getActivity(
+                    this, INCOMING_CALL_NOTIF_ID + 2, open,
                     PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
 
             // Decline: handled by the service itself (no WebView needed) —
@@ -4373,6 +4385,18 @@ public class NotificationRelayService extends Service {
             // Ring only as long as the offer stays fresh; the caller's own
             // give-up ("end") usually lands first and cancels explicitly.
             long timeout = Math.max(5_000, tsMs + CALL_RING_WINDOW_MS - System.currentTimeMillis());
+
+            // Full-screen fires untapped: the lock-screen ringer, not MainActivity.
+            Intent ringer = new Intent(this, IncomingCallActivity.class);
+            ringer.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_NO_USER_ACTION);
+            ringer.putExtra(EXTRA_CALL_ID, callId);
+            ringer.putExtra(IncomingCallActivity.EXTRA_NAME, name);
+            ringer.putExtra(IncomingCallActivity.EXTRA_RING_UNTIL_MS, System.currentTimeMillis() + timeout);
+            ringer.putExtra(IncomingCallActivity.EXTRA_ANSWER, answer);
+            ringer.putExtra(IncomingCallActivity.EXTRA_DECLINE, decline);
+            PendingIntent ringerPi = PendingIntent.getActivity(
+                    this, INCOMING_CALL_NOTIF_ID + 3, ringer,
+                    PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
             NotificationCompat.Builder b = new NotificationCompat.Builder(this, CALL_CHANNEL_ID)
                     .setSmallIcon(R.drawable.ic_stat_armada)
                     .setContentTitle(name)
@@ -4383,15 +4407,18 @@ public class NotificationRelayService extends Service {
                     .setOnlyAlertOnce(true)
                     .setWhen(tsMs)
                     .setTimeoutAfter(timeout)
-                    .setContentIntent(answerPi)
+                    .setContentIntent(openPi)
                     // The full phone-call surface: on a locked/idle device the
                     // activity launches full screen; unlocked it heads-up.
-                    .setFullScreenIntent(answerPi, true)
+                    .setFullScreenIntent(ringerPi, true)
                     .setStyle(NotificationCompat.CallStyle.forIncomingCall(caller, declinePi, answerPi));
             NotificationManager m = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
             try {
                 if (m != null) {
-                    m.notify(INCOMING_CALL_NOTIF_ID, b.build());
+                    Notification ring = b.build();
+                    // Loop the ringtone and vibration until the ring is cancelled.
+                    ring.flags |= Notification.FLAG_INSISTENT;
+                    m.notify(INCOMING_CALL_NOTIF_ID, ring);
                     healthLastPresentedAtMs = System.currentTimeMillis();
                     // The caller's "it rang" receipt — what turns their
                     // timeout into "No answer" rather than "Couldn't reach".

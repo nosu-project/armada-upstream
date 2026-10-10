@@ -71,6 +71,7 @@ public class ArmadaCallPlugin extends Plugin {
         if (audioSession != null) audioSession.end();
         // A destroyed WebView has taken the LiveKit room with it, so the
         // notification would be advertising a call that no longer exists.
+        CallForegroundService.markStopping();
         try {
             getContext().stopService(new Intent(getContext(), CallForegroundService.class));
         } catch (Exception ignored) {
@@ -165,6 +166,7 @@ public class ArmadaCallPlugin extends Plugin {
     public void stop(PluginCall call) {
         if (routes != null) routes.end();
         if (audioSession != null) audioSession.end();
+        CallForegroundService.markStopping();
         try {
             getContext().stopService(new Intent(getContext(), CallForegroundService.class));
         } catch (Exception e) {
