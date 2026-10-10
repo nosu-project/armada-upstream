@@ -180,6 +180,10 @@ const ROOM_ALERT_WINDOW_MS = 120_000;
 // headroom keeps a sustained flood's window full so it stays quiet until it
 // genuinely stops, instead of the budget refilling mid-flood.
 const ROOM_ALERT_MAX_TRACKED = 64;
+// Bound on alert/ entries, oldest-written dropped first like seen/. A re-put
+// moves an entry to the end of Cache.keys(), so only rooms quiet for longer
+// than this many others are dropped — and a dropped room merely alerts again.
+const MAX_ROOM_ALERT_ENTRIES = 128;
 
 /** Increment the Home-Screen badge without needing a live page. */
 async function incrementAppBadge(): Promise<void> {
@@ -621,7 +625,21 @@ async function roomAlertSilent(tag: string | undefined): Promise<boolean> {
     const silent = recent.length >= ROOM_ALERT_MAX;
     recent.push(now);
     if (recent.length > ROOM_ALERT_MAX_TRACKED) recent = recent.slice(-ROOM_ALERT_MAX_TRACKED);
+    // Delete before put so the entry moves to the end of Cache.keys() on every
+    // engine, which is what makes the oldest-first trim below drop quiet rooms.
+    await cache.delete(url);
     await cache.put(url, new Response(JSON.stringify(recent)));
+    try {
+      const prefix = stateUrl(ROOM_ALERT_PATH);
+      const entries = (await cache.keys()).filter((request) => request.url.startsWith(prefix));
+      if (entries.length > MAX_ROOM_ALERT_ENTRIES) {
+        await Promise.all(
+          entries.slice(0, entries.length - MAX_ROOM_ALERT_ENTRIES).map((request) => cache.delete(request)),
+        );
+      }
+    } catch {
+      // No enumeration — the entries just grow slowly.
+    }
     return silent;
   } catch {
     return false;
