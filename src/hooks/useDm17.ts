@@ -146,6 +146,20 @@ const inflightSync = new Map<string, { pass: Promise<boolean>; full: boolean }>(
 const seenWrapIds = new Map<string, Set<string>>();
 const seenWrapsLoaded = new Map<string, Promise<void>>();
 
+/**
+ * Drops per-account sync bookkeeping and Mini App peer signals held in memory; for
+ * logout's purge, after which a stale seen-set would skip wraps whose rumors are gone.
+ */
+export function clearDm17SessionState(): void {
+  lastFullScanAt.clear();
+  lastForegroundSyncAt.clear();
+  lastSyncAt.clear();
+  lastSyncDeclined.clear();
+  seenWrapIds.clear();
+  seenWrapsLoaded.clear();
+  dmPeerSignalStore.clear();
+}
+
 function seenSetFor(self: string): Set<string> {
   let set = seenWrapIds.get(self);
   if (!set) seenWrapIds.set(self, (set = new Set()));
@@ -198,6 +212,8 @@ export const DM_WEBXDC_PEER_SCOPE = "dm:webxdc-peer";
 
 const dmPeerSignalStore = new Map<string, PeerSignalEvent[]>();
 const DM_PEER_SIGNAL_MAX = 100;
+/** Conversation×topic keys kept; the least recently signalled is dropped past it. */
+const DM_PEER_SIGNAL_KEYS_MAX = 256;
 
 function peerSignalKey(conversation: string, topic: string): string {
   return `${conversation}\u0000${topic}`;
@@ -223,6 +239,8 @@ function dispatchDmPeerSignal(dm: OpenedDm): void {
 
   const key = peerSignalKey(conversation, signal.topic);
   const existing = dmPeerSignalStore.get(key) ?? [];
+  // Re-inserted so Map order is recency order for the key cap.
+  dmPeerSignalStore.delete(key);
   existing.push({
     author: dm.author,
     content: peerSignalContent(signal.topic, signal.op === "ad" ? signal.addr : undefined),
@@ -232,6 +250,9 @@ function dispatchDmPeerSignal(dm: OpenedDm): void {
     existing.splice(0, existing.length - DM_PEER_SIGNAL_MAX);
   }
   dmPeerSignalStore.set(key, existing);
+  while (dmPeerSignalStore.size > DM_PEER_SIGNAL_KEYS_MAX) {
+    dmPeerSignalStore.delete(dmPeerSignalStore.keys().next().value!);
+  }
 
   emitWireScopes([dmWebxdcPeerScope(conversation, signal.topic), DM_WEBXDC_PEER_SCOPE]);
 }

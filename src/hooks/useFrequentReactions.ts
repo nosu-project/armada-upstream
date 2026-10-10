@@ -188,7 +188,7 @@ export function useFrequentReactions(pubkey: string | undefined, limit = 3): Qui
   return useMemo(() => quickReactionRow(stored, NO_PINS, limit), [stored, limit]);
 }
 
-/** Test seam. */
+/** Cleared on logout by `purgeClientStorage`; also a test seam. */
 export function resetFrequentReactionsCache(): void {
   cache.clear();
 }

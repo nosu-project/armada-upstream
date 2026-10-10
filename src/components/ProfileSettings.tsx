@@ -416,6 +416,12 @@ export function ProfileSettings({ onSaved, saveLabel, centerSave, showNip05 = tr
   const { toast } = useToast();
 
   const [cropState, setCropState] = useState<CropState | null>(null);
+  // Revoked when replaced, dismissed or unmounted: the URL pins the whole file.
+  const cropSrc = cropState?.imageSrc;
+  useEffect(() => {
+    if (!cropSrc) return;
+    return () => URL.revokeObjectURL(cropSrc);
+  }, [cropSrc]);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [uploadingFieldIndex, setUploadingFieldIndex] = useState<number>(-1);
   const paymentTargetsRef = useRef<PaymentTargetsEditorHandle>(null);
@@ -573,15 +579,13 @@ export function ProfileSettings({ onSaved, saveLabel, centerSave, showNip05 = tr
 
   const handleCropConfirm = async (blob: Blob) => {
     if (!cropState) return;
-    const { field, imageSrc } = cropState;
-    URL.revokeObjectURL(imageSrc);
+    const { field } = cropState;
     setCropState(null);
     const file = new File([blob], `${field}.jpg`, { type: 'image/jpeg' });
     await uploadImage(file, field);
   };
 
   const handleCropCancel = () => {
-    if (cropState) URL.revokeObjectURL(cropState.imageSrc);
     setCropState(null);
   };
 

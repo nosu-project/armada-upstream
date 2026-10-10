@@ -42,6 +42,16 @@ const MISS_RETRY_MS = 60_000;
 const MISS_RETRY_MAX_MS = 30 * 60_000;
 /** Consecutive empty rounds per pubkey (cleared when found). */
 const missAttempts = new Map<string, number>();
+/**
+ * Cap on each per-pubkey session map, oldest first. Forgetting a pubkey only
+ * errs toward "due": a possibly early re-ask, never a missed one.
+ */
+const SESSION_MAP_MAX = 10_000;
+
+function capFifo(collection: Map<string, unknown> | Set<string>): void {
+  if (collection.size <= SESSION_MAP_MAX) return;
+  collection.delete(collection.keys().next().value as string);
+}
 /** Hinted relays asked per run, at most. */
 const MAX_HINT_RELAYS = 6;
 /** Pubkeys per REQ against a hinted relay. */
@@ -183,6 +193,7 @@ async function runProfileSync(signal: AbortSignal): Promise<void> {
     found.add(ev.pubkey);
     // Before the early return, so a candidate-less round still teaches the TTL.
     foundProfiles.add(ev.pubkey);
+    capFifo(foundProfiles);
     seedAuthorCache(c.queryClient, ev.pubkey, ev);
   }
 
@@ -253,7 +264,9 @@ async function runProfileSync(signal: AbortSignal): Promise<void> {
   for (const [pk, ev] of newest) {
     stamps.set(pk, at);
     stampedGeneration.set(pk, hintGeneration);
+    capFifo(stampedGeneration);
     foundProfiles.add(pk);
+    capFifo(foundProfiles);
     missAttempts.delete(pk);
     seedAuthorCache(c.queryClient, pk, ev);
   }
@@ -263,7 +276,9 @@ async function runProfileSync(signal: AbortSignal): Promise<void> {
     if (newest.has(pk)) continue;
     stamps.set(pk, at);
     stampedGeneration.set(pk, hintGeneration);
+    capFifo(stampedGeneration);
     missAttempts.set(pk, (missAttempts.get(pk) ?? 0) + 1);
+    capFifo(missAttempts);
   }
 }
 
@@ -275,13 +290,21 @@ registerSyncTopic(PROFILE_SYNC_TOPIC, {
   handler: ({ signal }) => runProfileSync(signal),
 });
 
-/** Test seam: drop all demand, hints, context, and session generations. */
-export function _resetProfileSyncForTests(): void {
-  demand.clear();
-  hintRelays.clear();
+/**
+ * Forget this session's per-pubkey bookkeeping (logout). Demand, hints and the
+ * context stay: they belong to mounted views, which keep syncing.
+ */
+export function clearProfileSyncMemory(): void {
   stampedGeneration.clear();
   foundProfiles.clear();
   missAttempts.clear();
+}
+
+/** Test seam: drop all demand, hints, context, and session generations. */
+export function _resetProfileSyncForTests(): void {
+  clearProfileSyncMemory();
+  demand.clear();
+  hintRelays.clear();
   hintGeneration = 0;
   ctx = undefined;
   demandHolds = 0;

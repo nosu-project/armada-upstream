@@ -16,7 +16,24 @@ import { clearOutgoingVerifyMemory } from "@/concord/lib/outgoingVerify";
 import { clearPendingGuestbookJoinMemory } from "@/concord/lib/pendingGuestbookJoin";
 import { clearPendingJoins } from "@/concord/lib/pendingJoins";
 import { clearRumorStoreMemory } from "@/concord/lib/rumorStore";
+import { clearCommunityListMemory } from "@/concord/hooks/useCommunityList";
+import { clearControlPlaneMemory } from "@/concord/hooks/useControlPlane";
+import { clearTimelineSnapshotMemory } from "@/concord/hooks/timelineSnapshot";
+import { clearChatDecodeMemo } from "@/concord/lib/chat";
+import { clearControlMemos } from "@/concord/lib/control";
+import { clearGroupKeyMemory } from "@/concord/lib/groupKeyPersist";
+import { clearStreamAuthRegistry } from "@/concord/lib/streamAuth";
+import { clearBuzzMediaCache } from "@/buzz/media";
+import { clearDm17SessionState } from "@/hooks/useDm17";
+import { resetFrequentReactionsCache } from "@/hooks/useFrequentReactions";
+import { clearMuteListMemos } from "@/hooks/useMuteList";
+import { resetSettingsKeysAnnouncements } from "@/hooks/useSettingsKeys";
+import { clearGroupListMemo } from "@/hooks/useUserGroupList";
+import { clearAttachmentCache } from "@/lib/encryptedMedia";
+import { closeAllNip46Transports } from "@/lib/nip46Transport";
+import { clearDm17ThreadSnapshotMemory } from "@/lib/nip17/threadSnapshot";
 import { clearSettingsRootMemory } from "@/lib/settingsRootStore";
+import { clearProfileSyncMemory } from "@/sync/profileSync";
 import { clearShareShortcuts } from "@/lib/shareTarget";
 import { writePushDisabledFlag } from "@/lib/swPushDisabled";
 import { WEB_PUSH_RETIREMENT_KEY } from "@/lib/webPushEndpoint";
@@ -113,12 +130,36 @@ function purgeLocalStorage(): void {
   }
 }
 
+/** Session memos holding decrypted data or the account's keys; run before and after the purge. */
+function clearSessionMemos(): void {
+  clearStreamAuthRegistry();
+  clearChatDecodeMemo();
+  clearControlMemos();
+  clearControlPlaneMemory();
+  clearCommunityListMemory();
+  clearTimelineSnapshotMemory();
+  clearDm17ThreadSnapshotMemory();
+  clearDm17SessionState();
+  clearMuteListMemos();
+  clearGroupListMemo();
+  clearAttachmentCache();
+  clearBuzzMediaCache();
+  clearProfileSyncMemory();
+  resetFrequentReactionsCache();
+  resetSettingsKeysAnnouncements();
+}
+
 /**
  * Purge all client-side persistence on logout (caches, decrypt cache, read
  * state, drafts, prefs, the push gateway's per-install client key, …).
  * `armada:login` is left to the caller's `removeLogin`.
  */
 export async function purgeClientStorage(): Promise<void> {
+  // First: latches group-key persistence off so no pending save rewrites
+  // derived stream secrets into the store this purge empties.
+  clearGroupKeyMemory();
+  closeAllNip46Transports();
+  clearSessionMemos();
   clearRenderedPlaintext();
   clearRecentDecrypts();
   clearFoldedMemory();
@@ -163,4 +204,5 @@ export async function purgeClientStorage(): Promise<void> {
   clearPendingGuestbookJoinMemory();
   clearRevealedMedia();
   clearSettingsRootMemory();
+  clearSessionMemos();
 }
