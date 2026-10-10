@@ -6,7 +6,7 @@ import { useFollowList } from "@/hooks/useFollowList";
 import { toast } from "@/hooks/useToast";
 import { impact } from "@/lib/haptics";
 
-/** Shared by `FollowButton` and the profile card's unfollow menu entry. */
+/** Backs the profile card's unfollow menu entry. */
 export function useFollowToggle(pubkey: string) {
   const { user } = useCurrentUser();
   const { data: followData } = useFollowList();

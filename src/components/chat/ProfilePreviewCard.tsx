@@ -8,7 +8,6 @@ import { BotPill } from "@/components/BotPill";
 import { EmojifiedText } from "@/components/chat/CustomEmoji";
 import { UserModerationMenuSection } from "@/components/chat/ModerationMenuSection";
 import { RolePickerItems } from "@/components/chat/RolePickerItems";
-import { FollowButton } from "@/components/FollowButton";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { FallbackImage } from "@/components/ui/FallbackImage";
@@ -138,7 +137,6 @@ function ProfilePreviewBody({
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-52">
-              {/* Stays open so the flip back to Follow is visible. */}
               {!isSelf && isFollowing && (
                 <DropdownMenuItem disabled={followPending} onSelect={() => void toggleFollow()}>
                   <UserMinus className="size-4" />
@@ -305,9 +303,6 @@ function ProfilePreviewBody({
             </Button>
           </div>
         )}
-
-        {/* Own row: the card is w-72. Hides itself for self/logged-out/following. */}
-        <FollowButton pubkey={pubkey} className="mt-2 w-full h-8" />
 
         {/* Full profile, plus ditto.pub and the person's nsite when published. */}
         <div className="mt-2 flex items-center gap-2">

@@ -541,21 +541,54 @@ async function existingRoomLines(tag: string): Promise<string[] | undefined> {
 }
 
 /**
- * Whether this push must display something. Only a runtime that reports
- * `userVisibleOnly: false` (Tenna on Android, NAPP.md) allows silence; every
- * browser punishes a silent push (revocation, a generic banner, a quota), and
- * a runtime that says nothing is assumed to as well.
+ * Whether this push must display something. A runtime reporting
+ * `userVisibleOnly: false` (Tenna on Android, NAPP.md) allows silence. WebKit
+ * revokes the subscription after a few silent pushes, with no exemption.
+ * Chromium and Gecko exempt a push while a page of the origin is visible or one
+ * of its notifications is still displayed (Chromium's
+ * PushMessagingNotificationManager, Gecko's PushService quota); outside that,
+ * Chromium posts its own generic banner and Gecko expires the subscription.
  */
 async function mustShowNotification(): Promise<boolean> {
+  let sub: PushSubscription | null | undefined;
   try {
-    const sub = await self.registration.pushManager?.getSubscription();
-    return sub?.options?.userVisibleOnly !== false;
+    sub = await self.registration.pushManager?.getSubscription();
   } catch {
     return true;
   }
+  if (sub?.options?.userVisibleOnly === false) return false;
+  if (!sub || isApplePushEndpoint(sub.endpoint)) return true;
+  return !(await silentPushExempt());
 }
 
-/** {@link mustShowNotification}, asked at most once per push. */
+function isApplePushEndpoint(endpoint: string): boolean {
+  try {
+    return new URL(endpoint).hostname.endsWith("push.apple.com");
+  } catch {
+    return false;
+  }
+}
+
+async function silentPushExempt(): Promise<boolean> {
+  try {
+    const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+    if (windows.some((client) => (client as WindowClient).visibilityState === "visible")) return true;
+  } catch {
+    // Fall through to the displayed-notification check.
+  }
+  try {
+    if (typeof self.registration.getNotifications !== "function") return false;
+    return (await self.registration.getNotifications()).length > 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * {@link mustShowNotification}, asked at most once per push. Settle it before
+ * the push shows anything: a notification this push itself posts (and may
+ * withdraw) must not count as one already on screen.
+ */
 function mustShowOnce(): () => Promise<boolean> {
   let answer: Promise<boolean> | undefined;
   return () => (answer ??= mustShowNotification());
@@ -639,6 +672,7 @@ async function handlePush(
     await dropOwnSubscription();
     return;
   }
+  await mustShow();
 
   if (await pushPlaneUnready(runtime, data)) {
     await quietSync(mustShow);
