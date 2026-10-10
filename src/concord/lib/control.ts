@@ -211,10 +211,14 @@ export function openControlEditions(opened: OpenedEvent[]): ParsedEdition[] {
   return out;
 }
 
-/** Test seam: empty the parsed-edition memo, i.e. what a reload does to it. */
-export function _resetControlMemosForTests(): void {
+/** Empty the parsed-edition and fold memos (decrypted state), i.e. what a reload does. Logout. */
+export function clearControlMemos(): void {
   parsedEditionMemo.clear();
+  foldMemo.clear();
 }
+
+/** Test seam. */
+export const _resetControlMemosForTests = clearControlMemos;
 
 /** Test seam: current parsed-edition memo entry count, for the unbounded-growth guard. */
 export function _parsedEditionMemoSizeForTests(): number {

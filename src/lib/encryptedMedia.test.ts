@@ -3,6 +3,7 @@ import { bytesToHex } from "@noble/hashes/utils.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  clearAttachmentCache,
   decryptAttachmentToObjectURL,
   decryptBytes,
   encryptBytes,
@@ -10,6 +11,8 @@ import {
   fetchCapped,
   FileTooLargeError,
   peekAttachmentObjectURL,
+  peekPrimedAttachment,
+  primeAttachment,
   readCapped,
   verifyPlaintextHash,
 } from "./encryptedMedia";
@@ -326,5 +329,32 @@ describe("peekAttachmentObjectURL", () => {
     // Same blob, different nonce: a different plaintext, so it must not hit.
     expect(peekAttachmentObjectURL(url, { algorithm: "aes-gcm", key, nonce: "c".repeat(32) }))
       .toBeUndefined();
+  });
+});
+
+describe("clearAttachmentCache", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("revokes every cached object URL at once and forgets the entries", () => {
+    const revoked: string[] = [];
+    let n = 0;
+    class StubURL extends URL {
+      static override createObjectURL = () => `blob:clear-${++n}`;
+      static override revokeObjectURL = (u: string) => void revoked.push(u);
+    }
+    vi.stubGlobal("URL", StubURL);
+    clearAttachmentCache(); // earlier suites' entries
+    revoked.length = 0;
+    const enc = { algorithm: "aes-gcm", key: "1".repeat(64), nonce: "2".repeat(32) };
+    primeAttachment("https://blossom.example/p1", enc, new Blob([new Uint8Array(8)]));
+    primeAttachment("https://blossom.example/p2", undefined, new Blob([new Uint8Array(8)]));
+    const urls = [peekPrimedAttachment("https://blossom.example/p1", enc), peekPrimedAttachment("https://blossom.example/p2", undefined)];
+
+    clearAttachmentCache();
+
+    expect(revoked.sort()).toEqual([...urls].sort());
+    expect(peekPrimedAttachment("https://blossom.example/p1", enc)).toBeUndefined();
+    expect(peekAttachmentObjectURL("https://blossom.example/p1", enc)).toBeUndefined();
+    expect(peekPrimedAttachment("https://blossom.example/p2", undefined)).toBeUndefined();
   });
 });

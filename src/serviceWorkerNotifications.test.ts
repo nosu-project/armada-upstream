@@ -58,6 +58,8 @@ function loadWorker(options: {
   noPushManager?: boolean;
   pushDisabled?: boolean;
   priorNotifications?: Array<{ tag: string; data: Record<string, unknown>; close?: () => void }>;
+  /** Add each shown notification to `priorNotifications`, like a real tray. */
+  trackShown?: boolean;
   /**
    * The event a relay answers the worker's by-id REQ with (the fetch path for
    * pushes the gateway didn't inline). Its `id` must match the push's
@@ -79,6 +81,13 @@ function loadWorker(options: {
     if (showFailures > 0) {
       showFailures -= 1;
       throw new Error("show failed");
+    }
+    if (options.trackShown && options.priorNotifications) {
+      const tag = String(_options.tag ?? "");
+      const tray = options.priorNotifications;
+      const existing = tray.findIndex((n) => n.tag === tag);
+      if (existing >= 0) tray.splice(existing, 1);
+      tray.push({ tag, data: (_options.data ?? {}) as Record<string, unknown> });
     }
   });
   const setAppBadge = vi.fn(async () => undefined);
@@ -161,8 +170,8 @@ function loadWorker(options: {
       },
       ...(options.priorNotifications
         ? {
-          getNotifications: async ({ tag }: { tag: string }) =>
-            options.priorNotifications!.filter((n) => n.tag === tag),
+          getNotifications: async (filter?: { tag?: string }) =>
+            options.priorNotifications!.filter((n) => filter?.tag === undefined || n.tag === filter.tag),
         }
         : {}),
     },
@@ -638,17 +647,55 @@ describe("Web Push suppression", () => {
     }
   });
 
-  it("shows the quiet sync on non-Apple endpoints too", async () => {
-    // Chrome and Firefox punish a silent push as well (a generic banner, a
-    // quota), and report `userVisibleOnly: true` like Safari.
+  it("shows the quiet sync on non-Apple endpoints with no page visible", async () => {
+    // Chrome posts its own generic banner and Firefox spends quota when a
+    // push shows nothing with no visible page or displayed notification.
     const worker = loadWorker({
       ownEventId: "own-wrap",
       pushEndpoint: "https://fcm.googleapis.com/fcm/send/abc",
+      clients: [{ url: "https://armada.buzz/dm", visibilityState: "hidden", focused: false }],
+      priorNotifications: [],
     });
     await worker.push({ scope: "dm", event_id: "own-wrap", url: "/dm" });
     expect(worker.showNotification).toHaveBeenCalledTimes(1);
     const [, opts] = worker.showNotification.mock.calls[0] as unknown as [string, Record<string, unknown>];
     expect(opts).toMatchObject({ body: "Messages synced", silent: true, renotify: false });
+  });
+
+  it.each([
+    "https://fcm.googleapis.com/fcm/send/abc",
+    "https://updates.push.services.mozilla.com/wpush/v2/abc",
+  ])("stays silent on %s while an Armada page is visible", async (pushEndpoint) => {
+    const worker = loadWorker({
+      ownEventId: "own-wrap",
+      pushEndpoint,
+      clients: [{ url: "https://armada.buzz/dm", visibilityState: "visible", focused: true }],
+    });
+    await worker.push({ scope: "dm", event_id: "own-wrap", url: "/dm" });
+    expect(worker.showNotification).not.toHaveBeenCalled();
+  });
+
+  it("stays silent on a non-Apple endpoint while an Armada notification is displayed", async () => {
+    const worker = loadWorker({
+      ownEventId: "own-wrap",
+      pushEndpoint: "https://fcm.googleapis.com/fcm/send/abc",
+      priorNotifications: [{ tag: "dm:peer", data: {} }],
+    });
+    await worker.push({ scope: "dm", event_id: "own-wrap", url: "/dm" });
+    expect(worker.showNotification).not.toHaveBeenCalled();
+  });
+
+  it("keeps the quiet sync on Apple endpoints even while a page is visible", async () => {
+    const worker = loadWorker({
+      ownEventId: "own-wrap",
+      pushEndpoint: "https://web.push.apple.com/QKw71NdV3vO",
+      clients: [{ url: "https://armada.buzz/dm", visibilityState: "visible", focused: true }],
+      priorNotifications: [{ tag: "dm:peer", data: {} }],
+    });
+    await worker.push({ scope: "dm", event_id: "own-wrap", url: "/dm" });
+    expect(worker.showNotification).toHaveBeenCalledTimes(1);
+    const [, opts] = worker.showNotification.mock.calls[0] as unknown as [string, Record<string, unknown>];
+    expect(opts.body).toBe("Messages synced");
   });
 
   it("shows the quiet sync when the runtime has no pushManager", async () => {
@@ -1448,6 +1495,31 @@ describe("Fetched (non-inlined) encrypted pushes", () => {
     expect(JSON.stringify([title, opts])).not.toContain("hi there");
     expect(JSON.stringify([title, opts])).not.toContain("Alice");
     expect(staticEntry.close).not.toHaveBeenCalled();
+  });
+
+  it("does not count its own wake-up as a displayed notification on a non-Apple endpoint", async () => {
+    // Withdrawing the wake-up would leave the push showing nothing, which
+    // Chrome answers with its generic banner.
+    const worker = loadWorker({
+      runtime: { preparePush: vi.fn(async () => ({ ...prepared, drop: true })) },
+      pushConfig: { self: "me" },
+      relayEvent: { id: "wrap-own", kind: 1059, tags: [], content: "x" },
+      priorNotifications: [],
+      trackShown: true,
+      pushEndpoint: "https://fcm.googleapis.com/fcm/send/abc",
+    });
+
+    await worker.push({
+      scope: "dm",
+      tag: "sub-1",
+      event_id: "wrap-own",
+      relays: ["wss://relay.example"],
+      url: "/dm",
+    });
+
+    expect(worker.showNotification).toHaveBeenCalledTimes(2);
+    const [, opts] = worker.showNotification.mock.calls[1] as unknown as [string, Record<string, unknown>];
+    expect(opts).toMatchObject({ body: "Messages synced", tag: "wrap-own" });
   });
 
   it("leaves the static wake-up when the wrap cannot be opened", async () => {

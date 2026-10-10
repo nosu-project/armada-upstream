@@ -67,6 +67,16 @@
 
         </activity>
 
+        <!-- The incoming-call full-screen surface. Its own task, so ending the
+             ring leaves nothing behind the keyguard to open on unlock. -->
+        <activity
+            android:name=".IncomingCallActivity"
+            android:exported="false"
+            android:taskAffinity=""
+            android:excludeFromRecents="true"
+            android:launchMode="singleInstance"
+            android:theme="@android:style/Theme.DeviceDefault.NoActionBar" />
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"

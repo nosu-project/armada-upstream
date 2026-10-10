@@ -30,6 +30,7 @@ import android.os.HandlerThread;
 import android.os.IBinder;
 import android.os.SystemClock;
 import android.util.Log;
+import android.util.LruCache;
 
 import androidx.core.app.NotificationCompat;
 import androidx.core.app.Person;
@@ -86,6 +87,7 @@ import okhttp3.Callback;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.Response;
+import okhttp3.ResponseBody;
 import okhttp3.WebSocket;
 import okhttp3.WebSocketListener;
 
@@ -228,6 +230,8 @@ public class NotificationRelayService extends Service {
     private static final long ALERT_BURST_WINDOW_MS = 120_000L;
     /** Bound per room; entries older than the window are pruned on every check. */
     private static final int ALERT_BURST_MAX_TRACKED = 256;
+    /** Room count past which quiet rooms' keys are swept out of a budget map. */
+    private static final int ALERT_BURST_SWEEP_AT = 64;
     private final java.util.Map<String, java.util.ArrayDeque<Long>> alertBurst = new java.util.HashMap<>();
     private final java.util.Map<String, java.util.ArrayDeque<Long>> mentionBurst = new java.util.HashMap<>();
 
@@ -239,7 +243,7 @@ public class NotificationRelayService extends Service {
     // Ring only while the offer is at most this old (the rumor's REAL
     // created_at); an older — but NIP-40-unexpired — offer surfaces as a
     // "Missed call" line in the conversation's notification instead.
-    private static final long CALL_RING_WINDOW_MS = 60_000;
+    static final long CALL_RING_WINDOW_MS = 60_000;
     // Dedicated channel: IMPORTANCE_HIGH with the device RINGTONE, not the
     // message blip, so an incoming call sounds like a call.
     static final String CALL_CHANNEL_ID = "armada_calls";
@@ -538,7 +542,7 @@ public class NotificationRelayService extends Service {
     // CommunityRef.imageCacheKey(). Populated async; used as the conversation
     // shortcut's avatar (the left icon on Android 11+). Kept separate from
     // avatarCache (sender avatars).
-    private final Map<String, Bitmap> groupImageCache = new HashMap<>();
+    private final LruCache<String, Bitmap> groupImageCache = bitmapCache(4 * 1024 * 1024);
     // In-flight community-icon fetches (by imageCacheKey) so a burst of messages
     // in one community doesn't kick off the same fetch repeatedly.
     private final Set<String> groupImageInFlight = new HashSet<>();
@@ -592,7 +596,18 @@ public class NotificationRelayService extends Service {
     // persistent disk cache (avatarDir) so a warm avatar survives service
     // restarts and lands in the FIRST, alerting post instead of a later silent
     // re-post.
-    private final Map<String, Bitmap> avatarCache = new HashMap<>();
+    // Bounded by decoded bytes; a miss falls back to avatarDir, not the network.
+    private final LruCache<String, Bitmap> avatarCache = bitmapCache(6 * 1024 * 1024);
+
+    /** A bitmap LRU bounded by decoded size. LruCache synchronizes internally. */
+    private static LruCache<String, Bitmap> bitmapCache(int maxBytes) {
+        return new LruCache<String, Bitmap>(maxBytes) {
+            @Override
+            protected int sizeOf(String key, Bitmap value) {
+                return Math.max(1, value.getByteCount());
+            }
+        };
+    }
     // Decoded, circle-cropped avatars persisted across restarts (getCacheDir()).
     private File avatarDir;
     // Avatar/image HTTP client: derived from httpClient (shares the dispatcher +
@@ -1547,6 +1562,17 @@ public class NotificationRelayService extends Service {
     }
 
     @Override
+    public void onTrimMemory(int level) {
+        super.onTrimMemory(level);
+        // Both caches re-fill from avatarDir, so dropping them costs a disk
+        // decode, never a refetch. RUNNING_LOW and every background level.
+        if (level >= TRIM_MEMORY_RUNNING_LOW) {
+            avatarCache.evictAll();
+            groupImageCache.evictAll();
+        }
+    }
+
+    @Override
     public void onDestroy() {
         super.onDestroy();
         // `instance` is read by startIfConfigured on the main thread, so it is
@@ -1626,6 +1652,9 @@ public class NotificationRelayService extends Service {
             selfTopicWindow.clear();
             handler.removeCallbacks(flushSelfTopicDocsRunnable);
             selfTopicFlushPosted = false;
+            // Decoded images of the outgoing account's contacts and communities.
+            avatarCache.evictAll();
+            groupImageCache.evictAll();
         }
         userPubkey = nextUserPubkey;
         relayUrls.clear();
@@ -2308,6 +2337,8 @@ public class NotificationRelayService extends Service {
             sentFilters.clear();
             cursorGate.reset();
             answeredAuth.clear();
+            // An AUTH whose OK never came belonged to the dropped session.
+            pendingAuthIds.clear();
             bridgedChallenges.clear();
             lastChallenge = null;
             concordWalled = false;
@@ -4339,7 +4370,8 @@ public class NotificationRelayService extends Service {
         // the router is reachable on can produce one. The vetting that makes
         // this an authorization already happened above — fresh, a known peer, with
         // a well-formed secret and an https broker.
-        ArmadaNotificationPlugin.setCallAnswer(this, callId, peer, secret, broker);
+        final String answerToken =
+                ArmadaNotificationPlugin.setCallAnswer(this, callId, peer, secret, broker, tsMs);
         resolveAuthor(peer, relayUrl, profile -> {
             // Cancelled (or replaced) while the profile resolved.
             if (!callId.equals(ringingCallId)) return;
@@ -4353,10 +4385,21 @@ public class NotificationRelayService extends Service {
             // this app can read, rather than in the URL. A tap is then a
             // request to answer a specific call; whether that call is one the
             // service actually rang is answered by the ticket, not by the link.
-            Intent answer = deepLinkIntent(dmRoute(peer) + "?call=" + uriEncode(callId));
+            // Only this action carries the answer token.
+            String ringPath = dmRoute(peer) + "?call=" + uriEncode(callId);
+            Intent answer = deepLinkIntent(answerToken != null
+                    ? ringPath + "&answer=" + uriEncode(answerToken)
+                    : ringPath);
             answer.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
             PendingIntent answerPi = PendingIntent.getActivity(
                     this, INCOMING_CALL_NOTIF_ID, answer,
+                    PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+
+            // Body tap: rings in-app, no token.
+            Intent open = deepLinkIntent(ringPath);
+            open.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+            PendingIntent openPi = PendingIntent.getActivity(
+                    this, INCOMING_CALL_NOTIF_ID + 2, open,
                     PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
 
             // Decline: handled by the service itself (no WebView needed) —
@@ -4373,6 +4416,18 @@ public class NotificationRelayService extends Service {
             // Ring only as long as the offer stays fresh; the caller's own
             // give-up ("end") usually lands first and cancels explicitly.
             long timeout = Math.max(5_000, tsMs + CALL_RING_WINDOW_MS - System.currentTimeMillis());
+
+            // Full-screen fires untapped: the lock-screen ringer, not MainActivity.
+            Intent ringer = new Intent(this, IncomingCallActivity.class);
+            ringer.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_NO_USER_ACTION);
+            ringer.putExtra(EXTRA_CALL_ID, callId);
+            ringer.putExtra(IncomingCallActivity.EXTRA_NAME, name);
+            ringer.putExtra(IncomingCallActivity.EXTRA_RING_UNTIL_MS, System.currentTimeMillis() + timeout);
+            ringer.putExtra(IncomingCallActivity.EXTRA_ANSWER, answer);
+            ringer.putExtra(IncomingCallActivity.EXTRA_DECLINE, decline);
+            PendingIntent ringerPi = PendingIntent.getActivity(
+                    this, INCOMING_CALL_NOTIF_ID + 3, ringer,
+                    PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
             NotificationCompat.Builder b = new NotificationCompat.Builder(this, CALL_CHANNEL_ID)
                     .setSmallIcon(R.drawable.ic_stat_armada)
                     .setContentTitle(name)
@@ -4383,15 +4438,18 @@ public class NotificationRelayService extends Service {
                     .setOnlyAlertOnce(true)
                     .setWhen(tsMs)
                     .setTimeoutAfter(timeout)
-                    .setContentIntent(answerPi)
+                    .setContentIntent(openPi)
                     // The full phone-call surface: on a locked/idle device the
                     // activity launches full screen; unlocked it heads-up.
-                    .setFullScreenIntent(answerPi, true)
+                    .setFullScreenIntent(ringerPi, true)
                     .setStyle(NotificationCompat.CallStyle.forIncomingCall(caller, declinePi, answerPi));
             NotificationManager m = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
             try {
                 if (m != null) {
-                    m.notify(INCOMING_CALL_NOTIF_ID, b.build());
+                    Notification ring = b.build();
+                    // Loop the ringtone and vibration until the ring is cancelled.
+                    ring.flags |= Notification.FLAG_INSISTENT;
+                    m.notify(INCOMING_CALL_NOTIF_ID, ring);
                     healthLastPresentedAtMs = System.currentTimeMillis();
                     // The caller's "it rang" receipt — what turns their
                     // timeout into "No answer" rather than "Couldn't reach".
@@ -5748,7 +5806,21 @@ public class NotificationRelayService extends Service {
         // flood's window full, and quiet, until the flood actually stops.
         times.addLast(now);
         while (times.size() > ALERT_BURST_MAX_TRACKED) times.pollFirst();
+        if (budget.size() > ALERT_BURST_SWEEP_AT) sweepAlertBurst(budget, now);
         return allow;
+    }
+
+    /**
+     * Drop rooms whose newest attempt is outside the window — their budget is
+     * full again, exactly as if the key were absent. Only runs past
+     * {@link #ALERT_BURST_SWEEP_AT} rooms, so a normal session never scans.
+     */
+    private static void sweepAlertBurst(java.util.Map<String, java.util.ArrayDeque<Long>> budget, long now) {
+        java.util.Iterator<java.util.ArrayDeque<Long>> it = budget.values().iterator();
+        while (it.hasNext()) {
+            java.util.ArrayDeque<Long> t = it.next();
+            if (t.isEmpty() || now - t.peekLast() > ALERT_BURST_WINDOW_MS) it.remove();
+        }
     }
 
     /**
@@ -7003,8 +7075,8 @@ public class NotificationRelayService extends Service {
                     Bitmap circle = null;
                     try {
                         if (response.isSuccessful() && response.body() != null) {
-                            byte[] bytes = response.body().bytes();
-                            if (ref.imgKey != null && ref.imgNonce != null) {
+                            byte[] bytes = readCapped(response.body(), MAX_ICON_BODY_BYTES);
+                            if (bytes != null && ref.imgKey != null && ref.imgNonce != null) {
                                 bytes = decryptGcm(bytes, ref.imgKey, ref.imgNonce, ref.imgHash);
                             }
                             Bitmap raw = decodeSampled(bytes);
@@ -7247,7 +7319,7 @@ public class NotificationRelayService extends Service {
                     Bitmap circle = null;
                     try {
                         if (response.isSuccessful() && response.body() != null) {
-                            byte[] bytes = response.body().bytes();
+                            byte[] bytes = readCapped(response.body(), MAX_AVATAR_BODY_BYTES);
                             Bitmap raw = decodeSampled(bytes);
                             circle = circleCrop(raw);
                         }
@@ -7265,6 +7337,25 @@ public class NotificationRelayService extends Service {
                 }
             });
         });
+    }
+
+    // Body ceilings for an image fetch; the bytes are buffered whole before the
+    // decode. Avatars cover an un-resized phone photo (a proxy, when set,
+    // resizes); icons are encrypted so no proxy can shrink them, and other
+    // clients may upload larger than our 512px edge.
+    static final long MAX_AVATAR_BODY_BYTES = 2L * 1024 * 1024;
+    static final long MAX_ICON_BODY_BYTES = 4L * 1024 * 1024;
+
+    /**
+     * The whole body, or null if it is (or declares itself) over {@code cap}.
+     * Reads at most cap+1 bytes, so a chunked body of unknown length can't
+     * grow the buffer without bound.
+     */
+    static byte[] readCapped(ResponseBody body, long cap) throws IOException {
+        if (body == null || body.contentLength() > cap) return null;
+        okio.BufferedSource src = body.source();
+        if (src.request(cap + 1)) return null;
+        return src.readByteArray();
     }
 
     /**
@@ -7563,8 +7654,11 @@ public class NotificationRelayService extends Service {
         g.put("connections", (long) connections.size());
         g.put("socketsOpen", (long) open);
         g.put("notifiedIds", (long) notifiedIds.size());
-        g.put("avatarCache", (long) avatarCache.size());
-        g.put("groupImageCache", (long) groupImageCache.size());
+        // LruCache.size() is in sizeOf units (bytes); the entry count is the snapshot's.
+        g.put("avatarCache", (long) avatarCache.snapshot().size());
+        g.put("avatarCacheBytes", (long) avatarCache.size());
+        g.put("groupImageCache", (long) groupImageCache.snapshot().size());
+        g.put("groupImageCacheBytes", (long) groupImageCache.size());
         g.put("roomNotifs", (long) roomNotifs.size());
         g.put("handlerQueue", (long) pendingFrames.get());
         NativeSigner signer = nativeSigner;

@@ -91,12 +91,19 @@ export interface ArmadaNotificationPlugin {
    * The ring the service posted for `callId`, or `{}`. This is the authorization
    * to join from a notification: a URL proves nothing, while the service only
    * rings fresh offers from followed peers with valid secrets and https brokers.
-   * Consumed once.
+   * `token` is the one only the Answer action's link carries. Consumed once.
    */
-  consumeCallAnswer(options: { callId: string }): Promise<{
+  consumeCallAnswer(options: { callId: string; token: string }): Promise<{
     peer?: string;
     secret?: string;
     broker?: string;
+  }>;
+  /** The ring the service is posting for `callId`, or `{}`. Not consumed; permits ringing only. */
+  peekCallRing(options: { callId: string }): Promise<{
+    peer?: string;
+    secret?: string;
+    broker?: string;
+    createdAtMs?: number;
   }>;
   /**
    * Peer the WebView is dialing or in a call with; the service won't ring or post
@@ -277,16 +284,34 @@ export interface NativeCallAnswer {
 }
 
 /**
- * Claim the ring parameters for `callId`, or null. Android-gated (not
- * `isNativePlatform()`); older APKs answer "no ticket".
+ * Claim the ring parameters for `callId` with the Answer action's `token`, or
+ * null. Android-gated (not `isNativePlatform()`); older APKs answer "no ticket".
  */
-export async function consumeNativeCallAnswer(callId: string): Promise<NativeCallAnswer | null> {
+export async function consumeNativeCallAnswer(
+  callId: string,
+  token: string,
+): Promise<NativeCallAnswer | null> {
   if (Capacitor.getPlatform() !== "android") return null;
   if (!Capacitor.isPluginAvailable("ArmadaNotification")) return null;
   try {
-    const { peer, secret, broker } = await ArmadaNotification.consumeCallAnswer({ callId });
+    const { peer, secret, broker } = await ArmadaNotification.consumeCallAnswer({ callId, token });
     if (!peer || !secret || !broker) return null;
     return { peer, secretHex: secret, broker };
+  } catch {
+    return null;
+  }
+}
+
+/** The ring the service is posting for `callId`, to ring in-app; null when none. Android only. */
+export async function peekNativeCallRing(
+  callId: string,
+): Promise<(NativeCallAnswer & { createdAtMs: number }) | null> {
+  if (Capacitor.getPlatform() !== "android") return null;
+  if (!Capacitor.isPluginAvailable("ArmadaNotification")) return null;
+  try {
+    const { peer, secret, broker, createdAtMs } = await ArmadaNotification.peekCallRing({ callId });
+    if (!peer || !secret || !broker || !createdAtMs) return null;
+    return { peer, secretHex: secret, broker, createdAtMs };
   } catch {
     return null;
   }

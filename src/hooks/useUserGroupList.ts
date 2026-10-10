@@ -89,10 +89,16 @@ export async function resolveGroupListRead(
 type PrivateItems = string[][] | undefined;
 
 /**
- * Decode-once cache for the 10009 private-items decrypt, keyed by event id.
- * Several always-on surfaces mount this hook, and a remote signer decrypt costs seconds.
+ * Decode-once cache for the 10009 private-items decrypt, holding each author's newest
+ * version only. Several always-on surfaces mount this hook, and a remote signer decrypt
+ * costs seconds.
  */
-const groupListDecryptMemo = new Map<string, Promise<PrivateItems>>();
+const groupListDecryptMemo = new Map<string, { id: string; createdAt: number; work: Promise<PrivateItems> }>();
+
+/** Drops decrypted 10009 private items held in memory; for logout's purge. */
+export function clearGroupListMemo(): void {
+  groupListDecryptMemo.clear();
+}
 
 /** The NIP-44 private items of a kind 10009 (NIP-51); `[]` when it has none. */
 async function readGroupListPrivate(
@@ -102,8 +108,8 @@ async function readGroupListPrivate(
   if (!event.content) return [];
   if (!signer?.nip44) return undefined;
 
-  const cached = groupListDecryptMemo.get(event.id);
-  if (cached) return cached;
+  const cached = groupListDecryptMemo.get(event.pubkey);
+  if (cached?.id === event.id) return cached.work;
 
   const nip44 = signer.nip44;
   const work = (async (): Promise<PrivateItems> => {
@@ -114,11 +120,14 @@ async function readGroupListPrivate(
         : [];
     } catch (err) {
       console.warn("Failed to decrypt group list private items:", err);
-      groupListDecryptMemo.delete(event.id); // don't memoize a transient failure
+      // Don't memoize a transient failure.
+      if (groupListDecryptMemo.get(event.pubkey)?.id === event.id) groupListDecryptMemo.delete(event.pubkey);
       return undefined;
     }
   })();
-  groupListDecryptMemo.set(event.id, work);
+  if (!cached || event.created_at >= cached.createdAt) {
+    groupListDecryptMemo.set(event.pubkey, { id: event.id, createdAt: event.created_at, work });
+  }
   return work;
 }
 

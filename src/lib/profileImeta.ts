@@ -45,7 +45,8 @@ export function imetaTagFromUpload(tags: string[][]): string[] {
   return ["imeta", ...tags.filter(([name, value]) => name && value).map(([name, value]) => `${name} ${value}`)];
 }
 
-function imetaUrl(tag: string[]): string | undefined {
+/** The `url` an imeta tag describes, without parsing the rest of it. */
+export function imetaUrl(tag: string[]): string | undefined {
   if (tag[0] !== "imeta") return undefined;
   return tag.find((part) => part.startsWith("url "))?.slice(4);
 }

@@ -17,7 +17,8 @@ import { useCurrentUserProfile } from '@/hooks/useCurrentUser';
 import { useNostrPublish } from '@/hooks/useNostrPublish';
 import { useUploadFile } from '@/hooks/useUploadFile';
 import { useUploadProfileImage } from '@/hooks/useUploadProfileImage';
-import { profileImetaTags } from '@/lib/profileImeta';
+import { useMediaPolicy } from '@/hooks/useMediaPolicy';
+import { completeProfileImetaTags } from '@/lib/computeProfileImeta';
 import { useToast } from '@/hooks/useToast';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -408,6 +409,7 @@ export function ProfileSettings({ onSaved, saveLabel, centerSave, showNip05 = tr
   const { user, metadata, event, imeta: profileImeta } = useCurrentUserProfile();
   const queryClient = useQueryClient();
   const { mutateAsync: publishEvent, isPending } = useNostrPublish();
+  const mediaPolicy = useMediaPolicy();
   const { mutateAsync: uploadFile, isPending: isUploadingMedia } = useUploadFile();
   const { upload: uploadProfileImage, isPending: isUploadingImage } = useUploadProfileImage();
   const isUploading = isUploadingMedia || isUploadingImage;
@@ -416,6 +418,12 @@ export function ProfileSettings({ onSaved, saveLabel, centerSave, showNip05 = tr
   const { toast } = useToast();
 
   const [cropState, setCropState] = useState<CropState | null>(null);
+  // Revoked when replaced, dismissed or unmounted: the URL pins the whole file.
+  const cropSrc = cropState?.imageSrc;
+  useEffect(() => {
+    if (!cropSrc) return;
+    return () => URL.revokeObjectURL(cropSrc);
+  }, [cropSrc]);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [uploadingFieldIndex, setUploadingFieldIndex] = useState<number>(-1);
   const paymentTargetsRef = useRef<PaymentTargetsEditorHandle>(null);
@@ -573,15 +581,13 @@ export function ProfileSettings({ onSaved, saveLabel, centerSave, showNip05 = tr
 
   const handleCropConfirm = async (blob: Blob) => {
     if (!cropState) return;
-    const { field, imageSrc } = cropState;
-    URL.revokeObjectURL(imageSrc);
+    const { field } = cropState;
     setCropState(null);
     const file = new File([blob], `${field}.jpg`, { type: 'image/jpeg' });
     await uploadImage(file, field);
   };
 
   const handleCropCancel = () => {
-    if (cropState) URL.revokeObjectURL(cropState.imageSrc);
     setCropState(null);
   };
 
@@ -625,7 +631,7 @@ export function ProfileSettings({ onSaved, saveLabel, centerSave, showNip05 = tr
       await publishEvent({
         kind: 0,
         content: JSON.stringify(data),
-        tags: profileImetaTags(data, [...uploadedImeta.current, ...(event?.tags ?? [])]),
+        tags: await completeProfileImetaTags(data, [...uploadedImeta.current, ...(event?.tags ?? [])], mediaPolicy),
         prev: event,
       });
       queryClient.invalidateQueries({ queryKey: ['logins'] });
@@ -642,7 +648,8 @@ export function ProfileSettings({ onSaved, saveLabel, centerSave, showNip05 = tr
     }
   };
 
-  const busy = isPending || isUploading;
+  // isSubmitting also covers describing the images before the publish starts.
+  const busy = isPending || isUploading || form.formState.isSubmitting;
 
   if (!user) {
     return (

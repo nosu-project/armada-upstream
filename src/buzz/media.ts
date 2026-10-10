@@ -88,9 +88,12 @@ const tokenByHost = new Map<string, CachedToken>();
 
 /** In-flight mints, so concurrent image loads on a host share one signature. */
 const mintInFlight = new Map<string, Promise<string>>();
+/** Bumped by {@link clearBuzzMediaCache}, so a mint signed before it isn't kept. */
+let tokenGeneration = 0;
 
 async function mintGetToken(signer: NostrSigner, host: string): Promise<string> {
   const now = Date.now();
+  const generation = tokenGeneration;
   const event = await signer.signEvent({
     kind: 24242,
     // BUD-11 requires a non-empty, human-readable content string.
@@ -103,7 +106,7 @@ async function mintGetToken(signer: NostrSigner, host: string): Promise<string> 
     ],
   });
   const header = `Nostr ${N64.encodeEvent(event)}`;
-  tokenByHost.set(host, { header, mintedAt: now, pubkey: event.pubkey });
+  if (generation === tokenGeneration) tokenByHost.set(host, { header, mintedAt: now, pubkey: event.pubkey });
   return header;
 }
 
@@ -123,7 +126,7 @@ async function getGetAuthHeader(
   const existing = mintInFlight.get(host);
   if (existing) return existing;
   const promise = mintGetToken(signer, host).finally(() => {
-    mintInFlight.delete(host);
+    if (mintInFlight.get(host) === promise) mintInFlight.delete(host);
   });
   mintInFlight.set(host, promise);
   return promise;
@@ -158,6 +161,21 @@ function evictToBudget(keep: string): void {
     const url = entry.url;
     if (url) setTimeout(() => URL.revokeObjectURL(url), REVOKE_GRACE_MS);
   }
+}
+
+/**
+ * Drop every cached blob (revoking its object URL now) and every GET token
+ * (logout): both belong to the account that fetched them.
+ */
+export function clearBuzzMediaCache(): void {
+  for (const entry of cache.values()) {
+    if (entry.url) URL.revokeObjectURL(entry.url);
+  }
+  cache.clear();
+  totalBytes = 0;
+  tokenByHost.clear();
+  mintInFlight.clear();
+  tokenGeneration += 1;
 }
 
 /**

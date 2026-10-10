@@ -30,10 +30,14 @@ function audioContext(): AudioContext | null {
   }
 }
 
-/** Play a short note sequence, each a softly enveloped sine. */
-function playNotes(notes: { freq: number; start: number; dur: number }[], gainPeak: number): void {
+/** Play a short note sequence, each a softly enveloped sine. Returns the oscillators. */
+function playNotes(
+  notes: { freq: number; start: number; dur: number }[],
+  gainPeak: number,
+): OscillatorNode[] {
   const ac = audioContext();
-  if (!ac) return;
+  if (!ac) return [];
+  const oscs: OscillatorNode[] = [];
   const now = ac.currentTime;
   for (const { freq, start, dur } of notes) {
     const osc = ac.createOscillator();
@@ -48,7 +52,9 @@ function playNotes(notes: { freq: number; start: number; dur: number }[], gainPe
     osc.connect(gain).connect(ac.destination);
     osc.start(t0);
     osc.stop(t0 + dur + 0.02);
+    oscs.push(osc);
   }
+  return oscs;
 }
 
 /** Rising chirp: someone joined. (C6 → E6) */
@@ -102,8 +108,11 @@ export function playUnmuteSound(): void {
 let ringTimer: ReturnType<typeof setInterval> | null = null;
 let ringbackTimer: ReturnType<typeof setInterval> | null = null;
 
+/** The ring phrase still sounding, so a stop cuts it rather than letting it finish. */
+let ringNotes: OscillatorNode[] = [];
+
 function ringPhrase(): void {
-  playNotes(
+  ringNotes = playNotes(
     [
       { freq: 1046.5, start: 0, dur: 0.15 },
       { freq: 1318.5, start: 0.16, dur: 0.15 },
@@ -126,6 +135,12 @@ export function stopIncomingRing(): void {
     clearInterval(ringTimer);
     ringTimer = null;
   }
+  for (const osc of ringNotes) {
+    try {
+      osc.stop();
+    } catch { /* ignore */ }
+  }
+  ringNotes = [];
 }
 
 function ringbackBurst(): void {

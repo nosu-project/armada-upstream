@@ -218,7 +218,7 @@ const DEFAULT_PROCESSING: AudioProcessingPrefs = {
   rnnoise: DEFAULT_RNNOISE,
 };
 
-/** The remembered audio-processing preferences (defaults: all enabled). */
+/** The remembered audio-processing preferences (defaults: `DEFAULT_PROCESSING`). */
 export function getAudioProcessing(): AudioProcessingPrefs {
   try {
     const raw = localStorage.getItem(PROCESSING_KEY);

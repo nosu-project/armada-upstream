@@ -8,7 +8,7 @@
  */
 
 import { useNostr } from "@nostrify/react";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
 
@@ -232,6 +232,9 @@ export function useHistoryAudit(community: Community | undefined) {
     abortRef.current?.abort();
   }, []);
 
+  // A run outliving its view would keep backfilling with no one to show it to.
+  useEffect(() => () => abortRef.current?.abort(), []);
+
   const run = useCallback(
     async (opts?: RunOptions): Promise<HistoryAuditResult | undefined> => {
       if (!community || !folded) return undefined;
@@ -253,6 +256,8 @@ export function useHistoryAudit(community: Community | undefined) {
         // 1. Control plane — exhaustive sweep.
         setProgress({ phase: "control", done: 0, total: 1, label: "Reading the control plane" });
         await sweepControl(nostr, community, { exhaustive: true });
+        // sweepControl takes no signal; stop here if cancelled meanwhile.
+        if (signal.aborted) throw new Error("cancelled");
         const control: ControlCollection = {
           incompleteEntities: folded.incomplete,
           truncated: controlSweepTruncated(community),

@@ -17,7 +17,7 @@
  * membership, so without the pubkey key another account could read it.
  */
 import { isUnsealedRow } from "@/concord/lib/outgoing";
-import { encode, readFolded, writeFolded } from "@/lib/foldedCache";
+import { readFolded, writeFolded } from "@/lib/foldedCache";
 import { perfMark } from "@/lib/perf";
 
 import type { QueryClient } from "@tanstack/react-query";
@@ -30,7 +30,6 @@ function snapKey(viewerPubkey: string, channelIdHex: string): string {
 }
 
 const prewarmed = new Set<string>();
-const lastWritten = new Map<string, string>();
 /** Channels whose cache currently holds a snapshot seed no store read has replaced yet. */
 const seeded = new Set<string>();
 
@@ -69,11 +68,8 @@ export function persistTimelineSnapshot(
   if (sealed.length === 0) return Promise.resolve();
   const key = snapKey(viewerPubkey, channelIdHex);
   const newest = sealed.sort((a, b) => b.ms - a.ms).slice(0, SNAP_WINDOW);
-  const serialized = encode(newest);
-  if (lastWritten.get(key) === serialized) return Promise.resolve();
-  const firstWrite = !lastWritten.has(key);
-  lastWritten.set(key, serialized);
-  if (firstWrite) perfMark("snap.persist", `${channelIdHex.slice(0, 8)} ${newest.length} row(s)`);
+  // writeFolded skips an encoding identical to the last one it wrote.
+  perfMark("snap.persist", `${channelIdHex.slice(0, 8)} ${newest.length} row(s)`);
   return writeFolded(key, newest);
 }
 
@@ -83,8 +79,11 @@ export function takeSnapshotSeed(viewerPubkey: string | undefined, channelIdHex:
   return seeded.delete(snapKey(viewerPubkey, channelIdHex));
 }
 
-export function _resetTimelineSnapshotForTests(): void {
+/** Forget which channels were prewarmed/seeded. Logout. */
+export function clearTimelineSnapshotMemory(): void {
   prewarmed.clear();
-  lastWritten.clear();
   seeded.clear();
 }
+
+/** Test seam. */
+export const _resetTimelineSnapshotForTests = clearTimelineSnapshotMemory;

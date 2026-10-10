@@ -8,9 +8,9 @@
  * its own two-minute poll, so the write itself has to be observable.
  */
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { purgeArmadaDB } from "@/lib/db/armadaDB";
+import { getArmadaDB, purgeArmadaDB } from "@/lib/db/armadaDB";
 
 import {
   __resetFoldedForTests,
@@ -25,6 +25,7 @@ import {
 // fresh `IDBFactory` per test would strand the already-open connection. Purge
 // instead.
 afterEach(async () => {
+  vi.restoreAllMocks();
   await purgeArmadaDB();
   __resetFoldedForTests();
 });
@@ -123,6 +124,31 @@ describe("readFoldedShared", () => {
     await expect(readFoldedShared("concord2-cursor:none")).resolves.toBeUndefined();
     await writeFolded("concord2-cursor:none", { newest: 5 });
     await expect(readFoldedShared("concord2-cursor:none")).resolves.toEqual({ newest: 5 });
+  });
+
+  it("does not pin values that were only ever written", async () => {
+    const value = { rows: ["plaintext"] };
+    await writeFolded("dm17-thread-snap:x:1", value);
+    const get = vi.spyOn(getArmadaDB().kv, "get");
+    const read = await readFoldedShared("dm17-thread-snap:x:1");
+    expect(get).toHaveBeenCalledTimes(1);
+    expect(read).toEqual(value);
+    expect(read).not.toBe(value);
+    // Once shared, a later write replaces the shared object in place.
+    const next = { rows: ["next"] };
+    await writeFolded("dm17-thread-snap:x:1", next);
+    await expect(readFoldedShared("dm17-thread-snap:x:1")).resolves.toBe(next);
+    expect(get).toHaveBeenCalledTimes(1);
+  });
+
+  it("a write landing during a shared read wins over the read's older value", async () => {
+    await writeFolded("concord2-fold:race", { v: 1 });
+    __resetFoldedForTests();
+    const reading = readFoldedShared("concord2-fold:race");
+    const next = { v: 2 };
+    await writeFolded("concord2-fold:race", next);
+    await reading;
+    await expect(readFoldedShared("concord2-fold:race")).resolves.toBe(next);
   });
 
   it("plain reads still decode a fresh object each time", async () => {

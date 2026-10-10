@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  clearBuzzMediaCache,
   getBuzzMediaHostsVersion,
   isBuzzMediaUrl,
   registerBuzzMediaHost,
@@ -95,6 +96,25 @@ describe("resolveBuzzMediaObjectURL", () => {
     expect(event.tags).toContainEqual(["server", HOST]);
     expect(event.tags.some((t: string[]) => t[0] === "expiration")).toBe(true);
     expect(event.content.trim().length).toBeGreaterThan(0);
+  });
+
+  it("clearBuzzMediaCache revokes cached blobs and drops GET tokens", async () => {
+    const revoke = vi.fn();
+    let n = 0;
+    Object.assign(URL, { createObjectURL: () => `blob:clear-${++n}`, revokeObjectURL: revoke });
+    clearBuzzMediaCache(); // earlier tests' token for this host
+    const url = `https://${HOST}/media/${"c".repeat(64)}.png`;
+    const first = await resolveBuzzMediaObjectURL(url);
+    expect(signEvent).toHaveBeenCalledTimes(1);
+
+    clearBuzzMediaCache();
+    expect(revoke).toHaveBeenCalledWith(first);
+
+    // A fresh fetch under a freshly signed token, not the old session's.
+    const second = await resolveBuzzMediaObjectURL(url);
+    expect(second).not.toBe(first);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(signEvent).toHaveBeenCalledTimes(2);
   });
 
   it("rejects when there is no signer", async () => {

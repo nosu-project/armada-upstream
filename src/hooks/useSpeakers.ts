@@ -61,6 +61,7 @@ export function useDetectedSpeakers(): readonly string[] | null {
       return;
     }
     const taps: Tap[] = [];
+    let unreadable = false;
     for (const ref of mics) {
       const publication = ref.publication;
       const track = publication?.track?.mediaStreamTrack;
@@ -68,6 +69,11 @@ export function useDetectedSpeakers(): readonly string[] | null {
       try {
         const source = ctx.createMediaStreamSource(new MediaStream([track]));
         const analyser = ctx.createAnalyser();
+        // Bromite strips AnalyserNode reads.
+        if (typeof analyser.getFloatTimeDomainData !== "function") {
+          unreadable = true;
+          break;
+        }
         analyser.fftSize = 512;
         analyser.smoothingTimeConstant = 0;
         source.connect(analyser);
@@ -84,6 +90,15 @@ export function useDetectedSpeakers(): readonly string[] | null {
       } catch {
         // An unreadable track just goes unmeasured.
       }
+    }
+    if (unreadable) {
+      for (const tap of taps) {
+        try {
+          tap.source.disconnect();
+        } catch { /* ignore */ }
+      }
+      setSpeakers(null);
+      return;
     }
 
     let last: string | null = null;

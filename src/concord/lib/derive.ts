@@ -266,10 +266,15 @@ export function onGroupKeyMemoDirty(listener: () => void): void {
   memoDirtyListener = listener;
 }
 
-/** Test seam: forget every cached and hydrated derivation. */
-export function _resetGroupKeyMemoForTests(): void {
+/** Forget every cached and hydrated derivation (they hold stream secrets). */
+export function clearGroupKeyMemo(): void {
   groupKeyMemo.clear();
   hydratedEntries.clear();
+}
+
+/** Test seam: forget every derivation and the persist listener. */
+export function _resetGroupKeyMemoForTests(): void {
+  clearGroupKeyMemo();
   memoDirtyListener = undefined;
 }
 

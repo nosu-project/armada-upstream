@@ -306,6 +306,10 @@ export class Nip46Transport {
    */
   close(): void {
     for (const c of this.conns) c.stop();
+    // No socket is left to answer them.
+    const pending = [...this.pendingOks.values()];
+    this.pendingOks.clear();
+    for (const p of pending) p.reject(new Error("transport closed"));
     void this.appStateHandle?.remove();
     this.appStateHandle = undefined;
   }
@@ -319,9 +323,17 @@ export class Nip46Transport {
 /** One transport per bunker identity, shared by every signer that needs it. */
 const transports = new Map<string, Nip46Transport>();
 
-/** App-wide transport per bunker pubkey + relay set (re-pairing with new relays gets a fresh one). */
+function transportKey(bunkerPubkey: string, relays: string[]): string {
+  return `${bunkerPubkey}|${[...relays].sort().join(",")}`;
+}
+
+/**
+ * App-wide transport per bunker pubkey + relay set (re-pairing with new relays
+ * gets a fresh one). The superseded one is NOT closed here: another live login
+ * may share the bunker pubkey with that relay set, and only the caller knows.
+ */
 export function getNip46Transport(bunkerPubkey: string, relays: string[]): Nip46Transport {
-  const key = `${bunkerPubkey}|${[...relays].sort().join(",")}`;
+  const key = transportKey(bunkerPubkey, relays);
   let t = transports.get(key);
   if (!t) {
     logSync("nip46", `creating dedicated transport for bunker ${bunkerPubkey.slice(0, 8)} (${relays.length} relay(s))`);
@@ -329,4 +341,17 @@ export function getNip46Transport(bunkerPubkey: string, relays: string[]): Nip46
     transports.set(key, t);
   }
   return t;
+}
+
+/** Close and forget one shared transport (its login was removed). */
+export function closeNip46Transport(bunkerPubkey: string, relays: string[]): void {
+  const key = transportKey(bunkerPubkey, relays);
+  transports.get(key)?.close();
+  transports.delete(key);
+}
+
+/** Close and forget every shared transport (logout). */
+export function closeAllNip46Transports(): void {
+  for (const t of transports.values()) t.close();
+  transports.clear();
 }

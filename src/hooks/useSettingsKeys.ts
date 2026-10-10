@@ -99,7 +99,7 @@ export function useSettingsKeys(): UseSettingsKeysReturn {
   return { keys, isFetched: query.isFetched, ensure };
 }
 
-/** Test seam. */
+/** Cleared on logout by `purgeClientStorage`; also a test seam. */
 export function resetSettingsKeysAnnouncements(): void {
   announced.clear();
 }

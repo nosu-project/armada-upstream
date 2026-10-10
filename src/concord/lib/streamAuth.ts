@@ -229,11 +229,14 @@ export async function* signStreamAuthsChunked(
   }
 }
 
-/** Test seam: forget every registered stream key and all per-relay ack state. */
-export function _resetStreamAuthRegistry(): void {
+/** Forget every registered stream key (secrets) and all per-relay ack state. Logout. */
+export function clearStreamAuthRegistry(): void {
   registry.clear();
   relayAuth.clear();
 }
+
+/** Test seam. */
+export const _resetStreamAuthRegistry = clearStreamAuthRegistry;
 
 // Per-relay AUTH ack state: NostrProvider feeds ditto-relay's `["OK", id, true]`
 // acks in here and sweeps gate on them (`streamAuthsSettled`). Per live socket;

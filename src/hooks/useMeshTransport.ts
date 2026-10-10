@@ -135,10 +135,13 @@ export function useMeshTransportState(): MeshContextType {
         if (cancelled) return;
         setAvailable(avail);
         if (avail) {
-          handles.push(await BluetoothMesh.addListener("message", appendMessage));
-          handles.push(
-            await BluetoothMesh.addListener("peers", (d) => setPeers(d.peers)),
-          );
+          // A handle that resolves after cleanup ran would never be removed.
+          const onMessage = await BluetoothMesh.addListener("message", appendMessage);
+          if (cancelled) { void onMessage.remove(); return; }
+          handles.push(onMessage);
+          const onPeers = await BluetoothMesh.addListener("peers", (d) => setPeers(d.peers));
+          if (cancelled) { void onPeers.remove(); return; }
+          handles.push(onPeers);
         }
       } catch {
         if (!cancelled) setAvailable(false);

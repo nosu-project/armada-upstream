@@ -111,6 +111,8 @@ export function VoiceDeviceSettings() {
 
   const [playingTone, setPlayingTone] = useState(false);
   const toneTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** Closes the live tone's AudioContext; unmount calls it, since the timer that would is cleared. */
+  const toneReleaseRef = useRef<(() => void) | null>(null);
 
   // Labels populate only with a media permission, so re-enumerate after the mic test and on devicechange.
   const refreshDevices = useCallback(async () => {
@@ -183,7 +185,10 @@ export function VoiceDeviceSettings() {
       source.connect(analyser);
       const data = new Uint8Array(analyser.fftSize);
 
+      // Bromite strips AnalyserNode reads.
+      const readable = typeof analyser.getByteTimeDomainData === "function";
       const tick = () => {
+        if (!readable) return;
         analyser.getByteTimeDomainData(data);
         let sum = 0;
         for (let i = 0; i < data.length; i++) {
@@ -230,6 +235,7 @@ export function VoiceDeviceSettings() {
     () => () => {
       stopMicTest();
       if (toneTimerRef.current) clearTimeout(toneTimerRef.current);
+      toneReleaseRef.current?.();
     },
     [stopMicTest],
   );
@@ -250,6 +256,13 @@ export function VoiceDeviceSettings() {
     try {
       const Ctx = window.AudioContext ?? (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
       const ctx = new Ctx();
+      const audio = new Audio();
+      const release = () => {
+        if (toneReleaseRef.current === release) toneReleaseRef.current = null;
+        audio.srcObject = null;
+        void ctx.close().catch(() => {});
+      };
+      toneReleaseRef.current = release;
       const dest = ctx.createMediaStreamDestination();
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
@@ -263,7 +276,6 @@ export function VoiceDeviceSettings() {
       gain.gain.linearRampToValueAtTime(0, now + 0.6);
       osc.connect(gain).connect(dest);
 
-      const audio = new Audio();
       audio.srcObject = dest.stream;
       if (supportsSpeakerSelection() && speakerId && speakerId !== "default") {
         try {
@@ -273,15 +285,17 @@ export function VoiceDeviceSettings() {
         } catch { /* ignore */ }
       }
       await audio.play();
+      // Unmounted while starting: the context is already closed.
+      if (toneReleaseRef.current !== release) return;
       osc.start();
       setPlayingTone(true);
       osc.stop(now + 0.6);
       toneTimerRef.current = setTimeout(() => {
-        audio.srcObject = null;
-        void ctx.close().catch(() => {});
+        release();
         setPlayingTone(false);
       }, 700);
     } catch {
+      toneReleaseRef.current?.();
       setPlayingTone(false);
     }
   }, [playingTone, speakerId]);

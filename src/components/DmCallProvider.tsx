@@ -22,7 +22,13 @@ import { ownAvServers } from "@/concord/hooks/useVoice";
 import { canonicalOrigin, probeAvBroker } from "@/concord/lib/voice";
 import { registerBeforeAccountExit } from "@/lib/beforeAccountExit";
 import { signerNeedsApproval } from "@/lib/bulkDecryptGate";
-import { consumeNativeCallAnswer, dismissNativeCallRing, setNativeCallPeer } from "@/lib/nativeNotifications";
+import {
+  consumeNativeCallAnswer,
+  dismissNativeCallRing,
+  peekNativeCallRing,
+  setNativeCallPeer,
+  type NativeCallAnswer,
+} from "@/lib/nativeNotifications";
 import {
   startIncomingRing,
   startRingback,
@@ -52,7 +58,7 @@ import {
   wrapDmSealEphemeral,
   type Dm17Signer,
 } from "@/lib/nip17/protocol";
-import { RESCUE_RELAYS } from "@/lib/platform";
+import { hasNativeNotificationService, RESCUE_RELAYS } from "@/lib/platform";
 
 import type { DmVoiceContext } from "@/contexts/CallContext";
 import type { NostrEvent } from "@nostrify/nostrify";
@@ -102,7 +108,7 @@ function rememberOwnCallId(ids: Set<string>, callId: string): void {
  *   answer/ringing arrives within {@link DM_CALL_COLLISION_FALLBACK_MS}.
  * - "end" is both cancel and hangup, so a 1:1 call ends when either leaves.
  *
- * Must be mounted inside CallProvider and the router (Android Answer deep-links
+ * Must be mounted inside CallProvider and the router (Android's ring deep-links
  * `/dm/<peer>?call=<id>`; the URL names a call and authorizes nothing).
  */
 export function DmCallProvider({ children }: { children: React.ReactNode }) {
@@ -147,8 +153,6 @@ export function DmCallProvider({ children }: { children: React.ReactNode }) {
   const receiptCallIdsRef = useRef(new Set<string>());
   const receiptAtRef = useRef(new Map<string, number>());
   const incomingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const pendingAcceptRef = useRef<{ callId: string; at: number } | null>(null);
-  const answeringRef = useRef<string | null>(null);
 
   // Live refs so the lifetime signal subscription reads current state.
   const incomingRef = useRef(incoming);
@@ -192,6 +196,44 @@ export function DmCallProvider({ children }: { children: React.ReactNode }) {
     stopIncomingRing();
     setIncoming(null);
   }, []);
+
+  /** Show the incoming-call overlay for a vetted offer until its ring window closes. */
+  const ringIncoming = useCallback(
+    (signal: DmCallSignal) => {
+      // Set ahead of the render so a second delivery of the same call sees it.
+      incomingRef.current = signal;
+      setIncoming(signal);
+      if (incomingTimeoutRef.current) clearTimeout(incomingTimeoutRef.current);
+      incomingTimeoutRef.current = setTimeout(() => {
+        clearIncoming();
+      }, Math.max(0, signal.createdAtMs + DM_CALL_RING_MS - Date.now()));
+    },
+    [clearIncoming],
+  );
+
+  // Hidden on Android, the tray rings alone: a ring here would outlast a decline
+  // or end there. On screen, this ring takes over.
+  const incomingCallId = incoming?.callId;
+  useEffect(() => {
+    if (!incomingCallId) return;
+    let ours = false;
+    const sync = () => {
+      if (ours) return;
+      if (document.visibilityState === "visible") {
+        dismissNativeCallRing(incomingCallId);
+      } else if (hasNativeNotificationService()) {
+        return;
+      }
+      ours = true;
+      startIncomingRing();
+    };
+    sync();
+    document.addEventListener("visibilitychange", sync);
+    return () => {
+      document.removeEventListener("visibilitychange", sync);
+      stopIncomingRing();
+    };
+  }, [incomingCallId]);
 
   /**
    * Seal + publish a call rumor in an EPHEMERAL (21059) wrap to the peer's
@@ -582,21 +624,8 @@ export function DmCallProvider({ children }: { children: React.ReactNode }) {
             }
             return;
           }
-          const pending = pendingAcceptRef.current;
-          setIncoming(signal);
-          startIncomingRing();
-          // On screen, this ring is the one to answer; the tray's would ring alongside it.
-          if (document.visibilityState === "visible") dismissNativeCallRing(signal.callId);
+          ringIncoming(signal);
           sendReceipt("ringing", signal.author, signal.callId);
-          if (incomingTimeoutRef.current) clearTimeout(incomingTimeoutRef.current);
-          incomingTimeoutRef.current = setTimeout(() => {
-            clearIncoming();
-          }, Math.max(0, signal.createdAtMs + DM_CALL_RING_MS - Date.now()));
-          // An Android Answer tap arrived before the offer did.
-          if (pending && pending.callId === signal.callId && Date.now() - pending.at < 90_000) {
-            pendingAcceptRef.current = null;
-            setTimeout(() => acceptRef.current(), 0);
-          }
           return;
         }
         case "answer": {
@@ -660,6 +689,7 @@ export function DmCallProvider({ children }: { children: React.ReactNode }) {
   }, [
     user?.pubkey,
     clearIncoming,
+    ringIncoming,
     clearOutgoing,
     leaveCall,
     toast,
@@ -711,53 +741,38 @@ export function DmCallProvider({ children }: { children: React.ReactNode }) {
     }
   }, [activeCall, sendSignal, clearOutgoing]);
 
-  // Android's Answer action deep-links `/dm/<peer>?call=<id>`. The URL NAMES a
-  // call; it never authorizes one — anything can produce a URL. Parameters come
-  // from the service that rang (`consumeCallAnswer`), which only holds fresh
-  // offers from known peers with a valid secret and https broker.
+  // Android's ring deep-links `/dm/<peer>?call=<id>`, plus `&answer=<token>` from
+  // the Answer action. The URL names a call and authorizes nothing: parameters
+  // come from the service's ticket, and only the token claims it to join.
   useEffect(() => {
     const params = new URLSearchParams(location.search);
     const wanted = params.get("call");
-    if (!wanted || !/^[0-9a-f]{64}$/.test(wanted)) return;
-    // Strip the param first so a later navigation can't re-answer an ended call.
+    if (!wanted || !HEX64.test(wanted)) return;
+    const token = params.get("answer");
+    // Strip the params first so a later navigation can't re-answer an ended call.
     navigate(location.pathname, { replace: true });
+    const self = userRef.current?.pubkey;
+    if (!self) return;
 
-    const ringing = incomingRef.current;
-    if (ringing && ringing.callId === wanted) {
-      acceptRef.current();
+    if (token && HEX64.test(token)) {
+      void consumeNativeCallAnswer(wanted, token).then((ticket) => {
+        const offer = ticket && ticketOffer(ticket, wanted, self, Date.now());
+        // Busy check: joining would drop the active call.
+        if (!offer || activeCallRef.current) return;
+        clearIncoming();
+        dismissNativeCallRing(wanted);
+        joinOfferRef.current(offer);
+      });
       return;
     }
 
-    // Deduped by call id rather than torn down on cleanup: stripping the query
-    // re-runs this effect, and cancelling would drop the ticket.
-    if (answeringRef.current === wanted) return;
-    answeringRef.current = wanted;
-
-    void consumeNativeCallAnswer(wanted).then((ticket) => {
-      if (!ticket) return;
-      // Busy check: joining would drop the active call.
-      if (activeCallRef.current) return;
-      // Re-validate across the bridge: the peer becomes a `p` tag we publish.
-      if (!/^[0-9a-f]{64}$/.test(ticket.peer)) return;
-      if (!/^[0-9a-f]{64}$/.test(ticket.secretHex)) return;
-      try {
-        // Integrity check only; having the ticket is the authorization.
-        if (dmCallKeys(ticket.secretHex).room.pk !== wanted) return;
-      } catch {
-        return;
-      }
-      // A broker is a bearer-credential endpoint: refuse http, userinfo and paths.
-      const origin = canonicalOrigin(ticket.broker);
-      if (!origin) return;
-      clearIncoming();
-      pendingAcceptRef.current = null;
-      void sendSignal("answer", ticket.peer, wanted).catch(() => undefined);
-      joinDmCall({ peer: ticket.peer, callId: wanted, secretHex: ticket.secretHex, broker: origin });
+    void peekNativeCallRing(wanted).then((ticket) => {
+      const offer = ticket && ticketOffer(ticket, wanted, self, ticket.createdAtMs);
+      if (!offer || !isDmOfferFresh(offer) || activeCallRef.current) return;
+      if (incomingRef.current?.callId === wanted) return;
+      ringIncoming(offer);
     });
-
-    // No ticket yet: park it for the signal fold, which applies the ring gate.
-    pendingAcceptRef.current = { callId: wanted, at: Date.now() };
-  }, [location.search, location.pathname, navigate, clearIncoming, sendSignal, joinDmCall]);
+  }, [location.search, location.pathname, navigate, clearIncoming, ringIncoming]);
 
   useEffect(
     () => () => {
@@ -794,6 +809,38 @@ export function DmCallProvider({ children }: { children: React.ReactNode }) {
       )}
     </DmCallContext.Provider>
   );
+}
+
+const HEX64 = /^[0-9a-f]{64}$/;
+
+/** The offer a service ticket stands for, or null when it doesn't check out. */
+function ticketOffer(
+  ticket: NativeCallAnswer,
+  callId: string,
+  self: string,
+  createdAtMs: number,
+): DmCallSignal | null {
+  // Re-validate across the bridge: the peer becomes a `p` tag we publish.
+  if (!HEX64.test(ticket.peer) || !HEX64.test(ticket.secretHex)) return null;
+  try {
+    // Integrity check only; having the ticket is the authorization.
+    if (dmCallKeys(ticket.secretHex).room.pk !== callId) return null;
+  } catch {
+    return null;
+  }
+  // A broker is a bearer-credential endpoint: refuse http, userinfo and paths.
+  const broker = canonicalOrigin(ticket.broker);
+  if (!broker) return null;
+  return {
+    phase: "offer",
+    callId,
+    author: ticket.peer,
+    peer: self,
+    createdAtMs,
+    rumorId: "",
+    secretHex: ticket.secretHex,
+    broker,
+  };
 }
 
 /** Full-screen, modal incoming-call surface (Accept / Decline). */
