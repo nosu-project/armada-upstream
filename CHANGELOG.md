@@ -4,6 +4,18 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.64.11] - 2026-10-09
+
+Private settings are harder to trace back to you. Your synced settings, GIF
+favorites and conversation list are now stored under keys only your devices can
+work out, with a single small record tied to your account. Settings from earlier
+versions carry over on their own.
+
+### Changed
+- Synced settings, GIF favorites and the conversation list are stored under unlinkable keys, leaving one fixed-size record tied to your account
+- Signer apps and bunkers are asked to approve settings sync once per device instead of on every change
+- GIF favorites and the conversation list are shared across devices as one copy instead of one per device
+
 ## [0.64.10] - 2026-10-09
 
 Pick your own quick reactions, and right-click a message to react straight
