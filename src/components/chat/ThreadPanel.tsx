@@ -51,7 +51,7 @@ import { useMessagePermalink } from "@/hooks/useMessagePermalink";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { isTombstoneRoot } from "@/concord/hooks/useConcordThreads";
 import { ComposerBoundsProvider, getComposerCollisionPadding, useComposerBoundsRef } from "@/contexts/ComposerBoundsContext";
-import { linkActionsAt, withImageActions } from "@/contexts/ChatImageMenuContext";
+import { contextActionsAt, keepSelectionOnRightPress, withImageActions } from "@/contexts/ChatImageMenuContext";
 import { getAvatarShape } from "@/lib/avatarShape";
 import { sendsOnEnter } from "@/lib/sendOnEnter";
 import { fullDateTime, shortClockTime, shortTimeAgo } from "@/lib/formatTime";
@@ -327,10 +327,11 @@ export function ThreadMessage({
     {/* Touch: no right-click menu; long-press belongs to the action sheet. */}
     <div
       {...longPress}
+      onMouseDownCapture={isTouch ? undefined : keepSelectionOnRightPress}
       onContextMenu={(e) => {
         longPress.onContextMenu(e);
         if (isTouch) return;
-        setLinkActions(linkActionsAt(e.target));
+        setLinkActions(contextActionsAt(e.target, e.currentTarget));
         contextMenu.onContextMenu(e);
       }}
       className={cn(
