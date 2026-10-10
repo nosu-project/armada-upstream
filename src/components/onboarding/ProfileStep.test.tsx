@@ -92,6 +92,18 @@ describe("signup profile step", () => {
     const published = h.publishEvent.mock.calls[0][0];
     expect(published.kind).toBe(0);
     expect(JSON.parse(published.content)).toEqual({ name: "Ana", picture: sloth?.url });
+    // Described from what is pinned for the preset, not by downloading it.
+    expect(published.tags).toEqual([
+      [
+        "imeta",
+        `url ${sloth?.url}`,
+        "m image/png",
+        `x ${sloth?.url.match(/[0-9a-f]{64}/)?.[0]}`,
+        `size ${sloth?.size}`,
+        `dim ${sloth?.dim}`,
+        `blurhash ${sloth?.blurhash}`,
+      ],
+    ]);
     expect(onFinish).toHaveBeenCalledTimes(1);
   });
 
@@ -105,7 +117,8 @@ describe("signup profile step", () => {
     renderStep({ expectedPubkey: PUBKEY, onFinish: vi.fn() });
 
     for (const avatar of DEFAULT_AVATARS) {
-      expect(avatar.url).toMatch(/^https:\/\/[^/]+\/[0-9a-f]{64}\.\w+$/);
+      expect(avatar.url).toMatch(/^https:\/\/[^/]+\/[0-9a-f]{64}\.(png|jpeg)$/);
+      expect(avatar.dim).toMatch(/^\d+x\d+$/);
       expect(screen.getByRole("button", { name: avatar.label })).toBeInTheDocument();
     }
 

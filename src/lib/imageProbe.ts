@@ -3,6 +3,14 @@ import { encode as blurhashEncode } from "blurhash";
 /** For an image File: `{ dim: "WxH", blurhash }`, decoded at ≤64px wide. */
 export async function getImageMeta(file: File): Promise<{ dim?: string; blurhash?: string }> {
   if (!file.type.startsWith("image/")) return {};
+  return probeImage(file);
+}
+
+/**
+ * {@link getImageMeta} for a blob of any declared type (servers often send
+ * `application/octet-stream`); `{}` when the browser can't decode it.
+ */
+export async function probeImage(file: Blob): Promise<{ dim?: string; blurhash?: string }> {
   try {
     const url = URL.createObjectURL(file);
     try {

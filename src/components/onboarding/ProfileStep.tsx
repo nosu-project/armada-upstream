@@ -15,7 +15,7 @@ import { useNostrPublish } from "@/hooks/useNostrPublish";
 import { toast } from "@/hooks/useToast";
 import { useUploadProfileImage } from "@/hooks/useUploadProfileImage";
 import { profileImetaTags } from "@/lib/profileImeta";
-import { DEFAULT_AVATARS, type DefaultAvatar } from "@/lib/defaultAvatars";
+import { DEFAULT_AVATARS, defaultAvatarImeta, type DefaultAvatar } from "@/lib/defaultAvatars";
 import { impact } from "@/lib/haptics";
 import { cn } from "@/lib/utils";
 
@@ -130,7 +130,9 @@ export function ProfileStepBody({ expectedPubkey, onPublished, onFinish }: Profi
       const event = await publishEvent({
         kind: 0,
         content: JSON.stringify(metadata),
-        tags: picture.kind === "uploaded" ? profileImetaTags(metadata, [picture.imeta]) : [],
+        tags: profileImetaTags(metadata, [
+          picture.kind === "uploaded" ? picture.imeta : picture.kind === "default" ? defaultAvatarImeta(picture.avatar) : [],
+        ]),
       });
       if (event) onPublished?.(event);
       queryClient.invalidateQueries({ queryKey: ["logins"] });
