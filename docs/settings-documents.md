@@ -1,35 +1,143 @@
 # Settings documents (NIP-78)
 
-Armada's private, cross-device settings live in **seven** NIP-78 documents —
-kind 30078, NIP-44-encrypted to self, named `${APP_ID}/<name>`.
+Armada's private, cross-device state lives in kind-30078 (NIP-78) documents.
+Exactly **one** of them is signed by the account key: the **settings root**,
+`d = ${APP_ID}`. Every other document is signed by its own key derived from the
+secret inside that root, under an opaque `d`, so nothing on the wire links it to
+the account.
 
-| `d` tag | Contents | Written when | Merge |
+| Document | Contents | Written when | Merge |
 |---|---|---|---|
-| `armada/metadata` | theme, custom theme, relay toggles, `appRelays`, `communityRelays`, replaceable app DM/media endpoints, voice-server preference, DM typing indicators, DM requests, Discover scope/curated list/relays, zap defaults, Account Standing nag | a preference changes | wholesale |
-| `armada/rail` | `railLayout` | every rail drag | wholesale |
-| `armada/read-state` | `readState`, the whole map | when `read-state-recent` passes 8 KB | max per key |
-| `armada/read-state-recent` | `readState`, only entries newer than `read-state`'s | every channel view (4 s debounce) | max per key |
-| `armada/notifications` | `notifLevels`, `mutedCommunities`, `mutedChannels`, account-global notification categories | a notification preference changes | wholesale |
-| `armada/dms` | `dmProtocol`, `pinnedDms`, `closedDms`, `acceptedDms`, `startedDms` | a DM is pinned, closed, accepted, opened | additive peer maps; `dmProtocol` wholesale |
-| `armada/reactions` | `frequentReactions` | every reaction (10 s debounce) | max count / most recent |
+| `metadata` | theme, custom theme, relay toggles, `appRelays`, `communityRelays`, replaceable app DM/media endpoints, voice-server preference, DM typing indicators, DM requests, Discover scope/curated list/relays, zap defaults, Account Standing nag | a preference changes | wholesale |
+| `rail` | `railLayout` | every rail drag | wholesale |
+| `read-state` | `readState`, the whole map | when `read-state-recent` passes 8 KB | max per key |
+| `read-state-recent` | `readState`, only entries newer than `read-state`'s | every channel view (4 s debounce) | max per key |
+| `notifications` | `notifLevels`, `mutedCommunities`, `mutedChannels`, account-global notification categories | a notification preference changes | wholesale |
+| `dms` | `dmProtocol`, `pinnedDms`, `closedDms`, `acceptedDms`, `startedDms` | a DM is pinned, closed, accepted, opened | additive peer maps; `dmProtocol` wholesale |
+| `reactions` | `frequentReactions` | every reaction (10 s debounce) | max count / most recent |
+| `gif-favorites` | every GIF favorite and un-favorite | a GIF is (un)favorited (400 ms debounce) | newest operation per GIF |
+| `dm-conversations/0..7` | the DM conversation index, by hash bucket | a conversation is first seen (60 s debounce) | add-only union |
 
-The catalogue is `src/lib/settingsDocs.ts`; the schemas are in
-`src/lib/schemas.ts`; the AppConfig key lists are in `src/contexts/AppContext.ts`
-(`METADATA_/RAIL_/NOTIF_/DM_CONFIG_KEYS`); the read/write hook is
-`src/hooks/useSettingsDoc.ts`.
+The catalogue is `src/lib/settingsDocs.ts` (names in `settingsDocNames.ts`);
+the schemas are in `src/lib/schemas.ts`; the AppConfig key lists are in
+`src/contexts/AppContext.ts` (`METADATA_/RAIL_/NOTIF_/DM_CONFIG_KEYS`); the
+read/write hook is `src/hooks/useSettingsDoc.ts`. The root is
+`src/lib/settingsRoot.ts` (format) and `src/lib/settingsRootStore.ts`
+(lifecycle); derivation is `src/lib/settingsKeys.ts`; the React side is
+`src/hooks/useSettingsKeys.ts`.
+
+## The settings root
+
+`d = ${APP_ID}`, and **no other tag** — no `client`, `title` or `published_at`,
+which is why it is signed directly with the user's signer rather than through
+`useNostrPublish`. Content is NIP-44 to self over a plaintext that is always
+exactly `ROOT_PLAINTEXT_BYTES` (512):
+
+```json
+{"v":1,"root":"<64 hex>","pad":"      …"}
+```
+
+This is the one document an observer can tie to the account, so it is the one
+that must resist fingerprinting: every edition, of every version, has the same
+tags and the same ciphertext length, and in normal use it is written once. A
+field added later takes its bytes from `pad`; `encodeSettingsRoot` refuses a
+payload that would overflow, and readers keep fields they do not know.
+
+**The root is decrypted once per edition.** `resolveSettingsKeys` keeps it in
+ArmadaDB KV (`nip78root:<pubkey>`) with the event id it came from, so later boots
+derive every key without asking the signer anything; a NIP-46 user is prompted
+once per device, not per write. The in-memory copies are cleared in
+`purgeClientStorage`; the KV copy goes with the ArmadaDB purge.
+
+**Creating one** (`ensureSettingsKeys`) happens only when all of these hold:
+
+- no root is held locally and none is on disk;
+- the account already keeps Armada settings (a legacy document is on disk), or
+  the user pressed **Sync now** (`explicit`) — the AGENTS.md rule against
+  unsolicited publishes;
+- an account relay answered a read for the root (EOSE) and returned none. A root
+  found there is adopted instead.
+
+It is held in KV *before* it is published, so a partial fan-out cannot make this
+device mint a second one. Right after minting, `copyLegacySettingsDocs` writes
+every document that exists only in legacy form under its derived key (the eager
+copy), so a document nobody touches again does not stay legacy-only. Only the
+minting device may do this: it alone knows no derived copy exists yet.
+
+**Two devices minting at once** both publish, and NIP-01 keeps one. A device
+whose root lost keeps it as a *previous* root (`nip78root-prev:<pubkey>`, at most
+four) and reads that root's documents as one more source, so its writes fold them
+into the winner's. Nothing is lost; the race costs one extra read source.
+
+## Derived documents
+
+```
+sk(label) = HKDF-SHA256(ikm=root, salt="armada-nip78/v1", info=label [|| 0x00 || ctr])
+d(label)  = hex(HMAC-SHA256(root, "d:" || label))
+```
+
+Labels are `settings/<name>`, `gif-favorites` and `dm-conversations/<bucket>`;
+`settingsKeys.test.ts` pins the vectors, because changing a label or the salt
+re-addresses every document. Each document has its own key, carries only
+`["d", <opaque>]`, and is NIP-44 to its own pubkey. Signing and encryption are
+local (`NSecSigner`), so after the root no write touches the user's signer.
+
+Every derived key signs exactly one kind-30078 document, which is what lets the
+standing REQ ask `{authors: keyring.authors, kinds: [30078]}` with no `#d`.
+
+**There are no per-installation documents.** GIF favorites and the DM index used
+to be one shard per installation, because a write cost a signer round-trip and
+two devices writing one replaceable would overwrite each other. The first is
+gone, and the second is handled by merging on arrival: both payloads are CRDTs,
+and a device that sees an edition missing something it knows republishes the
+merge (`needsPublish`, `dirtyDmConversationIndexBuckets`). A lost concurrent
+write is repaired the next time the losing device sees the winner. The set of
+derived authors is therefore fixed — 16 — however many devices there are.
+
+### What this does and does not hide
+
+It hides the link from anyone reading relays: scrapers, other clients, a relay
+you only publish to. It does **not** hide it from a relay you subscribe on:
+the standing REQ asks for the account's root and its derived authors together,
+over one connection, after NIP-42 AUTH as the account. Sizes are not padded
+beyond NIP-44's own buckets, so read-state is visibly larger than reactions.
+
+## Migration from account-signed documents
+
+Before the root, every document was signed by the account: `${APP_ID}/<name>`
+for settings, and per-installation shards tagged `t=armada-gif-favorites` /
+`t=armada-dm-conversations`. They are **read, never written**:
+
+- A settings document is read from up to three sources: its derived document,
+  the same document under a previous root, and the legacy
+  `${APP_ID}/<name>` (`readSettingsDocSources`). For wholesale documents the
+  newest `created_at` wins (the current root's copy breaks a tie). This build
+  never writes a legacy document, so a newer legacy one can only come from an
+  older build, and folding it in is correct.
+- read-state and reactions fold **every** source, since their merges are
+  commutative (`sources` on `UseSettingsDocReturn`).
+- Legacy GIF and DM-index shards are decoded with the account signer and unioned
+  into the shared documents, which then republish the union.
+- Setup Sync and the NIP-65 mirror carry legacy documents to new relays only as
+  exact signed bytes; one whose signature was not kept is left behind rather than
+  re-signed.
+
+Older builds keep reading the legacy documents, so they stop seeing changes made
+on upgraded devices until they upgrade too. Deleting the legacy documents
+(NIP-09) is left to a later release, once older builds have aged out.
 
 ## Establishing and maintaining sync
 
 The first **Start sync** / **Sync now** action is deliberately explicit. It
 refreshes the user's existing replaceable records; copies their signed NIP-29,
 search, DM-relay and Blossom lists; mirrors the complete encrypted Concord
-community vault (kind 33302), creator invite authority (kind 13303), and dynamic
-topic shards; and creates or refreshes the seven encrypted documents on every
-NIP-65 write relay. A relay-set change performs the same state seeding before
+community vault (kind 33302), creator invite authority (kind 13303); and creates or refreshes the settings root
+and the derived documents on every NIP-65 write relay. A relay-set change performs the same state seeding before
 publishing the new kind-10002 pointer. This ordering prevents a new device from
 following the pointer to an empty account relay.
 
-These copies keep their signed ciphertext where possible. Concord is never
+Sync now is also what may create the settings root for an account that has none
+(see above). These copies keep their signed ciphertext where possible. Concord is never
 reduced to community IDs: the vault also carries private channel/control keys,
 old epochs, relay hints, tombstones and invite references needed for recovery.
 Invite records likewise contain the creator secrets needed to revoke a link.
@@ -47,8 +155,8 @@ the cold-boot sync performs the same discovery before the UI opens.
 Each installation has a device-local **Automatic settings sync** switch. Turning
 it off stops that client from publishing or applying encrypted settings
 automatically, including read-state and frequent-reaction updates, and skips the
-settings fetch during cold boot. Encrypted GIF-favorite and DM-conversation
-index shards follow the same switch. It does not travel in NIP-78 — otherwise one
+settings fetch during cold boot. The GIF-favorite and DM-conversation index
+documents follow the same switch. It does not travel in NIP-78 — otherwise one
 client could turn every other client back on or off. **Sync now** remains an
 explicit one-shot publish while the switch is off. Standard signed Nostr lists
 still change when the user explicitly edits or saves those lists.
@@ -91,9 +199,9 @@ entries newer than `read-state`; the base is rewritten when the delta passes
 does not matter. A build that predates the split reads only the base, and sees
 another device's reads at the next rollover.
 
-The cost is bounded: the standing REQ is still **one** filter with seven `#d`
-values (`NostrSync.tsx`), so there are no extra subscriptions — seven decrypts on
-boot instead of one.
+The cost is bounded: the standing REQ is still one subscription (`NostrSync.tsx`)
+— the root and legacy documents by `#d`, the derived ones by author — and the
+derived documents decrypt locally.
 
 ## `APP_ID`
 
@@ -103,14 +211,13 @@ boot instead of one.
 export const APP_ID: string = config("APP_ID") || "armada";
 ```
 
-`${APP_ID}/<name>` is what lets a fork or a custom build own its own documents
-on the same identity without colliding — and, read the other way, is what keeps
-Armada's documents out of every other NIP-78 client's way on a kind the whole
-ecosystem shares.
+`d = ${APP_ID}` is the root, so a fork or a custom build owns its own root — and
+with it its own derived documents — on the same identity without colliding. The
+legacy `${APP_ID}/<name>` documents are named the same way, which also keeps them
+out of every other NIP-78 client's way on a kind the whole ecosystem shares.
 
-Because the default is `"armada"`, every `d` tag is byte-identical to what
-shipped before it was parameterized. **Don't change the default.** It would
-strand every existing install's settings.
+**Don't change the default** `"armada"`. It would strand every existing
+install's root, and with it everything derived from it.
 
 `APP_ID` is deliberately separate from `APP_NAME`, which is cosmetic: renaming a
 deployment must not move the documents its users already read.
@@ -126,7 +233,8 @@ A fork that changes `APP_ID` must also change
    whatever subset the caller passed — on every device. A caller that publishes
    on its own schedule gates on `isFetched` (read-state, reactions) or on the
    metadata document's existence (`useConfigDocSync`, for which
-   `metadata === null` means "this user has no Armada settings at all").
+   `metadata === null` means "this user has no Armada settings at all"). The
+   first derived write of a document merges over its resolved legacy copy.
 2. **The metadata writer strips the migrated fields.** See the migration
    section — this is what makes the timestamp comparison there mean anything.
 3. **`lastSync` goes on `metadata` only.** Nothing here reads it; it exists
@@ -139,7 +247,10 @@ A fork that changes `APP_ID` must also change
    addressable supersession, so "the document on disk" is by construction the
    newest one this device has seen from any source — which is why a write
    re-reads the store rather than trusting the query cache.
-5. **Writes to one document are serialized, and the query cache is not allowed
+5. **Never write a legacy document, and never write the root after it exists.**
+   The migration's "newer legacy wins" rule is sound only because legacy
+   documents come from older builds alone.
+6. **Writes to one document are serialized, and the query cache is not allowed
    to regress.** A write spans a store read and two signer round-trips —
    seconds on a NIP-46 signer — so two edits back to back (rail drags) would
    otherwise merge over the same previous version and stamp the same
@@ -154,7 +265,7 @@ A fork that changes `APP_ID` must also change
    flight (not just while its debounce pends); and the apply effect refuses
    any event older than one it has already applied.
 
-## The migration window
+## The metadata-split migration window
 
 Before the split, everything was in `armada/metadata`. The migration is **lazy**
 — there is no boot-time write storm, and no publish built over a read that might
@@ -193,27 +304,34 @@ disagree.
 
 `NotificationRelayService` subscribes to and stores these documents while the
 app is dead, so a change made on another device is already on disk at next open.
-It needs the tag set **before any WebView has run** (a cold boot reads prefs and
-opens sockets long before the app is opened), so it carries
-`SelfState.DEFAULT_D_TAGS` alongside the `selfDTags` list the plugin config
-supplies.
+It needs the account-signed tag set **before any WebView has run** (a cold boot
+reads prefs and opens sockets long before the app is opened), so it carries
+`SelfState.DEFAULT_D_TAGS` — the root plus the legacy documents — alongside the
+`selfDTags` list the plugin config supplies.
 
+- The derived documents need the root, which the service never sees. The WebView
+  sends `selfDocs` (`nativeSelfDocs`): each derived author with its one `d`. The
+  service subscribes to those authors, and `SelfState.storable` admits each only
+  at that exact coordinate. Until a WebView with the root has configured it, the
+  service mirrors the root and the legacy documents only.
+- read-state entries carry the document's NIP-44 **conversation key**, so the
+  service opens them to dismiss notifications read elsewhere without the user's
+  signer. A conversation key decrypts that one document and cannot sign.
+- The derived filter has its own resume cursor, keyed by the author set, so a
+  newly configured set is read in full rather than from the account's cursor.
+- `selfCoordinateOf` includes the author: a derived document must not share a
+  newest-version floor with the user's.
 - Absent config means "use the default", never "use nothing" — an empty set
   would drop the kind-30078 subscription entirely. That is also what an older
   WebView, which doesn't send the field, gets.
-- The REQ builder and `SelfState.storable` must use the **same** set, or the
+- The REQ builder and `SelfState.storable` must use the **same** sets, or the
   service subscribes to documents it then refuses to store.
-- Dynamic documents are admitted by the same bounded topic catalogue as the
-  WebView (`armada-gif-favorites` and `armada-dm-conversations`); their opaque
-  coordinates are not copied into preferences one by one.
 - The background subscription runs only on the account's self-state relays.
   Joined NIP-29 servers carry conversation traffic and must never become a
-  fallback destination for private settings or topic shards.
+  fallback destination for private settings.
 - `settingsDocs.test.ts` reads `SelfState.kt` and asserts the default set
-  matches `SETTINGS_DOC_NAMES`. Drift is otherwise silent, and shows up only as
-  "that one setting doesn't travel between my devices".
-
-Nothing native decrypts these; storing the raw event verbatim is the whole job.
+  matches the root plus `SETTINGS_DOC_NAMES`. Drift is otherwise silent, and
+  shows up only as "that one setting doesn't travel between my devices".
 
 ## What is deliberately NOT here
 
@@ -232,20 +350,13 @@ Nothing native decrypts these; storing the raw event verbatim is the whole job.
   Web Push subscriptions, native-service enablement, and foreground intent are
   device capabilities. The category choices themselves (`PushPrefs`) sync in
   `armada/notifications`; localStorage is only their background-runtime mirror.
-- **GIF favorites**, which use kind 30078 but a different scheme: one
-  per-installation shard at `armada/gif-favorites/<deviceId>`, discovered by the
-  `t` tag `armada-gif-favorites` rather than by `d`. Merging shards gives
-  add/remove convergence without one upgrading device replacing another's list.
-- **DM conversation discovery**, which uses eight bounded, encrypted kind-30078
-  buckets per installation at
-  `${APP_ID}/dm-conversations/<opaqueDeviceId>/<bucket>`, discovered only by the
-  public `t` tag `armada-dm-conversations`. The encrypted payload contains the
+- **Anything in the DM conversation index beyond discovery.** Each record is the
   canonical participant-set key, a latest-activity marker and whether this
   account has participated. It deliberately contains no message text, preview,
-  read state, request state, ciphertext or gift-wrap id. Shards merge additively
-  across installations; they restore placeholder rows quickly while the real
-  NIP-04/NIP-17 history catches up. Existing trust, mute, closed-DM and request
-  rules still decide whether a restored row is visible.
+  read state, request state, ciphertext or gift-wrap id. It restores placeholder
+  rows quickly while the real NIP-04/NIP-17 history catches up; existing trust,
+  mute, closed-DM and request rules still decide whether a restored row is
+  visible.
 - **`themes`** — a per-mode override of the builtin light/dark palettes that
   this client only ever read and never wrote. Removed. The schema is loose, so a
   copy left in an older device's document passes through untouched.
@@ -261,7 +372,9 @@ rather than an age or a count.
 
 ## Adding a document
 
-1. A name in `SETTINGS_DOC_NAMES` (`src/lib/settingsDocs.ts`).
+1. A name in `SETTINGS_DOC_NAMES` (`src/lib/settingsDocNames.ts`). Its derived
+   key and `d` follow from the name; the Android service learns them from
+   `selfDocs`.
 2. A `z.looseObject` schema in `src/lib/schemas.ts`, wired into
    `SETTINGS_DOC_SCHEMAS`.
 3. If it mirrors AppConfig: a key list in `src/contexts/AppContext.ts`, an entry
@@ -269,7 +382,6 @@ rather than an age or a count.
    `useConfigDocSync("<name>")` call in `NostrSync`. Otherwise, an owner module
    that calls `useSettingsDoc("<name>")` and honours rule 1 above.
 4. If it takes fields out of an existing document, an entry in `MIGRATED_KEYS`.
-5. `SelfState.DEFAULT_D_TAGS` in the Android service.
 
 The schema must stay **loose**. A key this build doesn't know has to survive a
 read-modify-write, or a newer Armada on another device loses its settings every
