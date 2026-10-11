@@ -14,7 +14,7 @@ import {
   parseGitTicket,
 } from "@/lib/gitActivity";
 import { isGitAnnouncementDiscoveryRelay, normalizeRelayUrl } from "@/lib/platform";
-import { bootLedgers, recordUnits, rootsUnit, ticketChildrenCovered, unitMark } from "@/wire/bootLedger";
+import { bootLedgers, recordUnits, rootsUnit, ticketChildrenCovered, unitMark, type BootLedger } from "@/wire/bootLedger";
 import { useWireScopes } from "@/wire/useWireScopes";
 
 import type { GitRepositoryWireInput } from "@/wire/spec";
@@ -28,6 +28,28 @@ const ROOT_DISCOVERY_TIMEOUT_MS = 8_000;
 const ROOT_RESUME_OVERLAP_SECONDS = 600;
 /** Keep direct child backfill requests at the same conservative size as wire REQs. */
 const ROOT_FILTER_CHUNK_SIZE = 100;
+
+/**
+ * The roots whose children one relay's backfill must read: those the wire
+ * watches there and whose children no past round covered. A root tagging
+ * several repositories belongs to the first one the client knows and is
+ * watched on that repository's relays only (wire/spec.ts); a read on any other
+ * relay can never be marked covered.
+ */
+export function childBackfillRootIds(
+  roots: Iterable<NostrRumor>,
+  relayAddresses: ReadonlySet<string>,
+  known: ReadonlySet<string>,
+  ledger: BootLedger | undefined,
+): string[] {
+  const out: string[] = [];
+  for (const root of roots) {
+    const ticket = parseGitTicket(root);
+    const owner = ticket ? matchGitTicketRepository(ticket, known)?.coordinate : undefined;
+    if (owner !== undefined && relayAddresses.has(owner) && !ticketChildrenCovered(ledger, root.id)) out.push(root.id);
+  }
+  return out.sort();
+}
 
 /**
  * Cache-first root discovery for every actively attached repository. Ignores
@@ -124,16 +146,10 @@ export function useWireGitTicketRoots(repositories: readonly GitRepositoryWireIn
       // the relay cursor, so backfill children directly — for roots the wire's
       // ledger hasn't covered on this relay (covered ones resume from their mark).
       await bootLedgers.ready();
+      const known = new Set(repositories.map((repository) => repository.address));
       await Promise.all([...addressesByRelay].map(async ([relay, atRelay]) => {
         const ledger = bootLedgers.get(normalizeRelayUrl(relay) ?? relay);
-        const rootIds = [...roots.values()]
-          .filter((root) => {
-            const ticket = parseGitTicket(root);
-            return Boolean(ticket && matchGitTicketRepository(ticket, atRelay))
-              && !ticketChildrenCovered(ledger, root.id);
-          })
-          .map((root) => root.id)
-          .sort();
+        const rootIds = childBackfillRootIds(roots.values(), atRelay, known, ledger);
         for (let offset = 0; offset < rootIds.length; offset += ROOT_FILTER_CHUNK_SIZE) {
           const ids = rootIds.slice(offset, offset + ROOT_FILTER_CHUNK_SIZE);
           try {
