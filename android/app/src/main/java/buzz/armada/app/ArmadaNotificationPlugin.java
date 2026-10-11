@@ -545,6 +545,19 @@ public class ArmadaNotificationPlugin extends Plugin {
                 == PackageManager.PERMISSION_GRANTED;
     }
 
+    /**
+     * Per DM relay, since when the service's NIP-17 inbox has been continuously
+     * live ({@code {relays: {url: ms}}}); see NotificationRelayService.dmCoverage.
+     */
+    @PluginMethod
+    public void getDmCoverage(PluginCall call) {
+        NotificationRelayService.dmCoverage(coverage -> {
+            JSObject ret = new JSObject();
+            ret.put("relays", coverage);
+            call.resolve(ret);
+        });
+    }
+
     /** Non-secret diagnostics for permission, channels and the live relay service. */
     @PluginMethod
     public void getHealth(PluginCall call) {

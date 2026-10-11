@@ -910,6 +910,37 @@ public class NotificationRelayService extends Service {
     private static volatile long processLastErrorAtMs;
     private static volatile String processLastError;
 
+    /**
+     * Per DM relay, since when (wall ms) the NIP-17 inbox subscription has been
+     * continuously live: every wrap published there since then was received,
+     * stored and queued for the WebView's drain, whether or not it could be
+     * opened here. A relay whose socket or subscription is down is absent.
+     * Lets the WebView skip re-reading the backdate window from relays the
+     * service already watched. Answers on the handler thread.
+     */
+    static void dmCoverage(java.util.function.Consumer<JSONObject> cb) {
+        NotificationRelayService svc = instance;
+        if (svc == null) {
+            cb.accept(new JSONObject());
+            return;
+        }
+        svc.handler.post(() -> {
+            JSONObject out = new JSONObject();
+            if (svc.shouldWatchDm()) {
+                for (RelayConnection rc : svc.connections) {
+                    if (rc.closed || !rc.socketOpen || !rc.dm17Live || rc.dm17ReqAtMs <= 0) continue;
+                    if (!svc.dmRelays.contains(rc.relayUrl)) continue;
+                    try {
+                        out.put(rc.relayUrl, rc.dm17ReqAtMs);
+                    } catch (JSONException ignored) {
+                        // A relay URL is always a valid key.
+                    }
+                }
+            }
+            cb.accept(out);
+        });
+    }
+
     /** Build a non-secret diagnostic snapshot for the Capacitor bridge. */
     static JSONObject healthSnapshot(Context context) {
         JSONObject out = new JSONObject();
@@ -2311,6 +2342,9 @@ public class NotificationRelayService extends Service {
         // NIP-17: the sub reached EOSE (live), and whether this session's REQ
         // is a catch-up replay whose rumors notify only from the gap onward.
         volatile boolean dm17Live = false;
+        // When this session's NIP-17 REQ went out (wall ms): once it is live,
+        // every wrap published here since then reached the service.
+        volatile long dm17ReqAtMs = 0;
         volatile boolean dm17CatchingUp = false;
         volatile long dm17NotifyFloorSec = 0;
         final Set<String> bridgedChallenges = new HashSet<>();
@@ -2545,6 +2579,12 @@ public class NotificationRelayService extends Service {
             }
             sentFilters.put(subId, signature);
             standingSubs.add(subId);
+            // Coverage restarts only when the inbox REQ actually goes out again;
+            // a reconfigure that leaves it unchanged keeps it (dmCoverage).
+            if (subId.equals(subDm17)) {
+                dm17ReqAtMs = System.currentTimeMillis();
+                dm17Live = false;
+            }
             cursorGate.onReqSent(subId);
             if (ServiceProfiler.ON) ServiceProfiler.count("frame.out REQ " + subId.substring(0, Math.min(2, subId.length())));
             if (ServiceProfiler.ON) ServiceProfiler.count("frame.out REQ " + subId.substring(0, Math.min(2, subId.length())) + " " + ServiceProfiler.host(relayUrl) + (filters.length > 0 && filters[0].has("since") ? " since" : " full"));
@@ -3401,6 +3441,9 @@ public class NotificationRelayService extends Service {
                 // blind re-REQ is an unwinnable retry storm (#49). Everything
                 // else (relay restart, transient error, rate limit) earns a
                 // DELAYED resubscribe with per-connection exponential backoff.
+                // A dropped inbox sub no longer vouches for what the relay received (dmCoverage).
+                RelayConnection dropped = connectionFor(relayUrl);
+                if (dropped != null && sub.equals(dropped.subDm17)) dropped.dm17Live = false;
                 if (isAuthRequired(reason)) {
                     // Remember the wall for this session; an EOSE or EVENT on
                     // the same sub (after an AUTH lands) clears it. A session

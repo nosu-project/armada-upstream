@@ -1,7 +1,10 @@
 import { getPublicKey, generateSecretKey } from "nostr-tools/pure";
 import { describe, expect, it, vi } from "vitest";
 
-import { dm17InboxFilter, queryWrapsPerRelay, relayScanWatermarks, syncDm17Inbox } from "@/hooks/useDm17";
+const coverage = vi.hoisted(() => ({ map: new Map<string, number>() }));
+vi.mock("@/lib/nativeNotifications", () => ({ nativeDmCoverage: async () => coverage.map }));
+
+import { dm17InboxFilter, queryWrapsPerRelay, relayScanWatermarks, serviceCovered, syncDm17Inbox } from "@/hooks/useDm17";
 import { readDm17Cursor, updateDm17Cursor } from "@/lib/nip17/dm17Store";
 import { MAX_WRAP_BACKDATE_SECS } from "@/lib/nip17/protocol";
 
@@ -296,5 +299,49 @@ describe("syncDm17Inbox", () => {
     await expect(c).resolves.toBe(true);
     await expect(d).resolves.toBe(true);
     expect(queries.length).toBe(3);
+  });
+
+  it("does not ask a relay the background service has covered since its last full read", async () => {
+    const self = getPublicKey(generateSecretKey());
+    const url = "wss://covered.example";
+    const newest = 5_000_000_000;
+    const lastFull = Date.now() - 60 * 60_000; // past the 15-minute cadence
+    await updateDm17Cursor(self, {
+      newest,
+      oldest: 1,
+      exhausted: false,
+      relayNewest: { [url]: newest },
+      relayFullScanAt: { [url]: lastFull },
+    });
+    const { pool, queries } = deferredPool();
+    const ctx = syncCtx(pool, self, [url]);
+
+    // Live since before our last full read: the relay isn't asked at all.
+    coverage.map = new Map([[url, lastFull - 1_000]]);
+    await expect(syncDm17Inbox(ctx, { force: true, full: true })).resolves.toBe(true);
+    expect(queries).toHaveLength(0);
+
+    // The service reconnected after it: a routine poll reads the full window
+    // once to close the gap…
+    coverage.map = new Map([[url, lastFull + 1_000]]);
+    const full = syncDm17Inbox(ctx, { force: true });
+    await vi.waitFor(() => expect(queries.length).toBe(1));
+    expect(queries[0].filter.since).toBe(newest - RESYNC_SLACK_SECS);
+    queries[0].resolve([]);
+    await expect(full).resolves.toBe(true);
+    // …and the relay is left alone from then on.
+    await expect(syncDm17Inbox(ctx, { force: true })).resolves.toBe(true);
+    expect(queries).toHaveLength(1);
+    coverage.map = new Map();
+  });
+});
+
+describe("serviceCovered()", () => {
+  it("needs coverage from before the last full read, on the normalized URL", () => {
+    const cov = new Map([["wss://a.example", 1_000]]);
+    expect(serviceCovered(cov, "wss://a.example/", 2_000)).toBe(true);
+    expect(serviceCovered(cov, "wss://a.example", 500)).toBe(false);
+    expect(serviceCovered(cov, "wss://b.example", 2_000)).toBe(false);
+    expect(serviceCovered(cov, "wss://a.example", 0), "never read in full").toBe(false);
   });
 });

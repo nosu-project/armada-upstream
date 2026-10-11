@@ -511,6 +511,20 @@ describe("dm17Store relay cursors", () => {
     });
   });
 
+  it("persists per-relay full-scan times monotonically, pruned like the watermarks", async () => {
+    const viewer = getPublicKey(generateSecretKey());
+    await updateDm17Cursor(viewer, {
+      relayFullScanAt: { "wss://a.example": 5_000, "wss://b.example": 7_000 },
+    });
+    await updateDm17Cursor(
+      viewer,
+      { relayFullScanAt: { "wss://a.example": 4_000 } },
+      { pruneRelaysTo: ["wss://a.example"] },
+    );
+
+    expect((await readDm17Cursor(viewer))?.relayFullScanAt).toEqual({ "wss://a.example": 5_000 });
+  });
+
   it("leaves legacy global progress unattributed so every relay gets a recovery scan", async () => {
     const viewer = getPublicKey(generateSecretKey());
     await updateDm17Cursor(viewer, {

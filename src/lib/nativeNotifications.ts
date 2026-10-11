@@ -1,5 +1,7 @@
 import { Capacitor, registerPlugin, type PluginListenerHandle } from "@capacitor/core";
 
+import { normalizeRelayUrl } from "@/lib/platform";
+
 import type { ConcordLevelPolicy } from "@/hooks/useNotifLevels";
 import type { MediaPolicyConfig } from "@/lib/mediaPolicy";
 import type { NativeSelfDoc } from "@/lib/settingsKeys";
@@ -61,6 +63,8 @@ export interface ArmadaNotificationPlugin {
   /** Prompt for POST_NOTIFICATIONS (Android 13+). */
   requestPermission(): Promise<{ granted: boolean }>;
   getHealth(): Promise<NativeNotificationHealth>;
+  /** Per DM relay, since when (ms) the service's NIP-17 inbox has been continuously live. */
+  getDmCoverage(): Promise<{ relays: Record<string, number> }>;
   /** Open Android's app-level or one-channel notification settings screen. */
   openNotificationSettings(options: {
     channel?: "messages" | "calls" | "service";
@@ -263,6 +267,28 @@ export interface ArmadaNotificationPlugin {
 
 export const ArmadaNotification =
   registerPlugin<ArmadaNotificationPlugin>("ArmadaNotification");
+
+/**
+ * Since when (ms) the background service has received every NIP-17 wrap
+ * published to each DM relay (normalized URL → ms). Every wrap it receives is
+ * stored and queued for the WebView's drain, so a relay covered since our own
+ * last full read of it needs no re-read of the backdate window. Empty off
+ * Android or when the service can't answer.
+ */
+export async function nativeDmCoverage(): Promise<Map<string, number>> {
+  if (Capacitor.getPlatform() !== "android") return new Map();
+  try {
+    const { relays } = await ArmadaNotification.getDmCoverage();
+    const out = new Map<string, number>();
+    for (const [url, since] of Object.entries(relays ?? {})) {
+      const key = normalizeRelayUrl(url);
+      if (key && Number.isFinite(since) && since > 0) out.set(key, since);
+    }
+    return out;
+  } catch {
+    return new Map();
+  }
+}
 
 /** Battery-optimization exemption; `true` off Android or on older binaries (no false warnings). */
 export async function isIgnoringBatteryOptimizations(): Promise<boolean> {

@@ -473,6 +473,30 @@ export interface Dm17Cursor {
    * means "never completed a scan", so a legacy upgrade rescans every relay.
    */
   relayNewest?: Record<string, number>;
+  /**
+   * Per relay, when (ms) its last full backdate-window scan completed. Persisted so a
+   * cold start doesn't re-read two days of wraps from every relay.
+   */
+  relayFullScanAt?: Record<string, number>;
+}
+
+/** Monotonic per-relay merge; `keep` (when given) drops relays outside it. */
+function mergeRelayStamps(
+  prev: Record<string, number> | undefined,
+  patch: Record<string, number> | undefined,
+  keep: Set<string> | undefined,
+): Record<string, number> {
+  const out = { ...(prev ?? {}) };
+  for (const [relay, value] of Object.entries(patch ?? {})) {
+    if (!Number.isFinite(value) || value <= 0) continue;
+    out[relay] = Math.max(out[relay] ?? 0, value);
+  }
+  if (keep) {
+    for (const relay of Object.keys(out)) {
+      if (!keep.has(relay)) delete out[relay];
+    }
+  }
+  return out;
 }
 
 const cursorKey = (self: string) => `dm17-cursor:${self}`;
@@ -493,17 +517,9 @@ export async function updateDm17Cursor(
   opts?: { pruneRelaysTo?: readonly string[] },
 ): Promise<void> {
   const prev = await readDm17Cursor(self);
-  const relayNewest = { ...(prev?.relayNewest ?? {}) };
-  for (const [relay, newest] of Object.entries(patch.relayNewest ?? {})) {
-    if (!Number.isFinite(newest) || newest <= 0) continue;
-    relayNewest[relay] = Math.max(relayNewest[relay] ?? 0, newest);
-  }
-  if (opts?.pruneRelaysTo) {
-    const keep = new Set(opts.pruneRelaysTo);
-    for (const relay of Object.keys(relayNewest)) {
-      if (!keep.has(relay)) delete relayNewest[relay];
-    }
-  }
+  const keep = opts?.pruneRelaysTo ? new Set(opts.pruneRelaysTo) : undefined;
+  const relayNewest = mergeRelayStamps(prev?.relayNewest, patch.relayNewest, keep);
+  const relayFullScanAt = mergeRelayStamps(prev?.relayFullScanAt, patch.relayFullScanAt, keep);
   const next: Dm17Cursor = {
     newest: Math.max(prev?.newest ?? 0, patch.newest ?? 0),
     oldest:
@@ -514,6 +530,7 @@ export async function updateDm17Cursor(
         : (prev?.oldest ?? 0),
     exhausted: patch.exhausted ?? prev?.exhausted ?? false,
     ...(Object.keys(relayNewest).length > 0 ? { relayNewest } : {}),
+    ...(Object.keys(relayFullScanAt).length > 0 ? { relayFullScanAt } : {}),
   };
   await writeFolded(cursorKey(self), next);
 }

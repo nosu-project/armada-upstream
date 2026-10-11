@@ -20,7 +20,7 @@ import { STORE_READ } from "@/lib/storeQuery";
 import { useWireScopes } from "@/wire/useWireScopes";
 import { dmThreadScope } from "@/wire/bus";
 import { dmThreadSnapshotScope, readTimelineSnapshot } from "@/lib/timelineSnapshot";
-import { isDmSynced, markDmSynced } from "@/lib/dmSynced";
+import { isDmSynced, markDmSynced, readDmPullFloor, writeDmPullFloor } from "@/lib/dmSynced";
 import { markOwnWebPushEvent } from "@/lib/webPushState";
 
 import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
@@ -107,6 +107,18 @@ export function nextDirectionCursor(events: NostrRumor[]): DirectionCursor {
   if (events.length < DM_PAGE_SIZE) return null;
   const oldest = Math.min(...events.map((e) => e.created_at));
   return Number.isFinite(oldest) ? oldest - 1 : null;
+}
+
+/**
+ * Load-older cursors when the first page was skipped: every relay pages back from
+ * just below the oldest stored message (from the top when nothing is stored).
+ */
+export function seedDmCursors(relays: string[], stored: NostrRumor[]): RelayCursors {
+  const oldest = stored.length > 0 ? Math.min(...stored.map((e) => e.created_at)) : undefined;
+  const until: DirectionCursor = oldest !== undefined ? oldest - 1 : undefined;
+  const out: RelayCursors = {};
+  for (const url of relays) out[url] = { sent: until, received: until };
+  return out;
 }
 
 /** True if any relay/direction still has older pages to fetch. */
@@ -459,6 +471,7 @@ export function useDMConversations(options?: { decryptPreviews?: boolean }) {
       const store = await eventStore;
       // Newest established-peer set at execution time (not fetch scheduling).
       const scopedKnownPeers = knownPeersRef.current;
+      const peerKey = [...scopedKnownPeers].sort().join(",");
 
       // 1. LOCAL-FIRST: paint from the store (fed by the wire), scoped to
       //    established authors like the relay queries.
@@ -479,8 +492,15 @@ export function useDMConversations(options?: { decryptPreviews?: boolean }) {
         const startedAt = Math.floor(Date.now() / 1000);
         // After the first full page, top up with `since` (NIP-04 timestamps are
         // real) instead of re-downloading the first page every minute.
-        const floor = pullFloorRef.current;
+        // Stored, so a cold start and the hook's other mount (same query key)
+        // top up too instead of re-reading the first page.
+        const floor = pullFloorRef.current ?? readDmPullFloor(pubkey, relayKey, peerKey);
         if (floor !== undefined) {
+          // A floor restored from a previous launch skipped the first page, so
+          // "load older" pages back from the oldest stored message instead.
+          if (Object.keys(cursorsRef.current).length === 0) {
+            cursorsRef.current = seedDmCursors(relays, local);
+          }
           const since = dmTopUpSince(floor);
           try {
             const events = await queryRelaysMerged(
@@ -497,6 +517,7 @@ export function useDMConversations(options?: { decryptPreviews?: boolean }) {
             if (signal.aborted) return;
             // Only an answered top-up moves the floor.
             pullFloorRef.current = startedAt;
+            writeDmPullFloor(pubkey, relayKey, peerKey, startedAt);
             if (events.length === 0) return;
             queryClient.setQueryData<NostrRumor[]>(queryKey, (old = []) => mergeDmEvents(old, events));
           } catch {
@@ -516,6 +537,7 @@ export function useDMConversations(options?: { decryptPreviews?: boolean }) {
           if (signal.aborted) return;
           cursorsRef.current = cursors;
           pullFloorRef.current = startedAt;
+          writeDmPullFloor(pubkey, relayKey, peerKey, startedAt);
           setHasMore(hasMoreCursor(cursors));
           // Completed: later loads may trust the store.
           markDmSynced("nip04", pubkey);
