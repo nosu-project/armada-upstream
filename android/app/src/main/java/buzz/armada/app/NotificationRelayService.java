@@ -47,6 +47,7 @@ import buzz.armada.app.relayfleet.CursorGate;
 import buzz.armada.app.relayfleet.FloodBreaker;
 import buzz.armada.app.relayfleet.GitRelayCover;
 import buzz.armada.app.relayfleet.Keepalive;
+import buzz.armada.app.relayfleet.RelayCover;
 import buzz.armada.app.relayfleet.NetworkSettle;
 import buzz.armada.app.relayfleet.RelayFleetPolicy;
 import buzz.armada.app.relayfleet.RelayFleetPolicy.ConnectionResult;
@@ -445,9 +446,22 @@ public class NotificationRelayService extends Service {
     // Concord (CORD-02) channel subscriptions, keyed for fast lookup:
     //   pkToStream2: stream pubkey (the kind-1059 wrap's author, hex) → decrypt
     //                material + display name + deep link for that channel/epoch
-    //   relayToPks2: relay url → the stream pubkeys that live on that relay
+    //   relayToPks2: relay url → the stream pubkeys WATCHED there (the cover)
+    //   concordPublishRelays: relay url → every stream pubkey its community
+    //                lists it for — where a reply is published
     private final java.util.Map<String, ConcordStream> pkToStream2 = new java.util.HashMap<>();
     private final java.util.Map<String, Set<String>> relayToPks2 = new java.util.HashMap<>();
+    private final java.util.Map<String, Set<String>> concordPublishRelays = new java.util.HashMap<>();
+    // Each community's listed relays and stream pubkeys, the cover's input.
+    private final java.util.Map<String, Set<String>> communityRelays = new java.util.HashMap<>();
+    private final java.util.Map<String, Set<String>> communityPks = new java.util.HashMap<>();
+    // Relays that rejected the stream keys' AUTH on a walled Concord sub this
+    // process: the cover picks them only for a community with nothing else.
+    private final Set<String> concordRefusedRelays = new HashSet<>();
+    // A community is published to every relay it lists, so a couple carry it.
+    static final int CONCORD_RELAYS_PER_COMMUNITY = 2;
+    // Rebuilds the fleet after a refusal; live sockets are kept (reconfigure).
+    private final Runnable recoverConcordRunnable = this::loadConfigAndReconnect;
     // The user's shared signer (nsec key / Amber grant / NIP-46 session),
     // rebuilt on every config load. Opens NIP-17 gift wraps addressed to the
     // user (the DM wrap filter is `{kinds:[1059], "#p":[userPubkey]}` on the DM
@@ -1694,6 +1708,7 @@ public class NotificationRelayService extends Service {
             // A hot account replacement must not inherit the outgoing user's
             // relay position (or any other native last-good state).
             cursors.clear();
+            concordRefusedRelays.clear();
             selfFloodByUrl.clear();
             selfSeenIds.clear();
             selfNewestByCoordinate.clear();
@@ -1777,6 +1792,7 @@ public class NotificationRelayService extends Service {
         healthSignerStatus = nativeSigner != null
                 ? "ready" : (sealedSigner != null ? "unavailable" : "missing");
 
+        coverConcordRelays();
         pruneGitRelays();
 
         // The relays to connect to: NIP-29 group relays ∪ DM relays ∪ Concord
@@ -2015,6 +2031,9 @@ public class NotificationRelayService extends Service {
     private void parseConcordSubs(String json) {
         pkToStream2.clear();
         relayToPks2.clear();
+        concordPublishRelays.clear();
+        communityRelays.clear();
+        communityPks.clear();
         if (json == null) return;
         try {
             JSONArray arr = new JSONArray(json);
@@ -2076,15 +2095,13 @@ public class NotificationRelayService extends Service {
                             mentionOnly, banned, mentionEveryoneAuthors,
                             Math.max(0, sub.optLong("joinedAtMs", 0))));
                 }
+                Set<String> listed = communityRelays.computeIfAbsent(communityId, k -> new LinkedHashSet<>());
+                communityPks.computeIfAbsent(communityId, k -> new LinkedHashSet<>()).addAll(pkList);
                 for (int j = 0; j < relays.length(); j++) {
                     String relay = relays.optString(j);
                     if (!isValidRelayUrl(relay)) continue;
-                    Set<String> set = relayToPks2.get(relay);
-                    if (set == null) {
-                        set = new LinkedHashSet<>();
-                        relayToPks2.put(relay, set);
-                    }
-                    set.addAll(pkList);
+                    listed.add(relay);
+                    concordPublishRelays.computeIfAbsent(relay, k -> new LinkedHashSet<>()).addAll(pkList);
                 }
             }
         } catch (JSONException e) {
@@ -2137,6 +2154,27 @@ public class NotificationRelayService extends Service {
                 }
             }
         } catch (JSONException e) { Log.w(TAG, "Failed to parse gitSubs", e); }
+    }
+
+    /**
+     * Watch each Concord community on {@link #CONCORD_RELAYS_PER_COMMUNITY} of
+     * its relays (see {@link RelayCover}) rather than all of them. Runs after
+     * the NIP-29, DM and self-state planes are parsed, since their relays are free.
+     */
+    private void coverConcordRelays() {
+        relayToPks2.clear();
+        Set<String> held = new HashSet<>(relayToGroupIds.keySet());
+        held.addAll(dmRelays);
+        held.addAll(selfRelays);
+        Map<String, Set<String>> assignment = RelayCover.assign(
+                communityRelays, held, CONCORD_RELAYS_PER_COMMUNITY, concordRefusedRelays);
+        for (Map.Entry<String, Set<String>> e : assignment.entrySet()) {
+            Set<String> pks = communityPks.get(e.getKey());
+            if (pks == null || pks.isEmpty()) continue;
+            for (String relay : e.getValue()) {
+                relayToPks2.computeIfAbsent(relay, k -> new LinkedHashSet<>()).addAll(pks);
+            }
+        }
     }
 
     /**
@@ -3406,7 +3444,16 @@ public class NotificationRelayService extends Service {
                     if (rc.pendingAuthIds.remove(okId)) {
                         healthAuthStatus = ok ? "accepted" : "rejected";
                         if (ok) rc.scheduleAuthResend();
-                        else recordHealthError("auth_rejected");
+                        else {
+                            recordHealthError("auth_rejected");
+                            // A walled Concord sub whose AUTH is refused can't be
+                            // served here: re-cover its communities elsewhere.
+                            if (rc.concordWalled && concordRefusedRelays.add(relayUrl)) {
+                                if (ServiceProfiler.ON) ServiceProfiler.count("concord.refused " + ServiceProfiler.host(relayUrl));
+                                handler.removeCallbacks(recoverConcordRunnable);
+                                handler.postDelayed(recoverConcordRunnable, 1_000);
+                            }
+                        }
                         continue;
                     }
                     // A reply publish's OK. `auth-required` earns ONE delayed
@@ -6737,7 +6784,7 @@ public class NotificationRelayService extends Service {
         }
         if (best == null) return null;
         List<String> relays = new ArrayList<>();
-        for (Map.Entry<String, Set<String>> e : relayToPks2.entrySet()) {
+        for (Map.Entry<String, Set<String>> e : concordPublishRelays.entrySet()) {
             if (e.getValue().contains(bestPk)) relays.add(e.getKey());
         }
         return relays.isEmpty() ? null : new C2Stream(bestPk, best, relays);
