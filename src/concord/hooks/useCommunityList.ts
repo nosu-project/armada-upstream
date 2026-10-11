@@ -1047,7 +1047,10 @@ export function useCommunityList() {
   return useQuery<ListData>({
     queryKey,
     enabled: Boolean(user?.signer.nip44),
-    staleTime: 30_000,
+    // A new fragment from any device reaches NostrSync's self-state stream,
+    // which invalidates this key; a mount-driven re-read of every fragment on
+    // every relay finds nothing that stream missed. Writes read first anyway.
+    staleTime: 10 * 60_000,
     // Keep retrying while a relay that missed the source read is outstanding (the
     // subscription can't detect an EMPTY returning relay).
     refetchInterval: (query) => query.state.data?.repairPending
