@@ -21,6 +21,7 @@ import { normalizeRelayUrl } from "@/lib/platform";
 import { logNostrEvent, logNostrReq } from "@/lib/nostrQueryLog";
 import { logRelayOpen } from "@/lib/relayConnectionLog";
 import { emitRelayReopened } from "@/lib/relayReopen";
+import { noteRelayClosed, noteRelayOpened } from "@/lib/relayHealth";
 import { onDesktopResume } from "@/lib/desktop";
 import { logSync } from "@/lib/syncLog";
 import {
@@ -242,6 +243,7 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
       socket: NRelay1["socket"];
     };
     const onOpen = () => {
+      noteRelayOpened(url);
       internals.authRetriedSubs?.clear();
       internals.authRetriedEvents?.clear();
       internals.authPromise = undefined;
@@ -265,6 +267,7 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
       // Standing consumers should re-REQ: their re-issued subs may have raced AUTH (see relayReopen.ts).
       emitRelayReopened(url);
     };
+    const onClose = () => noteRelayClosed(url);
     // Prefix check first so the wrap firehose isn't double-parsed.
     const onMessage = (...args: unknown[]) => {
       const data = args
@@ -285,6 +288,7 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
         };
         s.addEventListener("open", onOpen);
         s.addEventListener("message", onMessage);
+        s.addEventListener("close", onClose);
       } catch { /* ignore */ }
     };
     // NRelay1.wake() REPLACES relay.socket; intercept the assignment to watch the new one.

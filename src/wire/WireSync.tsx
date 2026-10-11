@@ -4,6 +4,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
 import { isBackgroundQuiet, onBackgroundQuiet } from "@/lib/backgroundQuiet";
+import { isRelayUnreachable, onRelayHealthChange, relayHealthVersion } from "@/lib/relayHealth";
 import { useBootGateOpen } from "@/lib/bootGate";
 
 import { useCommunityList } from "@/concord/hooks/useCommunityList";
@@ -671,6 +672,8 @@ function WireSyncInner() {
   // the spec settles several times at startup, and restarting every relay
   // aborted replays and re-authed identical subscriptions.
   const quiet = useSyncExternalStore(onBackgroundQuiet, isBackgroundQuiet, () => false);
+  // Relays that never connect are left alone until their cooldown ends (relayHealth.ts).
+  const healthVersion = useSyncExternalStore(onRelayHealthChange, relayHealthVersion, () => 0);
   const loopsRef = useRef(new Map<string, { sig: string; stop: () => void; bump: () => void }>());
   const loopsOwnerRef = useRef<{ nostr: unknown; pubkey?: string } | null>(null);
   // Explicit-`since` filters (git child / CI bootstraps) whose replay reached
@@ -845,7 +848,9 @@ function WireSyncInner() {
     // Android background with the native service watching: no loops; resume
     // restarts from cursors losslessly (backgroundQuiet.ts).
     const desired = new Map<string, NostrFilter[]>(
-      user && !quiet ? spec.subs.map(({ relay, filters }) => [relay, filters]) : [],
+      user && !quiet
+        ? spec.subs.filter(({ relay }) => !isRelayUnreachable(relay)).map(({ relay, filters }) => [relay, filters])
+        : [],
     );
     for (const [relay, loop] of loops) {
       const filters = desired.get(relay);
@@ -859,7 +864,7 @@ function WireSyncInner() {
     }
     // Loops outlive this effect (the teardown effect owns them).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nostr, user?.pubkey, spec.sig, quiet]);
+  }, [nostr, user?.pubkey, spec.sig, quiet, healthVersion]);
 
   // Throttled background tabs stretch the watchdog to minutes: kick every
   // relay's round when the tab becomes visible (socket reopens do the same per
