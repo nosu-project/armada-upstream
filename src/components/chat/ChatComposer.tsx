@@ -84,7 +84,7 @@ import { MAX_ENCRYPTED_BYTES, deviceInputLimit, keepUserFields, mimeOfPicked } f
 import { attachmentExpiration } from "@/lib/blossom";
 import { describeRefusal, uploadFailureReason } from "@/lib/blossomPreflight";
 import { KIND_GROUP_CHAT, relayRejectionMessage } from "@/lib/nip29";
-import { resizeImage } from "@/lib/resizeImage";
+import { makeImageThumb, resizeImage } from "@/lib/resizeImage";
 import { parseChatRoute, roomPath } from "@/lib/routes";
 import { consumeShareFor, onShareStashChanged } from "@/lib/shareTarget";
 import { recordSent } from "@/lib/shareTargets";
@@ -1113,11 +1113,13 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
       let audio: AudioMetadata | undefined;
       let audioWaveform: Promise<number[] | undefined> | undefined;
       let modelStill: Blob | undefined;
+      let imageThumb: File | undefined;
 
       if (isImage) {
         const resized = await resizeImage(file);
         uploadableFile = resized.file;
         resizedDim = resized.dimensions;
+        imageThumb = await makeImageThumb(uploadableFile);
       } else if (isVideo) {
         // Never throws for media reasons (falls back to the original). Progress is
         // patched per whole percent to limit re-renders.
@@ -1187,12 +1189,12 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
       }
       const originalMime = uploadableFile.type || mime;
 
-      // Poster frame or model still: a second blob, referenced as `image`/`thumb`.
+      // Poster frame, model still or image preview: a second blob, referenced as `image`/`thumb`.
       let posterFile = video?.poster
         ? new File([video.poster], replaceExtension(uploadableFile.name, ".jpg"), { type: "image/jpeg" })
         : modelStill
           ? new File([modelStill], replaceExtension(uploadableFile.name, ".png"), { type: "image/png" })
-          : undefined;
+          : imageThumb;
 
       // The plaintext, kept to render the upload locally (see primeAttachment).
       const plainFile = uploadableFile;
@@ -1246,7 +1248,10 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
         if (blurhashTag && !hasTag("blurhash")) tags.push(["blurhash", blurhashTag]);
       }
       if (video?.duration && !hasTag("duration")) tags.push(["duration", String(video.duration)]);
-      if (posterUrl) {
+      if (posterUrl && imageThumb) {
+        // An image's own preview is only its `thumb`; `image` would read as a poster.
+        tags.push(["thumb", posterUrl]);
+      } else if (posterUrl) {
         // NIP-94 defines both; clients differ on which they read.
         tags.push(["image", posterUrl], ["thumb", posterUrl]);
       }
