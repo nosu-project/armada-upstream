@@ -18,6 +18,7 @@ import {
   writeRumors,
 } from "@/concord/lib/rumorStore";
 import type { Channel, Community } from "@/concord/lib/types";
+import { isRelayUnreachable } from "@/lib/relayHealth";
 import { beginSyncTask } from "@/lib/syncActivity";
 import { registerSyncTopic } from "@/sync/syncManager";
 import { emitWireScopes } from "@/wire/bus";
@@ -42,6 +43,21 @@ const BACKFILL_EOSE_GRACE_MS = 500;
 const BACKFILL_MAX_PAGES = 20;
 /** Pages per `loadOlder` scroll-up when the local store is exhausted. */
 export const LOAD_OLDER_MAX_PAGES = 6;
+/** Older-history pages a background round reads; deeper history is the scroll-up's job. */
+const ROUND_OLDER_PAGES = 2;
+/** Overlap behind the saved `newest` for the newest pass (publisher clock skew; CORD-01: no backdating). */
+const NEWEST_OVERLAP_SECS = 10 * 60;
+/**
+ * Relays older history is paged from. A community's wraps are published to all
+ * its relays, so the rest return the same pages again.
+ */
+const HISTORY_RELAYS = 2;
+
+/** The relays to page a community's older history from: its first reachable few. */
+export function historyRelays(community: Pick<Community, "relays">): string[] {
+  const live = community.relays.filter((url) => !isRelayUnreachable(url));
+  return (live.length > 0 ? live : community.relays).slice(0, HISTORY_RELAYS);
+}
 
 /**
  * Floor between two rounds for one channel, and the freshness stamp's max age
@@ -104,6 +120,8 @@ export async function backfillStore(
      * read. Not called once any relay has failed.
      */
     onProgress?: (coveredDownTo: number) => Promise<void>;
+    /** An all-empty answer is conclusive (a `since`-bounded read of a quiet channel). */
+    emptyOk?: boolean;
   } = {},
 ): Promise<{ oldest?: number; newest?: number; events: NostrEvent[]; count: number; exhausted: boolean; failed: boolean }> {
   const maxPages = opts.maxPages ?? BACKFILL_MAX_PAGES;
@@ -194,7 +212,7 @@ export async function backfillStore(
   // the channel, so it's treated as a failure.
   const reachedBottom = active.length === 0 && !failed;
   const exhausted = reachedBottom && count > 0;
-  return { oldest, newest, events: collected, count, exhausted, failed: failed || (reachedBottom && count === 0) };
+  return { oldest, newest, events: collected, count, exhausted, failed: failed || (reachedBottom && count === 0 && !opts.emptyOk) };
 }
 
 /** Floor between two bus rings from one round's older-history pages. */
@@ -314,9 +332,13 @@ async function syncChannelRound(ctx: ChannelSyncContext, signal: AbortSignal): P
       tick();
     };
 
-    // Pass 1: the newest page, committed first — it's what the viewer sees.
+    // Pass 1: the newest page, committed first — it's what the viewer sees. Past a
+    // complete round only what's newer is asked for; the bridge fills a burst.
+    const newestSince = saved?.newest ? Math.max(0, saved.newest - NEWEST_OVERLAP_SECS) : undefined;
     const newest = await backfillStore(nostr, community.relays, channel, signal, {
       maxPages: 1,
+      since: newestSince,
+      emptyOk: newestSince !== undefined,
       freezeRetired,
       beforeRelay: authGate,
       onPage: writePage,
@@ -347,10 +369,12 @@ async function syncChannelRound(ctx: ChannelSyncContext, signal: AbortSignal): P
     // ring re-runs community-wide readers.
     const resumeFrom = saved?.oldest ?? (newest.oldest !== undefined ? newest.oldest - 1 : undefined);
     const olderRing = throttledRing(`c2:${idHex}`, OLDER_RING_MS);
-    let older: Awaited<ReturnType<typeof backfillStore>>;
+    let older: Awaited<ReturnType<typeof backfillStore>> = { events: [], count: 0, exhausted: true, failed: false };
     try {
-      older = await backfillStore(nostr, community.relays, channel, signal, {
+      // Nothing older once the bottom was reached; otherwise a couple of pages.
+      if (!saved?.exhausted) older = await backfillStore(nostr, historyRelays(community), channel, signal, {
         until: resumeFrom,
+        maxPages: ROUND_OLDER_PAGES,
         freezeRetired,
         beforeRelay: authGate,
         onPage: (events) => writePage(events, olderRing),
