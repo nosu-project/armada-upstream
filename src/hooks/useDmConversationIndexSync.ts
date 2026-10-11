@@ -2,6 +2,7 @@ import { useNostr } from "@nostrify/react";
 import { useQuery } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { verifyEventOnce } from "@/lib/verifyCache";
+import { loadSelfReadMarks, noteSelfRead, sinceSelfRead, storeSelfReadEvents } from "@/lib/selfReadMarks";
 
 import type { NostrEvent, NostrFilter, NostrSigner } from "@nostrify/nostrify";
 
@@ -339,10 +340,19 @@ export function useDmConversationIndexSync(): void {
       const ctx = { signer: user.signer, pubkey: user.pubkey, keys };
       const filters = dmConversationIndexFilters(user.pubkey, keys);
       const store = await eventStore;
+      await loadSelfReadMarks();
+      const readKeyFor = (relay: string) => `dm-index\u0000${user.pubkey}\u0000${relay}\u0000${keysKey}`;
       const deadline = AbortSignal.any([signal, AbortSignal.timeout(6_000)]);
       const [settled, cached] = await Promise.all([
         // Strict: a CLOSED REQ must not read as "no index there".
-        Promise.allSettled(relays.map((relay) => queryRelayStrict(nostr.relay(relay), filters, { signal: deadline }))),
+        Promise.allSettled(relays.map(async (relay) => {
+          // Resumed: what an earlier pull read is in the store (stored below and by NostrSync).
+          const requestedAt = Math.floor(Date.now() / 1000);
+          const events = await queryRelayStrict(nostr.relay(relay), sinceSelfRead(filters, readKeyFor(relay)), { signal: deadline });
+          await storeSelfReadEvents(store, filters, events);
+          noteSelfRead(readKeyFor(relay), requestedAt);
+          return events;
+        })),
         store.query(filters).catch(() => []),
       ]);
       const completed = settled.flatMap((result, index) =>

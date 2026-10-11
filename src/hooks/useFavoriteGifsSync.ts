@@ -2,6 +2,7 @@ import { useNostr } from "@nostrify/react";
 import { useQuery } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { verifyEventOnce } from "@/lib/verifyCache";
+import { loadSelfReadMarks, noteSelfRead, sinceSelfRead, storeSelfReadEvents } from "@/lib/selfReadMarks";
 
 import { selfStateRelays } from "@/contexts/AppContext";
 import {
@@ -230,9 +231,18 @@ export function useFavoriteGifsSync(): void {
       if (!user) throw new Error("Not logged in");
       const filters = favoriteGifFilters(user.pubkey, keys);
       const store = await eventStore;
+      await loadSelfReadMarks();
+      const readKeyFor = (relay: string) => `gifs\u0000${user.pubkey}\u0000${relay}\u0000${keysKey}`;
       const deadline = AbortSignal.any([signal, AbortSignal.timeout(6000)]);
       const [settled, cached] = await Promise.all([
-        Promise.allSettled(relays.map((relay) => nostr.relay(relay).query(filters, { signal: deadline }))),
+        Promise.allSettled(relays.map(async (relay) => {
+          // Resumed: what an earlier pull read is in the store (stored below and by NostrSync).
+          const requestedAt = Math.floor(Date.now() / 1000);
+          const events = await nostr.relay(relay).query(sinceSelfRead(filters, readKeyFor(relay)), { signal: deadline });
+          await storeSelfReadEvents(store, filters, events);
+          noteSelfRead(readKeyFor(relay), requestedAt);
+          return events;
+        })),
         store.query(filters).catch(() => []),
         readyFavoriteGifShards(),
       ]);

@@ -52,6 +52,7 @@ import type { CachingReqOpts } from "@/lib/NostrBatcher";
 import { ACTIVE_THEME_KIND, parseDittoTheme } from "@/lib/themeEvent";
 import { savePushPrefs } from "@/lib/pushPrefs";
 import { KeyedThrottle } from "@/lib/keyedThrottle";
+import { loadSelfReadMarks, noteSelfRead, sinceSelfRead } from "@/lib/selfReadMarks";
 import { verifyEventOnce } from "@/lib/verifyCache";
 import { setPreferredVoiceServer } from "@/lib/voiceDevices";
 
@@ -71,13 +72,6 @@ const SELF_SYNC_KEY_MIN_GAP_MS = 15_000;
 
 /** Background time before the self-state REQ is rebuilt on return (half-open sockets never reconnect). */
 const SELF_SYNC_RESUBSCRIBE_AFTER_AWAY_MS = 30_000;
-
-/**
- * How far behind a relay's last complete read a resumed self-state REQ asks:
- * other devices stamp these documents with their own clocks. Matches the
- * notification service's `SELF_SINCE_SLACK_SEC`.
- */
-const SELF_SYNC_RESUME_SLACK_SECS = 600;
 
 function dTagOf(event: NostrEvent): string | undefined {
   for (const t of event.tags) if (t[0] === "d") return t[1];
@@ -145,8 +139,6 @@ function NostrSyncInner() {
   // NIP-01: the LOWER id wins when two replaceables share a second.
   const relayListSeenVersion = useRef<NostrEvent | undefined>(undefined);
   const seenSelfVersions = useRef<Map<string, SelfSyncEventVersion>>(new Map());
-  // `pubkey \0 relay` → the REQ time of that relay's last self-state read to reach EOSE.
-  const selfReadCompleteAt = useRef<Map<string, number>>(new Map());
   // Ref so a debounced callback can read it without rebuilding the subscription.
   const reactionsFetched = useRef(false);
   useEffect(() => {
@@ -321,26 +313,28 @@ function NostrSyncInner() {
 
     // `onEvent` stores each version it admits itself; see CachingReqOpts.
     const reqOpts: CachingReqOpts = { signal: controller.signal, cache: false };
-    for (const url of relayUrls) {
-      // A new filter set is a new read: a resume would miss documents older than its `since`.
-      const readKey = `${pubkey}\u0000${url}\u0000${derivedAuthorKey}`;
-      const completeAt = selfReadCompleteAt.current.get(readKey);
-      const relayFilters = completeAt === undefined
-        ? filters
-        : filters.map((f) => ({ ...f, since: completeAt - SELF_SYNC_RESUME_SLACK_SECS }));
-      const requestedAt = Math.floor(Date.now() / 1000);
-      void (async () => {
-        try {
-          for await (const msg of nostr.relay(url).req(relayFilters, reqOpts)) {
-            if (msg[0] === "EVENT") onEvent(msg[2] as NostrEvent);
-            // Everything stamped before this REQ has now been read from `url`.
-            else if (msg[0] === "EOSE") selfReadCompleteAt.current.set(readKey, requestedAt);
+    // Resumed from each relay's persisted read mark, so a cold start doesn't
+    // re-read every stored version.
+    void loadSelfReadMarks().then(() => {
+      if (controller.signal.aborted) return;
+      for (const url of relayUrls) {
+        // A new filter set is a new read: a resume would miss documents older than its `since`.
+        const readKey = `${pubkey}\u0000${url}\u0000${derivedAuthorKey}`;
+        const relayFilters = sinceSelfRead(filters, readKey);
+        const requestedAt = Math.floor(Date.now() / 1000);
+        void (async () => {
+          try {
+            for await (const msg of nostr.relay(url).req(relayFilters, reqOpts)) {
+              if (msg[0] === "EVENT") onEvent(msg[2] as NostrEvent);
+              // Everything stamped before this REQ has now been read from `url`.
+              else if (msg[0] === "EOSE") noteSelfRead(readKey, requestedAt);
+            }
+          } catch {
+            // Subscription ended; NRelay1 reconnects, account change re-runs this.
           }
-        } catch {
-          // Subscription ended; NRelay1 reconnects, account change re-runs this.
-        }
-      })();
-    }
+        })();
+      }
+    });
 
     return () => {
       controller.abort();
