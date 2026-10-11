@@ -93,7 +93,7 @@ import {
 } from "@/lib/voiceDevices";
 import { syncRnnoise } from "@/lib/voiceProcessor";
 import { keepCallAwake } from "@/lib/callKeepAwake";
-import { keepCallAudioOutput, keepCallAudioRunning } from "@/lib/voiceAudioContext";
+import { guardSilenceProbe, keepCallAudioOutput, keepCallAudioRunning } from "@/lib/voiceAudioContext";
 import { DetectedSpeakersContext, useDetectedSpeakers, useSpeakers } from "@/hooks/useSpeakers";
 import { useListShowing } from "@/contexts/PaneCoveredContext";
 import { ignorePrivateCandidatesFrom } from "@/lib/privateIceCandidates";
@@ -501,6 +501,7 @@ const audioPublishDefaults = {
 const disconnectOnPageLeave = !Capacitor.isNativePlatform();
 
 installWorkerCriticalTimers();
+guardSilenceProbe();
 
 function useRoomOptions(extra?: Partial<RoomOptions>): RoomOptions {
   return useMemo<RoomOptions>(() => {

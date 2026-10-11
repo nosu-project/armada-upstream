@@ -1,4 +1,4 @@
-import { ConnectionState, RoomEvent, type Room } from "livekit-client";
+import { ConnectionState, LocalAudioTrack, RoomEvent, type Room } from "livekit-client";
 
 import { liveDeviceSwitch, preferredAudioOutput } from "@/lib/voiceDevices";
 
@@ -8,6 +8,19 @@ export function contextOf(room: Room): AudioContext | undefined {
 }
 
 const MAX_RETRY_MS = 10_000;
+
+/**
+ * Skip LiveKit's mic silence probe where AnalyserNode can't be read (Bromite
+ * strips the reads). The probe throws before `ctx.close()`, leaking a running
+ * AudioContext per mic publish that keeps the audio HAL awake for as long as
+ * the notification service keeps the process alive. Nothing here consumes
+ * `AudioSilenceDetected`, so reporting "not silent" loses nothing.
+ */
+export function guardSilenceProbe(): void {
+  if (typeof AnalyserNode === "undefined") return;
+  if (typeof AnalyserNode.prototype.getByteTimeDomainData === "function") return;
+  LocalAudioTrack.prototype.checkForSilence = () => Promise.resolve(false);
+}
 
 /**
  * Point every AudioContext LiveKit creates at the remembered speaker. Under
