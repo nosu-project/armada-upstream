@@ -47,6 +47,7 @@ import { emitWireScopes, onWireScopes } from "@/wire/bus";
 import { useWireNip29Groups } from "@/wire/useWireNip29Groups";
 import { ingestWireEvents } from "@/wire/ingest";
 import { bootLedgers, isLedgerFilter, partitionByLedger, recordLedger, type BootLedger } from "@/wire/bootLedger";
+import { PROBE_FILTER, PROBE_TIMEOUT_MS, roundWatch, settleDue } from "@/wire/roundWatch";
 import { buildWireSpec, stampRoundSince, type WireSpec } from "@/wire/spec";
 import type { GitRepositoryWireInput } from "@/wire/spec";
 
@@ -62,18 +63,11 @@ const MAX_CURSOR_AGE_SECONDS = 7 * 24 * 60 * 60;
 /** Overlap subtracted from a resumed cursor (clock skew / borderline events). */
 const CURSOR_OVERLAP_SECONDS = 60;
 /**
- * Watchdog for a fresh REQ round: a healthy relay answers (events or EOSE)
- * well within this. A silent round is presumed swallowed (wedged AUTH,
- * half-open socket) and re-issued; otherwise `for await` blocks forever.
+ * Relays whose DM wrap replay already ran this session, so a loop restarted
+ * by a spec change doesn't replay the first-round cap again.
  */
-const SILENT_REQ_TIMEOUT_MS = 30_000;
-/**
- * Rotation ceiling for a QUIET established round: a long silence can't be told
- * from a silently dead sub (see relayReopen.ts), so re-REQ from the cursor.
- * Lossless (cursor + overlap) and cheap.
- */
-const QUIET_ROTATE_MS = 90_000;
-/** How often a round's silence is re-checked against the deadlines above. */
+const replayedRelays = new Set<string>();
+/** How often a round's silence is re-checked against roundWatch's deadlines. */
 const WATCHDOG_TICK_MS = 5_000;
 /**
  * Max pre-EOSE replay events batched into one ingest call (per-event awaits
@@ -681,6 +675,12 @@ function WireSyncInner() {
   const bootstrappedRef = useRef(new Set<string>());
   // This session's bootLedger marks, ahead of the throttled KV copy.
   const sessionLedgersRef = useRef(new Map<string, BootLedger>());
+  // A running loop's filters change several times while the spec settles at
+  // startup, and a restart re-sends every filter (Git ones are tens of KB), so
+  // changes wait for the spec to go quiet; see SPEC_SETTLE_MS.
+  const [settleTick, setSettleTick] = useState(0);
+  const settleRef = useRef<{ firstAt?: number; dueAt?: number; timer?: ReturnType<typeof setTimeout> }>({});
+  useEffect(() => () => clearTimeout(settleRef.current.timer), []);
 
   useEffect(() => {
     const loops = loopsRef.current;
@@ -714,7 +714,9 @@ function WireSyncInner() {
         let firstRound = true;
         // Once a round reached EOSE, the DM wrap and Git child filters shrink
         // their replay `limit` (repeats were pure duplicates; see stampRoundSince).
-        let replayDone = false;
+        // A relay read in an earlier session starts there too: the DM inbox scan,
+        // whose watermarks persist, is what catches backdated wraps.
+        let replayDone = replayedRelays.has(relay) || readCursor(relay) !== undefined;
         while (!controller.signal.aborted) {
           const started = Date.now();
           const now = Math.floor(Date.now() / 1000);
@@ -740,14 +742,30 @@ function WireSyncInner() {
           let lastMsgAt = started;
           let ingested = 0;
           let rotated = false;
+          let probing = false;
           const watchdog = setInterval(() => {
-            const silentFor = Date.now() - lastMsgAt;
-            if (!sawAnything && silentFor >= SILENT_REQ_TIMEOUT_MS) {
-              logSync("wire", `${relay}: round yielded nothing in ${Math.round(silentFor / 1000)}s — presumed swallowed, re-REQ`);
+            const action = roundWatch(Date.now(), started, lastMsgAt, sawAnything, probing);
+            if (action === "reissue") {
+              logSync("wire", `${relay}: round yielded nothing in ${Math.round((Date.now() - lastMsgAt) / 1000)}s — presumed swallowed, re-REQ`);
               round.abort();
-            } else if (sawAnything && silentFor >= QUIET_ROTATE_MS) {
+            } else if (action === "rotate") {
               rotated = true;
               round.abort();
+            } else if (action === "probe") {
+              probing = true;
+              const probeSignal = AbortSignal.any([roundSignal, AbortSignal.timeout(PROBE_TIMEOUT_MS)]);
+              nostr.relay(relay).query([PROBE_FILTER], { signal: probeSignal })
+                .catch(() => {})
+                .finally(() => {
+                  probing = false;
+                  // Any answer (EOSE, even CLOSED) proves the socket; the standing sub rides it.
+                  if (!probeSignal.aborted) lastMsgAt = Date.now();
+                  else if (!roundSignal.aborted) {
+                    logSync("wire", `${relay}: liveness probe unanswered — re-REQ`);
+                    rotated = true;
+                    round.abort();
+                  }
+                });
             }
           }, WATCHDOG_TICK_MS);
           if (firstRound) {
@@ -786,6 +804,7 @@ function WireSyncInner() {
                   await flushReplay();
                   eosed = true;
                   replayDone = true;
+                  replayedRelays.add(relay);
                   // Marked only at EOSE, so a torn-down replay retries.
                   for (const f of pending) bootstrappedRef.current.add(bootKey(f));
                   // Every EOSE advances this session's marks; KV only on a real step.
@@ -843,6 +862,7 @@ function WireSyncInner() {
       for (const loop of loops.values()) loop.stop();
       loops.clear();
       sessionLedgersRef.current.clear();
+      replayedRelays.clear();
       loopsOwnerRef.current = { nostr, pubkey: user?.pubkey };
     }
     // Android background with the native service watching: no loops; resume
@@ -852,11 +872,35 @@ function WireSyncInner() {
         ? spec.subs.filter(({ relay }) => !isRelayUnreachable(relay)).map(({ relay, filters }) => [relay, filters])
         : [],
     );
+    const now = Date.now();
+    const settle = settleRef.current;
+    const changed: string[] = [];
     for (const [relay, loop] of loops) {
       const filters = desired.get(relay);
-      if (!filters || JSON.stringify(filters) !== loop.sig) {
+      if (!filters) {
         loop.stop();
         loops.delete(relay);
+      } else if (JSON.stringify(filters) !== loop.sig) {
+        changed.push(relay);
+      }
+    }
+    if (changed.length === 0) {
+      settle.firstAt = undefined;
+      settle.dueAt = undefined;
+    } else {
+      settle.firstAt ??= now;
+      const due = settleDue(settle.firstAt, settle.dueAt, now);
+      if (due === true) {
+        for (const relay of changed) {
+          loops.get(relay)?.stop();
+          loops.delete(relay);
+        }
+        settle.firstAt = undefined;
+        settle.dueAt = undefined;
+      } else {
+        settle.dueAt = due;
+        clearTimeout(settle.timer);
+        settle.timer = setTimeout(() => setSettleTick((t) => t + 1), due - now);
       }
     }
     for (const [relay, filters] of desired) {
@@ -864,7 +908,7 @@ function WireSyncInner() {
     }
     // Loops outlive this effect (the teardown effect owns them).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nostr, user?.pubkey, spec.sig, quiet, healthVersion]);
+  }, [nostr, user?.pubkey, spec.sig, quiet, healthVersion, settleTick]);
 
   // Throttled background tabs stretch the watchdog to minutes: kick every
   // relay's round when the tab becomes visible (socket reopens do the same per
