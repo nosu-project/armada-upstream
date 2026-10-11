@@ -121,11 +121,24 @@ export function streamPubkeysForRelay(relayUrl: string): string[] {
  * socket's lifetime (a relay that can't verify AUTH answers every one `OK false`).
  */
 export function unackedStreamPubkeys(relayUrl: string): string[] {
-  const state = relayAuth.get(normalizeRelayUrl(relayUrl) ?? relayUrl);
+  const key = normalizeRelayUrl(relayUrl) ?? relayUrl;
+  if (isRefusing(key)) return [];
+  const state = relayAuth.get(key);
   return streamPubkeysForRelay(relayUrl).filter((pk) => {
     if (registry.get(pk)?.sk === undefined) return false;
     return !state?.acked.has(pk) && !state?.rejected.has(pk);
   });
+}
+
+/**
+ * A self-heal wave's keys: {@link unackedStreamPubkeys} minus those already
+ * being signed, marked in flight so overlapping waves don't send them twice.
+ */
+export function claimStaleWave(relayUrl: string): string[] {
+  const state = relayAuthState(relayUrl);
+  const out = unackedStreamPubkeys(relayUrl).filter((pk) => !state.inFlight.has(pk));
+  for (const pk of out) state.inFlight.add(pk);
+  return out;
 }
 
 /**
@@ -139,8 +152,13 @@ export function claimStreamAuths(relayUrl: string, pubkeys?: Iterable<string>): 
   const state = relayAuthState(relayUrl);
   const sending = new Set(state.pending.values());
   const scoped = new Set(streamPubkeysForRelay(relayUrl));
+  // A refusing relay gets one probe per challenge, not the whole key set.
+  const limit = isRefusing(normalizeRelayUrl(relayUrl) ?? relayUrl)
+    ? (state.pending.size + state.inFlight.size + state.rejected.size > 0 ? 0 : 1)
+    : Infinity;
   const out: string[] = [];
   for (const pk of pubkeys ?? scoped) {
+    if (out.length >= limit) break;
     if (!scoped.has(pk) || registry.get(pk)?.sk === undefined) continue;
     if (state.acked.has(pk) || state.rejected.has(pk) || state.inFlight.has(pk) || sending.has(pk)) continue;
     state.inFlight.add(pk);
@@ -233,6 +251,7 @@ export async function* signStreamAuthsChunked(
 export function clearStreamAuthRegistry(): void {
   registry.clear();
   relayAuth.clear();
+  refusingRelays.clear();
 }
 
 /** Test seam. */
@@ -247,6 +266,10 @@ interface RelayAuthState {
   challenged: boolean;
   /** When the current challenge was recorded (ms) — for the stale self-heal. */
   challengedAt: number;
+  /** When the relay last answered one of our stream AUTHs (ms): progress, not loss. */
+  answeredAt: number;
+  /** Self-heal waves fired since the relay last answered; each doubles the next window. */
+  waves: number;
   /** The challenge the claims, pending AUTHs and rejections below answered. */
   challenge?: string;
   /** Stream pubkeys the relay has acked (OK true) on the live socket. */
@@ -263,12 +286,34 @@ interface RelayAuthState {
 const relayAuth = new Map<string, RelayAuthState>();
 
 /**
+ * Relays that refused every stream AUTH they answered on a socket (e.g. one that
+ * can't verify AUTH at all), until when (ms). Outlives the socket and the
+ * challenge a reconnect renews, so the whole key set isn't re-signed and
+ * re-sent per reconnect. While set, a challenge gets one probe key; an ack
+ * clears it.
+ */
+const refusingRelays = new Map<string, number>();
+const REFUSING_MS = 60 * 60_000;
+/** Refusals, with nothing acked on the socket, that mark a relay as refusing. */
+const REFUSING_MIN_REJECTS = 3;
+
+function isRefusing(key: string): boolean {
+  const until = refusingRelays.get(key);
+  if (until === undefined) return false;
+  if (Date.now() < until) return true;
+  refusingRelays.delete(key);
+  return false;
+}
+
+/**
  * How long a challenged-but-not-fully-acked relay stays "unsettled" before
  * self-heal. Longer than the sweep auth-wait cap (8s) so slow acks win; past it
  * we assume a lost AUTH/OK and re-auth on the live socket (half-open sockets
  * never reopen on their own).
  */
 const AUTH_STALE_MS = 12_000;
+/** Ceiling for the doubling stale window. */
+const AUTH_STALE_MAX_MS = 5 * 60_000;
 
 /** Listeners asked to re-send AUTH frames for a relay whose auth went stale. */
 type ReauthListener = (url: string) => void;
@@ -290,6 +335,8 @@ function relayAuthState(url: string): RelayAuthState {
     state = {
       challenged: false,
       challengedAt: 0,
+      answeredAt: 0,
+      waves: 0,
       acked: new Set(),
       pending: new Map(),
       inFlight: new Set(),
@@ -314,6 +361,7 @@ export function noteRelayChallenged(url: string, challenge?: string): void {
       state.rejected.clear();
     }
     state.challenge = challenge;
+    state.waves = 0;
   }
   state.challenged = true;
   state.challengedAt = Date.now();
@@ -337,12 +385,23 @@ export function noteStreamAuthSent(url: string, eventId: string, pubkey: string)
  * same challenge; any other is the relay's answer for this socket.
  */
 export function noteAuthResult(url: string, eventId: string, ok: boolean, message?: string): void {
-  const state = relayAuth.get(normalizeRelayUrl(url) ?? url);
+  const key = normalizeRelayUrl(url) ?? url;
+  const state = relayAuth.get(key);
   const pk = state?.pending.get(eventId);
   if (!state || pk === undefined) return;
   state.pending.delete(eventId);
-  if (ok) state.acked.add(pk);
-  else if (!message?.startsWith("rate-limited:")) state.rejected.add(pk);
+  state.answeredAt = Date.now();
+  state.waves = 0;
+  if (ok) {
+    state.acked.add(pk);
+    refusingRelays.delete(key);
+  } else if (!message?.startsWith("rate-limited:")) {
+    state.rejected.add(pk);
+    // A refused probe, or enough refusals with nothing acked, is the relay's answer.
+    if (state.acked.size === 0 && (isRefusing(key) || state.rejected.size >= REFUSING_MIN_REJECTS)) {
+      refusingRelays.set(key, Date.now() + REFUSING_MS);
+    }
+  }
 }
 
 /**
@@ -355,8 +414,11 @@ export function noteAuthResult(url: string, eventId: string, ok: boolean, messag
  * recur while unacked, hence re-signing only {@link unackedStreamPubkeys}.
  */
 export function streamAuthsSettled(url: string, pubkeys: Iterable<string>): boolean {
-  const state = relayAuth.get(normalizeRelayUrl(url) ?? url);
+  const key = normalizeRelayUrl(url) ?? url;
+  const state = relayAuth.get(key);
   if (!state?.challenged) return true;
+  // Nothing will be acked; waiting would only stall the sweep and fire waves.
+  if (isRefusing(key)) return true;
   let allAcked = true;
   for (const pk of pubkeys) {
     // Address-only keys can never be authenticated here, so don't wait on them.
@@ -368,11 +430,14 @@ export function streamAuthsSettled(url: string, pubkeys: Iterable<string>): bool
     }
   }
   if (allAcked) return true;
-  // Inside the fresh-challenge window, keep waiting; past it, self-heal.
-  if (Date.now() - state.challengedAt < AUTH_STALE_MS) return false;
+  // Inside the window since the challenge — or since the relay last answered one
+  // of our AUTHs — keep waiting: a relay working through a large batch is slow,
+  // not lossy, and a wave would re-send keys whose answers are on the way.
+  const window = Math.min(AUTH_STALE_MAX_MS, AUTH_STALE_MS * 2 ** state.waves);
+  if (Date.now() - Math.max(state.challengedAt, state.answeredAt) < window) return false;
+  state.waves += 1;
   // Re-arm so the triggered re-auth gets its own grace period.
   state.challengedAt = Date.now();
-  const key = normalizeRelayUrl(url) ?? url;
   for (const l of reauthListeners) l(key);
   return true;
 }

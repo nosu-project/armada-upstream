@@ -34,7 +34,7 @@ import {
   signStreamAuths,
   signStreamAuthsChunked,
   streamPubkeysForRelay,
-  unackedStreamPubkeys,
+  claimStaleWave,
 } from "@/concord/lib/streamAuth";
 
 interface NostrProviderProps {
@@ -583,8 +583,8 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
     return onStreamAuthStale((url) => {
       const entry = openRelaysRef.current.get(url);
       if (!entry?.challenge) return;
-      // Only unacked keys; the wave repeats every AUTH_STALE_MS.
-      const pks = unackedStreamPubkeys(url);
+      // Only unacked keys not already being sent; waves back off (streamAuthsSettled).
+      const pks = claimStaleWave(url);
       if (pks.length === 0) return;
       logSync("auth", `stream auth went stale for ${url} — re-sending ${pks.length} AUTH frame(s)`);
       void sendStreamAuths(entry, url, pks);
