@@ -46,6 +46,7 @@ import buzz.armada.app.relayfleet.CircuitBreakerPolicy;
 import buzz.armada.app.relayfleet.CursorGate;
 import buzz.armada.app.relayfleet.FloodBreaker;
 import buzz.armada.app.relayfleet.GitRelayCover;
+import buzz.armada.app.relayfleet.Keepalive;
 import buzz.armada.app.relayfleet.NetworkSettle;
 import buzz.armada.app.relayfleet.RelayFleetPolicy;
 import buzz.armada.app.relayfleet.RelayFleetPolicy.ConnectionResult;
@@ -268,6 +269,46 @@ public class NotificationRelayService extends Service {
     private static final long INITIAL_BACKOFF_MS = 1_000;
     private static final long MAX_BACKOFF_MS = 5 * 60 * 1_000;
 
+    // The keepalive probe: a REQ no event can match, which the relay answers
+    // with EOSE. One fixed sub id, so a repeat replaces it rather than piling up.
+    static final String KEEPALIVE_SUB = "ak-keepalive";
+    static final String KEEPALIVE_PROBE = "[\"REQ\",\"" + KEEPALIVE_SUB
+            + "\",{\"ids\":[\"0000000000000000000000000000000000000000000000000000000000000000\"],\"limit\":1}]";
+    private static final String KEEPALIVE_CLOSE = "[\"CLOSE\",\"" + KEEPALIVE_SUB + "\"]";
+    // Per relay, how long its sockets may stay quiet before a probe (see
+    // Keepalive.learn). Outlives the connection, which a config change rebuilds.
+    private final Map<String, Long> quietLimitByUrl = new HashMap<>();
+    // Persisted, or every launch re-learns each relay's timeout by being dropped once.
+    private static final String KEEPALIVE_PREFS = "armada_keepalive";
+    private boolean quietLimitsLoaded = false;
+
+    private long quietLimitFor(String relayUrl) {
+        if (!quietLimitsLoaded) {
+            quietLimitsLoaded = true;
+            for (Map.Entry<String, ?> e : getSharedPreferences(KEEPALIVE_PREFS, Context.MODE_PRIVATE).getAll().entrySet()) {
+                if (e.getValue() instanceof Long) quietLimitByUrl.put(e.getKey(), Math.max(Keepalive.MIN_QUIET_MS, (Long) e.getValue()));
+            }
+        }
+        return quietLimitByUrl.getOrDefault(relayUrl, Keepalive.DEFAULT_QUIET_MS);
+    }
+    private final Runnable keepaliveCheck = () -> {
+        long now = SystemClock.uptimeMillis();
+        for (RelayConnection rc : this.connections) rc.checkProbe(now);
+    };
+    private final Runnable keepaliveTick = new Runnable() {
+        @Override
+        public void run() {
+            long now = SystemClock.uptimeMillis();
+            boolean probed = false;
+            for (RelayConnection rc : connections) probed |= rc.keepalive(now);
+            if (probed) {
+                handler.removeCallbacks(keepaliveCheck);
+                handler.postDelayed(keepaliveCheck, Keepalive.PROBE_TIMEOUT_MS);
+            }
+            handler.postDelayed(this, Keepalive.TICK_MS);
+        }
+    };
+
     /**
      * Decides, per relay, whether to hold a background socket at all, when to
      * reconnect after a failure, and when to stop trying (quarantine) until a
@@ -309,6 +350,9 @@ public class NotificationRelayService extends Service {
     // wait for NetworkSettle.SETTLE_MS of quiet after it, so a burst of changes
     // costs the fleet one reconnect instead of one per change.
     private long lastNetworkChangeAt = 0;
+    // A socket that ends this soon after a network change was dropped by the
+    // change, not by its relay's idle timeout.
+    private static final long NETWORK_DROP_GRACE_MS = 60_000;
     private boolean sawNetworkLoss = false;
     // When the default network was first seen unvalidated (elapsedRealtime), 0 when validated.
     private long unvalidatedSince = 0;
@@ -1462,7 +1506,10 @@ public class NotificationRelayService extends Service {
 
         httpClient = new OkHttpClient.Builder()
                 .connectTimeout(10, TimeUnit.SECONDS)
-                .pingInterval(30, TimeUnit.SECONDS) // keep the socket alive + detect drops
+                // No per-socket pings: each runs its own timer, waking the radio
+                // once per relay per interval. The fleet keeps sockets alive on
+                // one shared clock instead (keepaliveTick).
+                .pingInterval(0, TimeUnit.SECONDS)
                 .build();
 
         // Avatar/image fetches: bounded timeouts (so a slow host can't stall the
@@ -1491,6 +1538,7 @@ public class NotificationRelayService extends Service {
             cancelStaleSummaries();
             reconcileActiveRoomNotifications();
         });
+        handler.postDelayed(keepaliveTick, Keepalive.TICK_MS);
     }
 
     @Override
@@ -2155,6 +2203,18 @@ public class NotificationRelayService extends Service {
         // (newest first), so a drop mid-replay can't skip the older half.
         final CursorGate cursorGate = new CursorGate();
 
+        // Keepalive (see Keepalive): when a frame last arrived, and when the
+        // outstanding liveness probe went out (0 if none). Written from the
+        // socket thread, read on the handler's tick.
+        volatile long lastInboundAt = 0;
+        volatile long probeSentAt = 0;
+        // This session was ended by our own keepalive, not by the relay.
+        boolean killedByKeepalive = false;
+        // This session ended with the relay closing it (a close frame or EOF),
+        // the only ending that can be its idle timeout: an abort or DNS failure
+        // is the network changing under the socket.
+        boolean closedByPeer = false;
+
         // Single pending reconnect, cancellable — prevents a queued reconnect
         // and the network callback from racing to open duplicate sockets.
         final Runnable reconnectRunnable = this::connect;
@@ -2364,6 +2424,8 @@ public class NotificationRelayService extends Service {
                 public void onOpen(WebSocket webSocket, Response response) {
                     if (BuildConfig.DEBUG) Log.d(TAG, "WS open: " + relayUrl);
                     if (ServiceProfiler.ON) ServiceProfiler.count("socket.open");
+                    lastInboundAt = SystemClock.uptimeMillis();
+                    probeSentAt = 0;
                     // A fresh socket session: CLOSED-resubscribe backoff starts
                     // over, and a pending auth re-send belongs to the old session.
                     handler.post(() -> {
@@ -2380,6 +2442,7 @@ public class NotificationRelayService extends Service {
 
                 @Override
                 public void onMessage(WebSocket webSocket, String text) {
+                    lastInboundAt = SystemClock.uptimeMillis();
                     if (ServiceProfiler.ON) {
                         // Frames by subscription family, bytes, and how deep the
                         // handler queue gets behind them (every frame is a post).
@@ -2414,6 +2477,7 @@ public class NotificationRelayService extends Service {
                             + (httpCode != 0 ? " [HTTP " + httpCode + "]" : ""));
                     handler.post(() -> {
                         recordHealthError("socket");
+                        closedByPeer = Keepalive.isPeerClose(t);
                         endSession(classifyFailure(t, httpCode));
                     });
                 }
@@ -2422,6 +2486,7 @@ public class NotificationRelayService extends Service {
                 public void onClosed(WebSocket webSocket, int code, String reason) {
                     if (ServiceProfiler.ON) ServiceProfiler.count("socket.closed");
                     handler.post(() -> {
+                        closedByPeer = true;
                         if (!closed) endSession(null);
                     });
                 }
@@ -2868,6 +2933,7 @@ public class NotificationRelayService extends Service {
             boolean wasOpen = socketOpen;
             socketOpen = false;
             ws = null;
+            learnIdleDrop(wasOpen);
             long now = System.currentTimeMillis();
             long uptime = (wasOpen && connectAttemptAt > 0) ? Math.max(0, now - connectAttemptAt) : 0;
             Outcome outcome;
@@ -2906,6 +2972,62 @@ public class NotificationRelayService extends Service {
             handler.removeCallbacks(resubscribeRunnable);
             handler.postDelayed(resubscribeRunnable, subRetryBackoffMs);
             subRetryBackoffMs = Math.min(subRetryBackoffMs * 2, MAX_BACKOFF_MS);
+        }
+
+        /**
+         * A relay that dropped an open socket while it was quiet has an idle
+         * timeout: probe its sockets inside it from now on. Not when we killed
+         * the socket ourselves, or the network just changed under it.
+         */
+        private void learnIdleDrop(boolean wasOpen) {
+            boolean ours = killedByKeepalive;
+            boolean byPeer = closedByPeer;
+            killedByKeepalive = false;
+            closedByPeer = false;
+            if (!wasOpen || ours || !byPeer || lastInboundAt == 0) return;
+            if (SystemClock.elapsedRealtime() - lastNetworkChangeAt < NETWORK_DROP_GRACE_MS) return;
+            long current = quietLimitFor(relayUrl);
+            long learned = Keepalive.learn(current, SystemClock.uptimeMillis() - lastInboundAt);
+            if (learned < current) {
+                quietLimitByUrl.put(relayUrl, learned);
+                getSharedPreferences(KEEPALIVE_PREFS, Context.MODE_PRIVATE).edit().putLong(relayUrl, learned).apply();
+                if (ServiceProfiler.ON) ServiceProfiler.count("keepalive.learned " + ServiceProfiler.host(relayUrl) + " " + learned / 1000 + "s");
+            }
+        }
+
+        /** One keepalive tick (handler thread): probe a quiet socket, drop a dead one. Whether it probed. */
+        boolean keepalive(long now) {
+            WebSocket socket = ws;
+            if (closed || socket == null || !socketOpen) return false;
+            long limit = quietLimitFor(relayUrl);
+            switch (Keepalive.onTick(lastInboundAt, probeSentAt, limit, now)) {
+                case PROBE:
+                    probeSentAt = now;
+                    if (ServiceProfiler.ON) ServiceProfiler.count("keepalive.probe");
+                    socket.send(KEEPALIVE_PROBE);
+                    return true;
+                case KILL:
+                    killUnanswered(socket);
+                    return false;
+                default:
+                    return false;
+            }
+        }
+
+        /** After a tick's probes had time to answer: a silent socket is dead. */
+        void checkProbe(long now) {
+            WebSocket socket = ws;
+            if (closed || socket == null) return;
+            if (Keepalive.probeExpired(lastInboundAt, probeSentAt, now)) killUnanswered(socket);
+        }
+
+        private void killUnanswered(WebSocket socket) {
+            probeSentAt = 0;
+            killedByKeepalive = true;
+            if (ServiceProfiler.ON) ServiceProfiler.count("keepalive.dead " + ServiceProfiler.host(relayUrl));
+            Log.w(TAG, "Keepalive unanswered, dropping " + relayUrl);
+            // cancel() fails the socket, so onFailure → endSession reconnects it.
+            socket.cancel();
         }
 
         void close() {
@@ -3090,6 +3212,18 @@ public class NotificationRelayService extends Service {
         try {
             JSONArray msg = new JSONArray(text);
             String type = msg.optString(0);
+            // A keepalive answer did its job by arriving (onMessage stamped it).
+            // A CLOSED one (auth wall, rate limit) must not reach the standing
+            // sub's resubscribe path.
+            if (("EOSE".equals(type) || "CLOSED".equals(type)) && KEEPALIVE_SUB.equals(msg.optString(1))) {
+                RelayConnection probed = connectionFor(relayUrl);
+                if (probed != null) {
+                    probed.probeSentAt = 0;
+                    WebSocket socket = probed.ws;
+                    if ("EOSE".equals(type) && socket != null) socket.send(KEEPALIVE_CLOSE);
+                }
+                return;
+            }
             if ("AUTH".equals(type)) {
                 // NIP-42 challenge. The bridge is still emitted when the
                 // WebView is up (it signs the Concord STREAM auths, whose
