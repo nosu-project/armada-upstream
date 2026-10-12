@@ -190,6 +190,7 @@ type ContentToken =
   | { type: "quote"; tokens: ContentToken[] }
   | { type: "md-link"; text: string; url: string }
   | { type: "heading"; level: number; tokens: ContentToken[] }
+  | { type: "subtext"; tokens: ContentToken[] }
   | { type: "list"; ordered: boolean; start: number; items: ContentToken[][] }
   | { type: "rule" };
 
@@ -302,7 +303,7 @@ function applyEveryoneMentions(tokens: ContentToken[]): ContentToken[] {
       out.push(...splitEveryoneToken(token.value));
     } else if (token.type === "quote") {
       out.push({ ...token, tokens: applyEveryoneMentions(token.tokens) });
-    } else if (token.type === "heading") {
+    } else if (token.type === "heading" || token.type === "subtext") {
       out.push({ ...token, tokens: applyEveryoneMentions(token.tokens) });
     } else if (token.type === "list") {
       out.push({ ...token, items: token.items.map(applyEveryoneMentions) });
@@ -783,6 +784,8 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
           out.push({ type: "quote", tokens: collapseAroundBlocks(blockTokens(block.blocks)) });
         } else if (block.type === "heading") {
           out.push({ type: "heading", level: block.level, tokens: tokenizeRun(block.text) });
+        } else if (block.type === "subtext") {
+          out.push({ type: "subtext", tokens: tokenizeRun(block.text) });
         } else if (block.type === "list") {
           out.push({ type: "list", ordered: block.ordered, start: block.start, items: block.items.map(tokenizeRun) });
         } else if (block.type === "rule") {
@@ -1155,6 +1158,12 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
             )}
           >
             {renderTokens(token.tokens, `${key}-h`, false, true)}
+          </div>
+        );
+      case "subtext":
+        return (
+          <div key={key} className="text-xs leading-snug text-muted-foreground">
+            {renderTokens(token.tokens, `${key}-st`, false, true)}
           </div>
         );
       case "list": {

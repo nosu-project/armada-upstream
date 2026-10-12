@@ -226,6 +226,20 @@ describe("splitMarkdownBlocks (chat headings and lists)", () => {
     ]);
   });
 
+  it("extracts Discord subtext lines", () => {
+    expect(splitMarkdownBlocks("main\n-# *small* print\n- item")).toEqual([
+      { type: "text", text: "main" },
+      { type: "subtext", text: "*small* print" },
+      { type: "list", ordered: false, start: 1, items: ["item"] },
+    ]);
+  });
+
+  it("keeps a subtext marker without a space or mid-line literal", () => {
+    expect(splitMarkdownBlocks("-#tag\n-# \na -# b")).toEqual([
+      { type: "text", text: "-#tag\n-# \na -# b" },
+    ]);
+  });
+
   it("extracts list runs", () => {
     expect(splitMarkdownBlocks("todo:\n- one\n- two\n1. first\n2. second\ndone")).toEqual([
       { type: "text", text: "todo:" },
