@@ -80,7 +80,7 @@ else
 fi
 
 # Recorded in the bundle, so whoever installs it, directly or through npkg's
-# .flatpakref, is pointed at the repository the Electron runtime comes from.
+# .flatpakref, is pointed at the repository its runtime comes from.
 runtime_repo=https://dl.flathub.org/repo/flathub.flatpakrepo
 
 set -- --force-clean --disable-rofiles-fuse --default-branch=stable --repo="$repo_dir"
