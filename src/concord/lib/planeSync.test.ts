@@ -6,7 +6,7 @@
 
 import { finalizeEvent, generateSecretKey, getPublicKey } from "nostr-tools/pure";
 import type { EventTemplate, NostrEvent } from "nostr-tools/pure";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { controlGroups } from "@/concord/lib/control";
 import { bytesToHex, controlGroupKey, guestbookGroupKey } from "@/concord/lib/derive";
@@ -15,6 +15,7 @@ import { KIND_SEAL_PLAINTEXT } from "@/concord/lib/kinds";
 import {
   _configureAuthWaitForTests,
   _configureSweepCadenceForTests,
+  _coldStartPlaneFloorsForTests,
   _configureSweepPagingForTests,
   _resetPlaneSweepMemoForTests,
   controlScope,
@@ -22,6 +23,7 @@ import {
   controlSweepTruncated,
   controlSweepQuorum,
   controlSweepReach,
+  controlSweepRelays,
   controlSweepUnreadable,
   guestbookScope,
   markControlPlaneStale,
@@ -537,9 +539,9 @@ describe("control completeness — whole-plane reads with a session delta", () =
     // A clean full read licenses a short-overlap delta for the repeats — the
     // whole-plane re-fetch every background tick was pure duplicate ciphertext
     // (the seen-memo only ever skipped the re-decrypt, not the transfer).
-    expect(relay.calls[1][0].since, "a repeat sweep is delta-gated off the full read").toBe(
-      e1.wrap.created_at - 3600,
-    );
+    // Anchored on when the full read started, not on the plane's newest edition.
+    expect(relay.calls[1][0].since, "a repeat sweep is delta-gated off the full read").toBeGreaterThanOrEqual(now - 3600);
+    expect(relay.calls[1][0].since).toBeLessThanOrEqual(Math.floor(Date.now() / 1000) - 3600);
     expect(first.map((e) => e.rumorId)).toContain(e1.rumor.id);
     expect(second, "a re-received wrap is not fresh — the session memo keeps repeats quiet").toEqual([]);
 
@@ -548,6 +550,113 @@ describe("control completeness — whole-plane reads with a session delta", () =
     relay.events.push(e2.wrap);
     const third = await sweepControl(nostr, community);
     expect(third.map((e) => e.rumorId)).toEqual([e2.rumor.id]);
+  });
+
+  it("a clean full read still licenses a delta after a relaunch inside its window", async () => {
+    const owner = signer();
+    const community = communityOf(83, owner.pubkey);
+    const control = controlGroupKey(community.root, community.id, 0);
+    const now = Math.floor(Date.now() / 1000);
+    const e1 = await wrapAt(control, owner, "ab".repeat(32), now - 100);
+
+    const relay = new FakeRelay();
+    relay.events = [e1.wrap];
+    const nostr = poolOf({ [RELAY_A]: relay });
+
+    await sweepControl(nostr, community);
+    await _coldStartPlaneFloorsForTests();
+    await sweepControl(nostr, community);
+
+    expect(relay.calls[1][0].since, "the restored floor gates the relaunch's sweep").toBeGreaterThanOrEqual(now - 3600);
+  });
+
+  it("a restored floor past its interval re-asks the whole plane", async () => {
+    const owner = signer();
+    const community = communityOf(84, owner.pubkey);
+    const control = controlGroupKey(community.root, community.id, 0);
+    const now = Math.floor(Date.now() / 1000);
+    const e1 = await wrapAt(control, owner, "ab".repeat(32), now - 100);
+
+    const relay = new FakeRelay();
+    relay.events = [e1.wrap];
+    const nostr = poolOf({ [RELAY_A]: relay });
+
+    await sweepControl(nostr, community);
+    await _coldStartPlaneFloorsForTests();
+    _configureSweepCadenceForTests({ fullSweepIntervalMs: 0 });
+    await sweepControl(nostr, community);
+
+    expect(relay.calls[1][0].since).toBeUndefined();
+  });
+
+  it("markControlPlaneStale also drops the stored floor", async () => {
+    const owner = signer();
+    const community = communityOf(85, owner.pubkey);
+    const control = controlGroupKey(community.root, community.id, 0);
+    const now = Math.floor(Date.now() / 1000);
+    const e1 = await wrapAt(control, owner, "ab".repeat(32), now - 100);
+
+    const relay = new FakeRelay();
+    relay.events = [e1.wrap];
+    const nostr = poolOf({ [RELAY_A]: relay });
+
+    await sweepControl(nostr, community);
+    markControlPlaneStale(community);
+    await _coldStartPlaneFloorsForTests();
+    await sweepControl(nostr, community);
+
+    expect(relay.calls[1][0].since).toBeUndefined();
+  });
+
+  it("an old edition burst is not re-fetched: the delta starts an overlap before the last read", async () => {
+    const owner = signer();
+    const community = communityOf(86, owner.pubkey);
+    const control = controlGroupKey(community.root, community.id, 0);
+    const now = Math.floor(Date.now() / 1000);
+    // A burst of editions from yesterday — the plane's newest.
+    const burst = await Promise.all([1, 2, 3].map((n) => wrapAt(control, owner, String(n).repeat(64), now - 86_400 + n)));
+
+    const relay = new FakeRelay();
+    relay.events = burst.map((b) => b.wrap);
+    const nostr = poolOf({ [RELAY_A]: relay });
+
+    await sweepControl(nostr, community);
+    await sweepControl(nostr, community);
+
+    expect(relay.calls[1][0].since, "a day-old burst is below the delta").toBeGreaterThan(now - 86_400 + 3);
+  });
+
+  describe("controlSweepRelays — rotating delta reads", () => {
+    afterEach(() => vi.useRealTimers());
+
+    it("reads every relay until each has a floor, then the two read longest ago", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      const owner = signer();
+      const relays = ["wss://r1.test", "wss://r2.test", "wss://r3.test", "wss://r4.test"];
+      const community = { ...communityOf(87, owner.pubkey), relays };
+      const control = controlGroupKey(community.root, community.id, 0);
+      const e1 = await wrapAt(control, owner, "ab".repeat(32), Math.floor(Date.now() / 1000) - 100);
+      const fakes = Object.fromEntries(relays.map((r) => {
+        const f = new FakeRelay();
+        f.events = [e1.wrap];
+        return [r, f];
+      }));
+      const nostr = poolOf(fakes);
+
+      expect(await controlSweepRelays(community, 2), "no floors: every relay reads whole").toEqual(relays);
+      await sweepControl(nostr, community);
+      const first = await controlSweepRelays(community, 2);
+      expect(first).toEqual(["wss://r1.test", "wss://r2.test"]);
+
+      // Read those two later: the other two are now the ones read longest ago.
+      vi.setSystemTime(Date.now() + 60_000);
+      for (const url of first) await sweepRelayScopes(nostr, url, [controlScope(community, url)]);
+      expect(await controlSweepRelays(community, 2)).toEqual(["wss://r3.test", "wss://r4.test"]);
+
+      // An invalidated plane reads whole again on every relay.
+      markControlPlaneStale(community);
+      expect(await controlSweepRelays(community, 2)).toEqual(relays);
+    });
   });
 
   it("an aged delta floor re-asks the whole plane", async () => {

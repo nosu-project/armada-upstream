@@ -4,7 +4,7 @@
  * cursors. Invalidates progressively so rail buttons paint as relays answer.
  */
 
-import { controlScope, guestbookScope, sweepRelayScopes, type PlaneScope } from "@/concord/lib/planeSync";
+import { controlScope, controlSweepRelays, guestbookScope, sweepRelayScopes, type PlaneScope } from "@/concord/lib/planeSync";
 import type { Community } from "@/concord/lib/types";
 import { logSync, sinceMs } from "@/lib/syncLog";
 import { emitWireScopes } from "@/wire/bus";
@@ -23,6 +23,9 @@ export interface ControlPlaneSyncResult {
   /** Community-id hex → whether new control editions landed. */
   concordTouched: Set<string>;
 }
+
+/** Relays a routine sweep reads per community beyond those needing a whole read (see controlSweepRelays). */
+const DELTA_RELAYS_PER_COMMUNITY = 2;
 
 /** One batched control-plane sweep; best-effort (per-relay cursors retry failed relays next time). */
 export async function syncControlPlane(
@@ -56,9 +59,10 @@ export async function syncControlPlane(
     };
   };
   let guestbookTouched = 0;
-  const sweepJobs = (list: Community[]): Array<Promise<unknown>> => {
+  const sweepJobs = async (list: Community[], allRelays: boolean): Promise<Array<Promise<unknown>>> => {
     const byRelay = new Map<string, PlaneScope[]>();
     for (const c of list) {
+      const relays = allRelays ? c.relays : await controlSweepRelays(c, DELTA_RELAYS_PER_COMMUNITY);
       const announceControl = once(() => {
         emitWireScopes([`c2ctl:${c.idHex}`]);
         queryClient.invalidateQueries({ queryKey: ["concord", "control", c.idHex] });
@@ -67,7 +71,7 @@ export async function syncControlPlane(
         guestbookTouched++;
         queryClient.invalidateQueries({ queryKey: ["concord", "guestbook", c.idHex] });
       });
-      for (const url of c.relays) {
+      for (const url of relays) {
         const scopes = byRelay.get(url) ?? [];
         scopes.push(
           controlScope(c, url, () => {
@@ -85,10 +89,11 @@ export async function syncControlPlane(
   // The active community completes before the fan-out so it doesn't contend for sockets.
   const priority = communities.filter((c) => c.idHex === opts?.priorityIdHex);
   const rest = opts?.priorityIdHex ? communities.filter((c) => c.idHex !== opts.priorityIdHex) : communities;
+  // The community on screen reads every relay; the rest rotate through theirs.
   if (priority.length > 0) {
-    await Promise.all(sweepJobs(priority));
+    await Promise.all(await sweepJobs(priority, true));
   }
-  jobs.push(...sweepJobs(rest));
+  jobs.push(...(await sweepJobs(rest, false)));
 
   await Promise.all(jobs);
 

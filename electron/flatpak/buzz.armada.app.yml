@@ -61,10 +61,11 @@ finish-args:
 # and no message catch-up until a restart. Talk access only lets the app call
 # login1 and receive its signals; suspend/reboot still gate on polkit.
 #
-# The Flatpak itself is never updated in place (no origin URL, no repository).
-# Its WEB BUNDLE is: the shell fetches the site's dist archive into userData
-# and serves that (electron/webBundleUpdate.js). `--share=network` is all it
-# needs.
+# The bundle embeds no origin URL; its shell updates through `flatpak update`
+# from whichever remote it was installed from (npkg's, for pkg.soapbox.pub).
+# Its WEB BUNDLE also updates in place: the shell fetches the site's dist
+# archive into userData and serves that (electron/webBundleUpdate.js).
+# `--share=network` is all that needs.
 
 modules:
   - name: armada
@@ -109,8 +110,9 @@ modules:
         path: armada-wrapper
       - type: file
         path: buzz.armada.app.desktop
+      # Staged by build.sh with a <release> for the version being built.
       - type: file
-        path: buzz.armada.app.metainfo.xml
+        path: ../release/buzz.armada.app.metainfo.xml
       - type: file
         path: ../build/linux-icon.png
         dest-filename: armada.png

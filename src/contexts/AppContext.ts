@@ -190,6 +190,11 @@ export interface AppConfig {
    */
   showDmRequests: boolean;
   /**
+   * Whether DM list rows show the latest message's text (default on). Off also
+   * keeps it out of the at-rest list snapshot and skips NIP-04 preview decrypts. Synced.
+   */
+  showDmPreviews: boolean;
+  /**
    * Whether the rail shows the recent-unread DM strip (capped at
    * {@link MAX_RAIL_RECENT_DMS}; default on). Display only. Synced.
    */
@@ -299,6 +304,7 @@ export const METADATA_CONFIG_KEYS = [
   "dmTypingIndicators",
   "dmsDisabled",
   "showDmRequests",
+  "showDmPreviews",
   "showRecentRailDms",
   "discoverAllContent",
   "discoverCuration",
@@ -391,6 +397,7 @@ export const defaultConfig: AppConfig = {
   acceptedDms: [],
   startedDms: [],
   showDmRequests: true,
+  showDmPreviews: true,
   showRecentRailDms: true,
   discoverAllContent: false,
   discoverCuration: "",

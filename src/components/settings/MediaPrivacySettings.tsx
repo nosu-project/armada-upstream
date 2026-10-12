@@ -64,9 +64,9 @@ export function MediaPrivacySettings() {
         description={
           enabled
             ? "Not needed while images load through a proxy: the sites see the proxy, not you."
-            : "Media posted from a site other than your media servers, the sites below or the "
-              + "common Nostr hosts waits for Load, whoever posted it. Loading it tells that site "
-              + "your address."
+            : "Media posted from a site other than your media servers (Relays › Media), the sites "
+              + "below or the common Nostr hosts waits for Load, whoever posted it. Loading it tells "
+              + "that site your address."
         }
       >
         <Switch
@@ -78,7 +78,7 @@ export function MediaPrivacySettings() {
         <SettingsRow
           stack
           label="Sites you trust"
-          description={`Media from these loads without asking. Always included: your media servers and ${KNOWN_MEDIA_HOSTS.join(", ")}.`}
+          description={`Media from these loads without asking. Always included: your media servers (Relays › Media) and ${KNOWN_MEDIA_HOSTS.join(", ")}.`}
         >
           <TrustedHostListEditor hosts={config.trustedMediaHosts} onChange={setTrustedHosts} />
         </SettingsRow>

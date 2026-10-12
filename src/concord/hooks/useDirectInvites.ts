@@ -95,12 +95,15 @@ async function storeFreshInviteWraps(
  * from my inbox relays, decrypt, persist, advance. Returns true if it wrote
  * something. Always run un-awaited; it must never block a render.
  */
-async function sweepInviteInbox(
+export async function sweepInviteInbox(
   nostr: ReturnType<typeof useNostr>["nostr"],
   user: InviteUser,
   signal?: AbortSignal,
 ): Promise<boolean> {
   const pubkey = user.pubkey;
+  // No consent: nothing fetched could be opened or kept, and the cursor stays
+  // put, so the first poll after an "allow" scans everything anyway.
+  if (!mayDecryptInvites(user.method)) return false;
   // The cursor is rewound by NIP-59's backdate window (these wraps backdate).
   const since = await inviteInboxSince(pubkey);
   const filter: { kinds: number[]; "#p": string[]; "#k": string[]; limit: number; since?: number } = {
@@ -128,8 +131,6 @@ async function sweepInviteInbox(
   const seenWrap = new Set<string>();
   const wraps = perRelay.flat().filter((e) => (seenWrap.has(e.id) ? false : seenWrap.add(e.id)));
   if (wraps.length === 0) return false;
-  // No consent: don't decrypt or advance the cursor, so a later "allow" re-scans.
-  if (!mayDecryptInvites(user.method)) return false;
   const { stored, newestWrap } = await storeFreshInviteWraps(user, wraps, signal);
   if (newestWrap > 0) await advanceInviteInboxCursor(pubkey, newestWrap);
   return stored > 0;

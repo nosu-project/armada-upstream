@@ -445,6 +445,37 @@ describe("dm17Store disappearing messages", () => {
     expect(row?.mine).toBe(true);
   });
 
+  it("lists no conversation whose every message its author deleted", async () => {
+    // Its own viewer: other tests list every conversation of the shared one.
+    const viewer = getPublicKey(generateSecretKey());
+    const stranger = getPublicKey(generateSecretKey());
+    const friend = getPublicKey(generateSecretKey());
+    const forger = getPublicKey(generateSecretKey());
+    const from = (author: string, content: string): OpenedDm =>
+      ({ ...opened({ author, peer: author, content, tags: dmChatTags([viewer]) }), peers: [author] });
+    const deleteOf = (author: string, target: OpenedDm): OpenedDm => ({
+      ...opened({ author, peer: author, kind: KIND_DM_DELETE, content: "", tags: dmDeleteTags([viewer], target.rumorId, KIND_DM_CHAT) }),
+      peers: [author],
+    });
+
+    const spam = [from(stranger, "spam 1"), from(stranger, "spam 2")];
+    const older = from(friend, "still here");
+    const retracted = from(friend, "retracted");
+    const forgedTarget = from(forger, "not theirs to delete");
+    // Deletes land BEFORE their targets, so the store keeps the targets.
+    await writeDm17Rumors(viewer, [
+      ...spam.map((m) => deleteOf(stranger, m)),
+      deleteOf(friend, retracted),
+      deleteOf(stranger, forgedTarget),
+    ]);
+    await writeDm17Rumors(viewer, [...spam, older, retracted, forgedTarget]);
+
+    const rows = await queryDm17Conversations(viewer);
+    expect(rows.find((r) => r.key === stranger)).toBeUndefined();
+    expect(rows.find((r) => r.key === friend)?.latest.content).toBe("still here");
+    expect(rows.find((r) => r.key === forger)?.latest.content).toBe("not theirs to delete");
+  });
+
   it("reads back the newest timer change, whichever side set it", async () => {
     expect(await queryDm17Timer(self, [carol])).toBeUndefined();
 
@@ -509,6 +540,20 @@ describe("dm17Store relay cursors", () => {
     expect((await readDm17Cursor(viewer))?.relayNewest).toEqual({
       "wss://kept.example": 210,
     });
+  });
+
+  it("persists per-relay full-scan times monotonically, pruned like the watermarks", async () => {
+    const viewer = getPublicKey(generateSecretKey());
+    await updateDm17Cursor(viewer, {
+      relayFullScanAt: { "wss://a.example": 5_000, "wss://b.example": 7_000 },
+    });
+    await updateDm17Cursor(
+      viewer,
+      { relayFullScanAt: { "wss://a.example": 4_000 } },
+      { pruneRelaysTo: ["wss://a.example"] },
+    );
+
+    expect((await readDm17Cursor(viewer))?.relayFullScanAt).toEqual({ "wss://a.example": 5_000 });
   });
 
   it("leaves legacy global progress unattributed so every relay gets a recovery scan", async () => {

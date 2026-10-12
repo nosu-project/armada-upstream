@@ -73,6 +73,13 @@ vi.mock("@/hooks/useCurrentUser", () => ({
   }),
 }));
 
+// No resume marks: every pull here reads whole, as on a fresh install.
+vi.mock("@/lib/selfReadMarks", () => ({
+  loadSelfReadMarks: () => Promise.resolve(),
+  noteSelfRead: () => {},
+  sinceSelfRead: (filters: unknown[]) => filters,
+  storeSelfReadEvents: () => Promise.resolve(),
+}));
 vi.mock("@/hooks/useEventStore", () => ({
   useEventStore: () => Promise.resolve({ query: h.storeQuery, event: vi.fn() }),
 }));

@@ -28,6 +28,7 @@ vi.mock("@/concord/hooks/timelineSnapshot", () => ({
 vi.mock("@/hooks/useCurrentUser", () => ({ useCurrentUser: () => ({ user: { pubkey: "b".repeat(64) } }) }));
 vi.mock("@/concord/lib/channelSync", () => ({
   LOAD_OLDER_MAX_PAGES: 3,
+  historyRelays: (c: { relays: string[] }) => c.relays,
   backfillStore: (_n: unknown, _r: unknown, _c: unknown, signal: AbortSignal, opts?: { maxPages?: number }) => {
     // Only loadOlder pages with LOAD_OLDER_MAX_PAGES.
     if (!h.hang || opts?.maxPages !== 3) return Promise.resolve({ events: [], exhausted: false });

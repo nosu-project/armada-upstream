@@ -4,6 +4,31 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.64.13] - 2026-10-12
+
+Sent images now arrive with a preview that shows inline right away, and
+animated GIFs stay animated when cropped. You can hide message previews in the
+DM list, and Armada uses much less data and battery keeping communities,
+messages and notifications in sync.
+
+### Added
+- Sent images include a preview that shows inline, with the full image loading in the lightbox
+- A synced setting to hide message previews in the DM list
+- Discord-style `-#` subtext lines in chat messages
+
+### Changed
+- Cropping an animated GIF keeps its animation
+- Settings › Relays is laid out like the signup wizard, with sync in its own section
+- Forum posts and comments no longer have a character limit
+- Opening a community on mobile no longer jumps straight into a channel
+- Images and share-shortcut avatars are cached on disk instead of being downloaded again
+- Much less network traffic and battery use syncing communities, DMs and settings, and in the Android notification service
+- Relays that never connect are retried less often, including across restarts
+
+### Fixed
+- The DM list no longer shows a deleted message as a conversation's latest
+- Voice calls no longer fail to start where the microphone level can't be read
+
 ## [0.64.12] - 2026-10-10
 
 Incoming calls on Android now ring instead of joining by themselves, with a

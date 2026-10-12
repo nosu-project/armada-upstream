@@ -68,6 +68,50 @@ export async function resizeImage(file: File): Promise<ResizedImage> {
 }
 
 /**
+ * Longest side of an image's timeline preview: the inline box is at most
+ * 384×320 CSS px, so this stays sharp at 2× density.
+ */
+export const THUMB_DIMENSION = 768;
+const THUMB_QUALITY = 0.75;
+/** A preview must save at least this share of the image, or it isn't worth a second blob. */
+const THUMB_MIN_SAVING = 0.5;
+
+/**
+ * The timeline preview of an image about to be sent, uploaded beside it as its
+ * imeta `thumb` so a chat downloads the full image only when it is opened.
+ * Made here because an encrypted attachment can't be resized by any server.
+ * Undefined for animated images (a still would freeze them) and where the
+ * preview wouldn't be much smaller than the image itself.
+ */
+export async function makeImageThumb(file: File): Promise<File | undefined> {
+  try {
+    const head = new Uint8Array(await file.slice(0, METADATA_SCAN_BYTES).arrayBuffer());
+    if (isAnimatedImage(file.type, head)) return undefined;
+    const bitmap = await decodeUpright(file);
+    const scale = Math.min(1, THUMB_DIMENSION / Math.max(bitmap.width, bitmap.height));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+    canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+    const ctx = canvas.getContext('2d');
+    if (!ctx) {
+      bitmap.close();
+      return undefined;
+    }
+    ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    bitmap.close();
+    // JPEG would paint a transparent PNG's background black: an image that may
+    // carry alpha gets WebP, and no preview where the browser can't encode it.
+    const opaque = file.type === 'image/jpeg';
+    const type = opaque ? 'image/jpeg' : 'image/webp';
+    const blob = await canvasToBlob(canvas, type, THUMB_QUALITY);
+    if (blob.type !== type || blob.size > file.size * THUMB_MIN_SAVING) return undefined;
+    return new File([blob], replaceExtension(file.name, opaque ? '.thumb.jpg' : '.thumb.webp'), { type });
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Decode with EXIF rotation baked in, so dropping the orientation tag doesn't
  * leave photos sideways. Older Chromium WebViews reject `"from-image"` with a
  * TypeError; their default already applies the rotation.

@@ -78,6 +78,8 @@
     "date-fns": "^3.6.0",
     "emoji-mart": "^5.6.0",
     "fflate": "^0.8.3",
+    "gifenc": "^1.0.3",
+    "gifuct-js": "^2.1.2",
     "highlight.js": "^11.11.2",
     "idb": "^8.0.3",
     "light-bolt11-decoder": "^3.2.0",

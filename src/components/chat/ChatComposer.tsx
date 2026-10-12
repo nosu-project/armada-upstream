@@ -84,7 +84,7 @@ import { MAX_ENCRYPTED_BYTES, deviceInputLimit, keepUserFields, mimeOfPicked } f
 import { attachmentExpiration } from "@/lib/blossom";
 import { describeRefusal, uploadFailureReason } from "@/lib/blossomPreflight";
 import { KIND_GROUP_CHAT, relayRejectionMessage } from "@/lib/nip29";
-import { resizeImage } from "@/lib/resizeImage";
+import { makeImageThumb, resizeImage } from "@/lib/resizeImage";
 import { parseChatRoute, roomPath } from "@/lib/routes";
 import { consumeShareFor, onShareStashChanged } from "@/lib/shareTarget";
 import { recordSent } from "@/lib/shareTargets";
@@ -482,6 +482,8 @@ const PickerToggleButton = memo(function PickerToggleButton({
  */
 export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelReply, onJumpToReply, sealed = false, onSent, shareLabel, shareIconUrl, sendOverride, canSend, mentionPubkeys, canMentionEveryone = false, placeholder, draftScope, shareRoute, onOptimisticInsert, onOptimisticSent, onOptimisticFailed, canModerate = false, autoFocus = false, onTyping, onSlashAction, encryptAttachments = false, disappearingTimer, botCommands = false, botDmPeer, recentAuthors, conversationRelays, pollsEnabled = true, onPollSubmit, messageKind = KIND_GROUP_CHAT, onEditLast, layout = "bar", documentEnterSends = false, submitLabel = "Post", onCancel }: ChatComposerProps) {
   const isDocument = layout === "document";
+  // Forum posts and comments (the document layout) have no length cap.
+  const maxChars = isDocument ? Infinity : MAX_CHARS;
   const { user } = useCurrentUser();
   const composerBoundsRef = useComposerBoundsRef();
   const { mutateAsync: createEvent, isPending: isSending } = useNostrPublish();
@@ -1113,11 +1115,13 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
       let audio: AudioMetadata | undefined;
       let audioWaveform: Promise<number[] | undefined> | undefined;
       let modelStill: Blob | undefined;
+      let imageThumb: File | undefined;
 
       if (isImage) {
         const resized = await resizeImage(file);
         uploadableFile = resized.file;
         resizedDim = resized.dimensions;
+        imageThumb = await makeImageThumb(uploadableFile);
       } else if (isVideo) {
         // Never throws for media reasons (falls back to the original). Progress is
         // patched per whole percent to limit re-renders.
@@ -1187,12 +1191,12 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
       }
       const originalMime = uploadableFile.type || mime;
 
-      // Poster frame or model still: a second blob, referenced as `image`/`thumb`.
+      // Poster frame, model still or image preview: a second blob, referenced as `image`/`thumb`.
       let posterFile = video?.poster
         ? new File([video.poster], replaceExtension(uploadableFile.name, ".jpg"), { type: "image/jpeg" })
         : modelStill
           ? new File([modelStill], replaceExtension(uploadableFile.name, ".png"), { type: "image/png" })
-          : undefined;
+          : imageThumb;
 
       // The plaintext, kept to render the upload locally (see primeAttachment).
       const plainFile = uploadableFile;
@@ -1246,7 +1250,10 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
         if (blurhashTag && !hasTag("blurhash")) tags.push(["blurhash", blurhashTag]);
       }
       if (video?.duration && !hasTag("duration")) tags.push(["duration", String(video.duration)]);
-      if (posterUrl) {
+      if (posterUrl && imageThumb) {
+        // An image's own preview is only its `thumb`; `image` would read as a poster.
+        tags.push(["thumb", posterUrl]);
+      } else if (posterUrl) {
         // NIP-94 defines both; clients differ on which they read.
         tags.push(["image", posterUrl], ["thumb", posterUrl]);
       }
@@ -1547,7 +1554,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
 
   /** `extraTags` carry routing the text can't express (the `bot` tag); sealed like the rest on Concord. */
   const publishMessage = useCallback(async (finalText: string, extraTags?: string[][]) => {
-    if (!finalText || !user || finalText.length > MAX_CHARS) return;
+    if (!finalText || !user || finalText.length > maxChars) return;
     // Only the legacy publish path serializes on `isSending`; the others publish
     // in the background, serialized by the per-identity signer queue.
     if (!sendOverride && !onOptimisticInsert && isSending) return;
@@ -1631,7 +1638,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
         variant: "destructive",
       });
     }
-  }, [user, isSending, sendOverride, canSend, createEvent, buildMessageTags, relayUrl, resetComposeState, onSent, noteSent, toast, onOptimisticInsert, onOptimisticSent, onOptimisticFailed, messageKind]);
+  }, [user, isSending, sendOverride, canSend, createEvent, buildMessageTags, relayUrl, resetComposeState, onSent, noteSent, toast, onOptimisticInsert, onOptimisticSent, onOptimisticFailed, messageKind, maxChars]);
 
   const executeSlash = useCallback(async (command: SlashCommand, arg: string) => {
     // A typed command needing a missing capability (e.g. "/poll" in Concord) is sent as text.
@@ -2269,7 +2276,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                   onPaste={handlePaste}
                   aria-label={placeholderText}
                   rows={isDocument ? 5 : 1}
-                  maxLength={MAX_CHARS}
+                  maxLength={isDocument ? undefined : MAX_CHARS}
                   className={cn(
                     "block w-full resize-none bg-transparent border-0 outline-none px-1.5 touch:pl-0.5 touch:pr-2 pt-[7px] pb-[9px] touch:pt-[13px] touch:pb-[11px] disabled:opacity-50 overflow-y-auto align-middle",
                     isDocument
@@ -2396,7 +2403,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
             </div>
             )}
 
-            {charCount > MAX_CHARS * 0.8 && (
+            {charCount > maxChars * 0.8 && (
               <div className="flex justify-end pt-1 pr-2">
                 <span
                   className={cn(

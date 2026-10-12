@@ -92,8 +92,10 @@ interface Filter {
 class FakeRelay {
   events: NostrEvent[] = [];
   fail = false;
+  asked: Filter[] = [];
 
   async query(filters: Filter[]): Promise<NostrEvent[]> {
+    this.asked.push(...filters);
     if (this.fail) throw new Error("relay down");
     const out = new Map<string, NostrEvent>();
     for (const f of filters) {
@@ -179,6 +181,52 @@ describe("channelSync — the c2: topic handler", () => {
       off();
       release();
     }
+  });
+
+  it("past a complete round, a quiet channel costs one since-bounded ask per relay and settles", { timeout: 30_000 }, async () => {
+    const m = await freshModules();
+    const channel = makeChannel(m);
+    const alice = signer();
+    const now = Math.floor(Date.now() / 1000);
+    const relay = new FakeRelay();
+    relay.events = await Promise.all([0, 1, 2].map((i) => wrapChatAt(m, channel, alice, `old-${i}`, now - 86_400 + i)));
+    await m.updateStreamCursor(channel.idHex, { newest: now - 3_600, oldest: now - 90_000, exhausted: true });
+    const community = { idHex: CID, relays: [RELAY] } as unknown as Community;
+    m.setChannelSyncContext(channel.idHex, { nostr: makePool({ [RELAY]: relay }), community, channel });
+
+    const topic = `c2:${channel.idHex}`;
+    const release = m.want(topic);
+    await vi.waitFor(() => expect(m.syncState(topic).status).toBe("settled"), { timeout: 15_000 });
+    expect(relay.asked).toHaveLength(1);
+    expect(relay.asked[0].since).toBe(now - 3_600 - 600);
+    expect(relay.asked[0].until).toBeUndefined();
+    release();
+  });
+
+  it("pages older history from two relays, two pages a round", { timeout: 30_000 }, async () => {
+    const m = await freshModules();
+    const channel = makeChannel(m);
+    const alice = signer();
+    const now = Math.floor(Date.now() / 1000);
+    const history = await Promise.all(
+      Array.from({ length: 300 }, (_, i) => wrapChatAt(m, channel, alice, `h-${i}`, now - 200_000 + i)),
+    );
+    const urls = ["wss://r1.test", "wss://r2.test", "wss://r3.test", "wss://r4.test"];
+    const relays = Object.fromEntries(urls.map((u) => {
+      const r = new FakeRelay();
+      r.events = history;
+      return [u, r];
+    }));
+    await m.updateStreamCursor(channel.idHex, { newest: now - 3_600, oldest: now - 199_700 });
+    const community = { idHex: CID, relays: urls } as unknown as Community;
+    m.setChannelSyncContext(channel.idHex, { nostr: makePool(relays), community, channel });
+
+    const topic = `c2:${channel.idHex}`;
+    const release = m.want(topic);
+    await vi.waitFor(() => expect(m.syncState(topic).status).toBe("settled"), { timeout: 15_000 });
+    const olderAsks = (u: string) => relays[u].asked.filter((f) => f.until !== undefined).length;
+    expect(urls.map(olderAsks)).toEqual([2, 2, 0, 0]);
+    release();
   });
 
   it("a round with no reachable relay marks the topic error, never fresh", { timeout: 30_000 }, async () => {

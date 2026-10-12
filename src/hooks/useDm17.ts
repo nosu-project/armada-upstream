@@ -23,6 +23,7 @@ import { customEmojiReactionTags } from "@/hooks/useReactions";
 import { useResumeEpoch } from "@/hooks/useResumeEpoch";
 import { effectiveDmRelays } from "@/contexts/AppContext";
 import { normalizeRelayUrl } from "@/lib/platform";
+import { nativeDmCoverage } from "@/lib/nativeNotifications";
 import { mayBulkDecrypt, signerNeedsApproval } from "@/lib/bulkDecryptGate";
 import { getDecryptConsent } from "@/lib/decryptConsent";
 import { isDmSynced, markDmSynced } from "@/lib/dmSynced";
@@ -480,6 +481,12 @@ export function dm17InboxFilter(
   return filter;
 }
 
+/** Whether the background service has received everything `relay` got since `since` (ms). */
+export function serviceCovered(coverage: ReadonlyMap<string, number>, relay: string, since: number): boolean {
+  const from = coverage.get(normalizeRelayUrl(relay) ?? relay);
+  return from !== undefined && since > 0 && from <= since;
+}
+
 /** True only when the query completed and its wraps were consumed. */
 async function runInboxSync(
   ctx: SyncCtx,
@@ -487,27 +494,35 @@ async function runInboxSync(
   now: number,
 ): Promise<boolean> {
   try {
-    const [cursor] = await Promise.all([readDm17Cursor(ctx.self), loadSeenWraps(ctx.self)]);
+    const [cursor, , covered] = await Promise.all([readDm17Cursor(ctx.self), loadSeenWraps(ctx.self), nativeDmCoverage()]);
     // Full-window cadence is PER RELAY, so a failed relay never inherits another's progress.
+    const lastFullOf = (relay: string) =>
+      Math.max(lastFullScanAt.get(`${ctx.self}\u0000${relay}`) ?? 0, cursor?.relayFullScanAt?.[relay] ?? 0);
+    // Android: a relay the service has held live since our last full read of it
+    // is not asked at all — everything published there since is already stored
+    // (or in the drain).
+    const scan = ctx.relays.filter((relay) =>
+      cursor?.relayNewest?.[relay] === undefined || !serviceCovered(covered, relay, lastFullOf(relay)));
+    if (scan.length === 0) return true;
+    // A relay the service covers only since AFTER our last full read gets one
+    // full read now to close that gap, and is skipped from then on.
     const fullRelays = new Set(
-      ctx.relays.filter((relay) => {
-        const key = `${ctx.self}\u0000${relay}`;
-        return opts?.full || cursor?.relayNewest?.[relay] === undefined ||
-          now - (lastFullScanAt.get(key) ?? 0) >= FULL_SCAN_INTERVAL_MS;
-      }),
+      scan.filter((relay) =>
+        cursor?.relayNewest?.[relay] === undefined || opts?.full || covered.has(normalizeRelayUrl(relay) ?? relay)
+          || now - lastFullOf(relay) >= FULL_SCAN_INTERVAL_MS),
     );
     const result = await queryWrapsPerRelay(
       ctx.nostr,
-      ctx.relays,
+      scan,
       (relay) => dm17InboxFilter(ctx.self, cursor, relay, fullRelays.has(relay)),
       AbortSignal.timeout(8000),
     );
     if (result.pages.length === 0) {
-      logSync("dm", `inbox scan failed on all ${ctx.relays.length} relay(s)`);
+      logSync("dm", `inbox scan failed on all ${scan.length} relay(s)`);
       return false;
     }
     if (result.failed.length > 0) {
-      logSync("dm", `inbox scan reached ${result.pages.length}/${ctx.relays.length} relay(s); ${result.failed.length} remain retryable`);
+      logSync("dm", `inbox scan reached ${result.pages.length}/${scan.length} relay(s); ${result.failed.length} remain retryable`);
     }
 
     const wraps = mergeRelayPages(result.pages);
@@ -519,9 +534,11 @@ async function runInboxSync(
     // candidates.
     const nowSecs = Math.floor(now / 1000);
     const relayNewest = relayScanWatermarks(result.pages, nowSecs);
+    const relayFullScanAt: Record<string, number> = {};
     for (const page of result.pages) {
       if (fullRelays.has(page.url)) {
         lastFullScanAt.set(`${ctx.self}\u0000${page.url}`, now);
+        relayFullScanAt[page.url] = now;
       }
     }
     if (wraps.length > 0) {
@@ -530,6 +547,7 @@ async function runInboxSync(
       await updateDm17Cursor(ctx.self, {
         newest,
         relayNewest,
+        relayFullScanAt,
         // First full scan seeds the backfill floor; a short page means nothing deeper.
         ...(cursor ? {} : {
           oldest,
@@ -539,6 +557,7 @@ async function runInboxSync(
     } else {
       await updateDm17Cursor(ctx.self, {
         relayNewest,
+        relayFullScanAt,
         ...(cursor ? {} : {
           newest: nowSecs,
           oldest: nowSecs,

@@ -47,6 +47,7 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { isValidAvatarShape } from '@/lib/avatarShape';
 import { isAnimatedImage, METADATA_SCAN_BYTES } from '@/lib/imageMetadata';
+import { isGifBytes } from '@/lib/runGifCrop';
 
 const WALLET_TICKERS = [
   '$BTC', '$ETH', '$SOL', '$XMR', '$LTC', '$DOGE', '$ADA', '$DOT', '$XRP', '$MATIC',
@@ -566,7 +567,7 @@ export function ProfileSettings({ onSaved, saveLabel, centerSave, showNip05 = tr
 
     // Animated images would be flattened by the crop canvas; upload them as-is.
     const head = new Uint8Array(await file.slice(0, METADATA_SCAN_BYTES).arrayBuffer());
-    if (isAnimatedImage(file.type, head)) {
+    if (!isGifBytes(head) && isAnimatedImage(file.type, head)) {
       await uploadImage(file, field);
       return;
     }
@@ -583,7 +584,8 @@ export function ProfileSettings({ onSaved, saveLabel, centerSave, showNip05 = tr
     if (!cropState) return;
     const { field } = cropState;
     setCropState(null);
-    const file = new File([blob], `${field}.jpg`, { type: 'image/jpeg' });
+    const gif = blob.type === 'image/gif';
+    const file = new File([blob], `${field}.${gif ? 'gif' : 'jpg'}`, { type: gif ? 'image/gif' : 'image/jpeg' });
     await uploadImage(file, field);
   };
 

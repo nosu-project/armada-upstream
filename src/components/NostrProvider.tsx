@@ -21,6 +21,7 @@ import { normalizeRelayUrl } from "@/lib/platform";
 import { logNostrEvent, logNostrReq } from "@/lib/nostrQueryLog";
 import { logRelayOpen } from "@/lib/relayConnectionLog";
 import { emitRelayReopened } from "@/lib/relayReopen";
+import { noteRelayClosed, noteRelayOpened } from "@/lib/relayHealth";
 import { onDesktopResume } from "@/lib/desktop";
 import { logSync } from "@/lib/syncLog";
 import {
@@ -34,7 +35,7 @@ import {
   signStreamAuths,
   signStreamAuthsChunked,
   streamPubkeysForRelay,
-  unackedStreamPubkeys,
+  claimStaleWave,
 } from "@/concord/lib/streamAuth";
 
 interface NostrProviderProps {
@@ -242,6 +243,7 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
       socket: NRelay1["socket"];
     };
     const onOpen = () => {
+      noteRelayOpened(url);
       internals.authRetriedSubs?.clear();
       internals.authRetriedEvents?.clear();
       internals.authPromise = undefined;
@@ -265,6 +267,7 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
       // Standing consumers should re-REQ: their re-issued subs may have raced AUTH (see relayReopen.ts).
       emitRelayReopened(url);
     };
+    const onClose = () => noteRelayClosed(url);
     // Prefix check first so the wrap firehose isn't double-parsed.
     const onMessage = (...args: unknown[]) => {
       const data = args
@@ -285,6 +288,7 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
         };
         s.addEventListener("open", onOpen);
         s.addEventListener("message", onMessage);
+        s.addEventListener("close", onClose);
       } catch { /* ignore */ }
     };
     // NRelay1.wake() REPLACES relay.socket; intercept the assignment to watch the new one.
@@ -583,8 +587,8 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
     return onStreamAuthStale((url) => {
       const entry = openRelaysRef.current.get(url);
       if (!entry?.challenge) return;
-      // Only unacked keys; the wave repeats every AUTH_STALE_MS.
-      const pks = unackedStreamPubkeys(url);
+      // Only unacked keys not already being sent; waves back off (streamAuthsSettled).
+      const pks = claimStaleWave(url);
       if (pks.length === 0) return;
       logSync("auth", `stream auth went stale for ${url} — re-sending ${pks.length} AUTH frame(s)`);
       void sendStreamAuths(entry, url, pks);

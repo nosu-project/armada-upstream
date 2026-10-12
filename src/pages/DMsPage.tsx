@@ -2054,8 +2054,9 @@ export function ConversationList({
     <DeferredRow key={c.conversation} active={gateRows && index >= EAGER_ROWS} minHeight={ROW_MIN_H}>
     <ConversationRow
       peers={c.peers}
-      preview={c.latest}
-      previewText={c.plaintext ?? previews[c.conversation]}
+      // Hidden previews drop the whole line; a search hit still shows what was typed.
+      preview={config.showDmPreviews ? c.latest : undefined}
+      previewText={config.showDmPreviews ? c.plaintext ?? previews[c.conversation] : undefined}
       query={search}
       messageMatch={messageMatches.get(c.conversation)?.text}
       unread={
@@ -2344,6 +2345,8 @@ export function DMsPage() {
   const self = user?.pubkey;
   const dmSupported = useDMSupport();
   const dm17Supported = useDm17Support();
+  const { config } = useAppContext();
+  const showPreviews = config.showDmPreviews;
   const {
     conversations,
     previews,
@@ -2352,7 +2355,7 @@ export function DMsPage() {
     loadMore,
     hasMore,
     isLoadingMore,
-  } = useDMConversations({ decryptPreviews: true });
+  } = useDMConversations({ decryptPreviews: showPreviews });
   // Interactive: the DMs page may legitimately raise the one-time decrypt-consent prompt.
   const { conversations: dm17Conversations, isLoading: dm17Loading } = useDm17Conversations({
     interactive: true,
@@ -2624,7 +2627,8 @@ export function DMsPage() {
             eventId: c.latest.id,
             createdAt: c.latest.created_at,
             author: c.latest.pubkey,
-            preview: c.plaintext ?? previews[c.conversation],
+            // Hidden previews stay off disk too: the snapshot is plaintext at rest.
+            preview: showPreviews ? c.plaintext ?? previews[c.conversation] : undefined,
             emojiTags: pickEmojiTags(c.latest.tags),
             // So a restored disappearing preview drops after its deadline.
             expiresAt: expirationOf(c.latest.tags),
@@ -2633,7 +2637,7 @@ export function DMsPage() {
       );
     }, 800);
     return () => clearTimeout(timer);
-  }, [isLoading, visibleRows, previews, user?.pubkey]);
+  }, [isLoading, visibleRows, previews, showPreviews, user?.pubkey]);
 
   const openPeer = useCallback(
     (conversation: string) => {

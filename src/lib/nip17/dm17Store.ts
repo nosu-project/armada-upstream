@@ -180,19 +180,33 @@ export async function queryDm17Messages(
     .map((ev) => storedToDm17(ev, self))
     .filter((opened) => dmConvKey(opened.peers) === key);
   if (rows.length === 0) return [];
-  // Only the target's author may delete it, so the delete needs no conversation scope.
+  const deleted = await authorDeleted(store, rows, opts.signal);
+  return rows.filter((r) => !deleted.has(r.rumorId));
+}
+
+/**
+ * The ids among `rows` deleted by their own author. Kind 5 removes only targets
+ * already stored, and wraps arrive out of order, so a target can outlive its delete.
+ * Only the target's author may delete it, so the delete needs no conversation scope.
+ */
+async function authorDeleted(
+  store: NRumorStore,
+  rows: readonly OpenedDm[],
+  signal?: AbortSignal,
+): Promise<Set<string>> {
+  const deleted = new Set<string>();
+  if (rows.length === 0) return deleted;
   const deletes = await store.query(
     [{ kinds: [KIND_DM_DELETE], "#e": rows.map((r) => r.rumorId) }],
-    { signal: opts.signal },
+    { signal },
   );
-  const deleted = new Set<string>();
   const authorOf = new Map(rows.map((r) => [r.rumorId, r.author]));
   for (const d of deletes) {
     for (const [name, value] of d.tags) {
       if (name === "e" && value && authorOf.get(value) === d.pubkey) deleted.add(value);
     }
   }
-  return rows.filter((r) => !deleted.has(r.rumorId));
+  return deleted;
 }
 
 /**
@@ -311,8 +325,15 @@ export async function queryDm17Conversations(
   const byConversation = new Map<string, OpenedDm>();
   /** Conversation → when the viewer last sent there. Keys are the `mine` set. */
   const mine = new Map<string, number>();
-  /** Conversations whose newest message is expired but not yet swept. */
-  const stale = new Map<string, OpenedDm>();
+  /**
+   * Per conversation, the newest message ruled out (expired but not yet swept,
+   * or deleted by its author). Everything newer has been ruled out too.
+   */
+  const ruledOut = new Map<string, OpenedDm>();
+  const ruleOut = (key: string, opened: OpenedDm): void => {
+    const prev = ruledOut.get(key);
+    if (!prev || opened.createdAt > prev.createdAt) ruledOut.set(key, opened);
+  };
 
   const fold = (ev: NostrRumor): void => {
     const opened = storedToDm17(ev, self);
@@ -329,8 +350,7 @@ export async function queryDm17Conversations(
       if (prev === undefined || opened.createdAt > prev) mine.set(key, opened.createdAt);
     }
     if (isExpired(ev.tags)) {
-      const worst = stale.get(key);
-      if (!worst || opened.createdAt > worst.createdAt) stale.set(key, opened);
+      ruleOut(key, opened);
       return;
     }
     const cur = byConversation.get(key);
@@ -339,16 +359,30 @@ export async function queryDm17Conversations(
 
   for (const ev of events) fold(ev);
 
-  // A conversation whose collapsed row expired may still have an older live
-  // message; re-read those once, by term.
-  const missing = [...stale].filter(([key]) => !byConversation.has(key));
-  if (missing.length > 0) {
+  // A conversation whose newest message is expired or author-deleted falls back
+  // to an older live one, paged by term; one with none left is not listed, as
+  // its thread would be empty.
+  const checked = new Set<string>();
+  for (let round = 0; ; round++) {
+    const unchecked = [...byConversation].filter(([key]) => !checked.has(key));
+    const deleted = await authorDeleted(store, unchecked.map(([, latest]) => latest), opts.signal);
+    for (const [key, latest] of unchecked) {
+      if (deleted.has(latest.rumorId)) {
+        byConversation.delete(key);
+        ruleOut(key, latest);
+      } else {
+        checked.add(key);
+      }
+    }
+    const missing = [...ruledOut].filter(([key]) => !byConversation.has(key));
+    if (missing.length === 0 || round === RETRY_ROUNDS) break;
+    ruledOut.clear();
     const retry = await store.query(
-      missing.map(([, latest]) => ({
+      missing.map(([, newest]) => ({
         kinds: [KIND_DM_CHAT, KIND_DM_FILE],
-        search: dmConvTerm(latest.peers),
-        until: latest.createdAt - 1,
-        limit: EXPIRED_RETRY,
+        search: dmConvTerm(newest.peers),
+        until: newest.createdAt - 1,
+        limit: RETRY_PAGE,
       })),
       { signal: opts.signal },
     );
@@ -366,8 +400,12 @@ export async function queryDm17Conversations(
     .sort((a, b) => b.latest.createdAt - a.latest.createdAt);
 }
 
-/** How far back to look for a live message when the newest has expired; the sweep settles the rest. */
-const EXPIRED_RETRY = 8;
+/**
+ * How far back the list looks past an expired or deleted head: RETRY_ROUNDS
+ * pages of RETRY_PAGE, bounding what a burst of deleted messages costs a refresh.
+ */
+const RETRY_PAGE = 8;
+const RETRY_ROUNDS = 4;
 
 /**
  * Local search over decrypted chat/file rumors (never prompts the signer):
@@ -473,6 +511,30 @@ export interface Dm17Cursor {
    * means "never completed a scan", so a legacy upgrade rescans every relay.
    */
   relayNewest?: Record<string, number>;
+  /**
+   * Per relay, when (ms) its last full backdate-window scan completed. Persisted so a
+   * cold start doesn't re-read two days of wraps from every relay.
+   */
+  relayFullScanAt?: Record<string, number>;
+}
+
+/** Monotonic per-relay merge; `keep` (when given) drops relays outside it. */
+function mergeRelayStamps(
+  prev: Record<string, number> | undefined,
+  patch: Record<string, number> | undefined,
+  keep: Set<string> | undefined,
+): Record<string, number> {
+  const out = { ...(prev ?? {}) };
+  for (const [relay, value] of Object.entries(patch ?? {})) {
+    if (!Number.isFinite(value) || value <= 0) continue;
+    out[relay] = Math.max(out[relay] ?? 0, value);
+  }
+  if (keep) {
+    for (const relay of Object.keys(out)) {
+      if (!keep.has(relay)) delete out[relay];
+    }
+  }
+  return out;
 }
 
 const cursorKey = (self: string) => `dm17-cursor:${self}`;
@@ -493,17 +555,9 @@ export async function updateDm17Cursor(
   opts?: { pruneRelaysTo?: readonly string[] },
 ): Promise<void> {
   const prev = await readDm17Cursor(self);
-  const relayNewest = { ...(prev?.relayNewest ?? {}) };
-  for (const [relay, newest] of Object.entries(patch.relayNewest ?? {})) {
-    if (!Number.isFinite(newest) || newest <= 0) continue;
-    relayNewest[relay] = Math.max(relayNewest[relay] ?? 0, newest);
-  }
-  if (opts?.pruneRelaysTo) {
-    const keep = new Set(opts.pruneRelaysTo);
-    for (const relay of Object.keys(relayNewest)) {
-      if (!keep.has(relay)) delete relayNewest[relay];
-    }
-  }
+  const keep = opts?.pruneRelaysTo ? new Set(opts.pruneRelaysTo) : undefined;
+  const relayNewest = mergeRelayStamps(prev?.relayNewest, patch.relayNewest, keep);
+  const relayFullScanAt = mergeRelayStamps(prev?.relayFullScanAt, patch.relayFullScanAt, keep);
   const next: Dm17Cursor = {
     newest: Math.max(prev?.newest ?? 0, patch.newest ?? 0),
     oldest:
@@ -514,6 +568,7 @@ export async function updateDm17Cursor(
         : (prev?.oldest ?? 0),
     exhausted: patch.exhausted ?? prev?.exhausted ?? false,
     ...(Object.keys(relayNewest).length > 0 ? { relayNewest } : {}),
+    ...(Object.keys(relayFullScanAt).length > 0 ? { relayFullScanAt } : {}),
   };
   await writeFolded(cursorKey(self), next);
 }

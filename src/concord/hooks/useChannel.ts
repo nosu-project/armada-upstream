@@ -17,7 +17,7 @@ import {
   type FoldedTimeline,
   type OpenedChat,
 } from "@/concord/lib/chat";
-import { backfillStore, LOAD_OLDER_MAX_PAGES, setChannelSyncContext } from "@/concord/lib/channelSync";
+import { backfillStore, historyRelays, LOAD_OLDER_MAX_PAGES, setChannelSyncContext } from "@/concord/lib/channelSync";
 import { KIND_COMMENT, KIND_DELETE, KIND_MESSAGE, KIND_POLL, KIND_REACTION, KIND_SEAL_ENCRYPTED } from "@/concord/lib/kinds";
 import {
   clearStreamExhausted,
@@ -441,7 +441,7 @@ export function useChannelTimeline(
         if (!exhausted) {
           const controller = new AbortController();
           olderAbortRef.current = controller;
-          const older = await backfillStore(nostr, community!.relays, channel!, controller.signal, {
+          const older = await backfillStore(nostr, historyRelays(community!), channel!, controller.signal, {
             until: saved?.oldest,
             maxPages: LOAD_OLDER_MAX_PAGES,
           });

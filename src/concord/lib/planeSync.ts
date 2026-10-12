@@ -138,6 +138,7 @@ export const controlScopeKey = (community: Community, relayUrl: string) =>
  */
 export function markControlPlaneStale(community: Community): void {
   for (const url of community.relays) completeFloors.delete(controlScopeKey(community, url));
+  persistFloors();
 }
 
 /**
@@ -259,7 +260,10 @@ export function _configureSweepPagingForTests(cfg: Partial<typeof paging>): void
 const cadence = {
   /** How long a clean full read licenses delta sweeps before the next full one. */
   fullSweepIntervalMs: 6 * 60 * 60_000,
-  /** Overlap behind the floor's newest wrap — covers publisher clock skew only (CORD-01: no backdating). */
+  /**
+   * Overlap behind the last read's start — covers publisher clock skew only
+   * (CORD-01: no backdating), so anything published since that read is caught.
+   */
   deltaOverlapSecs: 3600,
 };
 
@@ -269,11 +273,87 @@ export function _configureSweepCadenceForTests(cfg: Partial<typeof cadence>): vo
 }
 
 /**
- * Per-scope delta floor for COMPLETE sweeps: time of the last CLEAN full read and
- * newest wrap seen. SESSION-ONLY on purpose — persisting it recreates the
- * forward-cursor starvation.
+ * Per-scope delta floor for COMPLETE sweeps: time of the last CLEAN full read,
+ * newest wrap seen, and when the last read that reached the relay started
+ * (`readAt`, secs) — the delta's anchor, so an old burst of editions isn't the
+ * floor forever. Never a forward cursor: it licenses delta reads only until
+ * `fullSweepIntervalMs` after that full read, as within one session, so a cold
+ * start inside the window doesn't re-download the plane. Persisted beside the
+ * rumors it vouches for (ArmadaDB KV, wiped with them on logout); every
+ * invalidation clears the stored copy too.
  */
-const completeFloors = new Map<string, { fullAt: number; newest: number }>();
+type CompleteFloor = { fullAt: number; newest: number; readAt?: number };
+const completeFloors = new Map<string, CompleteFloor>();
+const FLOORS_KEY = "plane-complete-floors";
+const FLOORS_PERSIST_MS = 2_000;
+let floorsLoaded: Promise<void> | undefined;
+let floorsPersistTimer: ReturnType<typeof setTimeout> | undefined;
+
+function loadFloors(): Promise<void> {
+  floorsLoaded ??= readFolded<Record<string, CompleteFloor>>(FLOORS_KEY)
+    .then((stored) => {
+      const now = Date.now();
+      for (const [scope, floor] of Object.entries(stored ?? {})) {
+        if (completeFloors.has(scope)) continue;
+        if (!Number.isFinite(floor?.fullAt) || !Number.isFinite(floor?.newest)) continue;
+        // A future stamp (clock moved back) would license deltas indefinitely.
+        if (floor.fullAt > now || now - floor.fullAt >= cadence.fullSweepIntervalMs) continue;
+        completeFloors.set(scope, floor);
+      }
+    })
+    .catch(() => {});
+  return floorsLoaded;
+}
+
+/**
+ * Where a COMPLETE scope's delta read would start (before the skew overlap), or
+ * undefined when its floor licenses none and the next read must be whole. An
+ * empty plane's floor (newest 0) licenses a delta once a read has stamped it.
+ */
+function deltaAnchor(scope: string): number | undefined {
+  const floor = completeFloors.get(scope);
+  if (!floor || (floor.newest <= 0 && !floor.readAt)) return undefined;
+  if (Date.now() - floor.fullAt >= cadence.fullSweepIntervalMs) return undefined;
+  return Math.max(floor.newest, floor.readAt ?? 0);
+}
+
+/**
+ * The relays a routine control sweep of `community` reads: every relay whose
+ * plane needs a whole read, plus the `deltaRelays` read longest ago. A
+ * community's editions are published to all its relays, so the rest add only
+ * duplicates; each relay's delta resumes from its OWN last read, so rotating
+ * through them skips nothing, and a withheld edition still surfaces within a
+ * few sweeps (and at every whole read, which goes to all of them).
+ */
+export async function controlSweepRelays(community: Community, deltaRelays: number): Promise<string[]> {
+  await loadFloors();
+  const whole: string[] = [];
+  const delta: Array<{ url: string; anchor: number }> = [];
+  for (const url of community.relays) {
+    const anchor = deltaAnchor(controlScopeKey(community, url));
+    if (anchor === undefined) whole.push(url);
+    else delta.push({ url, anchor });
+  }
+  delta.sort((a, b) => a.anchor - b.anchor || a.url.localeCompare(b.url));
+  return [...whole, ...delta.slice(0, deltaRelays).map((d) => d.url)];
+}
+
+/** Test seam: write the floors now, then forget them in memory, as a relaunch would. */
+export async function _coldStartPlaneFloorsForTests(): Promise<void> {
+  clearTimeout(floorsPersistTimer);
+  floorsPersistTimer = undefined;
+  await writeFolded(FLOORS_KEY, Object.fromEntries(completeFloors));
+  completeFloors.clear();
+  floorsLoaded = undefined;
+}
+
+function persistFloors(): void {
+  if (floorsPersistTimer !== undefined) return;
+  floorsPersistTimer = setTimeout(() => {
+    floorsPersistTimer = undefined;
+    void writeFolded(FLOORS_KEY, Object.fromEntries(completeFloors)).catch(() => {});
+  }, FLOORS_PERSIST_MS);
+}
 
 /**
  * Wrap ids a COMPLETE scope has processed (decrypted or judged garbage), keeping
@@ -388,6 +468,10 @@ export function _resetPlaneSweepMemoForTests(): void {
   scopeTruncated.clear();
   scopeReached.clear();
   completeFloors.clear();
+  floorsLoaded = Promise.resolve();
+  clearTimeout(floorsPersistTimer);
+  floorsPersistTimer = undefined;
+  void writeFolded(FLOORS_KEY, {});
   seenWrapsLoaded = Promise.resolve();
   void seenWrapsLog.clear();
   void junkWrapsLog.clear();
@@ -595,7 +679,7 @@ async function runScopes(
   scopes: PlaneScope[],
 ): Promise<Map<string, OpenedEvent[]>> {
   // Load the seen-memo before narrowing, or a cold launch re-decrypts everything.
-  await loadSeenWraps();
+  await Promise.all([loadSeenWraps(), loadFloors()]);
   // A Refounded control scope whose snapshot id-set is missing must re-ingest
   // WITHOUT the memo narrowing: the set is only recorded for fresh wraps, so
   // otherwise the fold anchors on an empty snapshot. Known junk stays skipped.
@@ -611,10 +695,8 @@ async function runScopes(
   // COMPLETE scopes: a fresh session floor licenses a delta read; otherwise full plane.
   const deltaSince = scopes.map((s, i) => {
     if (!s.complete || s.exhaustive || rebuildSnapshot[i]) return undefined;
-    const floor = completeFloors.get(s.scope);
-    if (!floor || floor.newest <= 0) return undefined;
-    if (Date.now() - floor.fullAt >= cadence.fullSweepIntervalMs) return undefined;
-    return Math.max(0, floor.newest - cadence.deltaOverlapSecs);
+    const anchor = deltaAnchor(s.scope);
+    return anchor === undefined ? undefined : Math.max(0, anchor - cadence.deltaOverlapSecs);
   });
   const filters: NostrFilter[] = scopes.map((s, i) => ({
     kinds: [KIND_WRAP],
@@ -743,7 +825,7 @@ async function runScopes(
         scopes.map((s, i) => {
           logSync(
             "sweep",
-            `${s.scope} → ${totals[i]} event(s), ${freshPerScope[i].length} new in ${sinceMs(started)} (${s.complete ? "full" : `since=${cursors[i]?.newest ?? "∅"}`}, authors×${s.groups.length})`,
+            `${s.scope} → ${totals[i]} event(s), ${freshPerScope[i].length} new in ${sinceMs(started)} (${s.complete ? (deltaSince[i] === undefined ? "full" : `delta since=${deltaSince[i]}`) : `since=${cursors[i]?.newest ?? "∅"}`}, authors×${s.groups.length})`,
           );
           if (s.complete) return undefined; // memoed per page above
           const mine = perScope[i];
@@ -760,12 +842,14 @@ async function runScopes(
           // nothing; a delta read only raises the high-water mark.
           const prior = completeFloors.get(s.scope);
           const newest = Math.max(newestPerScope[i] ?? 0, prior?.newest ?? 0);
+          const readAt = Math.floor(started / 1000);
           if (deltaSince[i] === undefined) {
             if (scopeTruncated.get(s.scope) === true) completeFloors.delete(s.scope);
-            else completeFloors.set(s.scope, { fullAt: Date.now(), newest });
+            else completeFloors.set(s.scope, { fullAt: Date.now(), newest, readAt });
           } else if (prior) {
-            completeFloors.set(s.scope, { fullAt: prior.fullAt, newest });
+            completeFloors.set(s.scope, { fullAt: prior.fullAt, newest, readAt });
           }
+          persistFloors();
         }
         const fresh = freshPerScope[i];
         if (fresh.length === 0) continue;

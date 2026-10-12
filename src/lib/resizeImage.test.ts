@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { resizeImage } from "./resizeImage";
+import { makeImageThumb, resizeImage } from "./resizeImage";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -31,5 +31,46 @@ describe("resizeImage", () => {
     const file = new File([new Uint8Array([1, 2, 3])], "bad.png", { type: "image/png" });
 
     await expect(resizeImage(file)).rejects.toThrow("could not be decoded");
+  });
+});
+
+describe("makeImageThumb", () => {
+  function stubCanvas(blob: Blob) {
+    vi.stubGlobal("createImageBitmap", async () => ({ width: 4000, height: 3000, close: () => undefined }));
+    const drawn: number[][] = [];
+    vi.stubGlobal("document", {
+      createElement: () => {
+        const canvas = {
+          width: 0,
+          height: 0,
+          getContext: () => ({ drawImage: () => drawn.push([canvas.width, canvas.height]) }),
+          toBlob: (cb: (b: Blob) => void) => cb(blob),
+        };
+        return canvas;
+      },
+    });
+    return drawn;
+  }
+
+  const photo = (size: number, type = "image/jpeg") =>
+    new File([new Uint8Array(size)], "photo.jpg", { type });
+
+  it("scales the longest side to the preview size", async () => {
+    const drawn = stubCanvas(new Blob([new Uint8Array(40_000)], { type: "image/jpeg" }));
+    const thumb = await makeImageThumb(photo(3_000_000));
+    expect(drawn).toEqual([[768, 576]]);
+    expect(thumb?.type).toBe("image/jpeg");
+    expect(thumb?.size).toBe(40_000);
+  });
+
+  it("skips a preview that would not save much", async () => {
+    stubCanvas(new Blob([new Uint8Array(60_000)], { type: "image/jpeg" }));
+    expect(await makeImageThumb(photo(100_000))).toBeUndefined();
+  });
+
+  it("skips an image that may be transparent where WebP can't be encoded", async () => {
+    // A browser without a WebP encoder hands back PNG.
+    stubCanvas(new Blob([new Uint8Array(40_000)], { type: "image/png" }));
+    expect(await makeImageThumb(photo(3_000_000, "image/png"))).toBeUndefined();
   });
 });

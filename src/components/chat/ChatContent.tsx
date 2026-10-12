@@ -59,6 +59,10 @@ import { canShareFiles, shareFile } from "@/lib/share";
 import { bolt11AmountSats, formatSats } from "@/lib/zaps";
 import { useLongPress } from "@/hooks/useLongPress";
 import { useMediaWithFallback } from "@/hooks/useMediaWithFallback";
+import { useRoutedCandidates } from "@/hooks/useBlossomCandidates";
+import { isBuzzMediaUrl } from "@/buzz/media";
+import { decryptAttachmentToObjectURL, peekPrimedAttachment } from "@/lib/encryptedMedia";
+import { captureLoadedMedia } from "@/lib/mediaCache";
 import { toast, useToast } from "@/hooks/useToast";
 import { useWallet } from "@/hooks/useWallet";
 import { useChatImageMenu } from "@/contexts/ChatImageMenuContext";
@@ -143,15 +147,22 @@ function groupRouteToken(url: string, group: GroupAddress, card: boolean): Conte
     : { type: "self-link", url, path: nip29GroupPath(group) };
 }
 
-type ImageRef = EncryptedRef & { alt?: string; spoiler?: boolean };
+/** `thumb`: the sender's smaller preview (imeta `thumb`), shown inline; the lightbox opens `url`. */
+type ImageRef = EncryptedRef & { alt?: string; spoiler?: boolean; thumb?: string };
 
 function imageRefOf(t: Extract<ContentToken, { type: "image-embed" }>): ImageRef {
-  return { url: t.url, encryption: t.encryption, mime: t.mime, dim: t.dim, blurhash: t.blurhash, fallbacks: t.fallbacks, alt: t.alt, spoiler: t.spoiler };
+  return { url: t.url, encryption: t.encryption, mime: t.mime, dim: t.dim, blurhash: t.blurhash, fallbacks: t.fallbacks, alt: t.alt, spoiler: t.spoiler, thumb: t.thumb };
+}
+
+/** An imeta preview worth loading instead of the image: a distinct, sane URL. */
+function previewOf(url: string, thumbnail: string | undefined): string | undefined {
+  const thumb = thumbnail ? sanitizeUrl(thumbnail) : undefined;
+  return thumb && thumb !== url ? thumb : undefined;
 }
 
 type ContentToken =
   | { type: "text"; value: string }
-  | { type: "image-embed"; url: string; encryption?: ImetaEncryption; mime?: string; dim?: string; blurhash?: string; fallbacks?: string[]; alt?: string; spoiler?: boolean }
+  | { type: "image-embed"; url: string; encryption?: ImetaEncryption; mime?: string; dim?: string; blurhash?: string; fallbacks?: string[]; alt?: string; spoiler?: boolean; thumb?: string }
   | { type: "image-gallery"; urls: ImageRef[] }
   | { type: "media-embed"; url: string; encryption?: ImetaEncryption; mime?: string; fallbacks?: string[] }
   | { type: "file-embed"; url: string; encryption?: ImetaEncryption; mime?: string; name?: string; size?: number; thumbnail?: string; fallbacks?: string[] }
@@ -179,6 +190,7 @@ type ContentToken =
   | { type: "quote"; tokens: ContentToken[] }
   | { type: "md-link"; text: string; url: string }
   | { type: "heading"; level: number; tokens: ContentToken[] }
+  | { type: "subtext"; tokens: ContentToken[] }
   | { type: "list"; ordered: boolean; start: number; items: ContentToken[][] }
   | { type: "rule" };
 
@@ -291,7 +303,7 @@ function applyEveryoneMentions(tokens: ContentToken[]): ContentToken[] {
       out.push(...splitEveryoneToken(token.value));
     } else if (token.type === "quote") {
       out.push({ ...token, tokens: applyEveryoneMentions(token.tokens) });
-    } else if (token.type === "heading") {
+    } else if (token.type === "heading" || token.type === "subtext") {
       out.push({ ...token, tokens: applyEveryoneMentions(token.tokens) });
     } else if (token.type === "list") {
       out.push({ ...token, items: token.items.map(applyEveryoneMentions) });
@@ -574,6 +586,7 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
               fallbacks: inlineImeta?.fallbacks,
               alt: inlineImeta?.alt,
               spoiler: inlineImeta?.spoiler,
+              thumb: previewOf(url, inlineImeta?.thumbnail),
             });
             lastIndex = index + fullMatch.length;
             const leadingWs = segment.substring(lastIndex).match(/^\s+/);
@@ -771,6 +784,8 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
           out.push({ type: "quote", tokens: collapseAroundBlocks(blockTokens(block.blocks)) });
         } else if (block.type === "heading") {
           out.push({ type: "heading", level: block.level, tokens: tokenizeRun(block.text) });
+        } else if (block.type === "subtext") {
+          out.push({ type: "subtext", tokens: tokenizeRun(block.text) });
         } else if (block.type === "list") {
           out.push({ type: "list", ordered: block.ordered, start: block.start, items: block.items.map(tokenizeRun) });
         } else if (block.type === "rule") {
@@ -817,7 +832,7 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
         if (!url || renderedUrls.has(url)) continue;
         const mime = imageMimeFor(entry);
         if (mime?.startsWith("image/")) {
-          result.push({ type: "image-embed", url, encryption: entry.encryption, mime, dim: entry.dim, blurhash: entry.blurhash, fallbacks: entry.fallbacks, alt: entry.alt, spoiler: entry.spoiler });
+          result.push({ type: "image-embed", url, encryption: entry.encryption, mime, dim: entry.dim, blurhash: entry.blurhash, fallbacks: entry.fallbacks, alt: entry.alt, spoiler: entry.spoiler, thumb: previewOf(url, entry.thumbnail) });
           renderedUrls.add(url);
         } else if (mime?.startsWith("audio/") || mime?.startsWith("video/")) {
           result.push({ type: "media-embed", url, encryption: entry.encryption, mime, fallbacks: entry.fallbacks });
@@ -1145,6 +1160,12 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
             {renderTokens(token.tokens, `${key}-h`, false, true)}
           </div>
         );
+      case "subtext":
+        return (
+          <div key={key} className="text-xs leading-snug text-muted-foreground">
+            {renderTokens(token.tokens, `${key}-st`, false, true)}
+          </div>
+        );
       case "list": {
         const items = token.items.map((item, j) => (
           <li key={`${key}-li${j}`}>{renderTokens(item, `${key}-li${j}-`, false, true)}</li>
@@ -1158,7 +1179,7 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
         return <hr key={key} className="my-2 border-border" />;
       case "image-embed": {
         if (inQuote) return inlineLink(key, token.url);
-        const held = heldReason(token.url);
+        const held = heldReason(token.url) ?? (token.thumb ? heldReason(token.thumb) : undefined);
         if (held !== undefined) return <HeldMedia key={key} kind="image" host={held || undefined} onLoad={loadMedia} />;
         const imgIndex = topIndex !== null ? tokenImageIndex.get(topIndex) ?? 0 : 0;
         return (
@@ -1170,7 +1191,9 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
         );
       }
       case "image-gallery": {
-        const held = token.urls.map((u) => heldReason(u.url)).find((r) => r !== undefined);
+        const held = token.urls
+          .flatMap((u) => [heldReason(u.url), u.thumb ? heldReason(u.thumb) : undefined])
+          .find((r) => r !== undefined);
         if (held !== undefined) {
           return <HeldMedia key={key} kind="image" count={token.urls.length} host={held || undefined} onLoad={loadMedia} />;
         }
@@ -1539,6 +1562,14 @@ function getImetaField(tags: string[][], url: string, field: string): string | u
   return undefined;
 }
 
+function saveFailed(): void {
+  toast({
+    title: "Couldn't load this image",
+    description: "Please try again.",
+    variant: "destructive",
+  });
+}
+
 /** Save from the resolved (decrypted) source, mirroring the lightbox's download. */
 async function saveImage(src: string, image: ImageRef): Promise<void> {
   try {
@@ -1596,26 +1627,26 @@ async function copyImage(src: string): Promise<void> {
  * this image's actions prepended (via {@link useChatImageMenu}). Save/share
  * need the resolved source.
  */
-function useImageMenu(image: ImageRef, resolvedSrc: string | null, onOpen: () => void) {
+function useImageMenu(image: ImageRef, getSrc: (() => Promise<string>) | null, onOpen: () => void) {
   const menu = useChatImageMenu();
 
   const actions = useMemo<MessageActionItem[]>(() => {
     const list: MessageActionItem[] = [
       { id: "img-open", label: "Open image", icon: Expand, onSelect: onOpen },
     ];
-    if (resolvedSrc) {
+    if (getSrc) {
       list.push({
         id: "img-save",
         label: "Save image",
         icon: Download,
-        onSelect: () => void saveImage(resolvedSrc, image),
+        onSelect: () => void getSrc().then((src) => saveImage(src, image), () => saveFailed()),
       });
       if (canShareFiles()) {
         list.push({
           id: "img-share",
           label: "Share image",
           icon: Share2,
-          onSelect: () => void shareImage(resolvedSrc, image),
+          onSelect: () => void getSrc().then((src) => shareImage(src, image), () => saveFailed()),
         });
       }
       if (canCopyImages()) {
@@ -1623,12 +1654,12 @@ function useImageMenu(image: ImageRef, resolvedSrc: string | null, onOpen: () =>
           id: "img-copy",
           label: "Copy image",
           icon: Copy,
-          onSelect: () => void copyImage(resolvedSrc),
+          onSelect: () => void getSrc().then(copyImage, () => saveFailed()),
         });
       }
     }
     return list;
-  }, [image, resolvedSrc, onOpen]);
+  }, [image, getSrc, onOpen]);
 
   // Touch only; the <button> IS the long-press target.
   const longPress = useLongPress(
@@ -1663,14 +1694,55 @@ function useImageMenu(image: ImageRef, resolvedSrc: string | null, onOpen: () =>
   };
 }
 
+/**
+ * The full image on demand, for save/share/copy while a cell shows its
+ * preview: routed through the media policy, and decrypted when encrypted.
+ */
+function useFullImageSrc(image: ImageRef, enabled: boolean): (() => Promise<string>) | null {
+  const { sources } = useRoutedCandidates(enabled ? image.url : undefined, image.fallbacks);
+  const { url, mime, encryption } = image;
+  const encKey = encryption?.algorithm ? `${encryption.key}\n${encryption.nonce}` : "";
+  return useMemo(() => {
+    if (!enabled || sources.length === 0) return null;
+    const enc = encKey && encryption ? encryption : undefined;
+    return async () => {
+      const primed = peekPrimedAttachment(url, enc);
+      if (primed) return primed;
+      if (!enc) return sources[0];
+      return decryptAttachmentToObjectURL(sources[0], enc, mime, { alternates: sources.slice(1) });
+    };
+    // `encryption` is keyed by its fields (a fresh object each render).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [enabled, sources, url, mime, encKey]);
+}
+
+/**
+ * What an inline cell loads: the sender's preview when the image has one, so a
+ * chat downloads the full image only in the lightbox. A preview that fails to
+ * load falls back to the image. Not for Buzz blobs (their fetch is signed).
+ */
+function useShownImage(image: ImageRef) {
+  const [previewFailed, setPreviewFailed] = useState(false);
+  const preview = image.thumb !== undefined && !previewFailed && !isBuzzMediaUrl(image.url);
+  const shown: ImageRef = preview ? { ...image, url: image.thumb!, fallbacks: undefined } : image;
+  const media = useMediaWithFallback(shown);
+  useEffect(() => {
+    if (preview && media.failed) setPreviewFailed(true);
+  }, [preview, media.failed]);
+  const full = useFullImageSrc(image, preview);
+  const readySrc = media.resolved.status === "ready" ? media.resolved.src : null;
+  const own = useMemo(() => (readySrc ? () => Promise.resolve(readySrc) : null), [readySrc]);
+  return { ...media, failed: media.failed && !preview, getSrc: preview ? full : own };
+}
+
 /** Covered by a spoiler: no menu handlers and out of tab order; reachable only via reveal. */
 const COVERED_IMAGE_PROPS = { tabIndex: -1 } as const;
 
 function InlineImage({ image, onOpen }: { image: ImageRef; onOpen: () => void }) {
   const [loaded, setLoaded] = useState(false);
   const [revealed, setRevealed] = useState(false);
-  const { resolved, onError, failed, fallbackProps } = useMediaWithFallback(image);
-  const menu = useImageMenu(image, resolved.status === "ready" ? resolved.src : null, onOpen);
+  const { resolved, onError, failed, fallbackProps, getSrc } = useShownImage(image);
+  const menu = useImageMenu(image, getSrc, onOpen);
   const covered = image.spoiler && !revealed;
 
   // Block-level: the tokenizer stripped the surrounding newlines expecting a block.
@@ -1719,7 +1791,10 @@ function InlineImage({ image, onOpen }: { image: ImageRef; onOpen: () => void })
             )}
             loading="lazy"
             decoding="async"
-            onLoad={() => setLoaded(true)}
+            onLoad={() => {
+              setLoaded(true);
+              captureLoadedMedia(resolved.src);
+            }}
             onError={onError}
           />
         )}
@@ -1758,8 +1833,8 @@ function GridImage({
 }) {
   const [loaded, setLoaded] = useState(false);
   const [revealed, setRevealed] = useState(false);
-  const { resolved, onError, failed, fallbackProps } = useMediaWithFallback(image);
-  const menu = useImageMenu(image, resolved.status === "ready" ? resolved.src : null, onOpen);
+  const { resolved, onError, failed, fallbackProps, getSrc } = useShownImage(image);
+  const menu = useImageMenu(image, getSrc, onOpen);
   const covered = image.spoiler && !revealed;
 
   return (
@@ -1785,7 +1860,10 @@ function GridImage({
               draggable={false}
               loading="lazy"
               decoding="async"
-              onLoad={() => setLoaded(true)}
+              onLoad={() => {
+                setLoaded(true);
+                captureLoadedMedia(resolved.src);
+              }}
               onError={onError}
               className="absolute inset-0 w-full h-full object-cover hover:opacity-90 transition-opacity [-webkit-user-drag:none]"
             />

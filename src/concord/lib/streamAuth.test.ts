@@ -314,6 +314,43 @@ describe("streamAuth per-relay ack state", () => {
     expect(streamAuthsSettled(RELAY, [a.pk])).toBe(true);
   });
 
+  it("a relay that refuses every stream AUTH gets one probe per reconnect, not the key set", () => {
+    const keys = [makeKey(), makeKey(), makeKey(), makeKey(), makeKey()];
+    registerStreamKeys(keys, [RELAY]);
+    noteRelayChallenged(RELAY, "first");
+    const claimed = claimStreamAuths(RELAY);
+    expect(claimed).toHaveLength(5);
+    claimed.forEach((pk, i) => noteStreamAuthSent(RELAY, `ev-${i}`, pk));
+    claimed.forEach((_, i) => noteAuthResult(RELAY, `ev-${i}`, false, "error: relay needs serviceUrl to be configured"));
+
+    // A reconnect renews the challenge; only one probe key is signed.
+    resetRelayAuth(RELAY);
+    noteRelayChallenged(RELAY, "second");
+    const probe = claimStreamAuths(RELAY);
+    expect(probe).toHaveLength(1);
+    expect(claimStreamAuths(RELAY), "no second probe on the same challenge").toEqual([]);
+    expect(unackedStreamPubkeys(RELAY), "no stale-wave re-sends").toEqual([]);
+    expect(streamAuthsSettled(RELAY, keys.map((k) => k.pk)), "sweeps don't wait on it").toBe(true);
+
+    // The probe is accepted: the relay is back to the full key set.
+    noteStreamAuthSent(RELAY, "ev-probe", probe[0]);
+    noteAuthResult(RELAY, "ev-probe", true);
+    expect(claimStreamAuths(RELAY)).toHaveLength(4);
+  });
+
+  it("a couple of refused keys beside nothing acked yet do not mark the relay", () => {
+    const keys = [makeKey(), makeKey(), makeKey()];
+    registerStreamKeys(keys, [RELAY]);
+    noteRelayChallenged(RELAY, "first");
+    noteStreamAuthSent(RELAY, "ev-a", keys[0].pk);
+    noteStreamAuthSent(RELAY, "ev-b", keys[1].pk);
+    noteAuthResult(RELAY, "ev-a", false, "invalid: bad key");
+    noteAuthResult(RELAY, "ev-b", false, "invalid: bad key");
+    resetRelayAuth(RELAY);
+    noteRelayChallenged(RELAY, "second");
+    expect(claimStreamAuths(RELAY)).toHaveLength(3);
+  });
+
   it("ack state normalizes relay URLs", () => {
     const a = makeKey();
     registerStreamKeys([a], [RELAY]);
@@ -377,7 +414,31 @@ describe("streamAuth self-heal (never wedge until a restart)", () => {
     off();
   });
 
-  it("re-arms the window so a stale relay fires ONE re-auth per window, not a storm", () => {
+  it("a relay still answering a large AUTH batch is slow, not stale: no wave while OKs arrive", () => {
+    vi.useFakeTimers();
+    const keys = Array.from({ length: 30 }, makeKey);
+    registerStreamKeys(keys, [RELAY]);
+    noteRelayChallenged(RELAY, "nonce");
+    keys.forEach((k, i) => noteStreamAuthSent(RELAY, `ev-${i}`, k.pk));
+    let reauthCount = 0;
+    const off = onStreamAuthStale(() => reauthCount++);
+
+    // One OK every 5s: the batch takes 150s, far past the 12s window.
+    for (let i = 0; i < keys.length - 1; i++) {
+      vi.advanceTimersByTime(5_000);
+      noteAuthResult(RELAY, `ev-${i}`, true);
+      expect(streamAuthsSettled(RELAY, keys.map((k) => k.pk))).toBe(false);
+    }
+    expect(reauthCount, "answers kept coming, so nothing was re-sent").toBe(0);
+
+    // The last answer never comes: 12s of silence is a loss, healed once.
+    vi.advanceTimersByTime(13_000);
+    expect(streamAuthsSettled(RELAY, keys.map((k) => k.pk))).toBe(true);
+    expect(reauthCount).toBe(1);
+    off();
+  });
+
+  it("re-arms a doubling window so a stale relay fires ONE re-auth per window, not a storm", () => {
     vi.useFakeTimers();
     const a = makeKey();
     registerStreamKeys([a], [RELAY]);
@@ -396,10 +457,18 @@ describe("streamAuth self-heal (never wedge until a restart)", () => {
     expect(streamAuthsSettled(RELAY, [a.pk])).toBe(false);
     expect(reauthCount).toBe(1);
 
-    // Only after the NEW window elapses without an ack does it heal + fire again.
+    // The next window is twice as long: a relay answering nothing isn't re-sent
+    // every key every 12s.
     vi.advanceTimersByTime(13_000);
+    expect(streamAuthsSettled(RELAY, [a.pk])).toBe(false);
+    vi.advanceTimersByTime(12_000);
     expect(streamAuthsSettled(RELAY, [a.pk])).toBe(true);
     expect(reauthCount).toBe(2);
+    vi.advanceTimersByTime(47_000);
+    expect(streamAuthsSettled(RELAY, [a.pk])).toBe(false);
+    vi.advanceTimersByTime(2_000);
+    expect(streamAuthsSettled(RELAY, [a.pk])).toBe(true);
+    expect(reauthCount).toBe(3);
 
     off();
   });

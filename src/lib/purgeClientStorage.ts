@@ -30,6 +30,7 @@ import { clearMuteListMemos } from "@/hooks/useMuteList";
 import { resetSettingsKeysAnnouncements } from "@/hooks/useSettingsKeys";
 import { clearGroupListMemo } from "@/hooks/useUserGroupList";
 import { clearAttachmentCache } from "@/lib/encryptedMedia";
+import { clearMediaCacheMemory } from "@/lib/mediaCache";
 import { closeAllNip46Transports } from "@/lib/nip46Transport";
 import { clearDm17ThreadSnapshotMemory } from "@/lib/nip17/threadSnapshot";
 import { clearSettingsRootMemory } from "@/lib/settingsRootStore";
@@ -143,6 +144,7 @@ function clearSessionMemos(): void {
   clearMuteListMemos();
   clearGroupListMemo();
   clearAttachmentCache();
+  clearMediaCacheMemory();
   clearBuzzMediaCache();
   clearProfileSyncMemory();
   resetFrequentReactionsCache();

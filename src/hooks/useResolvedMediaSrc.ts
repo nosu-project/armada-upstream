@@ -13,6 +13,7 @@ import {
   peekPrimedAttachment,
 } from "@/lib/encryptedMedia";
 import { isSupportedEncryption } from "@/lib/imeta";
+import { blobHashOf, cachedMediaUrl, isMediaCached, peekCachedMediaUrl } from "@/lib/mediaCache";
 
 import type { ImetaEncryption } from "@/lib/imeta";
 
@@ -86,7 +87,14 @@ export function useResolvedMediaSrc(
       const cached = peekAttachmentObjectURL(url, encryption!);
       return cached ? { status: "ready", src: cached } : { status: "loading" };
     }
-    return needsBuzzAuth ? { status: "loading" } : { status: "ready", src: peekPrimedAttachment(url, undefined) ?? url };
+    if (needsBuzzAuth) return { status: "loading" };
+    const primed = peekPrimedAttachment(url, undefined);
+    if (primed) return { status: "ready", src: primed };
+    const hash = blobHashOf(url);
+    const held = hash ? peekCachedMediaUrl(hash) : undefined;
+    if (held) return { status: "ready", src: held };
+    // A cached blob is read before the element can start a download.
+    return hash && isMediaCached(hash) ? { status: "loading" } : { status: "ready", src: url };
   });
 
   useEffect(() => {
@@ -97,8 +105,19 @@ export function useResolvedMediaSrc(
     }
     if (!encrypted) {
       if (!needsBuzzAuth) {
-        setState(ready(peekPrimedAttachment(url, undefined) ?? url));
-        return;
+        const primed = peekPrimedAttachment(url, undefined);
+        const hash = primed ? undefined : blobHashOf(url);
+        if (!hash || !isMediaCached(hash)) {
+          setState(ready(primed ?? url));
+          return;
+        }
+        let cancelled = false;
+        void cachedMediaUrl(hash).then((src) => {
+          if (!cancelled) setState(ready(src ?? url));
+        });
+        return () => {
+          cancelled = true;
+        };
       }
       let cancelled = false;
       const controller = new AbortController();

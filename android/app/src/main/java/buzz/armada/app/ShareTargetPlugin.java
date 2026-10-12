@@ -337,6 +337,24 @@ public class ShareTargetPlugin extends Plugin {
     private final java.util.Map<String, IconCompat> iconCache = new java.util.HashMap<>();
 
     /**
+     * The finished icons on disk, keyed by the SHA-256 of the URL: every cold
+     * start re-publishes the shortcuts, and the session cache alone would
+     * refetch each avatar at full size per launch. A changed picture is a new
+     * URL, so nothing needs invalidating. Cleared with the shortcuts on logout.
+     */
+    private File iconDir() {
+        return new File(getContext().getCacheDir(), "share-icons");
+    }
+
+    private File iconFile(String url) throws java.security.NoSuchAlgorithmException {
+        byte[] digest = java.security.MessageDigest.getInstance("SHA-256")
+                .digest(url.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        StringBuilder hex = new StringBuilder();
+        for (byte b : digest) hex.append(String.format("%02x", b));
+        return new File(iconDir(), hex + ".png");
+    }
+
+    /**
      * Fetch + downscale + circle-crop an avatar into a shortcut icon.
      * Best-effort: null on any failure, and the shortcut ships icon-less.
      */
@@ -344,6 +362,13 @@ public class ShareTargetPlugin extends Plugin {
         IconCompat cached = iconCache.get(url);
         if (cached != null) return cached;
         try {
+            File file = iconFile(url);
+            Bitmap stored = file.isFile() ? BitmapFactory.decodeFile(file.getPath()) : null;
+            if (stored != null) {
+                IconCompat icon = IconCompat.createWithBitmap(stored);
+                iconCache.put(url, icon);
+                return icon;
+            }
             java.net.HttpURLConnection conn =
                     (java.net.HttpURLConnection) new java.net.URL(url).openConnection();
             conn.setConnectTimeout(5000);
@@ -376,6 +401,14 @@ public class ShareTargetPlugin extends Plugin {
             canvas.drawBitmap(src,
                     new Rect(left, top, left + side, top + side),
                     new Rect(0, 0, ICON_PX, ICON_PX), paint);
+            src.recycle();
+            //noinspection ResultOfMethodCallIgnored
+            file.getParentFile().mkdirs();
+            try (FileOutputStream os = new FileOutputStream(file)) {
+                out.compress(Bitmap.CompressFormat.PNG, 100, os);
+            } catch (Exception ignored) {
+                // Uncached: the next launch fetches it again.
+            }
             IconCompat icon = IconCompat.createWithBitmap(out);
             iconCache.put(url, icon);
             return icon;
@@ -394,6 +427,11 @@ public class ShareTargetPlugin extends Plugin {
         } catch (Exception e) {
             if (BuildConfig.DEBUG) Log.w(TAG, "clearShortcuts failed", e);
         }
+        // The previous account's contacts' faces.
+        iconCache.clear();
+        File[] icons = iconDir().listFiles();
+        if (icons != null) for (File f : icons) //noinspection ResultOfMethodCallIgnored
+            f.delete();
         call.resolve();
     }
 
