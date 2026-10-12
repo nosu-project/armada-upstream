@@ -68,6 +68,18 @@ export interface BlossomServerListEditorProps {
   onReset?: () => void;
   emptyText?: string;
   placeholder?: string;
+  /**
+   * The server whose URL uploads embed; the first server unless given. `null`
+   * when there is none (the app's default list on a build with no preferred
+   * server), so no row claims to be it.
+   */
+  primary?: string | null;
+  /** The rows are the app's defaults, not yet the user's own list. */
+  defaults?: boolean;
+}
+
+function RowTag({ children }: { children: string }) {
+  return <span className="text-xs text-muted-foreground shrink-0 ml-1">{children}</span>;
 }
 
 /**
@@ -80,6 +92,8 @@ export function BlossomServerListEditor({
   onReset,
   emptyText = "No media servers configured.",
   placeholder = "https://blossom.example.com",
+  primary = servers[0],
+  defaults = false,
 }: BlossomServerListEditorProps) {
   const [newUrl, setNewUrl] = useState("");
 
@@ -103,13 +117,14 @@ export function BlossomServerListEditor({
 
   return (
     <div className="space-y-1.5">
-      {servers.map((url, index) => (
+      {servers.map((url) => (
         <div key={url} className="flex items-center gap-2 clip-corner bg-background/40 px-3 py-2.5">
           <div className="flex-1 min-w-0">
             <ServerIdentity url={url} />
           </div>
-          {index === 0 ? (
-            <span className="text-xs text-muted-foreground shrink-0 ml-1">Primary</span>
+          {defaults && <RowTag>Default</RowTag>}
+          {url === primary ? (
+            <RowTag>Primary</RowTag>
           ) : (
             <Button
               variant="ghost"

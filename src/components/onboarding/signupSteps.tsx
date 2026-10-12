@@ -1,19 +1,17 @@
 import { useMemo, useState, type Dispatch, type SetStateAction } from "react";
-import { AlertTriangle, Check, ChevronDown, Copy, Download, Eye, Info, Waypoints } from "lucide-react";
+import { AlertTriangle, Check, Copy, Download, Eye, Info, Waypoints } from "lucide-react";
 import { generateSecretKey, getPublicKey, nip19 } from "nostr-tools";
 
 import { ArmadaKey } from "@/components/brand/ArmadaCrest";
 import { BlossomServerListEditor } from "@/components/BlossomServerListEditor";
 import { RelayListEditor } from "@/components/RelayListEditor";
+import { SetupListRow } from "@/components/SetupListRow";
 import { Button } from "@/components/ui/button";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { BlossomLed, RelayLed } from "@/components/RelayLed";
 import { Input } from "@/components/ui/input";
 import { toast } from "@/hooks/useToast";
 import { writeClipboardText } from "@/lib/clipboard";
 import { backUpNsec } from "@/lib/credentialManager";
-import { cn } from "@/lib/utils";
 
 import type { SignupSetup } from "@/lib/signupLists";
 
@@ -288,10 +286,6 @@ function InfoTip({ label, hint }: { label: string; hint: string }) {
   );
 }
 
-function hostOf(url: string): string {
-  return url.replace(/^[a-z]+:\/\//i, "").replace(/\/+$/, "");
-}
-
 /**
  * Step 3 body: every relay and media server list the new account starts with,
  * one row each with its first entry's status light. A row opens its editor
@@ -331,49 +325,32 @@ export function RelayStepBody({
         <div className="w-full clip-corner-lg bg-secondary/40 text-left divide-y divide-background/60">
           {SETUP_ROWS.map(({ field, label, hint }) => {
             const list = setup[field];
-            const first = list[0];
-            const expanded = open === field;
             return (
-              <Collapsible key={field} open={expanded} onOpenChange={(next) => setOpen(next ? field : null)}>
-                <CollapsibleTrigger asChild>
-                  <button type="button" className="flex w-full items-center gap-3 px-3 py-3 text-left touch:min-h-12">
-                    <span className="text-sm font-medium text-foreground">{label}</span>
-                    <span className="ml-auto flex min-w-0 items-center gap-1.5 font-mono text-xs text-muted-foreground">
-                      {first && (field === "blossom" ? <BlossomLed url={first} /> : <RelayLed url={first} />)}
-                      <span className="truncate">
-                        {first ? hostOf(first) : "None"}
-                        {list.length > 1 && ` +${list.length - 1}`}
-                      </span>
-                    </span>
-                    <ChevronDown
-                      className={cn(
-                        "size-4 shrink-0 text-muted-foreground transition-transform duration-200",
-                        expanded && "rotate-180",
-                      )}
-                    />
-                  </button>
-                </CollapsibleTrigger>
-                <CollapsibleContent className="overflow-hidden data-[state=open]:animate-collapsible-down data-[state=closed]:animate-collapsible-up">
-                  <div className="space-y-2 px-3 pb-3">
-                    <p className="text-xs leading-snug text-muted-foreground">{hint}</p>
-                    {field === "blossom" ? (
-                      <BlossomServerListEditor
-                        servers={setup.blossom}
-                        onChange={set("blossom")}
-                        onReset={() => set("blossom")(defaults.blossom)}
-                        emptyText="None. Uploads use Armada's servers."
-                      />
-                    ) : (
-                      <RelayListEditor
-                        relays={list}
-                        onChange={set(field)}
-                        onReset={() => set(field)(defaults[field])}
-                        emptyText={field === "home" ? "None. Continue uses the defaults." : "None."}
-                      />
-                    )}
-                  </div>
-                </CollapsibleContent>
-              </Collapsible>
+              <SetupListRow
+                key={field}
+                label={label}
+                hint={hint}
+                urls={list}
+                kind={field === "blossom" ? "blossom" : "relay"}
+                open={open === field}
+                onOpenChange={(next) => setOpen(next ? field : null)}
+              >
+                {field === "blossom" ? (
+                  <BlossomServerListEditor
+                    servers={setup.blossom}
+                    onChange={set("blossom")}
+                    onReset={() => set("blossom")(defaults.blossom)}
+                    emptyText="None. Uploads use Armada's servers."
+                  />
+                ) : (
+                  <RelayListEditor
+                    relays={list}
+                    onChange={set(field)}
+                    onReset={() => set(field)(defaults[field])}
+                    emptyText={field === "home" ? "None. Continue uses the defaults." : "None."}
+                  />
+                )}
+              </SetupListRow>
             );
           })}
         </div>

@@ -9,14 +9,14 @@ import {
   Download,
   EyeOff,
   FileText,
-  Image,
   KeyRound,
-   Link2,
+  Link2,
   MessageSquare,
   MessageSquareLock,
   Mic,
   Monitor,
   Palette,
+  RefreshCw,
   ScrollText,
   Search,
   Shield,
@@ -43,6 +43,7 @@ import { NotificationSettings } from "@/components/NotificationSettings";
 import { DmInboxNotice } from "@/components/DmInboxNotice";
 import { RelayListEditor } from "@/components/RelayListEditor";
 import { RelayBootstrapForm } from "@/components/RelayBootstrapForm";
+import { SetupListRow } from "@/components/SetupListRow";
 import { DesktopSettings } from "@/components/settings/DesktopSettings";
 import { DiagnosticsSettings } from "@/components/settings/DiagnosticsSettings";
 import { KeyBackupSettings } from "@/components/settings/KeyBackupSettings";
@@ -57,6 +58,7 @@ import { ThemeSelector } from "@/components/ThemeSelector";
 import { VoiceDeviceSettings } from "@/components/VoiceDeviceSettings";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useBackOrHome } from "@/hooks/useBackOrHome";
@@ -100,10 +102,10 @@ type SectionId =
   | "desktop"
   | "voice"
   | "app-relays"
+  | "sync"
   | "dms"
   | "chat"
   | "media"
-  | "uploads"
   | "links"
   | "discover"
   | "emojis"
@@ -131,6 +133,22 @@ interface NavGroup {
   items: NavItem[];
 }
 
+/** Section ids older links may still carry, and where they now live. */
+const SECTION_ALIASES: Record<string, SectionId> = { uploads: "app-relays" };
+
+/** The lists Settings › Relays shows, in the signup wizard's order and with its names. */
+type RelayRow = "home" | "dm" | "search" | "blossom" | "community" | "broadcast";
+
+/** Mono URL list for prose: hosts joined by commas. */
+function hostList(urls: string[]): ReactNode {
+  return urls.map((url, index) => (
+    <span key={url}>
+      {index > 0 && ", "}
+      <span className="font-mono text-foreground">{url.replace(/^[a-z]+:\/\//i, "").replace(/\/+$/, "")}</span>
+    </span>
+  ));
+}
+
 /** App settings: one scrolling list; multi-control sections collapse, single-item ones render inline. */
 export function SettingsPage({
   section,
@@ -143,7 +161,8 @@ export function SettingsPage({
   const back = useBackOrHome();
   // Deep-linked section (e.g. /settings#profile) renders expanded and scrolled into view.
   const routedSection = useLocation().hash.slice(1);
-  const targetSection = section ?? routedSection;
+  const requestedSection = section ?? routedSection;
+  const targetSection = SECTION_ALIASES[requestedSection] ?? requestedSection;
   const [openSections, setOpenSections] = useState<ReadonlySet<string>>(
     () => new Set(targetSection ? [targetSection] : []),
   );
@@ -185,9 +204,14 @@ export function SettingsPage({
     });
   }, []);
   const [standingOpen, setStandingOpen] = useState(false);
-  // Searching mounts the advanced rows so settings search can match them.
+  // Searching mounts every relay row and the advanced rows so settings search can match them.
   const [relaysAdvancedOpen, setRelaysAdvancedOpen] = useState(false);
   const showAdvanced = relaysAdvancedOpen || searching;
+  // One list open at a time, as in the signup wizard.
+  const [openRelayRow, setOpenRelayRow] = useState<RelayRow | null>(null);
+  const [publishedListOpen, setPublishedListOpen] = useState(false);
+  const relayRowOpen = (row: RelayRow) => searching || openRelayRow === row;
+  const setRelayRowOpen = (row: RelayRow) => (open: boolean) => setOpenRelayRow(open ? row : null);
 
   /** Retire Account Standing's nag dot on open (not close). */
   const openStanding = useCallback(() => {
@@ -233,15 +257,21 @@ export function SettingsPage({
     }
   };
 
-  /** Off is a foot-gun: with no other relays the pool is empty. */
-  const setUseAppRelays = (value: boolean) => {
-    updateConfig((current) => ({ ...current, useAppRelays: value }));
+  /**
+   * One choice over two flags; "neither" is unreachable from here since it
+   * empties the pool. Publishes nothing: `relayMetadata` is a read-only mirror
+   * of kind 10002.
+   */
+  const setRelaySources = (value: string) => {
+    updateConfig((current) => ({
+      ...current,
+      useAppRelays: value !== "published",
+      useUserRelays: value !== "home",
+    }));
   };
-
-  /** Publishes nothing: `relayMetadata` is a read-only mirror of kind 10002. */
-  const setUseUserRelays = (value: boolean) => {
-    updateConfig((current) => ({ ...current, useUserRelays: value }));
-  };
+  const relaySources = config.useAppRelays
+    ? (config.useUserRelays ? "both" : "home")
+    : (config.useUserRelays ? "published" : "");
 
   const setDmTypingIndicators = (value: boolean) => {
     updateConfig((current) => ({ ...current, dmTypingIndicators: value }));
@@ -346,10 +376,14 @@ export function SettingsPage({
     appItems.push(
       { id: "voice", title: "Voice", icon: Mic },
       { id: "app-relays", title: "Relays", icon: Waypoints },
+    );
+    if (user) {
+      appItems.push({ id: "sync", title: "Sync", icon: RefreshCw });
+    }
+    appItems.push(
       { id: "dms", title: "Direct messages", icon: MessageSquareLock },
       { id: "chat", title: "Chat", icon: MessageSquare },
       { id: "media", title: "Media privacy", icon: EyeOff },
-      { id: "uploads", title: "Media uploads", icon: Image },
       { id: "links", title: "Links", icon: Link2 },
       { id: "discover", title: "Discover", icon: Compass },
     );
@@ -375,6 +409,16 @@ export function SettingsPage({
     }
     return groups;
   }, [user, logins, canInstall, needsManualInstall, config.accountStandingSeen, openStanding]);
+
+  // The user's published NIP-65 list (`relayMetadata`), read-only here; ignored when it belongs to another login.
+  const ownsRelayList =
+    !config.relayMetadata.pubkey || config.relayMetadata.pubkey === user?.pubkey;
+  const userRelayUrls = ownsRelayList
+    ? config.relayMetadata.relays.map((r) => r.url)
+    : [];
+  const userWriteRelayUrls = ownsRelayList
+    ? config.relayMetadata.relays.filter((r) => r.write).map((r) => r.url)
+    : [];
 
   const sectionBody = (id: SectionId): ReactNode => {
     switch (id) {
@@ -418,61 +462,227 @@ export function SettingsPage({
       case "desktop":
         return <DesktopSettings />;
       case "app-relays": {
-        const ownsRelayList =
-          !config.relayMetadata.pubkey || config.relayMetadata.pubkey === user?.pubkey;
-        const userRelayUrls = ownsRelayList
-          ? config.relayMetadata.relays.map((r) => r.url)
-          : [];
-        const userWriteRelayUrls = ownsRelayList
-          ? config.relayMetadata.relays.filter((r) => r.write).map((r) => r.url)
-          : [];
+        const targets = uploadTargets(config.blossomServerMetadata);
+        const ownServers = config.blossomServerMetadata.servers.length > 0;
+        const publishedMatchesHome =
+          userRelayUrls.length === config.appRelays.length &&
+          userRelayUrls.every((url) => config.appRelays.includes(url));
+        const publishedOpen = searching || publishedListOpen;
         return (
           <>
             <SettingsRow>
               <p className="text-xs text-muted-foreground leading-snug">
-                Where Armada keeps your profile, follows, emoji packs and other
-                account data.
+                Relays are servers that store and pass along your profile, messages and lists.
+                Armada picked these for you; change any of them here, just as at sign-up.
               </p>
             </SettingsRow>
             {!config.useAppRelays && !(config.useUserRelays && userRelayUrls.length > 0) && (
               <SettingsRow>
                 <p className="text-sm text-destructive leading-snug">
-                  No account relays. Your profile and lists won't load or sync
+                  No home relays in use. Your profile and lists won't load or sync
                   until you add one.
                 </p>
               </SettingsRow>
             )}
-            <SettingsRow>
+            <SetupListRow
+              label="Home"
+              hint="Stores your profile, follows and settings."
+              detail="Stores your profile, follows and settings. Every other list here may be empty; this one can't."
+              urls={config.appRelays}
+              open={relayRowOpen("home")}
+              onOpenChange={setRelayRowOpen("home")}
+              padX="px-4"
+            >
               <RelayListEditor
                 relays={config.appRelays}
                 onChange={setAppRelays}
                 onReset={() => setAppRelays([...APP_RELAYS])}
-                emptyText="No app relays yet. Configure personal NIP-65 relays to keep account data available."
+                emptyText="None. Add a relay, or reset to Armada's defaults."
+              />
+              {user && (
+                <Collapsible
+                  open={publishedOpen}
+                  onOpenChange={setPublishedListOpen}
+                  className="clip-corner bg-background/40"
+                >
+                  <CollapsibleTrigger asChild>
+                    <button type="button" className="flex w-full items-start gap-3 px-3 py-2.5 text-left">
+                      <div className="min-w-0 flex-1 space-y-0.5">
+                        <div className="text-sm font-medium leading-tight">Published relay list</div>
+                        <div className="text-xs text-muted-foreground leading-snug">
+                          {userRelayUrls.length === 0
+                            ? "Not published yet, so other Nostr apps can't find where your account lives. Publish your home relays to fix that."
+                            : publishedMatchesHome
+                              ? "Other Nostr apps find your account through this signed list (NIP-65). It matches your home relays."
+                              : <>Other Nostr apps find your account through this signed list (NIP-65). It names {hostList(userRelayUrls)}, which differs from your home relays above.</>}
+                        </div>
+                      </div>
+                      <ChevronDown
+                        className={cn(
+                          "mt-0.5 size-4 shrink-0 text-muted-foreground transition-transform duration-200",
+                          publishedOpen && "rotate-180",
+                        )}
+                      />
+                    </button>
+                  </CollapsibleTrigger>
+                  <CollapsibleContent className="overflow-hidden data-[state=open]:animate-collapsible-down data-[state=closed]:animate-collapsible-up">
+                    <div className="px-3 pb-3">
+                      <RelayBootstrapForm />
+                    </div>
+                  </CollapsibleContent>
+                </Collapsible>
+              )}
+            </SetupListRow>
+            <SetupListRow
+              label="Messages"
+              hint="Other apps deliver your direct messages here."
+              detail="Other apps deliver your direct messages here. Armada also checks your home relays."
+              urls={config.dmRelays}
+              open={relayRowOpen("dm")}
+              onOpenChange={setRelayRowOpen("dm")}
+              padX="px-4"
+            >
+              <DmInboxNotice />
+              <RelayListEditor
+                relays={config.dmRelays}
+                onChange={setDmRelays}
+                onReset={() => setDmRelays(recommendedDmInbox(config))}
+                emptyText="None. Armada users can still reach you on your home relays; other apps can't."
+                placeholder="wss://dm-relay.example.com"
+              />
+            </SetupListRow>
+            <SetupListRow
+              label="Search"
+              hint="Used to find people and communities."
+              detail="Used to find people and communities by name (NIP-50)."
+              urls={config.searchRelays}
+              open={relayRowOpen("search")}
+              onOpenChange={setRelayRowOpen("search")}
+              padX="px-4"
+            >
+              <RelayListEditor
+                relays={config.searchRelays}
+                onChange={setSearchRelays}
+                onReset={() => setSearchRelays([...SEARCH_RELAYS])}
+                emptyText="None. Search uses your home relays."
+              />
+            </SetupListRow>
+            <SetupListRow
+              label="Media"
+              hint="Your uploads go here. Links use the first server."
+              detail={(
+                <>
+                  Your uploads go here. A file is sent to every server in the list; links point
+                  at the primary one, first in the list, and the others keep a copy in case it
+                  goes away.
+                  {!ownServers && (
+                    " These are Armada's servers. Changing the list makes it your own and saves it to your account."
+                  )}
+                </>
+              )}
+              urls={targets.servers}
+              kind="blossom"
+              open={relayRowOpen("blossom")}
+              onOpenChange={setRelayRowOpen("blossom")}
+              padX="px-4"
+            >
+              <BlossomServerListEditor
+                servers={targets.servers}
+                primary={targets.preferred ?? null}
+                defaults={!ownServers}
+                onChange={setBlossomServers}
+                onReset={() => setBlossomServers([...APP_BLOSSOM_SERVERS])}
+              />
+            </SetupListRow>
+            <SetupListRow
+              label="Communities"
+              hint="Default relays for communities you create."
+              detail="Default relays for communities you create. Each community can change its own afterwards."
+              urls={config.communityRelays}
+              open={relayRowOpen("community")}
+              onOpenChange={setRelayRowOpen("community")}
+              padX="px-4"
+            >
+              <RelayListEditor
+                relays={config.communityRelays}
+                onChange={setCommunityRelays}
+                onReset={() => setCommunityRelays([...COMMUNITY_RELAYS])}
+                emptyText="None. New communities use the shared Concord relays."
+              />
+            </SetupListRow>
+            <SetupListRow
+              label="Broadcast"
+              hint="Extra relays your public profile is sent to."
+              detail="Extra relays your public profile is sent to, so people on other Nostr apps see it. Armada never reads from them or sends messages here."
+              urls={config.broadcastRelays}
+              open={relayRowOpen("broadcast")}
+              onOpenChange={setRelayRowOpen("broadcast")}
+              padX="px-4"
+            >
+              <RelayListEditor
+                relays={config.broadcastRelays}
+                onChange={setBroadcastRelays}
+                onReset={() => setBroadcastRelays([...BROADCAST_RELAYS])}
+                emptyText="None. Your public profile goes only to your home relays."
+              />
+            </SetupListRow>
+            <SettingsRow>
+              <button
+                type="button"
+                aria-expanded={showAdvanced}
+                className="flex w-full items-center gap-2 text-sm font-medium text-muted-foreground hover:text-foreground"
+                onClick={() => setRelaysAdvancedOpen((open) => !open)}
+              >
+                Advanced
+                <ChevronDown className={cn("size-4 transition-transform duration-200", showAdvanced && "rotate-180")} />
+              </button>
+            </SettingsRow>
+            {showAdvanced && (
+              <>
+                <SettingsRow
+                  stack
+                  label="Connect to"
+                  description={userRelayUrls.length > 0
+                    ? "Which relays Armada reads and writes your account data on: the Home list above, the relay list you published for other apps, or both."
+                    : "Which relays Armada reads and writes your account data on. Publish a relay list under Home to choose it here."}
+                >
+                  <Select value={relaySources} onValueChange={setRelaySources}>
+                    <SelectTrigger className="w-full sm:w-56" aria-label="Connect to">
+                      <SelectValue placeholder="None" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="home">Home relays</SelectItem>
+                      <SelectItem value="published" disabled={userRelayUrls.length === 0}>Published relay list</SelectItem>
+                      <SelectItem value="both" disabled={userRelayUrls.length === 0}>Both</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </SettingsRow>
+              </>
+            )}
+          </>
+        );
+      }
+      case "sync":
+        return (
+          <>
+            <SettingsRow
+              label="Automatic settings sync"
+              description="Keep private settings and your DM list the same on your other devices. Applies to this device only."
+            >
+              <Switch
+                checked={config.automaticSettingsSync !== false}
+                onCheckedChange={setAutomaticSettingsSync}
               />
             </SettingsRow>
-            {user && (
-              <SettingsRow
-                stack
-                label={userRelayUrls.length > 0 ? "Edit my signed relay list" : "Find or publish my relay list"}
-                description={userRelayUrls.length > 0
-                  ? "Changes apply when you save and sign."
-                  : "Look up your NIP-65 list from one relay, or publish one."}
-              >
-                <RelayBootstrapForm />
+            {userWriteRelayUrls.length === 0 && (
+              <SettingsRow>
+                <p className="text-xs text-muted-foreground leading-snug">
+                  Publish a relay list under Relays › Home to copy your lists, settings and
+                  communities to your other devices.
+                </p>
               </SettingsRow>
             )}
-            {user && (
-              <SettingsRow
-                label="Automatic settings sync"
-                description="Sync private settings and DM list with your other devices. Applies to this device only."
-              >
-                <Switch
-                  checked={config.automaticSettingsSync !== false}
-                  onCheckedChange={setAutomaticSettingsSync}
-                />
-              </SettingsRow>
-            )}
-            {user && userWriteRelayUrls.length > 0 && (
+            {userWriteRelayUrls.length > 0 && (
               <SettingsRow
                 stack
                 label={portableSetup.isConfigured ? "Synchronize setup" : "Set up synchronization"}
@@ -490,7 +700,7 @@ export function SettingsPage({
                 <div className="grid w-full gap-2 sm:grid-cols-2">
                   <Button
                     type="button"
-                    variant="outline"
+                    variant="secondary"
                     className="h-11 clip-corner-lg touch:h-12"
                     disabled={portablePull.isPending || portableSetup.isPending}
                     onClick={() => {
@@ -553,72 +763,8 @@ export function SettingsPage({
                 </div>
               </SettingsRow>
             )}
-            <SettingsRow>
-              <button
-                type="button"
-                aria-expanded={showAdvanced}
-                className="flex w-full items-center gap-2 text-sm font-medium text-muted-foreground hover:text-foreground"
-                onClick={() => setRelaysAdvancedOpen((open) => !open)}
-              >
-                Advanced
-                <ChevronDown className={cn("size-4 transition-transform duration-200", showAdvanced && "rotate-180")} />
-              </button>
-            </SettingsRow>
-            {showAdvanced && (
-              <>
-                <SettingsRow
-                  label="Use app relays"
-                  description="Keep account data on the app relays."
-                >
-                  <Switch checked={config.useAppRelays} onCheckedChange={setUseAppRelays} />
-                </SettingsRow>
-                <SettingsRow
-                  label="Use my own relays (NIP-65)"
-                  description="Also use the relays in your NIP-65 relay list."
-                >
-                  <Switch checked={config.useUserRelays} onCheckedChange={setUseUserRelays} />
-                </SettingsRow>
-                <SettingsRow
-                  stack
-                  label="Broadcast relays"
-                  description="Your public profile is also published here for other Nostr apps. Armada never reads from them or sends messages here."
-                >
-                  <RelayListEditor
-                    relays={config.broadcastRelays}
-                    onChange={setBroadcastRelays}
-                    onReset={() => setBroadcastRelays([...BROADCAST_RELAYS])}
-                    emptyText="No broadcast relays. Your public data goes only to your app relays."
-                  />
-                </SettingsRow>
-                <SettingsRow
-                  stack
-                  label="Search relays"
-                  description="Queried when you search for people or communities by name (NIP-50)."
-                >
-                  <RelayListEditor
-                    relays={config.searchRelays}
-                    onChange={setSearchRelays}
-                    onReset={() => setSearchRelays([...SEARCH_RELAYS])}
-                    emptyText="No search relays. Search uses your app relays."
-                  />
-                </SettingsRow>
-                <SettingsRow
-                  stack
-                  label="Community relays"
-                  description="Defaults for communities you create. Each community can change its own."
-                >
-                  <RelayListEditor
-                    relays={config.communityRelays}
-                    onChange={setCommunityRelays}
-                    onReset={() => setCommunityRelays([...COMMUNITY_RELAYS])}
-                    emptyText="No community relays. New communities use the shared Concord relays."
-                  />
-                </SettingsRow>
-              </>
-            )}
           </>
         );
-      }
       case "dms":
         return (
           <>
@@ -631,19 +777,10 @@ export function SettingsPage({
             {/* With DMs disabled, only the master toggle remains. */}
             {!config.dmsDisabled && (
               <>
-                <DmInboxNotice className="mx-4 my-3.5" />
-                <SettingsRow
-                  stack
-                  label="DM inbox relays"
-                  description="Where other apps deliver your private messages. Armada also checks your app relays."
-                >
-                  <RelayListEditor
-                    relays={config.dmRelays}
-                    onChange={setDmRelays}
-                    onReset={() => setDmRelays(recommendedDmInbox(config))}
-                    emptyText="No DM inbox yet. Armada users can still reach you on your app relays."
-                    placeholder="wss://dm-relay.example.com"
-                  />
+                <SettingsRow>
+                  <p className="text-xs text-muted-foreground leading-snug">
+                    Where messages from other apps arrive is under Relays › Messages.
+                  </p>
                 </SettingsRow>
                 <SettingsRow
                   label="Message requests"
@@ -669,27 +806,6 @@ export function SettingsPage({
         );
       case "media":
         return <MediaPrivacySettings />;
-      case "uploads": {
-        const ownServers = config.blossomServerMetadata.servers.length > 0;
-        return (
-          <>
-            <SettingsRow>
-              <p className="text-xs text-muted-foreground leading-snug">
-                {ownServers
-                  ? "Your files are stored on these servers. Links point to the primary one."
-                  : "Your files are stored on Armada's servers. Change the list to make it your own."}
-              </p>
-            </SettingsRow>
-            <SettingsRow>
-              <BlossomServerListEditor
-                servers={uploadTargets(config.blossomServerMetadata).servers}
-                onChange={setBlossomServers}
-                onReset={() => setBlossomServers([...APP_BLOSSOM_SERVERS])}
-              />
-            </SettingsRow>
-          </>
-        );
-      }
       case "chat":
         return (
           <>
