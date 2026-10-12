@@ -11,9 +11,10 @@ build_dir="$release_dir/flatpak-build"
 repo_dir="$release_dir/flatpak-repo"
 bundle="$release_dir/Armada-flatpak-$(uname -m).flatpak"
 # No --repo-url and no GPG signing: the bundle is the only artifact, and it is
-# consumed by npkg (pkg.soapbox.pub), which imports it into its OWN OSTree repo
-# and re-signs the summary with its OWN key — so a signature or an embedded
-# origin here would be discarded. The local repo built below is only the
+# consumed by npkg (pkg.soapbox.pub), which publishes it into its OWN OSTree
+# repo as a new commit signed with its OWN key — so a signature or an embedded
+# origin here would be discarded. Only --runtime-repo is kept: npkg names it in
+# its .flatpakref. The local repo built below is only the
 # intermediate `flatpak build-bundle` exports from. The installed app's web
 # bundle still updates in place (electron/webBundleUpdate.js); its shell updates
 # through `flatpak update` from whichever remote it was installed from.
@@ -64,12 +65,30 @@ fi
 appimage_sha=$(sha256sum "$staged_appimage" | cut -d ' ' -f1)
 printf '%s\n' "$appimage_sha" > "$release_dir/Armada.AppImage.sha256"
 
+# The metainfo the manifest installs is staged here with a <release> for this
+# version, so GNOME Software and `flatpak search` show it. The version comes
+# from package.json, which release.yml sets from the tag; a local build at
+# 0.0.0 lists no release rather than a wrong one.
+version=$(sed -n 's/^  "version": "\([^"]*\)",$/\1/p' "$electron_dir/package.json")
+staged_metainfo="$release_dir/buzz.armada.app.metainfo.xml"
+if [ -n "$version" ] && [ "$version" != 0.0.0 ]; then
+  release_date=$(git -C "$repo_root" log -1 --format=%cs 2>/dev/null || date -u +%F)
+  sed "s|^</component>|  <releases>\n    <release version=\"$version\" date=\"$release_date\"/>\n  </releases>\n</component>|" \
+    "$script_dir/buzz.armada.app.metainfo.xml" > "$staged_metainfo"
+else
+  cp "$script_dir/buzz.armada.app.metainfo.xml" "$staged_metainfo"
+fi
+
+# Recorded in the bundle, so whoever installs it, directly or through npkg's
+# .flatpakref, is pointed at the repository the Electron runtime comes from.
+runtime_repo=https://dl.flathub.org/repo/flathub.flatpakrepo
+
 set -- --force-clean --disable-rofiles-fuse --default-branch=stable --repo="$repo_dir"
 case "$builder" in
   system)
     flatpak-builder "$@" "$build_dir" "$manifest"
     flatpak build-update-repo "$repo_dir"
-    flatpak build-bundle "$repo_dir" "$bundle" buzz.armada.app stable
+    flatpak build-bundle --runtime-repo="$runtime_repo" "$repo_dir" "$bundle" buzz.armada.app stable
     ;;
   flatpak-user)
     flatpak run --user --filesystem="$repo_root" --command=sh \
@@ -77,13 +96,14 @@ case "$builder" in
       --env=ARMADA_FLATPAK_MANIFEST="$manifest" \
       --env=ARMADA_FLATPAK_REPO_DIR="$repo_dir" \
       --env=ARMADA_FLATPAK_BUNDLE="$bundle" \
+      --env=ARMADA_FLATPAK_RUNTIME_REPO="$runtime_repo" \
       org.flatpak.Builder -c '
         set -eu
         export XDG_DATA_HOME="$HOME/.local/share"
         flatpak-builder "$@" "$ARMADA_FLATPAK_BUILD_DIR" "$ARMADA_FLATPAK_MANIFEST" &
         wait "$!"
         flatpak build-update-repo "$ARMADA_FLATPAK_REPO_DIR"
-        flatpak build-bundle "$ARMADA_FLATPAK_REPO_DIR" "$ARMADA_FLATPAK_BUNDLE" buzz.armada.app stable
+        flatpak build-bundle --runtime-repo="$ARMADA_FLATPAK_RUNTIME_REPO" "$ARMADA_FLATPAK_REPO_DIR" "$ARMADA_FLATPAK_BUNDLE" buzz.armada.app stable
       ' sh "$@"
     ;;
   flatpak-system)
@@ -92,13 +112,14 @@ case "$builder" in
       --env=ARMADA_FLATPAK_MANIFEST="$manifest" \
       --env=ARMADA_FLATPAK_REPO_DIR="$repo_dir" \
       --env=ARMADA_FLATPAK_BUNDLE="$bundle" \
+      --env=ARMADA_FLATPAK_RUNTIME_REPO="$runtime_repo" \
       org.flatpak.Builder -c '
         set -eu
         export XDG_DATA_HOME="$HOME/.local/share"
         flatpak-builder "$@" "$ARMADA_FLATPAK_BUILD_DIR" "$ARMADA_FLATPAK_MANIFEST" &
         wait "$!"
         flatpak build-update-repo "$ARMADA_FLATPAK_REPO_DIR"
-        flatpak build-bundle "$ARMADA_FLATPAK_REPO_DIR" "$ARMADA_FLATPAK_BUNDLE" buzz.armada.app stable
+        flatpak build-bundle --runtime-repo="$ARMADA_FLATPAK_RUNTIME_REPO" "$ARMADA_FLATPAK_REPO_DIR" "$ARMADA_FLATPAK_BUNDLE" buzz.armada.app stable
       ' sh "$@"
     ;;
 esac

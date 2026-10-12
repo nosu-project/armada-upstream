@@ -109,8 +109,9 @@ modules:
         path: armada-wrapper
       - type: file
         path: buzz.armada.app.desktop
+      # Staged by build.sh with a <release> for the version being built.
       - type: file
-        path: buzz.armada.app.metainfo.xml
+        path: ../release/buzz.armada.app.metainfo.xml
       - type: file
         path: ../build/linux-icon.png
         dest-filename: armada.png
