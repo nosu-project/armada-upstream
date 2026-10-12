@@ -52,7 +52,9 @@ export const shapedAvatarSpeakingStyle: React.CSSProperties = {
     ' drop-shadow(-1px -1px 0 hsl(var(--success)))',
 };
 
+/** LRU: each entry is a 256px PNG data URL, and few shapes are on screen at once. */
 const emojiMaskCache = new Map<string, string>();
+const EMOJI_MASK_CACHE_MAX = 64;
 
 /** Mask URL for emoji avatar shapes, or '' if invalid or generation fails. */
 export function getAvatarMaskUrl(shape: string): string {
@@ -81,9 +83,16 @@ export function getEmojiMaskUrl(emoji: string): string {
   // Failures are cached too; re-rendering an undrawable emoji per render was
   // the largest scroll cost on phones.
   const cached = emojiMaskCache.get(emoji);
-  if (cached !== undefined) return cached;
+  if (cached !== undefined) {
+    emojiMaskCache.delete(emoji);
+    emojiMaskCache.set(emoji, cached);
+    return cached;
+  }
   const url = renderEmojiMask(emoji);
   emojiMaskCache.set(emoji, url);
+  if (emojiMaskCache.size > EMOJI_MASK_CACHE_MAX) {
+    emojiMaskCache.delete(emojiMaskCache.keys().next().value as string);
+  }
   return url;
 }
 

@@ -9,13 +9,14 @@
  *    comes back from the cache.
  */
 import { QueryClient } from "@tanstack/react-query";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { purgeArmadaDB } from "@/lib/db/armadaDB";
-import { __resetFoldedForTests } from "@/lib/foldedCache";
+import { getArmadaDB, purgeArmadaDB } from "@/lib/db/armadaDB";
+import { __resetFoldedForTests, clearFoldedMemory, readFolded } from "@/lib/foldedCache";
 
 import {
   _resetDm17ThreadSnapshotForTests,
+  clearDm17ThreadSnapshotMemory,
   persistDm17ThreadSnapshot,
   prewarmDm17ThreadSnapshot,
 } from "./threadSnapshot";
@@ -43,6 +44,7 @@ function row(id: string, createdAt: number, opts: { peer?: string; expiresAt?: n
 }
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await purgeArmadaDB();
   __resetFoldedForTests();
   _resetDm17ThreadSnapshotForTests();
@@ -161,5 +163,32 @@ describe("dm17 threadSnapshot", () => {
     await prewarmDm17ThreadSnapshot(qc, SELF, PEER, declinedKey);
 
     expect(qc.getQueryData<OpenedDm[]>(declinedKey)?.map((m) => m.rumorId)).toEqual(["1"]);
+  });
+
+  it("skips an identical re-write, but writes it again into a purged store", async () => {
+    const window = [row("1", 1000), row("2", 2000)];
+    await persistDm17ThreadSnapshot(SELF, PEER, window);
+    const set = vi.spyOn(getArmadaDB().kv, "set");
+    await persistDm17ThreadSnapshot(SELF, PEER, window);
+    expect(set).not.toHaveBeenCalled();
+
+    // Logout: the store and both memories are cleared.
+    await purgeArmadaDB();
+    clearFoldedMemory();
+    clearDm17ThreadSnapshotMemory();
+    const setAfter = vi.spyOn(getArmadaDB().kv, "set"); // the purge reopened the store
+    await persistDm17ThreadSnapshot(SELF, PEER, window);
+    expect(setAfter).toHaveBeenCalledTimes(1);
+    expect(await readFolded<OpenedDm[]>(`dm17-thread-snap:${SELF}:${PEER}`)).toHaveLength(2);
+  });
+
+  it("prewarms again after clearDm17ThreadSnapshotMemory", async () => {
+    await persistDm17ThreadSnapshot(SELF, PEER, [row("1", 1000)]);
+    const qc = new QueryClient();
+    await prewarmDm17ThreadSnapshot(qc, SELF, PEER, key);
+    clearDm17ThreadSnapshotMemory();
+    qc.removeQueries({ queryKey: key });
+    await prewarmDm17ThreadSnapshot(qc, SELF, PEER, key);
+    expect(qc.getQueryData<OpenedDm[]>(key)?.map((m) => m.rumorId)).toEqual(["1"]);
   });
 });

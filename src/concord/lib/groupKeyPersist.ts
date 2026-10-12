@@ -9,7 +9,7 @@
  */
 import { getArmadaDB } from "@/lib/db/armadaDB";
 
-import { exportGroupKeyMemo, importGroupKeyMemo, onGroupKeyMemoDirty } from "./derive";
+import { clearGroupKeyMemo, exportGroupKeyMemo, importGroupKeyMemo, onGroupKeyMemoDirty } from "./derive";
 
 const KV_KEY = "c2gkmemo";
 
@@ -21,15 +21,18 @@ const SAVE_DEBOUNCE_MS = 3000;
 
 let saveTimer: ReturnType<typeof setTimeout> | undefined;
 let dirty = false;
+/** Latched by logout: a save after the purge would write secrets into the wiped KV. */
+let stopped = false;
 
 function scheduleSave(): void {
+  if (stopped) return;
   dirty = true;
   saveTimer ??= setTimeout(save, SAVE_DEBOUNCE_MS);
 }
 
 function save(): void {
   saveTimer = undefined;
-  if (!dirty) return;
+  if (stopped || !dirty) return;
   dirty = false;
   void getArmadaDB()
     .kv.set(KV_KEY, exportGroupKeyMemo(MAX_PERSISTED))
@@ -51,8 +54,20 @@ export async function initGroupKeyPersistence(): Promise<void> {
   }
   try {
     const entries = await getArmadaDB().kv.get<unknown[]>(KV_KEY);
-    if (Array.isArray(entries)) importGroupKeyMemo(entries);
+    if (!stopped && Array.isArray(entries)) importGroupKeyMemo(entries);
   } catch {
     // Best-effort: an unreadable cache just means keys re-derive as before.
   }
+}
+
+/**
+ * Logout: drop the in-memory secrets and stop persisting for the rest of the page's
+ * life. Call before the purge, so no pending save can land after it.
+ */
+export function clearGroupKeyMemory(): void {
+  stopped = true;
+  if (saveTimer !== undefined) clearTimeout(saveTimer);
+  saveTimer = undefined;
+  dirty = false;
+  clearGroupKeyMemo();
 }

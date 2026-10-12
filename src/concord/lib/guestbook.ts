@@ -113,28 +113,18 @@ export interface CoalescedMember {
   invite?: { creator: string; label?: string };
 }
 
-/** Open every guestbook wrap that decodes under one of `groups`. Memoized per wrap. */
-const openedGuestbookMemo = new Map<string, OpenedEvent | null>();
-
+/** Open every guestbook wrap that decodes under one of `groups`. */
 export function openGuestbookWraps(wraps: NostrEvent[], groups: GroupKey[]): OpenedEvent[] {
   const byPk = new Map(groups.map((g) => [g.pk, g]));
   const out: OpenedEvent[] = [];
   for (const wrap of wraps) {
-    const cached = openedGuestbookMemo.get(wrap.id);
-    if (cached !== undefined) {
-      if (cached) out.push(cached);
-      continue;
-    }
     const group = byPk.get(wrap.pubkey);
     if (!group) continue;
-    let opened: OpenedEvent | null = null;
     try {
-      opened = openWrap(wrap, group);
+      out.push(openWrap(wrap, group));
     } catch {
-      opened = null;
+      // Not openable under its claimed group: skipped.
     }
-    openedGuestbookMemo.set(wrap.id, opened);
-    if (opened) out.push(opened);
   }
   return out;
 }

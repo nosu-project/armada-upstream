@@ -129,7 +129,7 @@ const MAX_CHARS = 5000;
 
 const MD_BREAKPOINT_PX = 768;
 
-/** Empty-composer height per layout / font step / viewport height (see auto-resize). */
+/** Empty-composer height per layout / font step (see auto-resize). */
 const emptyHeights = new Map<string, number>();
 
 function replaceExtension(filename: string, ext: string): string {
@@ -607,6 +607,14 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
   const [pendingUploads, setPendingUploads] = useState<PendingUpload[]>([]);
   /** Abort per pending id; a ref so cancel isn't a side effect inside an updater. */
   const pendingAborts = useRef(new Map<string, AbortController>());
+  // An upload outliving the composer would keep its file, slot and request alive.
+  useEffect(() => {
+    const aborts = pendingAborts.current;
+    return () => {
+      for (const abort of aborts.values()) abort.abort();
+      aborts.clear();
+    };
+  }, []);
   /** Block sending mid-upload, or the text would publish without the file. */
   const isUploading = pendingUploads.length > 0;
 
@@ -712,7 +720,9 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
       if (box) box.style.height = held;
       return height;
     };
-    const emptyKey = `${layout}:${window.innerWidth >= MD_BREAKPOINT_PX}:${window.innerHeight}`;
+    // No viewport height in the key: an empty field sits far below the 240px
+    // floor of `max`, so it can't change the result — and would grow the map.
+    const emptyKey = `${layout}:${window.innerWidth >= MD_BREAKPOINT_PX}`;
     const set = parseFloat(el.style.height);
     if (content === "") {
       const known = emptyHeights.get(emptyKey);

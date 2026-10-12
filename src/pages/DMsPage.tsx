@@ -82,7 +82,7 @@ import {
   useHasUnreadDMs,
 } from "@/hooks/useDirectMessages";
 import { useBotManifests } from "@/hooks/useBotManifests";
-import { useDm17Backfill, useDm17Conversations, useDm17Support } from "@/hooks/useDm17";
+import { useDm17Backfill, useDm17Conversations, useDm17Support, type Dm17Conversation } from "@/hooks/useDm17";
 import { useDmConversationName } from "@/hooks/useDmConversationName";
 import {
   recordDmConversationIndex,
@@ -1844,6 +1844,28 @@ function dmListRowCreatedAt(row: DmListRow): number {
 }
 
 /**
+ * One rumor per NIP-17 latest record: the row list is re-derived on every
+ * switch, and a fresh object would re-render every memoized row as a new `preview`.
+ */
+const dm17LatestRumors = new WeakMap<Dm17Conversation["latest"], NostrRumor>();
+
+function dm17LatestRumor(latest: Dm17Conversation["latest"]): NostrRumor {
+  let rumor = dm17LatestRumors.get(latest);
+  if (!rumor) {
+    rumor = {
+      id: latest.rumorId,
+      pubkey: latest.author,
+      created_at: latest.createdAt,
+      kind: latest.kind,
+      content: latest.content,
+      tags: latest.tags,
+    };
+    dm17LatestRumors.set(latest, rumor);
+  }
+  return rumor;
+}
+
+/**
  * The request-tier entry row. Deliberately low-salience (muted count, no rail
  * badge): flooding a stranger's inbox must not light up their UI.
  */
@@ -2415,14 +2437,7 @@ export function DMsPage() {
       byConversation.set(c.key, {
         conversation: c.key,
         peers: c.peers,
-        latest: {
-          id: c.latest.rumorId,
-          pubkey: c.latest.author,
-          created_at: c.latest.createdAt,
-          kind: c.latest.kind,
-          content: c.latest.content,
-          tags: c.latest.tags,
-        },
+        latest: dm17LatestRumor(c.latest),
         plaintext: c.latest.content,
         mine,
       });

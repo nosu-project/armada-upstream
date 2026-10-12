@@ -50,7 +50,8 @@ interface MuteListSeed {
   version?: ReplaceableVersion;
 }
 
-const muteListDecryptMemo = new Map<string, Promise<MutedPubkeyRead>>();
+/** Per author, the newest list version only: a superseded one is never read again. */
+const muteListDecryptMemo = new Map<string, { id: string; createdAt: number; work: Promise<MutedPubkeyRead> }>();
 
 function collectMutedPubkeys(tags: string[][], out: Set<string>): void {
   for (const [name, value] of tags) {
@@ -75,8 +76,8 @@ async function readMutedPubkeys(
   // Missing the private half can never authorize a persisted/background replacement.
   if (!signer?.nip44) return { pubkeys: publicPubkeys, decryptFailed: true };
 
-  const cached = muteListDecryptMemo.get(event.id);
-  if (cached) return cached;
+  const cached = muteListDecryptMemo.get(event.pubkey);
+  if (cached?.id === event.id) return cached.work;
 
   const nip44 = signer.nip44;
   const work = (async (): Promise<MutedPubkeyRead> => {
@@ -93,11 +94,14 @@ async function readMutedPubkeys(
       return { pubkeys: result, decryptFailed: false };
     } catch (err) {
       console.warn("Failed to decrypt mute list private items:", err);
-      muteListDecryptMemo.delete(event.id); // don't memoize a transient failure
+      // Don't memoize a transient failure.
+      if (muteListDecryptMemo.get(event.pubkey)?.id === event.id) muteListDecryptMemo.delete(event.pubkey);
       return { pubkeys: result, decryptFailed: true };
     }
   })();
-  muteListDecryptMemo.set(event.id, work);
+  if (!cached || event.created_at >= cached.createdAt) {
+    muteListDecryptMemo.set(event.pubkey, { id: event.id, createdAt: event.created_at, work });
+  }
   return work;
 }
 
@@ -140,6 +144,12 @@ function readMuteSeed(pubkey: string): Promise<MuteListSeed> {
     });
   muteSeedMemo.set(pubkey, work);
   return work;
+}
+
+/** Drops decrypted mute lists and seeds held in memory; for logout's purge. */
+export function clearMuteListMemos(): void {
+  muteListDecryptMemo.clear();
+  muteSeedMemo.clear();
 }
 
 async function persistMuteList(

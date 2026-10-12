@@ -92,6 +92,8 @@ export function usePressDrag<T>({
   handlers.current = { onPickup, onAim, onDrop, onAbort, onContainerScroll };
 
   const panning = useRef(false);
+  /** Each live gesture's teardown, so unmount mid-gesture detaches its window listeners and rAF. */
+  const liveGestures = useRef(new Set<() => void>());
 
   // Also while panning: from an uncancelled fast lift Chromium starts an invisible fling, even
   // under `touch-action: none`, and drops the next tap as its cancel.
@@ -254,6 +256,7 @@ export function usePressDrag<T>({
       };
 
       const clear = () => {
+        liveGestures.current.delete(clear);
         if (timer.current) clearTimeout(timer.current);
         timer.current = null;
         stopAutoScroll();
@@ -365,6 +368,7 @@ export function usePressDrag<T>({
       window.addEventListener("pointerup", onUp);
       window.addEventListener("pointercancel", onCancel);
       window.addEventListener("contextmenu", onContextMenu, true);
+      liveGestures.current.add(clear);
 
       function pickup() {
         if (timer.current) clearTimeout(timer.current);
@@ -399,13 +403,15 @@ export function usePressDrag<T>({
   /** A drag just finished, or the tap only caught a fling. */
   const shouldSuppressClick = useCallback(() => didDrag.current || caughtFling.current, []);
 
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    const gestures = liveGestures.current;
+    return () => {
+      active.current = null;
+      for (const clear of [...gestures]) clear();
       if (timer.current) clearTimeout(timer.current);
       stopFling();
-    },
-    [stopFling],
-  );
+    };
+  }, [stopFling]);
 
   return { attachContainer, attachPanSurface, begin, panFrom, source, dragging, shouldSuppressClick };
 }

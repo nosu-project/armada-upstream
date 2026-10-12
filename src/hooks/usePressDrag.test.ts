@@ -396,3 +396,42 @@ describe("usePressDrag", () => {
     });
   });
 });
+
+describe("usePressDrag unmount during a drag", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it("detaches the gesture's window listeners and stops the auto-scroll loop", () => {
+    const WATCHED = ["pointermove", "pointerup", "pointercancel", "contextmenu"];
+    const live = new Map<string, number>();
+    const add = window.addEventListener.bind(window);
+    const remove = window.removeEventListener.bind(window);
+    vi.spyOn(window, "addEventListener").mockImplementation((type, l, o) => {
+      if (WATCHED.includes(type)) live.set(type, (live.get(type) ?? 0) + 1);
+      add(type, l, o);
+    });
+    vi.spyOn(window, "removeEventListener").mockImplementation((type, l, o) => {
+      if (WATCHED.includes(type)) live.set(type, (live.get(type) ?? 0) - 1);
+      remove(type, l, o);
+    });
+    const raf = vi.spyOn(window, "requestAnimationFrame");
+
+    const { result, calls, unmount } = setup();
+    act(() => {
+      result.current.begin("row")(pointer("pointerdown", { clientY: 50 }));
+      vi.advanceTimersByTime(300);
+    });
+    expect(calls.onPickup).toHaveBeenCalledWith("row", 0, 50);
+    unmount();
+
+    for (const t of WATCHED) expect(live.get(t) ?? 0).toBe(0);
+    window.dispatchEvent(pointer("pointermove", { clientY: 120 }));
+    expect(calls.onAim).not.toHaveBeenCalled();
+    const before = raf.mock.calls.length;
+    vi.advanceTimersByTime(100);
+    expect(raf.mock.calls.length).toBe(before);
+  });
+});

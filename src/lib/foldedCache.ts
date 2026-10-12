@@ -100,9 +100,21 @@ export function decode<T>(json: string): T | undefined {
 /**
  * Last serialized value per key this session. Identical writes are skipped:
  * folds are recomputed far more often than they change, and redundant writes
- * would flood the Android bridge and wake every listener.
+ * would flood the Android bridge and wake every listener. LRU-bounded, since
+ * each entry is a full encoding; an evicted key only costs one redundant write.
  */
 const knownEncoding = new Map<string, string>();
+const KNOWN_ENCODING_MAX = 4096;
+
+function rememberEncoding(key: string, json: string): void {
+  knownEncoding.delete(key);
+  knownEncoding.set(key, json);
+  if (knownEncoding.size <= KNOWN_ENCODING_MAX) return;
+  const oldest = knownEncoding.keys().next().value as string;
+  knownEncoding.delete(oldest);
+  // A shared hit is validated against this encoding, so it goes with it.
+  sharedDecoded.delete(oldest);
+}
 
 export async function readFolded<T>(key: string): Promise<T | undefined> {
   try {
@@ -110,8 +122,10 @@ export async function readFolded<T>(key: string): Promise<T | undefined> {
       const site = new Error().stack?.split("\n").slice(2, 4).join(" < ").replace(/https?:\/\/[^/]+/g, "") ?? "?";
       perfCount(`readFolded ${key.split(":")[0]} @ ${site}`, 0);
     }
+    const before = knownEncoding.get(key);
     const json = await getArmadaDB().kv.get<string>(foldedKey(key));
-    if (typeof json === "string") knownEncoding.set(key, json);
+    // A write during the read is newer than what the read saw.
+    if (typeof json === "string" && knownEncoding.get(key) === before) rememberEncoding(key, json);
     // A non-string (undefined normalized to null) reads as a miss.
     return typeof json === "string"
       ? await perfTime("fold.decode", async () => decode<T>(json), () => json.length, "chars")
@@ -130,7 +144,10 @@ const sharedDecoded = new Map<string, { json: string; value: unknown }>();
  */
 export async function readFoldedShared<T>(key: string): Promise<T | undefined> {
   const hit = sharedDecoded.get(key);
-  if (hit && knownEncoding.get(key) === hit.json) return hit.value as T;
+  if (hit && knownEncoding.get(key) === hit.json) {
+    rememberEncoding(key, hit.json); // touch: shared keys are the hottest ones
+    return hit.value as T;
+  }
   // Stays empty until the next writeFolded.
   if (sharedMissing.has(key)) return undefined;
   // Share in-flight reads: boot mounts dozens of fold hooks at once.
@@ -138,6 +155,9 @@ export async function readFoldedShared<T>(key: string): Promise<T | undefined> {
   if (!pending) {
     pending = readFolded<unknown>(key).then((value) => {
       const json = knownEncoding.get(key);
+      // A write that landed during the read already shared the newer value.
+      const shared = sharedDecoded.get(key);
+      if (json !== undefined && shared?.json === json) return shared.value;
       if (value !== undefined && json !== undefined) sharedDecoded.set(key, { json, value });
       else if (value === undefined && json === undefined) sharedMissing.add(key);
       return value;
@@ -188,10 +208,12 @@ export async function writeFolded(key: string, value: unknown, encoded?: string)
     const json = encoded ?? encode(value);
     if (knownEncoding.get(key) === json) return;
     // Set before the await so concurrent identical writes collapse to one.
-    knownEncoding.set(key, json);
+    rememberEncoding(key, json);
+    // Only keys someone shares: pinning every written value would hold it all.
+    const shared = sharedDecoded.has(key) || sharedInFlight.has(key) || sharedMissing.has(key);
     sharedMissing.delete(key);
-    if (value !== undefined) sharedDecoded.set(key, { json, value });
-    else sharedDecoded.delete(key);
+    if (value === undefined) sharedDecoded.delete(key);
+    else if (shared) sharedDecoded.set(key, { json, value });
     try {
       await getArmadaDB().kv.set(foldedKey(key), json);
     } catch (error) {

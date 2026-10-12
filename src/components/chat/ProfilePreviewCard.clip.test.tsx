@@ -40,7 +40,6 @@ vi.mock("@/hooks/useProfileTheme", () => ({
   usePrefetchProfileTheme: () => vi.fn(),
 }));
 vi.mock("@/hooks/useUserStatus", () => ({ useUserStatus: () => ({ data: undefined }), isStatusExpired: () => true }));
-vi.mock("@/components/FollowButton", () => ({ FollowButton: () => <button type="button">Follow</button> }));
 vi.mock("@/components/ReportDialog", () => ({ ReportDialog: () => null }));
 vi.mock("@/components/ui/FallbackImage", () => ({ FallbackImage: () => null }));
 vi.mock("@/components/chat/CustomEmoji", () => ({ EmojifiedText: ({ children }: { children: ReactNode }) => <>{children}</> }));
@@ -66,7 +65,7 @@ function openCard() {
     </MemoryRouter>,
   );
   fireEvent.click(screen.getByRole("button", { name: "avatar" }));
-  return screen.getByRole("button", { name: "Follow" });
+  return screen.getByRole("button", { name: "View profile" });
 }
 
 function classesOf(el: Element) {

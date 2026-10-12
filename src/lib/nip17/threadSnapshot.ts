@@ -9,10 +9,10 @@
  * can't come back from cache. The rumors are already stored decrypted in
  * dm17Store, so no new at-rest exposure; purged on logout with the KV.
  */
-import { readFolded, writeFolded, encode } from "@/lib/foldedCache";
+import { readFolded, writeFolded } from "@/lib/foldedCache";
 import { isExpired } from "@/lib/nip17/protocol";
 import { dmConvKey } from "@/lib/nip17/conversation";
-import { perfMark } from "@/lib/perf";
+import { perfCount, perfMark } from "@/lib/perf";
 
 import type { OpenedDm } from "@/lib/nip17/protocol";
 import type { QueryClient } from "@tanstack/react-query";
@@ -28,10 +28,12 @@ function snapKey(self: string, conversation: string): string {
   return `dm17-thread-snap:${self}:${conversation}`;
 }
 
-/** One prewarm attempt per query key per session; the write path keeps it fresh. */
+/**
+ * One prewarm attempt per query key per session; the write path keeps it fresh.
+ * FIFO-capped: a forgotten key only costs one more snapshot read.
+ */
 const prewarmed = new Set<string>();
-/** Last persisted content per conversation, so an identical window skips the write. */
-const lastWritten = new Map<string, string>();
+const PREWARMED_MAX = 1000;
 
 /**
  * Seed `queryKey` (the conversation's thread query) from the persisted
@@ -47,6 +49,7 @@ export async function prewarmDm17ThreadSnapshot(
   const once = JSON.stringify(queryKey);
   if (prewarmed.has(once)) return;
   prewarmed.add(once);
+  if (prewarmed.size > PREWARMED_MAX) prewarmed.delete(prewarmed.values().next().value as string);
   if ((queryClient.getQueryData<OpenedDm[]>(queryKey)?.length ?? 0) > 0) return;
   const snap = await readFolded<OpenedDm[]>(snapKey(self, conversation));
   if (!snap || snap.length === 0) {
@@ -79,17 +82,16 @@ export function persistDm17ThreadSnapshot(
     .sort((a, b) => b.createdAt - a.createdAt || (a.rumorId < b.rumorId ? -1 : 1))
     .slice(0, SNAP_WINDOW);
   if (newest.length === 0) return Promise.resolve();
-  const id = snapKey(self, conversation);
-  const serialized = encode(newest);
-  if (lastWritten.get(id) === serialized) return Promise.resolve();
-  const firstWrite = !lastWritten.has(id);
-  lastWritten.set(id, serialized);
-  if (firstWrite) perfMark("dm17.snap.persist", `${conversation.slice(0, 8)} ${newest.length} row(s)`);
-  return writeFolded(id, newest);
+  // Aggregated, not a mark: marks are an unbounded timeline and this runs per paint.
+  perfCount("dm17.snap.persist", 0, newest.length, "rows");
+  // writeFolded skips an encoding identical to the last one written.
+  return writeFolded(snapKey(self, conversation), newest);
 }
 
-/** Test seam: forget prewarm attempts and write memos. */
-export function _resetDm17ThreadSnapshotForTests(): void {
+/** Forget this session's prewarm attempts (logout). */
+export function clearDm17ThreadSnapshotMemory(): void {
   prewarmed.clear();
-  lastWritten.clear();
 }
+
+/** Test seam. */
+export const _resetDm17ThreadSnapshotForTests = clearDm17ThreadSnapshotMemory;

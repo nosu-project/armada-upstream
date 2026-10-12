@@ -179,6 +179,11 @@ function memoFragDecrypt(id: string, work: Promise<FragList | null>): void {
   fragDecryptMemo.set(id, work);
 }
 
+/** Forget every decrypted fragment (the user's community list, with its secrets). Logout. */
+export function clearCommunityListMemory(): void {
+  fragDecryptMemo.clear();
+}
+
 function dTagOf(event: NostrRumor): string | undefined {
   return event.tags.find((t) => t[0] === "d")?.[1];
 }

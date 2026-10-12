@@ -173,6 +173,18 @@ function evictToBudget(keep: string): void {
   }
 }
 
+/**
+ * Drop every cached decrypt and revoke its object URL now (logout): these are
+ * the previous account's plaintext. A decrypt still in flight is not cached.
+ */
+export function clearAttachmentCache(): void {
+  for (const entry of cache.values()) {
+    if (entry.url) URL.revokeObjectURL(entry.url);
+  }
+  cache.clear();
+  totalBytes = 0;
+}
+
 /** Copy bytes into a fresh ArrayBuffer-backed view (WebCrypto wants `ArrayBuffer`, not `ArrayBufferLike`). */
 function buf(bytes: Uint8Array): Uint8Array<ArrayBuffer> {
   const ab = new ArrayBuffer(bytes.byteLength);

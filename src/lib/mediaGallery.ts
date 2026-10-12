@@ -50,19 +50,29 @@ export function listRecentMedia(offset: number, limit = 60): Promise<{ items: Ga
   return MediaGallery.list({ limit, offset });
 }
 
-/** Thumbnail URLs memoized per item; each miss is a bridge call plus a decode. */
+/**
+ * Thumbnail URLs memoized per item; each miss is a bridge call plus a decode.
+ * LRU-capped well above a scrolled sheet; the files themselves stay cached natively.
+ */
 const thumbs = new Map<string, Promise<string>>();
+const THUMBS_MAX = 500;
 
 export function galleryThumbnailSrc(item: GalleryItem): Promise<string> {
   const key = `${item.video ? "v" : "i"}${item.id}-${item.modified}`;
-  let src = thumbs.get(key);
-  if (!src) {
-    src = MediaGallery.thumbnail({ id: item.id, video: item.video, modified: item.modified })
-      .then(({ path }) => Capacitor.convertFileSrc(path));
-    src.catch(() => thumbs.delete(key));
+  const src = thumbs.get(key);
+  if (src) {
+    thumbs.delete(key);
     thumbs.set(key, src);
+    return src;
   }
-  return src;
+  const pending = MediaGallery.thumbnail({ id: item.id, video: item.video, modified: item.modified })
+    .then(({ path }) => Capacitor.convertFileSrc(path));
+  pending.catch(() => {
+    if (thumbs.get(key) === pending) thumbs.delete(key);
+  });
+  thumbs.set(key, pending);
+  if (thumbs.size > THUMBS_MAX) thumbs.delete(thumbs.keys().next().value as string);
+  return pending;
 }
 
 /** A loadable URL for the item itself, for the full-size preview. */

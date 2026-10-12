@@ -254,6 +254,9 @@ export function useChannelTimeline(
   const [isLoadingOlder, setIsLoadingOlder] = useState(false);
   // Wakes the fold (reads Date.now()) when a held future-dated message's time arrives.
   const [revealTick, setRevealTick] = useState(0);
+  // The load-older relay backfill in flight; aborted when the channel changes or unmounts.
+  const olderAbortRef = useRef<AbortController | null>(null);
+  useEffect(() => () => olderAbortRef.current?.abort(), [channelIdHex]);
 
   useEffect(() => {
     endReachedRef.current = false;
@@ -437,10 +440,13 @@ export function useChannelTimeline(
         exhausted = !!saved?.exhausted;
         if (!exhausted) {
           const controller = new AbortController();
+          olderAbortRef.current = controller;
           const older = await backfillStore(nostr, community!.relays, channel!, controller.signal, {
             until: saved?.oldest,
             maxPages: LOAD_OLDER_MAX_PAGES,
           });
+          // The view that asked is gone; its query key is no longer read.
+          if (controller.signal.aborted) return 0;
           const opened = await openChatBatch(older.events, channel!);
           writeRumors(community!.idHex, opened);
           exhausted = older.exhausted;

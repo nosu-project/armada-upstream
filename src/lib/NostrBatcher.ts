@@ -83,6 +83,11 @@ abstract class MicrotaskBatcher<R extends AbortableRequest> {
     }
   }
 
+  /** No request is waiting for a flush. */
+  get idle(): boolean {
+    return this.pending.length === 0;
+  }
+
   protected drain(): R[] {
     const batch = this.pending;
     this.pending = [];
@@ -798,8 +803,15 @@ export class NostrBatcher {
           );
           this.dTagCollectors.set(collectorKey, collector);
         }
-        const event = await collector.request(dTag, opts?.signal);
-        return event ? [event] : [];
+        try {
+          const event = await collector.request(dTag, opts?.signal);
+          return event ? [event] : [];
+        } finally {
+          // One key per author ever queried: drop the collector once it drains.
+          if (collector.idle && this.dTagCollectors.get(collectorKey) === collector) {
+            this.dTagCollectors.delete(collectorKey);
+          }
+        }
       }
     }
 

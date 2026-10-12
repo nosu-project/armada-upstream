@@ -1,5 +1,5 @@
 import { createContext, useContext } from "react";
-import { Link } from "lucide-react";
+import { Copy, Link } from "lucide-react";
 
 import type { MessageActionItem } from "@/components/chat/messageActions";
 import { writeClipboardText } from "@/lib/clipboard";
@@ -50,6 +50,41 @@ export function linkActionsAt(target: EventTarget | null): MessageActionItem[] |
     icon: Link,
     onSelect: () => writeClipboardText(text).catch(() => undefined),
   }];
+}
+
+/**
+ * "Copy selection" while the user has text highlighted that touches `row`.
+ * Read at right-click time: clicking a menu item can collapse the selection.
+ */
+export function selectionActionsIn(row: Element): MessageActionItem[] | null {
+  const selection = row.ownerDocument.getSelection();
+  if (!selection || selection.isCollapsed) return null;
+  let touches = false;
+  for (let i = 0; i < selection.rangeCount && !touches; i++) {
+    touches = selection.getRangeAt(i).intersectsNode(row);
+  }
+  if (!touches) return null;
+  const text = selection.toString();
+  if (!text.trim()) return null;
+  return [{
+    id: "copy-selection",
+    label: "Copy selection",
+    icon: Copy,
+    onSelect: () => writeClipboardText(text).catch(() => undefined),
+  }];
+}
+
+/** A right press off the highlight would collapse it (Chromium) before the menu could offer it. */
+export function keepSelectionOnRightPress(e: React.MouseEvent): void {
+  if (e.button !== 2) return;
+  const selection = e.currentTarget.ownerDocument.getSelection();
+  if (selection && !selection.isCollapsed) e.preventDefault();
+}
+
+/** The right-click's own actions: the highlighted text, then the link under the pointer. */
+export function contextActionsAt(target: EventTarget | null, row: Element): MessageActionItem[] | null {
+  const actions = [...(selectionActionsIn(row) ?? []), ...(linkActionsAt(target) ?? [])];
+  return actions.length > 0 ? actions : null;
 }
 
 /** Combine image and message actions with a separator; unchanged when there are no image actions. */

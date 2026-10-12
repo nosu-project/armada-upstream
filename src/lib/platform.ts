@@ -220,9 +220,11 @@ export const DEFAULT_ECHO_CANCELLATION: boolean = envBool(
   config("DEFAULT_ECHO_CANCELLATION"),
   true,
 );
+// Off: Chromium's AGC holds a voice several dB down for seconds after any loud
+// moment (a laugh, leaning into the mic), which listeners hear as fading out.
 export const DEFAULT_AUTO_GAIN_CONTROL: boolean = envBool(
   config("DEFAULT_AUTO_GAIN_CONTROL"),
-  true,
+  false,
 );
 
 /** Default for RNNoise ML noise cancellation (AudioWorklet + WASM). Users can toggle per device. */

@@ -513,3 +513,24 @@ describe("detachableClient — the shared client survives being taken apart", ()
   });
 });
 
+
+describe("NostrBatcher — d-tag collectors", () => {
+  it("drops a (kind, author) collector once its batch has drained", async () => {
+    const pool = { query: vi.fn(async () => []) } as unknown as NPool;
+    const batcher = new NostrBatcher(pool);
+    const collectors = () => (batcher as unknown as { dTagCollectors: Map<string, unknown> }).dTagCollectors;
+    const author = (i: number) => i.toString(16).padStart(64, "0");
+
+    for (let i = 0; i < 20; i++) {
+      await batcher.query([{ kinds: [30023], authors: [author(i)], "#d": ["post"], limit: 1 }]);
+    }
+    expect(collectors().size).toBe(0);
+
+    // Concurrent d tags for one author still share one REQ.
+    await Promise.all(["a", "b", "c"].map((d) =>
+      batcher.query([{ kinds: [30023], authors: [author(1)], "#d": [d], limit: 1 }]),
+    ));
+    expect(pool.query).toHaveBeenCalledTimes(21);
+    expect(collectors().size).toBe(0);
+  });
+});

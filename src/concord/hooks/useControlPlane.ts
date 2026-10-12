@@ -203,6 +203,29 @@ function useControlSnapshot(community: Community | undefined, active: boolean) {
  */
 const foldFloors = new Map<string, Map<string, EntityHead>>();
 
+/**
+ * The floor map for the community's current epoch. Creating one drops the
+ * community's older epochs: a rekey re-baselines, so their floors are dead.
+ */
+function floorsFor(community: Community): Map<string, EntityHead> {
+  const floorKey = `${community.idHex}@${community.rootEpoch}`;
+  let floorHeads = foldFloors.get(floorKey);
+  if (floorHeads) return floorHeads;
+  const prefix = `${community.idHex}@`;
+  for (const k of foldFloors.keys()) {
+    if (k.startsWith(prefix) && BigInt(k.slice(prefix.length)) < community.rootEpoch) foldFloors.delete(k);
+  }
+  floorHeads = new Map();
+  foldFloors.set(floorKey, floorHeads);
+  return floorHeads;
+}
+
+/** Forget every floor map and cached live pause (decrypted control state). Logout. */
+export function clearControlPlaneMemory(): void {
+  foldFloors.clear();
+  livePauseCache.clear();
+}
+
 /** The last fold per shared opened-events array, so instances 2..N reuse it. */
 const foldByInputs = new WeakMap<
   OpenedEvent[],
@@ -218,13 +241,6 @@ export function useControlFold(community: Community | undefined, active = true) 
   const events = control.data;
   const refounded = Boolean(community && community.rootEpoch > 0n);
   const snapIds = useControlSnapshot(community, active).data;
-
-  const floorKey = community ? `${community.idHex}@${community.rootEpoch}` : "";
-  let floorHeads = foldFloors.get(floorKey);
-  if (!floorHeads) {
-    floorHeads = new Map();
-    foldFloors.set(floorKey, floorHeads);
-  }
 
   const data = useDeferredFold<FoldedControl>(
     community ? controlFoldKey(community.idHex) : null,
@@ -247,6 +263,7 @@ export function useControlFold(community: Community | undefined, active = true) 
       ) {
         return shared.folded;
       }
+      const floorHeads = floorsFor(community);
       const editions = openControlEditions(events);
       // After a Refounding, current-epoch editions fold by version-anchored bootstrap
       // (see headCandidates); never-rotated communities keep chain contiguity.
@@ -322,12 +339,7 @@ export async function readLivePause(community: Community, nowSec: number): Promi
   if (refounded && !snapIds) return undefined; // fail open — see above
   const stored = await queryPlane(community.idHex, "control");
 
-  const floorKey = `${community.idHex}@${community.rootEpoch}`;
-  let floorHeads = foldFloors.get(floorKey);
-  if (!floorHeads) {
-    floorHeads = new Map();
-    foldFloors.set(floorKey, floorHeads);
-  }
+  const floorHeads = floorsFor(community);
   const folded = foldControlState(
     openControlEditions(stored),
     community.id,

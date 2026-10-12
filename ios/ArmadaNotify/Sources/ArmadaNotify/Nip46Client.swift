@@ -76,6 +76,9 @@ final class Nip46Client {
 
     deinit {
         socket?.cancel(with: .goingAway, reason: nil)
+        // A session lives until invalidated, whether or not anything still
+        // references it.
+        session.invalidateAndCancel()
     }
 
     /// Ask the bunker to decrypt. Nil on any failure, including a timeout.

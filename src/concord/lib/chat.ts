@@ -63,11 +63,14 @@ export function forgetChatSkips(): void {
   skippedNoKey.clear();
 }
 
-/** Test seam: empty the decode memo, i.e. what a reload does to it. */
-export function _resetChatMemoForTests(): void {
+/** Empty the decode memo (decrypted messages), i.e. what a reload does to it. Logout. */
+export function clearChatDecodeMemo(): void {
   decodeMemo.clear();
   skippedNoKey.clear();
 }
+
+/** Test seam. */
+export const _resetChatMemoForTests = clearChatDecodeMemo;
 
 /** Test seam: current decode-memo entry count, for the unbounded-growth guard. */
 export function _chatDecodeMemoSizeForTests(): number {

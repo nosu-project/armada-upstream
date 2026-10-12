@@ -46,7 +46,7 @@ import { useToast } from "@/hooks/useToast";
 import { AppContext } from "@/contexts/AppContext";
 import { sendsOnEnter } from "@/lib/sendOnEnter";
 import { getComposerCollisionPadding, useComposerBoundsRef } from "@/contexts/ComposerBoundsContext";
-import { ChatImageMenuContext, linkActionsAt, withImageActions, type ChatImageMenu } from "@/contexts/ChatImageMenuContext";
+import { ChatImageMenuContext, contextActionsAt, keepSelectionOnRightPress, withImageActions, type ChatImageMenu } from "@/contexts/ChatImageMenuContext";
 import { getAvatarShape } from "@/lib/avatarShape";
 import { buildEmojiMap } from "@/lib/customEmoji";
 import { writeClipboardText } from "@/lib/clipboard";
@@ -480,7 +480,7 @@ const ChatMessageInner = memo(function ChatMessageInner({
   const [reportOpen, setReportOpen] = useState(false);
   // Built on first right-click (see useLazyContextMenu).
   const stageLinkActions = useCallback(
-    (e: React.MouseEvent) => setImageActions(linkActionsAt(e.target)),
+    (e: React.MouseEvent) => setImageActions(contextActionsAt(e.target, e.currentTarget)),
     [],
   );
   const contextMenu = useLazyContextMenu();
@@ -941,7 +941,12 @@ const ChatMessageInner = memo(function ChatMessageInner({
     ) : (
       // Restaging in the capture phase (before an image restages) keeps a text
       // right-click from inheriting the last image's actions.
-      <span className="block" onContextMenuCapture={stageLinkActions} onContextMenu={contextMenu.onContextMenu}>
+      <span
+        className="block"
+        onMouseDownCapture={keepSelectionOnRightPress}
+        onContextMenuCapture={stageLinkActions}
+        onContextMenu={contextMenu.onContextMenu}
+      >
         {row}
       </span>
     )}
