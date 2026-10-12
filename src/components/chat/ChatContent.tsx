@@ -62,6 +62,7 @@ import { useMediaWithFallback } from "@/hooks/useMediaWithFallback";
 import { useRoutedCandidates } from "@/hooks/useBlossomCandidates";
 import { isBuzzMediaUrl } from "@/buzz/media";
 import { decryptAttachmentToObjectURL, peekPrimedAttachment } from "@/lib/encryptedMedia";
+import { captureLoadedMedia } from "@/lib/mediaCache";
 import { toast, useToast } from "@/hooks/useToast";
 import { useWallet } from "@/hooks/useWallet";
 import { useChatImageMenu } from "@/contexts/ChatImageMenuContext";
@@ -1781,7 +1782,10 @@ function InlineImage({ image, onOpen }: { image: ImageRef; onOpen: () => void })
             )}
             loading="lazy"
             decoding="async"
-            onLoad={() => setLoaded(true)}
+            onLoad={() => {
+              setLoaded(true);
+              captureLoadedMedia(resolved.src);
+            }}
             onError={onError}
           />
         )}
@@ -1847,7 +1851,10 @@ function GridImage({
               draggable={false}
               loading="lazy"
               decoding="async"
-              onLoad={() => setLoaded(true)}
+              onLoad={() => {
+                setLoaded(true);
+                captureLoadedMedia(resolved.src);
+              }}
               onError={onError}
               className="absolute inset-0 w-full h-full object-cover hover:opacity-90 transition-opacity [-webkit-user-drag:none]"
             />

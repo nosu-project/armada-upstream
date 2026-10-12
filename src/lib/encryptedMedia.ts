@@ -1,6 +1,8 @@
 import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
 import { sha256 } from "@noble/hashes/sha2.js";
 
+import { blobHashOf, cachedBlob, storeBlob } from "@/lib/mediaCache";
+
 import type { ImetaEncryption } from "@/lib/imeta";
 
 /**
@@ -127,12 +129,20 @@ export async function fetchCapped(
 ): Promise<ArrayBuffer> {
   const list = typeof urls === "string" ? [urls] : urls;
   if (list.length === 0) throw new Error("attachment fetch failed: no source");
+  // Mirrors hold the same blob, so the first URL's hash names them all.
+  const hash = blobHashOf(list[0]);
+  if (hash) {
+    const cached = await cachedBlob(hash);
+    if (cached && cached.size <= (opts.maxBytes ?? MAX_DECRYPT_BYTES)) return cached.arrayBuffer();
+  }
   let lastError: unknown;
   for (const url of list) {
     try {
       const res = await fetch(url, { signal: opts.signal });
       if (!res.ok) throw new Error(`attachment fetch failed: HTTP ${res.status}`);
-      return await readCapped(res, opts.maxBytes ?? MAX_DECRYPT_BYTES, opts.onProgress);
+      const body = await readCapped(res, opts.maxBytes ?? MAX_DECRYPT_BYTES, opts.onProgress);
+      if (hash) void storeBlob(hash, body, res.headers.get("content-type") ?? "");
+      return body;
     } catch (e) {
       if (opts.signal?.aborted || e instanceof FileTooLargeError) throw e;
       lastError = e;
