@@ -114,6 +114,7 @@ import { useVoiceActivity } from "@/hooks/useVoiceActivity";
 import { useChannelNavValue } from "@/hooks/useChannelNav";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useIsTouch } from "@/hooks/useIsMobile";
+import { useIsDesktop } from "@/hooks/useIsDesktop";
 import { useMobileMembersOverlay } from "@/hooks/useMobileMembersOverlay";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useChannelGitActivity } from "@/hooks/useChannelGitActivity";
@@ -1125,10 +1126,13 @@ export function ConcordPage() {
   // Kicked/banned: stays on the rail but read-only; clears if re-included.
   const excluded = useIsExcluded(communityId);
 
-  // Fall back to the persisted last-open channel when the route doesn't name one:
-  // knowing the id at first render lets the timeline snapshot paint before the
-  // control fold resolves.
-  const channelIdHex = routeChannelId ?? (lastChannelKey ? config.lastChannelByServer[lastChannelKey] ?? null : null);
+  // Desktop falls back to the persisted last-open channel when the route doesn't
+  // name one: knowing the id at first render lets the timeline snapshot paint
+  // before the control fold resolves. Mobile picks none, leaving the channel list up.
+  const autoSelectChannel = useIsDesktop();
+  const channelIdHex =
+    routeChannelId ??
+    (autoSelectChannel && lastChannelKey ? config.lastChannelByServer[lastChannelKey] ?? null : null);
   const view: "channel" | Concord2Pane = routePane ?? "channel";
   const paneHeader =
     view === "channel" ? null : isModerationPane(view) ? MODERATION_TABS[view] : PANE_HEADERS[view];
@@ -1263,14 +1267,14 @@ export function ConcordPage() {
       if (named || !folded) return named;
       return channels[0];
     }
-    if (!folded) return undefined;
+    if (!folded || !autoSelectChannel) return undefined;
     return pickDefaultChannel(
       channels,
       config.lastChannelByServer[lastChannelKey],
       (c) => c.idHex,
       (c) => c.name,
     );
-  }, [channels, channelIdHex, folded, config.lastChannelByServer, lastChannelKey]);
+  }, [channels, channelIdHex, folded, autoSelectChannel, config.lastChannelByServer, lastChannelKey]);
 
   // Chat scope for in-message app affordances and the app stage (like NIP-29).
   const appScope = useMemo<AppScope | undefined>(
