@@ -5,6 +5,7 @@ import { ChromeDialogContent, ChromeDialogFooter, ChromeDialogHeader, Dialog } f
 import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
 import { Crop, ZoomIn, ZoomOut, RotateCcw } from 'lucide-react';
+import { isGifBytes, runGifCrop } from '@/lib/runGifCrop';
 
 interface ImageCropDialogProps {
   open: boolean;
@@ -18,7 +19,11 @@ interface ImageCropDialogProps {
 }
 
 async function getCroppedBlob(imageSrc: string, pixelCrop: Area, maxEdge?: number): Promise<Blob> {
-  const image = await createImageBitmap(await (await fetch(imageSrc)).blob());
+  const source = await (await fetch(imageSrc)).blob();
+  if (isGifBytes(new Uint8Array(await source.slice(0, 4).arrayBuffer()))) {
+    return (await runGifCrop(source, pixelCrop, maxEdge)) ?? source;
+  }
+  const image = await createImageBitmap(source);
   const scale = maxEdge ? Math.min(1, maxEdge / Math.max(pixelCrop.width, pixelCrop.height)) : 1;
   const canvas = document.createElement('canvas');
   canvas.width = Math.max(1, Math.round(pixelCrop.width * scale));
