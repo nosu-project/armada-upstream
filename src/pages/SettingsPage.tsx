@@ -257,6 +257,10 @@ export function SettingsPage({
     updateConfig((current) => ({ ...current, showDmRequests: value }));
   };
 
+  const setShowDmPreviews = (value: boolean) => {
+    updateConfig((current) => ({ ...current, showDmPreviews: value }));
+  };
+
   const setShowRecentRailDms = (value: boolean) => {
     updateConfig((current) => ({ ...current, showRecentRailDms: value }));
   };
@@ -646,6 +650,12 @@ export function SettingsPage({
                   description="Show DMs from strangers under Requests. Off hides them."
                 >
                   <Switch checked={config.showDmRequests} onCheckedChange={setShowDmRequests} />
+                </SettingsRow>
+                <SettingsRow
+                  label="Message previews"
+                  description="Show the latest message under each conversation in your DM list."
+                >
+                  <Switch checked={config.showDmPreviews} onCheckedChange={setShowDmPreviews} />
                 </SettingsRow>
                 <SettingsRow
                   label="Recent DMs in the rail"
