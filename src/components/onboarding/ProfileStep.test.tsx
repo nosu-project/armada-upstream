@@ -79,11 +79,11 @@ describe("signup profile step", () => {
     const onFinish = vi.fn();
     renderStep({ expectedPubkey: PUBKEY, onFinish });
 
-    const sloth = DEFAULT_AVATARS.find((avatar) => avatar.id === "sloth");
+    const dinosaur = DEFAULT_AVATARS.find((avatar) => avatar.id === "dinosaur");
     fireEvent.change(screen.getByPlaceholderText("Your name"), { target: { value: "  Ana  " } });
     fireEvent.click(screen.getByRole("button", { name: "Pig" }));
     fireEvent.click(screen.getByRole("button", { name: "Dragon by gravestoneghost" }));
-    fireEvent.click(screen.getByRole("button", { name: "Sloth" }));
+    fireEvent.click(screen.getByRole("button", { name: "Dinosaur" }));
     fireEvent.click(screen.getByRole("button", { name: "Continue" }));
 
     await waitFor(() => expect(h.publishEvent).toHaveBeenCalledTimes(1));
@@ -91,17 +91,17 @@ describe("signup profile step", () => {
 
     const published = h.publishEvent.mock.calls[0][0];
     expect(published.kind).toBe(0);
-    expect(JSON.parse(published.content)).toEqual({ name: "Ana", picture: sloth?.url });
+    expect(JSON.parse(published.content)).toEqual({ name: "Ana", picture: dinosaur?.url });
     // Described from what is pinned for the preset, not by downloading it.
     expect(published.tags).toEqual([
       [
         "imeta",
-        `url ${sloth?.url}`,
+        `url ${dinosaur?.url}`,
         "m image/png",
-        `x ${sloth?.url.match(/[0-9a-f]{64}/)?.[0]}`,
-        `size ${sloth?.size}`,
-        `dim ${sloth?.dim}`,
-        `blurhash ${sloth?.blurhash}`,
+        `x ${dinosaur?.url.match(/[0-9a-f]{64}/)?.[0]}`,
+        `size ${dinosaur?.size}`,
+        `dim ${dinosaur?.dim}`,
+        `blurhash ${dinosaur?.blurhash}`,
       ],
     ]);
     expect(onFinish).toHaveBeenCalledTimes(1);
@@ -133,6 +133,7 @@ describe("signup profile step", () => {
       "Gamer Kitty by dudsflausino",
       "Agent Flower by Milo",
       "Hatcat by xaibott",
+      "Cyber Oni by KrakenM",
     ]);
   });
 
