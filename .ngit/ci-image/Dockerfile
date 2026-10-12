@@ -82,7 +82,9 @@ RUN set -eux; \
 # levels android/variables.gradle builds against (compileSdk 36). NOT under
 # /opt/hostedtoolcache, so the act-toolcache volume can't shadow it. The NDK
 # only strips debug symbols from prebuilt .so files; keep it in step with
-# ndkVersion in android/variables.gradle.
+# ndkVersion in android/variables.gradle. build-tools 35.0.0 is AGP 8.13's
+# default, which the Capacitor plugin modules use; absent, Gradle downloads it
+# on every job, and a bad download fails the release.
 FROM fetch AS android
 COPY --from=jdk /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk
 ARG JAVA_DIR=21.0.11-10.0.LTS
@@ -96,7 +98,7 @@ RUN set -eux; \
     rm /tmp/ct.zip; \
     sm="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"; \
     yes | "$sm" --licenses >/dev/null || true; \
-    "$sm" --install "platforms;android-36" "build-tools;36.0.0" "platform-tools" "ndk;29.0.14206865" >/dev/null
+    "$sm" --install "platforms;android-36" "build-tools;36.0.0" "build-tools;35.0.0" "platform-tools" "ndk;29.0.14206865" >/dev/null
 
 # ── Swift toolchain (ios/ArmadaDB + ios/ArmadaNotify suites in test.yml) ─────
 # The iOS engines are SwiftPM packages precisely so their suites run on Linux —
