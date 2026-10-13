@@ -1,23 +1,27 @@
 /**
- * The desktop shell's update feed: the kind-30622 release event (the same one
- * `/downloads` reads), narrowed to the installer this machine can install —
- * content-addressed and signed by a pinned maintainer key. Also resolves the
- * Flatpak's web bundle from the signed nsite manifest ({@link resolveWebBundle}).
+ * The desktop shell's update feed: the NIP-82 release and asset events (the
+ * same ones `/downloads` reads), narrowed to the installer this machine can
+ * install — content-addressed and signed by a pinned maintainer key. Also
+ * resolves the Flatpak's web bundle from the signed nsite manifest
+ * ({@link resolveWebBundle}).
  *
  * Bundled into `electron/updateFeed.cjs` (like `electronMain.ts`) so
- * `parseRelease()` stays the single read contract. Keep it free of Electron
- * imports; the electron-updater half is `electron/nostrUpdateProvider.js`.
+ * `parseRelease()`/`parseAsset()` stay the single read contract. Keep it free
+ * of Electron imports; the electron-updater half is `electron/nostrUpdateProvider.js`.
  */
 
 import { verifyEvent } from "nostr-tools/pure";
 
 import {
+  ASSET_KIND,
+  RELEASE_APP_ID,
   RELEASE_AUTHORS,
   RELEASE_KIND,
   RELEASE_RELAYS,
-  RELEASE_REPO_ID,
   foldReleases,
+  isStable,
   parseRelease,
+  releaseArtifacts,
   type Release,
   type ReleaseArtifact,
 } from "./releases";
@@ -34,29 +38,35 @@ const RELAY_TIMEOUT_MS = 12_000;
 const RELEASE_QUERY_LIMIT = 50;
 
 /**
+ * Releases whose assets are fetched before giving up: the newest can lack this
+ * platform (a failed build), but a run of them means there is nothing to offer.
+ */
+const ASSET_LOOKUPS = 5;
+
+/**
  * Which installer each platform self-updates from; matches
  * `supportsSelfUpdate()` in `electron/updateSupport.js`. Package-manager and
  * portable builds must never go to electron-updater; `-portable.exe` shares the
- * NSIS installer's platform token and mime, so the filename is the only tell.
+ * NSIS installer's platform id and mime, so `variant` (or the filename) is the only tell.
  *
  * `flatpak` is a SYNTHETIC target (passed when `FLATPAK_ID` is set), kept out
  * of `linux` so electron-updater never gets it: `/app` is read-only and the
  * shell updates its web bundle instead (`electron/webBundleUpdate.js`).
  */
-const DESKTOP_FORMATS: Record<string, { os: string; accepts: (filename: string) => boolean }> = {
+const DESKTOP_FORMATS: Record<string, { os: string; accepts: (filename: string, variant?: string) => boolean }> = {
   linux: { os: "linux", accepts: (name) => /\.appimage$/i.test(name) },
   win32: {
     os: "windows",
-    accepts: (name) => /\.exe$/i.test(name) && !/-portable\.exe$/i.test(name),
+    accepts: (name, variant) =>
+      /\.exe$/i.test(name) && !/-portable\.exe$/i.test(name) && variant !== "portable",
   },
   darwin: { os: "macos", accepts: (name) => /\.zip$/i.test(name) },
   flatpak: { os: "linux", accepts: (name) => /\.flatpak$/i.test(name) },
 };
 
 /**
- * Architecture spellings for the same machine. The `f` token is advisory
- * (docs/releases.md): only used to REJECT an artifact naming another arch,
- * never to require one.
+ * Architecture spellings for the same machine. The `f` ids are only used to
+ * REJECT an artifact naming another arch, never to require one.
  */
 const ARCH_ALIASES: Record<string, readonly string[]> = {
   x64: ["x86_64", "x64", "amd64"],
@@ -95,7 +105,7 @@ export interface ResolveDesktopUpdateOptions {
   allowPrerelease?: boolean;
   relays?: readonly string[];
   authors?: readonly string[];
-  repoId?: string;
+  appId?: string;
   /** Injectable for tests; defaults to the runtime's global. */
   webSocket?: typeof WebSocket;
   signal?: AbortSignal;
@@ -118,15 +128,16 @@ export function downloadUrl(url: string): string {
   }
 }
 
-/** Whether an artifact's `f` token rules it out for this architecture. */
-function archMatches(platform: string, arch: string): boolean {
-  const dash = platform.indexOf("-");
-  if (dash < 0) return true;
-  const named = platform.slice(dash + 1).toLowerCase();
-  if (!named) return true;
+/** Whether an artifact's `f` ids rule it out for this architecture: only if every one names another. */
+function archMatches(platforms: readonly string[], arch: string): boolean {
   const accepted = ARCH_ALIASES[arch];
   // Unknown arch isn't evidence either way; the format check still applies.
-  return accepted == null ? true : accepted.includes(named);
+  if (accepted == null || platforms.length === 0) return true;
+  return platforms.some((platform) => {
+    const dash = platform.indexOf("-");
+    const named = dash < 0 ? "" : platform.slice(dash + 1).toLowerCase();
+    return !named || accepted.includes(named);
+  });
 }
 
 /**
@@ -135,16 +146,16 @@ function archMatches(platform: string, arch: string): boolean {
  * unverifiable installer is never offered.
  */
 export function pickDesktopArtifact(
-  release: Release,
+  artifacts: readonly ReleaseArtifact[],
   target: DesktopTarget,
 ): ReleaseArtifact | undefined {
   const format = DESKTOP_FORMATS[target.platform];
   if (!format) return undefined;
-  return release.artifacts.find(
+  return artifacts.find(
     (artifact) =>
       artifact.os === format.os &&
-      format.accepts(artifact.filename) &&
-      archMatches(artifact.platform, target.arch) &&
+      format.accepts(artifact.filename, artifact.variant) &&
+      archMatches(artifact.platforms, target.arch) &&
       /^[0-9a-f]{64}$/.test(artifact.hash),
   );
 }
@@ -157,10 +168,11 @@ export function toDesktopUpdate(
   release: Release,
   artifact: ReleaseArtifact,
 ): DesktopUpdate {
+  const version = semver(release.version);
   return {
-    version: semver(release.version),
-    tag: release.version,
-    releaseName: release.title,
+    version,
+    tag: `v${version}`,
+    releaseName: `v${version}`,
     releaseNotes: release.notes,
     releaseDate: new Date(release.createdAt * 1000).toISOString(),
     channel: release.channel,
@@ -174,43 +186,69 @@ export function toDesktopUpdate(
 }
 
 /**
- * Turn untrusted relay responses into the release to offer (the artifact is a
- * binary about to be installed). Each check blocks a malicious relay: the
- * signature must verify, the author must be a BUILD-PINNED release key, and
- * the `D` tag must be this repo (not another project by the same maintainer).
+ * The trusted releases among untrusted relay responses, newest first. Each
+ * check blocks a malicious relay: the signature must verify, the author must be
+ * a BUILD-PINNED release key, and `i` must be this application (not another one
+ * by the same maintainer).
  */
-export function selectDesktopRelease(
+export function trustedReleases(
   events: readonly unknown[],
   {
-    target,
     allowPrerelease = false,
     authors = RELEASE_AUTHORS,
-    repoId = RELEASE_REPO_ID,
-  }: {
-    target: DesktopTarget;
-    allowPrerelease?: boolean;
-    authors?: readonly string[];
-    repoId?: string;
-  },
-): DesktopUpdate | undefined {
+    appId = RELEASE_APP_ID,
+  }: { allowPrerelease?: boolean; authors?: readonly string[]; appId?: string } = {},
+): Release[] {
   const trusted = new Set(authors.map((author) => author.toLowerCase()));
   const releases: Release[] = [];
   for (const event of events) {
-    if (!isReleaseEvent(event)) continue;
+    if (!isSignedEvent(event) || event.kind !== RELEASE_KIND) continue;
     if (!trusted.has(event.pubkey.toLowerCase())) continue;
     if (!verifyEvent(event)) continue;
     const release = parseRelease(event);
-    if (!release || release.repoId !== repoId) continue;
+    if (!release || release.appId !== appId) continue;
     releases.push(release);
   }
-
   const folded = foldReleases(releases);
-  // Newest-first; stable builds take the newest `main` release (as `/downloads` does).
-  const candidates = allowPrerelease ? folded : folded.filter((r) => r.channel === "main");
-  for (const release of candidates) {
-    const artifact = pickDesktopArtifact(release, target);
+  // Stable builds take the newest stable release (as `/downloads` does).
+  return allowPrerelease ? folded : folded.filter(isStable);
+}
+
+/**
+ * The update a trusted release offers this machine, from untrusted asset
+ * events. An asset counts only if its signature verifies and the release names
+ * its id: the id is what binds the asset's bytes to the signed release.
+ */
+export function selectDesktopArtifact(
+  release: Release,
+  events: readonly unknown[],
+  target: DesktopTarget,
+): DesktopUpdate | undefined {
+  const assets = events.filter(
+    (event): event is SignedEvent =>
+      isSignedEvent(event) &&
+      event.kind === ASSET_KIND &&
+      release.assetIds.includes(event.id) &&
+      verifyEvent(event),
+  );
+  const artifact = pickDesktopArtifact(releaseArtifacts(release, assets), target);
+  return artifact ? toDesktopUpdate(release, artifact) : undefined;
+}
+
+/** {@link trustedReleases} then {@link selectDesktopArtifact}, over one pile of events. */
+export function selectDesktopRelease(
+  events: readonly unknown[],
+  options: {
+    target: DesktopTarget;
+    allowPrerelease?: boolean;
+    authors?: readonly string[];
+    appId?: string;
+  },
+): DesktopUpdate | undefined {
+  for (const release of trustedReleases(events, options)) {
     // Skip releases lacking this platform (e.g. a failed Windows build).
-    if (artifact) return toDesktopUpdate(release, artifact);
+    const update = selectDesktopArtifact(release, events, options.target);
+    if (update) return update;
   }
   return undefined;
 }
@@ -223,10 +261,6 @@ interface SignedEvent {
   created_at: number;
   tags: string[][];
   sig: string;
-}
-
-function isReleaseEvent(value: unknown): value is SignedEvent {
-  return isSignedEvent(value) && value.kind === RELEASE_KIND;
 }
 
 function isSignedEvent(value: unknown): value is SignedEvent {
@@ -409,7 +443,7 @@ export async function resolveDesktopUpdate({
   allowPrerelease = false,
   relays = RELEASE_RELAYS,
   authors = RELEASE_AUTHORS,
-  repoId = RELEASE_REPO_ID,
+  appId = RELEASE_APP_ID,
   webSocket,
   signal,
 }: ResolveDesktopUpdateOptions): Promise<DesktopUpdate | undefined> {
@@ -421,20 +455,23 @@ export async function resolveDesktopUpdate({
   if (relays.length === 0) throw new Error("no release relays configured");
   if (authors.length === 0) throw new Error("no release authors configured");
 
-  const filter = {
-    kinds: [RELEASE_KIND],
-    authors: [...authors],
-    "#D": [repoId],
-    limit: RELEASE_QUERY_LIMIT,
-  };
-  const responses = await Promise.all(
-    relays.map((relay) => queryRelay(relay, filter, WebSocketImpl, signal)),
-  );
+  const query = async (filter: unknown) =>
+    (await Promise.all(relays.map((relay) => queryRelay(relay, filter, WebSocketImpl, signal)))).flat();
 
-  return selectDesktopRelease(responses.flat(), {
-    target,
-    allowPrerelease,
-    authors,
-    repoId,
-  });
+  const releases = trustedReleases(
+    await query({
+      kinds: [RELEASE_KIND],
+      authors: [...authors],
+      "#i": [appId],
+      limit: RELEASE_QUERY_LIMIT,
+    }),
+    { allowPrerelease, authors, appId },
+  );
+  for (const release of releases.slice(0, ASSET_LOOKUPS)) {
+    if (signal?.aborted) break;
+    const assets = await query({ kinds: [ASSET_KIND], authors: [release.pubkey], ids: release.assetIds });
+    const update = selectDesktopArtifact(release, assets, target);
+    if (update) return update;
+  }
+  return undefined;
 }

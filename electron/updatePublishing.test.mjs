@@ -106,14 +106,14 @@ describe("desktop update publication", () => {
     expect(failure.with.path).toContain("electron/release/");
   });
 
-  // One writer of the release event, after every build. Kind 30622 is
+  // One writer of the release, after every build. A NIP-82 release is
   // addressable and Nostr has no compare-and-swap, so a second publisher would
   // replace the first's event rather than merge with it, dropping half the
   // artifacts.
-  it("publishes the release event from exactly one job, after every build", () => {
+  it("publishes the release from exactly one job, after every build", () => {
     const publishers = Object.entries(workflow.jobs).filter(([, job]) =>
       job.steps.some((step) =>
-        String(step.run || "").includes("publish-release.mjs"),
+        String(step.run || "").includes("ngit release publish"),
       ),
     );
     expect(publishers.map(([name]) => name)).toEqual(["release"]);

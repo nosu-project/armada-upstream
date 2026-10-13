@@ -1,9 +1,9 @@
 "use strict";
 
 /**
- * electron-updater's view of the Nostr release event.
+ * electron-updater's view of the Nostr release events.
  *
- * The desktop app self-updates from the SAME kind-30622 event `/downloads`
+ * The desktop app self-updates from the SAME NIP-82 release `/downloads`
  * renders, rather than from `latest*.yml` on a web server. electron-updater
  * supports this through its `custom` publish provider: `setFeedURL()` is handed
  * a class, `providerFactory.createClient()` instantiates it, and the updater
@@ -13,7 +13,7 @@
  * all of that. This only answers two questions: what is the latest version, and
  * where are its bytes.
  *
- * Everything about the event itself — relays, signature and author checks,
+ * Everything about the events themselves — relays, signature and author checks,
  * choosing the artifact for this platform — is in `updateFeed.cjs`, the bundled
  * build of `src/lib/desktopUpdate.ts`. So this file has no protocol knowledge
  * and that file has no Electron knowledge.
@@ -37,7 +37,7 @@ try {
  * because the class cannot be constructed without an updater to attach to.
  */
 function updateInfoFrom(update) {
-  // The release event's `x`, which is also the artifact's Blossom content
+  // The asset event's `x`, which is also the artifact's Blossom content
   // address — so the hash the download is checked against is the same fact the
   // URL already commits to, rather than a second one to keep in step.
   //
@@ -103,7 +103,7 @@ class NostrReleaseProvider extends Provider {
 
     if (update == null) {
       throw new Error(
-        `no ${process.platform}/${process.arch} release artifact was found in the release event`,
+        `no ${process.platform}/${process.arch} release artifact was found in the NIP-82 releases`,
       );
     }
 

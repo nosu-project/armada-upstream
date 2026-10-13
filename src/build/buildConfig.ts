@@ -37,9 +37,9 @@ export const CONFIG_NAMES = [
   "NOSTR_PUSH_RELAYS",
   "NOSTR_PUSH2_PUBKEY",
   "NOSTR_PUSH2_RELAYS",
-  // NIP-34 repo identifier whose releases `/downloads` offers (the 30617 `d`). Unset = "armada".
-  "RELEASE_REPO_ID",
-  // Comma-separated hex pubkeys whose kind-30622 releases are trusted. Unset = Armada's release signer.
+  // NIP-82 application id whose releases `/downloads` and the updater offer. Unset = "buzz.armada.app".
+  "RELEASE_APP_ID",
+  // Comma-separated hex pubkeys whose NIP-82 releases are trusted. Unset = Armada's release signer.
   "RELEASE_AUTHORS",
 ] as const;
 

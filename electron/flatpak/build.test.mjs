@@ -13,7 +13,7 @@ const buildScript = fs.readFileSync(
 describe("Flatpak bundle", () => {
   // The bundle is unsigned and carries no origin. npkg (pkg.soapbox.pub) is the
   // distribution channel: it hash-verifies the bundle against the signed
-  // kind-30622 release event and re-signs its own OSTree summary, so a signature
+  // NIP-82 release and re-signs its own OSTree summary, so a signature
   // or an embedded remote here would be discarded — and an embedded origin would
   // point a direct install at a remote nothing serves.
   it("embeds no update origin in any builder path", () => {

@@ -855,7 +855,7 @@ function hideWindowToTray() {
 // update feed. A Flatpak is never replaced; its web bundle is
 // (checkForWebBundleUpdate).
 //
-// The feed is the kind-30622 release event — the same one /downloads reads —
+// The feed is the NIP-82 release and its assets — the same ones /downloads reads —
 // resolved by ./nostrUpdateProvider.js (electron-updater path) and directly by
 // ./updateFeed.cjs (Flatpak path). The `publish` block in electron-builder.yml
 // is not a feed: it is the only thing that makes electron-builder package an

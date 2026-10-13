@@ -1,7 +1,7 @@
 /**
  * The platform side of `/downloads`: install targets, OS detection, install
  * commands and store listings. Release contents (files, hashes, URLs) come
- * from the kind-30622 event (`src/lib/releases.ts`).
+ * from the NIP-82 release events (`src/lib/releases.ts`).
  */
 
 export type DownloadOs = "linux" | "windows" | "macos" | "android" | "ios";

@@ -7,7 +7,7 @@ import { ArmadaCrest, ArmadaCrestKeyframes } from "@/components/brand/ArmadaCres
 import { AsciiSea } from "@/components/landing/AsciiSea";
 import { Button } from "@/components/ui/button";
 import { useBackOrHome } from "@/hooks/useBackOrHome";
-import { useReleases } from "@/hooks/useReleases";
+import { useReleaseArtifacts, useReleases } from "@/hooks/useReleases";
 import { toast } from "@/hooks/useToast";
 import { writeClipboardText } from "@/lib/clipboard";
 import {
@@ -23,11 +23,11 @@ import {
 } from "@/lib/downloads";
 import { formatBytes } from "@/lib/fileBytes";
 import { APP_NAME } from "@/lib/platform";
-import { featuredRelease, type Release, type ReleaseArtifact } from "@/lib/releases";
+import { featuredRelease, isStable, type Release, type ReleaseArtifact } from "@/lib/releases";
 
 /**
  * The downloads deck, in the landing's visual language over the
- * {@link AsciiSea}. Every file comes from a kind-30622 release event
+ * {@link AsciiSea}. Every file comes from a NIP-82 release and its asset events
  * (`docs/releases.md`): verifiable links, at the cost of a spinner on a cold pool.
  */
 
@@ -50,14 +50,25 @@ function prefersReducedMotion() {
   return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 }
 
+/** NIP-82 versions drop the tag's `v`; the page shows the tag. */
+function displayVersion(version: string): string {
+  return /^\d/.test(version) ? `v${version}` : version;
+}
+
+/** The badge a prerelease wears; undefined for a stable release. */
+function prereleaseBadge(release: Release): string | undefined {
+  if (isStable(release)) return undefined;
+  return release.channel === "main" ? "prerelease" : release.channel;
+}
+
 /**
  * The release's artifacts by platform card. `.deb`/`.flatpak` are omitted:
  * they're served via pkg.soapbox.pub ({@link PACKAGE_MANAGERS}) but stay in
  * the release event for npkg.
  */
-function groupByOs(release: Release | undefined): Map<DownloadOs, ReleaseArtifact[]> {
+function groupByOs(artifacts: readonly ReleaseArtifact[] | undefined): Map<DownloadOs, ReleaseArtifact[]> {
   const grouped = new Map<DownloadOs, ReleaseArtifact[]>();
-  for (const artifact of release?.artifacts ?? []) {
+  for (const artifact of artifacts ?? []) {
     if (!artifact.os) continue;
     if (isRepublishedPackage(artifact.filename)) continue;
     const existing = grouped.get(artifact.os);
@@ -193,7 +204,7 @@ function TargetCard({ platform, artifacts, version, channel, featured }: {
         {artifacts.length > 0 && version && (
           <span className="ml-auto flex items-center gap-1.5 shrink-0">
             {/* Only shown when nothing stable was ever tagged (`featuredRelease` prefers stable). */}
-            {channel && channel !== "main" && (
+            {channel && (
               <span className="font-mono text-3xs lowercase tracking-wide text-primary/80">{channel}</span>
             )}
             <span className="font-mono text-xs text-muted-foreground">{version}</span>
@@ -211,7 +222,7 @@ function TargetCard({ platform, artifacts, version, channel, featured }: {
           )}
           <div className="grid gap-2 sm:grid-cols-2">
           {artifacts.map((artifact, i) => (
-            <ArtifactButton key={artifact.hash || artifact.url} artifact={artifact} primary={featured && i === 0} />
+            <ArtifactButton key={artifact.id} artifact={artifact} primary={featured && i === 0} />
           ))}
           {platform.os === "android" &&
             ANDROID_STORES.map((store) => (
@@ -273,24 +284,35 @@ function TargetSkeleton() {
   );
 }
 
-/** One past version, collapsed. Its artifacts are already in hand. */
+/** One past version, collapsed. Its artifacts are fetched on first expand. */
 function OlderRelease({ release }: { release: Release }) {
+  const [opened, setOpened] = useState(false);
+  const artifacts = useReleaseArtifacts(opened ? release : undefined);
+
   return (
-    <details className="clip-corner-lg bg-background/30 px-4 py-3">
+    <details
+      className="clip-corner-lg bg-background/30 px-4 py-3"
+      onToggle={(event) => { if (event.currentTarget.open) setOpened(true); }}
+    >
       <summary className="flex cursor-pointer items-center gap-2 font-mono text-sm text-muted-foreground marker:content-none hover:text-foreground">
-        <span className="font-bold">{release.version}</span>
-        {release.channel !== "main" && (
-          <span className="font-mono text-3xs lowercase tracking-wide text-primary/70">{release.channel}</span>
+        <span className="font-bold">{displayVersion(release.version)}</span>
+        {prereleaseBadge(release) && (
+          <span className="font-mono text-3xs lowercase tracking-wide text-primary/70">{prereleaseBadge(release)}</span>
         )}
         <span className="ml-auto text-xs opacity-70">
           {new Date(release.createdAt * 1000).toLocaleDateString()}
         </span>
       </summary>
       <div className="mt-3 grid gap-2 sm:grid-cols-2">
-        {release.artifacts
+        {artifacts.isPending ? (
+          <>
+            <div className="h-14 animate-pulse clip-corner-lg bg-muted-foreground/10" />
+            <div className="h-14 animate-pulse clip-corner-lg bg-muted-foreground/10" />
+          </>
+        ) : (artifacts.data ?? [])
           .filter((artifact) => !isRepublishedPackage(artifact.filename))
           .map((artifact) => (
-            <ArtifactButton key={artifact.hash || artifact.url} artifact={artifact} />
+            <ArtifactButton key={artifact.id} artifact={artifact} />
           ))}
       </div>
     </details>
@@ -309,7 +331,9 @@ export function DownloadsPage() {
   // Newest STABLE leads, so a release candidate doesn't become everyone's download.
   const latest = useMemo(() => featuredRelease(releases.data ?? []), [releases.data]);
   const older = (releases.data ?? []).filter((release) => release !== latest);
-  const byOs = useMemo(() => groupByOs(latest), [latest]);
+  const artifacts = useReleaseArtifacts(latest);
+  const byOs = useMemo(() => groupByOs(artifacts.data), [artifacts.data]);
+  const pending = releases.isPending || (!!latest && artifacts.isPending);
 
   const platforms = useMemo(() => {
     const ordered = [...DOWNLOAD_PLATFORMS];
@@ -374,7 +398,7 @@ export function DownloadsPage() {
                   Open {APP_NAME} in this browser
                 </Link>
               </Button>
-            ) : releases.isPending ? (
+            ) : pending ? (
               <div className="h-12 w-full animate-pulse clip-corner-lg bg-muted-foreground/15" />
             ) : null}
             <button
@@ -395,7 +419,7 @@ export function DownloadsPage() {
         </section>
 
         <section ref={targetsRef} className="mx-auto max-w-2xl scroll-mt-6 space-y-4 px-6 pb-12 pt-4">
-          {releases.isPending ? (
+          {pending ? (
             <>
               <TargetSkeleton />
               <TargetSkeleton />
@@ -408,8 +432,8 @@ export function DownloadsPage() {
                   key={platform.os}
                   platform={platform}
                   artifacts={byOs.get(platform.os) ?? []}
-                  version={latest.version}
-                  channel={latest.channel}
+                  version={displayVersion(latest.version)}
+                  channel={prereleaseBadge(latest)}
                   featured={platform.os === detected}
                 />
               ))}

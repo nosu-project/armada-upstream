@@ -47,7 +47,7 @@ needs no Armada-specific server at all: any NIP-29 relay serves it.
 | `ios/ArmadaDB/` | ArmadaDB in Swift: the SQLite engine the iOS build runs, with SQLite vendored. A SwiftPM package so it builds on **Linux**, where its conformance suite runs without a Mac |
 | `ios/ArmadaNotify/` | The decrypt/store/present pipeline the iOS Notification Service Extension runs (NIP-44/NIP-17/Concord, libsecp256k1 vendored). A SwiftPM package for the same reason — its suite runs on **Linux** |
 | `electron/`  | Electron desktop shell (loads the bundled web build; Linux/Windows/macOS installers built in CI) |
-| `docs/`      | Design notes too long for this file — `settings-documents.md` (the NIP-78 settings root, its derived documents, and the split) and `releases.md` (kind 30622, the NIP-34 release event `/downloads` reads) |
+| `docs/`      | Design notes too long for this file — `settings-documents.md` (the NIP-78 settings root, its derived documents, and the split) and `releases.md` (the NIP-82 release and asset events `/downloads` and the desktop updater read) |
 | `scripts/`   | Repo tooling, incl. two Concord-aware moderation-UX harnesses that mirror the same CORD-01/02/05 derivations: `scripts/spambot.mjs` (WRITES — chat spam with flood-fold evasion, plus kind-3313 direct-invite spam via `--invite-spam`) and `scripts/dump-community.mjs` (READS — resolves an invite and pages the decrypted Chat Plane out of the relays in `OpenedChat` shape, for feeding `floodCluster.ts`); see each file's header comment |
 
 ## Build / test
@@ -613,12 +613,12 @@ Things to know before touching it:
   `app.getPath("userData")/armada.db`, and `preload.js` answers
   `armada:db-available` SYNCHRONOUSLY because the renderer picks its adapter
   before anything reads.
-- **The desktop updater reads the release event, by the same arrangement.**
+- **The desktop updater reads the release events, by the same arrangement.**
   `src/lib/desktopUpdate.ts` → `electron/updateFeed.cjs`
   (`vite.config.electron-update.ts`, `npm run build:electron-update`), wrapped
   as an electron-updater `custom` provider by `electron/nostrUpdateProvider.js`
-  and armed with `setFeedURL` in `main.js`. It resolves the SAME kind-30622
-  event `/downloads` renders (`docs/releases.md`) down to the one installer this
+  and armed with `setFeedURL` in `main.js`. It resolves the SAME NIP-82
+  release `/downloads` renders (`docs/releases.md`) down to the one installer this
   machine can replace itself with, so `parseRelease()` is not reimplemented in
   `electron/` — a second parser is a second contract. Its OWN vite config rather
   than a second entry beside `db.cjs`: a multi-entry lib build hoists shared code
@@ -636,7 +636,7 @@ Things to know before touching it:
   remote it was installed from. The bundle becomes the app:// origin with the
   whole preload bridge, so it is resolved only through that manifest, never
   from a URL the renderer supplies. The published build is
-  distributed by npkg at `pkg.soapbox.pub`, which watches the kind-30622 release
+  distributed by npkg at `pkg.soapbox.pub`, which watches the NIP-82 release
   events, hash-verifies each artifact, and re-signs the apt/flatpak/fdroid
   repositories under its own keys — so Armada ships the `.flatpak` (and `.deb`
   and `.apk`) UNSIGNED and does no OSTree/GPG signing of its own. Don't bring the
@@ -754,9 +754,8 @@ Things to know before touching it:
 
 ## CI: Blossom failover and mirroring
 
-The nsite deploys (`deploy-nsite.yml`, `release.yml`), the release event
-(`scripts/publish-release.mjs`) and the NIP-82 release (`ngit release
-publish`, `.ngit/release.yaml`) all write to the
+The nsite deploys (`deploy-nsite.yml`, `release.yml`) and the NIP-82 release
+(`ngit release publish`, `.ngit/release.yaml`) all write to the
 Blossom servers listed in `.nsite/config.json`, and no ONE of them may be able
 to fail a run:
 
@@ -780,12 +779,10 @@ to fail a run:
   gateways read), which is why it is one run over the live set rather than a
   primary pass plus a mirror pass: the manifest the second pass republished
   would name only the mirrors.
-- `publish-release.mjs` probes the same list, stores each artifact on the
-  first server that takes it, publishes the release, and only THEN asks the
-  rest to mirror it (BUD-04 `/mirror`) under a fixed budget — so mirroring can
-  delay a release but never block one. `ngit release publish` runs after it,
-  so its blobs are already there; ngit needs only one confirmed copy per blob
-  and reports incomplete replication as a warning.
+- `ngit release publish` uploads to every server in `release.yaml`'s
+  `blossom_servers` (the same list), needs only one confirmed copy per blob,
+  and reports incomplete replication as a warning. Most blobs are already on
+  the first server, where ngit-ci uploads run artifacts.
 
 ## Conventions
 

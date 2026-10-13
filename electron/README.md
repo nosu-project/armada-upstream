@@ -248,13 +248,13 @@ Every edition has exactly one update owner:
 | Windows portable / Store | Replace manually / Microsoft Store |
 | Developer ID–signed macOS build | Armada consumes the signed zip from the release event |
 | CI cross-built ad-hoc macOS zip | Replace manually; marked no-self-update |
-| Linux AppImage | Armada replaces the running AppImage from the release event |
+| Linux AppImage | Armada replaces the running AppImage from the NIP-82 release |
 | Linux deb | Download and install the newer deb; in-app updater disabled |
 | Linux Flatpak | Armada updates its web bundle in place; the shell and major versions update via `flatpak update` from the install's remote (pkg.soapbox.pub for the published build) |
 
-### The feed is the release event
+### The feed is the NIP-82 release
 
-The updater reads the same NIP-34 kind-30622 release event `/downloads` renders
+The updater reads the same NIP-82 release and asset events `/downloads` renders
 — see `docs/releases.md` — not a `latest*.yml` on a web server. The pieces:
 
 | File | Role |
@@ -363,9 +363,9 @@ flatpak update --user buzz.armada.app
 
 The published Flatpak comes from **pkg.soapbox.pub**, run by
 [npkg](https://github.com/soapbox-pub/npkg). npkg watches for Armada's
-kind-30622 release events (`docs/releases.md`), downloads the `.flatpak` bundle
-from Blossom, verifies its bytes against the `x` sha256 the signed event
-declares, imports it into its own OSTree repository, and re-signs the summary
+NIP-82 releases (`docs/releases.md`), downloads the `.flatpak` bundle
+from Blossom, verifies its bytes against the `x` sha256 the signed asset
+event declares, imports it into its own OSTree repository, and re-signs the summary
 with its own key. Users add one remote and install:
 
 ```sh
@@ -377,7 +377,7 @@ flatpak install soapbox buzz.armada.app
 That is a normal remote-tracked install, so `flatpak update` upgrades the whole
 app — shell, native modules and web bundle — from the soapbox remote.
 
-The same `.flatpak` bundle is also named in the release event and rendered by
+The same `.flatpak` bundle is also named in the release and rendered by
 `/downloads` for a direct sideload:
 
 ```sh
@@ -386,10 +386,10 @@ flatpak run buzz.armada.app
 ```
 
 **Armada does not sign this bundle.** Authenticity rests on the sha256 in the
-kind-30622 event, which is signed by a build-pinned maintainer key
+NIP-82 asset event, signed by a build-pinned maintainer key
 (`RELEASE_AUTHORS`); npkg verifies that hash before re-signing under its own
 key, which is the key the soapbox remote is trusted by. A direct sideload of the
-raw bundle is unsigned — the trust for it is the same event hash, checked out of
+raw bundle is unsigned — the trust for it is the same asset hash, checked out of
 band. Its Freedesktop and Electron runtimes need a configured Flathub remote;
 most Flatpak installations already have one. If needed, add it first with the
 `flathub` command in the builder setup above.
@@ -473,8 +473,8 @@ from a single Linux container.
 
 Nothing is served over HTTP by CI any more, and nothing is deployed over SSH.
 Every installer — including the signed `.flatpak` bundle — is staged into
-`.release-artifacts/`, uploaded to Blossom, and named by hash in the kind-30622
-release event the `release` job publishes (`docs/releases.md`), which is what
+`.release-artifacts/`, uploaded to Blossom, and named by hash in the NIP-82
+release the `release` job publishes (`docs/releases.md`), which is what
 `/downloads` reads and what the desktop app self-updates from.
 
 | File | Built by |
