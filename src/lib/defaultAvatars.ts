@@ -115,15 +115,15 @@ export const DEFAULT_AVATARS: readonly DefaultAvatar[] = [
     dim: "500x500",
     blurhash: "LHH2fk|3wCIWPKOmx[S2%UXnOaNY",
   },
-  // PLACEHOLDER rows, replace with artist submissions.
   {
-    id: "sloth",
-    url: `${BLOSSOM}/dcaec4220f3af5b7dd18df1801b7daaabb41f3835f50bb2041db61d1d162975a.png`,
-    label: "Sloth",
-    size: 42711,
-    dim: "1024x1024",
-    blurhash: "LKRU{^xu^n%3%3ayWUj[?Jj]D~R%",
+    id: "cyber-oni",
+    url: `${BLOSSOM}/3387dac6f93c41bd0197a021b6aa6fa9133d7c0b3ac83a0a589854604aacd783.jpeg`,
+    label: "Cyber Oni by KrakenM",
+    size: 638225,
+    dim: "1748x1687",
+    blurhash: "LK8$H@kD8^i{Y$j[q^ae8^af$,j@",
   },
+  // PLACEHOLDER rows, replace with artist submissions.
   {
     id: "dinosaur",
     url: `${BLOSSOM}/059741915d1c4bd314c2fac070e88b30e39191b968aef21b95afbad77d62fc13.png`,
