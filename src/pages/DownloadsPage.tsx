@@ -1,5 +1,5 @@
 import { ArrowLeft, ArrowUpRight, Check, ChevronDown, Copy, Download, Globe, Info, RefreshCw } from "lucide-react";
-import { type ComponentType, type ReactNode, useMemo, useRef, useState } from "react";
+import { type ComponentType, type MouseEvent, type ReactNode, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { ArmadaCrest, ArmadaCrestKeyframes } from "@/components/brand/ArmadaCrest";
@@ -30,6 +30,7 @@ import {
 } from "@/lib/downloads";
 import { formatBytes } from "@/lib/fileBytes";
 import { APP_NAME } from "@/lib/platform";
+import { HashMismatchError, downloadArtifact } from "@/lib/releaseDownload";
 import { featuredRelease, isStable, type Release, type ReleaseArtifact } from "@/lib/releases";
 import { cn } from "@/lib/utils";
 
@@ -208,9 +209,59 @@ function Segments<T extends string>({ options, value, onChange }: {
   );
 }
 
+/**
+ * Saves an artifact under its release filename, verified against its hash.
+ * The link's own href stays the fallback: for modified clicks (new tab, save
+ * as) and for a host that refuses the fetch.
+ */
+function useArtifactDownload(artifact: ReleaseArtifact | undefined) {
+  // Whole percent, so a 140 MB stream re-renders ~100 times rather than per chunk.
+  const [percent, setPercent] = useState<number>();
+  const busy = useRef(false);
+
+  const onClick = async (event: MouseEvent) => {
+    if (!artifact) return;
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    if (busy.current) return;
+    busy.current = true;
+    setPercent(0);
+    try {
+      await downloadArtifact(artifact, (fraction) => setPercent(Math.floor(fraction * 100)));
+    } catch (error) {
+      if (error instanceof HashMismatchError) {
+        toast({
+          title: "Download blocked",
+          description: "The file didn't match the hash its release names, so it wasn't saved.",
+          variant: "destructive",
+        });
+      } else {
+        window.location.assign(artifact.url);
+      }
+    } finally {
+      busy.current = false;
+      setPercent(undefined);
+    }
+  };
+
+  return { onClick, percent };
+}
+
+/** A thin fill along the bottom edge while a download streams. */
+function ProgressBar({ percent }: { percent: number }) {
+  return (
+    <span aria-hidden="true" className="absolute inset-x-0 bottom-0 h-1 bg-black/20">
+      <span className="block h-full bg-[hsl(var(--accent2))] transition-[width] duration-150" style={{ width: `${percent}%` }} />
+    </span>
+  );
+}
+
 /** A filled link tile: an icon well, a name over a detail line, and a trailing cue. */
-function Tile({ href, to, icon, title, detail, external, download, primary }: {
+function Tile({ href, to, icon, title, detail, external, download, primary, onClick, percent }: {
   href?: string;
+  onClick?: (event: MouseEvent) => void;
+  /** Set while a download streams; replaces the detail line. */
+  percent?: number;
   /** An in-app route, followed by the router rather than a page load. */
   to?: string;
   icon: ReactNode;
@@ -222,7 +273,7 @@ function Tile({ href, to, icon, title, detail, external, download, primary }: {
 }) {
   const Cue = external || to ? ArrowUpRight : Download;
   const className = cn(
-    "group flex min-h-[4.5rem] items-center gap-3.5 clip-corner-lg px-4 py-3 transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+    "group relative flex min-h-[4.5rem] items-center gap-3.5 clip-corner-lg px-4 py-3 transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
     primary
       ? "bg-primary text-primary-foreground hover:bg-primary/90"
       : "bg-foreground/[0.06] text-foreground hover:bg-foreground/[0.1]",
@@ -239,12 +290,13 @@ function Tile({ href, to, icon, title, detail, external, download, primary }: {
       </span>
       <span className="flex min-w-0 flex-1 flex-col gap-0.5">
         <span className="truncate text-[0.9375rem] font-semibold leading-tight">{title}</span>
-        {detail && (
+        {(detail || percent !== undefined) && (
           <span className={cn("truncate text-xs leading-tight", primary ? "opacity-80" : "text-muted-foreground")}>
-            {detail}
+            {percent !== undefined ? `Downloading… ${percent}%` : detail}
           </span>
         )}
       </span>
+      {percent !== undefined && <ProgressBar percent={percent} />}
       <Cue
         className={cn(
           "size-4 shrink-0 transition-transform motion-reduce:transition-none",
@@ -261,6 +313,8 @@ function Tile({ href, to, icon, title, detail, external, download, primary }: {
       download={download}
       target={external ? "_blank" : undefined}
       rel={external ? "noreferrer" : undefined}
+      onClick={onClick}
+      aria-busy={percent !== undefined || undefined}
       className={className}
     >
       {body}
@@ -280,11 +334,13 @@ function ArtifactTile({ artifact, icon: TileIcon, primary, full }: {
   // Mixed lists keep "(Intel)"/"(Apple silicon)": they're the only difference between two macOS rows.
   const title = full ? artifact.label.replace(/\s*\((x86_64|x64)\)$/, "") : name.title;
   const detail = [full ? undefined : name.detail, size].filter(Boolean).join(" · ") || undefined;
+  const { onClick, percent } = useArtifactDownload(artifact);
   return (
-    // Cross-origin `download` is ignored (Blossom); kept for same-origin mirrors.
     <Tile
       href={artifact.url}
       download={artifact.filename}
+      onClick={onClick}
+      percent={percent}
       icon={<TileIcon className="size-5" />}
       title={title}
       detail={detail}
@@ -529,8 +585,10 @@ function OlderReleases({ releases }: { releases: Release[] }) {
 }
 
 /** The page's one call to action: the detected platform's mark, big, over its build details. */
-function HeroButton({ href, to, download, icon: Mark, title, detail }: {
+function HeroButton({ href, to, download, icon: Mark, title, detail, onClick, percent }: {
   href?: string;
+  onClick?: (event: MouseEvent) => void;
+  percent?: number;
   to?: string;
   download?: string;
   icon: Icon;
@@ -544,7 +602,9 @@ function HeroButton({ href, to, download, icon: Mark, title, detail }: {
       </span>
       <span className="flex min-w-0 flex-1 flex-col items-start gap-1 text-left">
         <span className="text-lg font-semibold leading-tight">{title}</span>
-        <span className="truncate text-xs leading-tight opacity-80">{detail}</span>
+        <span className="truncate text-xs leading-tight opacity-80">
+          {percent !== undefined ? `Downloading… ${percent}%` : detail}
+        </span>
       </span>
       {to ? (
         <ArrowUpRight className="mr-1 size-5 shrink-0 opacity-90 transition-transform group-hover:-translate-y-0.5 group-hover:translate-x-0.5 motion-reduce:transition-none" />
@@ -553,7 +613,7 @@ function HeroButton({ href, to, download, icon: Mark, title, detail }: {
       )}
     </>
   );
-  const className = "group flex h-[4.5rem] w-full items-center gap-4 clip-corner-lg bg-primary px-3 text-primary-foreground transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
+  const className = "group relative flex h-[4.5rem] w-full items-center gap-4 clip-corner-lg bg-primary px-3 text-primary-foreground transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
 
   return (
     // clip-path cuts a box-shadow, so the glow is a filter on a wrapper.
@@ -561,7 +621,10 @@ function HeroButton({ href, to, download, icon: Mark, title, detail }: {
       {to ? (
         <Link to={to} className={className}>{body}</Link>
       ) : (
-        <a href={href} download={download} className={className}>{body}</a>
+        <a href={href} download={download} onClick={onClick} aria-busy={percent !== undefined || undefined} className={className}>
+          {body}
+          {percent !== undefined && <ProgressBar percent={percent} />}
+        </a>
       )}
     </div>
   );
@@ -588,6 +651,7 @@ export function DownloadsPage() {
   // On iOS the primary action is the web app; with no detection, the hero cues the list.
   const featured = DOWNLOAD_PLATFORMS.find((platform) => platform.os === detected);
   const heroArtifact = featured ? byOs.get(featured.os)?.[0] : undefined;
+  const heroDownload = useArtifactDownload(heroArtifact);
   // Only shown when nothing stable was ever tagged (`featuredRelease` prefers stable).
   const channel = latest ? prereleaseBadge(latest) : undefined;
 
@@ -631,6 +695,8 @@ export function DownloadsPage() {
             {heroArtifact && featured ? (
               <HeroButton
                 href={heroArtifact.url}
+                onClick={heroDownload.onClick}
+                percent={heroDownload.percent}
                 download={heroArtifact.filename}
                 icon={OS_ICON[featured.os]}
                 title={`Download for ${featured.name}`}
