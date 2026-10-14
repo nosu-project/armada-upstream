@@ -8,7 +8,9 @@ Blossom. `/downloads`, the desktop updater, Zapstore and npkg
 
 Every release Armada has published is in this form. Releases from v0.56.2 on
 were first published as an invented kind 30622 and later republished as
-NIP-82, dated to the original release; nothing reads kind 30622 any more.
+NIP-82, dated to the original release. This client reads only NIP-82, but
+desktop builds up to v0.64.13 update from kind 30622 and nothing else, so CI
+still publishes one per release (below) until most installs are past them.
 
 ## The events
 
@@ -124,6 +126,11 @@ release is addressable, replacement is whole-event rather than a tag union, and
 Nostr has no compare-and-swap, so two jobs publishing the same `d` would
 silently lose one side's assets. A tag with a `-` publishes on the `beta`
 channel.
+
+Before it, `scripts/publish-release.mjs` publishes the legacy kind-30622 event
+naming the same files, for desktop builds up to v0.64.13. Its format is
+whatever that script writes; nothing in this repository reads it. Delete the
+script and its step once few enough installs remain on those builds.
 
 `scripts/zapstore-compat.mjs` then re-signs the application and the APK asset
 for Zapstore's current client (see its header); it is skipped for prereleases.

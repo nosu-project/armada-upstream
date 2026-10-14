@@ -242,7 +242,10 @@ build and shipped a release with no desktop installers.
    skipped when `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON` isn't provisioned.
    Build and publish share one job on purpose: act's local artifact
    server round-trips a multi-file wildcard upload back as a 3-byte stub.
-3. **release** — runs `ngit release publish` with `.ngit/release.yaml`,
+3. **release** — first publishes the legacy kind-30622 release event
+   (`scripts/publish-release.mjs`), which desktop builds up to v0.64.13 update
+   from; it goes out even when a platform failed. Then it runs
+   `ngit release publish` with `.ngit/release.yaml`,
    publishing all eight files as a NIP-82 release of `buzz.armada.app` (kinds
    32267/30063/3063, also sent to the Zapstore relay; `docs/releases.md`). A
    tag with a `-` goes out on the `beta` channel. `needs: [android, desktop]`,
@@ -297,7 +300,7 @@ secrets notes.
 | `ANDROID_KEYSTORE_BASE64` | base64 of the JKS upload keystore (single line) |
 | `KEYSTORE_PASSWORD` | keystore store password |
 | `KEY_PASSWORD` | key password (**must equal** the store password — CI migrates JKS→PKCS12, which uses one password) |
-| `ZAPSTORE_BUNKER_URL` | `bunker://` URL of the NIP-46 signer that signs the Zapstore re-signs (`scripts/zapstore-compat.mjs`). |
+| `ZAPSTORE_BUNKER_URL` | `bunker://` URL of the NIP-46 signer that signs the kind-30622 release event and the Zapstore re-signs (`scripts/zapstore-compat.mjs`). |
 | `ZAPSTORE_CLIENT_KEY` | the client secret key that bunker session was established with (hex or nsec). Both halves are needed: the URL's one-time `secret=` is long spent, and this is the key the bunker actually authorized. |
 
 Optional (Google Play publish on tags, ngit-ci `release.yml`):

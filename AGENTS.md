@@ -754,8 +754,10 @@ Things to know before touching it:
 
 ## CI: Blossom failover and mirroring
 
-The nsite deploys (`deploy-nsite.yml`, `release.yml`) and the NIP-82 release
-(`ngit release publish`, `.ngit/release.yaml`) all write to the
+The nsite deploys (`deploy-nsite.yml`, `release.yml`), the legacy kind-30622
+release event (`scripts/publish-release.mjs`, kept only for desktop builds up
+to v0.64.13) and the NIP-82 release (`ngit release publish`,
+`.ngit/release.yaml`) all write to the
 Blossom servers listed in `.nsite/config.json`, and no ONE of them may be able
 to fail a run:
 
@@ -779,10 +781,12 @@ to fail a run:
   gateways read), which is why it is one run over the live set rather than a
   primary pass plus a mirror pass: the manifest the second pass republished
   would name only the mirrors.
-- `ngit release publish` uploads to every server in `release.yaml`'s
-  `blossom_servers` (the same list), needs only one confirmed copy per blob,
-  and reports incomplete replication as a warning. Most blobs are already on
-  the first server, where ngit-ci uploads run artifacts.
+- `publish-release.mjs` probes the same list, stores each artifact on the
+  first server that takes it, publishes the release, and only THEN asks the
+  rest to mirror it (BUD-04 `/mirror`) under a fixed budget — so mirroring can
+  delay a release but never block one. `ngit release publish` runs after it,
+  so its blobs are already there; ngit needs only one confirmed copy per blob
+  and reports incomplete replication as a warning.
 
 ## Conventions
 

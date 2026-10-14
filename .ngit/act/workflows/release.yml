@@ -6,13 +6,15 @@ name: Release
 #   desktop → android → release
 #
 # ── Why one workflow file ────────────────────────────────────────────────────
-# The `release` job publishes the NIP-82 software release (kinds
-# 32267/30063/3063, .ngit/release.yaml; docs/releases.md) listing all eight
-# installers, which /downloads, installed desktop builds, Zapstore and npkg
-# read. A release is ADDRESSABLE: replacement is whole-event rather than a tag
-# union, and Nostr has no compare-and-swap, so two jobs publishing the same `d`
-# silently lose one side's artifacts. Exactly one writer is therefore required,
-# and it has to run after every build.
+# The `release` job publishes two releases listing all eight installers: the
+# NIP-82 software release (kinds 32267/30063/3063, .ngit/release.yaml;
+# docs/releases.md), which /downloads, desktop builds after v0.64.13, Zapstore
+# and npkg read, and the legacy kind-30622 release, which only desktop builds
+# up to v0.64.13 update from (kept until most installs have moved past them).
+# Both are ADDRESSABLE: replacement is whole-event rather than a tag union, and
+# Nostr has no compare-and-swap, so two jobs publishing the same `d` silently
+# lose one side's artifacts. Exactly one writer is therefore required, and it has to run
+# after every build.
 #
 # This used to be two files — release.yml (Android) and desktop.yml — firing on
 # the same tag and running CONCURRENTLY (the coordinator's
@@ -76,7 +78,7 @@ name: Release
 #   KEY_PASSWORD             upload key password (== store password; PKCS12
 #                            uses a single password, so the two must match)
 #   ZAPSTORE_BUNKER_URL      bunker:// URL of the NIP-46 signer that signs the
-#                            Zapstore re-signs (scripts/zapstore-compat.mjs).
+#                            kind-30622 release event and the Zapstore re-signs.
 #   ZAPSTORE_CLIENT_KEY      the client secret key that bunker session was
 #                            established with (hex or nsec). Both halves are
 #                            needed: the URL's one-time `secret=` is long spent,
@@ -695,16 +697,18 @@ jobs:
         run: rm -f "$RUNNER_TEMP/play-service-account.json"
 
 
-  # The single writer of the NIP-82 release (docs/releases.md). `needs:` both
-  # build paths so it can name every artifact in one release — addressable,
-  # replacement is whole-event rather than a tag union, and Nostr has no
-  # compare-and-swap, so a second publisher would silently drop one side's
-  # artifacts rather than merge with them.
+  # The single writer of both release events. `needs:` both build paths so it
+  # can name every artifact in one legacy kind-30622 event and one NIP-82
+  # release (docs/releases.md) — both addressable, replacement is whole-event
+  # rather than a tag union, and Nostr has no compare-and-swap, so a second publisher would
+  # silently drop one side's artifacts rather than merge with them.
   #
-  # `always()` so the job runs past an ancestor's failure, but the release is
-  # all-or-nothing: ngit refuses a manifest file that doesn't exist and a `main`
-  # release missing one of the application's platforms, so a failed build
-  # fails the release rather than announcing a partial one.
+  # `always()` so the kind-30622 release still goes out when one platform
+  # failed, carrying whatever was built. The script refuses to publish an empty
+  # release, so a run where nothing built fails here instead of announcing a
+  # version with no downloads. The NIP-82 release is all-or-nothing: ngit
+  # refuses a manifest file that doesn't exist and a `main` release missing one
+  # of the application's platforms.
   release:
     needs: [android, desktop]
     if: ${{ always() && startsWith(github.ref, 'refs/tags/v') }}
@@ -718,18 +722,70 @@ jobs:
       # No checkout step: dependent ngit-ci jobs bind the same working tree, so
       # the sources, the node_modules the android job installed, and the
       # .release-artifacts/ both build jobs staged into are all already here.
+
+      # The legacy kind-30622 event, for desktop builds up to v0.64.13, which
+      # update from nothing else. Remove once most installs are past them.
+      - name: Publish the NIP-34 release event
+        # The only deadline this step actually has. act parses a JOB's
+        # `timeout-minutes` and merely debug-logs it — the `timeout-minutes: 30`
+        # above has never fired — while it does enforce a STEP's. v0.56.2
+        # published its release event and then failed to exit, and sat here for
+        # 40 minutes until the coordinator's run-level timeout fired; that
+        # timeout replaces every job result act has already reported with one
+        # synthetic entry, so the run lost the logs of four finished jobs to a
+        # step that had already done its work. Generous, because ~700 MB of
+        # first-time Blossom uploads legitimately take a while.
+        timeout-minutes: 25
+        env:
+          # Two halves of one NIP-46 session, both required: the bunker URL names the remote signer and its relay,
+          # the client key is what that signer already authorized.
+          NOSTR_BUNKER_URL: ${{ secrets.ZAPSTORE_BUNKER_URL }}
+          NOSTR_CLIENT_KEY: ${{ secrets.ZAPSTORE_CLIENT_KEY }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -eu
+          : "${NOSTR_BUNKER_URL:?Set the ZAPSTORE_BUNKER_URL secret.}"
+          : "${NOSTR_CLIENT_KEY:?Set the ZAPSTORE_CLIENT_KEY secret.}"
+
+          if [ ! -d .release-artifacts ]; then
+            echo "No .release-artifacts/ directory: every build job failed." >&2
+            exit 1
+          fi
+          ls -lh .release-artifacts
+
+          # Most blobs are already on Blossom — ngit-ci uploads run artifacts to
+          # the first of these servers — so this mostly hashes files and
+          # confirms hits. It uploads only what the coordinator dropped, which
+          # is why a 413 or an exhausted upload budget upstream costs a little
+          # time here rather than a missing download.
+          #
+          # All three of the client's servers (.nsite/config.json, the same
+          # list every nsite deploy uses), so an artifact that no server holds
+          # yet lands on the first live one and the others are asked to mirror
+          # it AFTER the release event is out — a dead mirror can slow the
+          # release, never block it.
+          #
+          # GITHUB_SHA is the tagged commit; the event records it because kind
+          # 30618 goes stale and a release that can't state its own provenance
+          # isn't self-sufficient.
+          BLOSSOM_SERVERS="$(node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(".nsite/config.json","utf8")).servers.join(","))')"
+          export BLOSSOM_SERVERS
+          node scripts/publish-release.mjs \
+            --version "$TAG" \
+            --commit "$GITHUB_SHA" \
+            --dir .release-artifacts
+
       - uses: danconwaydev/setup-ngit@v3
+        if: ${{ always() }}
 
       # The NIP-82 release (.ngit/release.yaml) of buzz.armada.app, which
-      # /downloads, the desktop updater, Zapstore and npkg all read.
+      # /downloads, the desktop updater, Zapstore and npkg read. Runs whether or
+      # not the kind-30622 step above succeeded: the two are read by different clients and neither should
+      # cost the other. Runs after it so the blobs are already on Blossom.
       - name: Publish the NIP-82 release
         id: nip82
-        # The only deadline this step actually has. act parses a JOB's
-        # `timeout-minutes` and merely debug-logs it, while it does enforce a
-        # STEP's; without one a publish that never exits holds the run until
-        # the coordinator's run-level timeout, which replaces every finished
-        # job's result with one synthetic entry. Generous, because ~700 MB of
-        # first-time Blossom uploads legitimately take a while.
+        if: ${{ always() }}
+        # A STEP deadline, for the reason given on the step above.
         timeout-minutes: 25
         env:
           NSYTE_BUNKER: ${{ secrets.NSYTE_BUNKER }}
@@ -755,11 +811,10 @@ jobs:
       # Until Zapstore ships purplebase/models' fix, its client takes the app's
       # first `a` tag as the release and installs the newest asset of ANY
       # platform. Re-sign the app and the APK asset so it reads them (see the
-      # script's header). Same key as the NIP-82 release, through a second
-      # session on it. Not for a prerelease, which this would make Zapstore's
-      # install.
+      # script's header). Same key as the NIP-82 release, through the 30622 one's
+      # session. Not for a prerelease, which this would make Zapstore's install.
       - name: Adapt the NIP-82 release for Zapstore
-        if: ${{ steps.nip82.outcome == 'success' && !contains(github.ref_name, '-') }}
+        if: ${{ always() && steps.nip82.outcome == 'success' && !contains(github.ref_name, '-') }}
         timeout-minutes: 10
         env:
           NOSTR_BUNKER_URL: ${{ secrets.ZAPSTORE_BUNKER_URL }}

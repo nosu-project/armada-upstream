@@ -26,9 +26,8 @@
  *   --dry-run prints the events it would sign and publishes nothing.
  *
  * Environment:
- *   NOSTR_BUNKER_URL, NOSTR_CLIENT_KEY  A NIP-46 session on the key that owns
- *                                       the app: the bunker URL and the client
- *                                       secret key it approved.
+ *   NOSTR_BUNKER_URL, NOSTR_CLIENT_KEY  The NIP-46 session that owns the app,
+ *                                       as for publish-release.mjs.
  *   RELAY_URLS                          Comma-separated. Default below.
  */
 
