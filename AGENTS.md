@@ -306,8 +306,8 @@ number doesn't exceed the previous one.
 - **Store builds rely on the section 7 additional permission in the README's
   License section** (App Store terms are the extra restrictions AGPL section 10
   forbids — this is what took VLC off the App Store). Soapbox can only grant it
-  for copyright it holds, so **no copyleft code or artwork you don't own may
-  enter a store build** unless its holder has granted the same permission.
+  for copyright it holds, so **no copyleft code you don't own may enter a
+  store build** unless its holder has granted the same permission.
 
 Android-only pieces that are simply absent on iOS, and are gated so they don't
 surface dead UI or throw: the `ArmadaNotification` background relay service
