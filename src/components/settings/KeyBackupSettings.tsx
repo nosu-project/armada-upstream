@@ -10,6 +10,7 @@ import { toast } from "@/hooks/useToast";
 import { writeClipboardText } from "@/lib/clipboard";
 import { saveNsec } from "@/lib/credentialManager";
 import { desktopSecretsStatus, isDesktop } from "@/lib/desktop";
+import { clearKeyBackupPending } from "@/lib/keyBackup";
 import { share } from "@/lib/share";
 
 import type { SecretsStatus } from "@/lib/desktop";
@@ -71,6 +72,7 @@ export function KeyBackupSettings({ nsec, pubkey }: KeyBackupSettingsProps) {
     try {
       await writeClipboardText(text);
       setCopied(which);
+      if (which === "nsec") clearKeyBackupPending(pubkey);
       setTimeout(() => setCopied(null), 2000);
     } catch {
       toast({
@@ -93,6 +95,8 @@ export function KeyBackupSettings({ nsec, pubkey }: KeyBackupSettingsProps) {
       } else {
         await saveNsec(npub, nsec);
       }
+      // Neither path reports a cancel; a deliberate backup from here counts.
+      clearKeyBackupPending(pubkey);
     } catch {
       toast({
         title: "Backup failed",

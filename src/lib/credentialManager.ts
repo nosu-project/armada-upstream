@@ -134,7 +134,7 @@ export type ExportResult =
   | { status: "failed" };
 
 /**
- * Back the key up during onboarding by a route the user can SEE happen:
+ * Back up a signup-minted key by a route the user can SEE happen:
  * Android's Credential Manager sheet, else a file. The web Credential API is
  * skipped because Chromium stores silently.
  */
@@ -181,8 +181,8 @@ export async function getNsecCredential(): Promise<NsecCredential | null> {
 }
 
 /**
- * Save to the keyring, falling back to {@link exportNsec}. Onboarding uses
- * {@link backUpNsec} instead, to gate on a visible backup.
+ * Save to the keyring, falling back to {@link exportNsec}. The signup backup
+ * reminder uses {@link backUpNsec} instead, to count only a visible backup.
  */
 export async function saveNsec(npub: string, nsec: string): Promise<void> {
   if ((await saveToKeyring(npub, nsec)) === "saved") return;

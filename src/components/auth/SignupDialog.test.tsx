@@ -1,8 +1,8 @@
 /**
  * `SignupDialog` is the in-app account-creation flow (reached from the
  * "Create account" escape hatch in `LoginScreen`, opened by `JoinButton`,
- * `LoginArea` and `GroupChat`). It mirrors the landing wizard: save the
- * minted key, then a profile step — and it applies the same fresh-account
+ * `LoginArea` and `GroupChat`). It mirrors the landing wizard: sign in with a
+ * freshly minted key at once, then a profile step — and it applies the same fresh-account
  * suppressions and onboarding flag so the post-login setup flow (`LoginSetup`,
  * including its "restore your setup" relay step, which is external-login
  * recovery UI) never fires over a brand-new signup.
@@ -10,8 +10,7 @@
  * `login.nsec` is asynchronous (adding an account while one is active is a full
  * switch: persist → hard reload). Advancing to the profile step before the
  * login is durable would render a step that requires `user`, and a rejected
- * persist would have no handler at all — for a key whose only copy the user was
- * just told to back up.
+ * persist would have no handler at all.
  */
 
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
@@ -28,6 +27,8 @@ const h = vi.hoisted(() => ({
   setOnboardingActive: vi.fn<(next: boolean) => void>(),
   seed: vi.fn<(pubkey: string, homeRelays: string[]) => void>(),
   publish: vi.fn(),
+  markKeyBackupPending: vi.fn<(pubkey: string) => void>(),
+  clearKeyBackupPending: vi.fn<(pubkey: string) => void>(),
   user: undefined as { pubkey: string } | undefined,
 }));
 
@@ -86,27 +87,12 @@ vi.mock("@/lib/relayRecoveryPrompt", () => ({
 vi.mock("@/lib/notificationSettingsAuthority", () => ({
   markNotificationSettingsReady: h.markNotificationSettingsReady,
 }));
-vi.mock("@/hooks/useToast", () => ({ toast: vi.fn() }));
-vi.mock("@/lib/clipboard", () => ({
-  writeClipboardText: vi.fn(async () => {}),
-}));
-vi.mock("@/lib/credentialManager", () => ({
-  backUpNsec: vi.fn(async () => ({ status: "cancelled" as const })),
+vi.mock("@/lib/keyBackup", () => ({
+  markKeyBackupPending: h.markKeyBackupPending,
+  clearKeyBackupPending: h.clearKeyBackupPending,
 }));
 
 import SignupDialog from "@/components/auth/SignupDialog";
-
-/**
- * Walk the wizard to a state where Continue exists. It is absent rather than
- * disabled until the key has demonstrably left the screen, and the only copy
- * affordance is the clipboard button that replaces the eye once the key is
- * revealed — so satisfying the gate is: reveal, then copy.
- */
-async function reachContinue() {
-  fireEvent.click(await screen.findByRole("button", { name: "Show key" }));
-  fireEvent.click(screen.getByRole("button", { name: "Copy key" }));
-  await screen.findByRole("button", { name: "Continue" });
-}
 
 beforeEach(() => {
   h.nsec.mockReset();
@@ -116,28 +102,16 @@ beforeEach(() => {
   h.setOnboardingActive.mockReset();
   h.seed.mockReset();
   h.publish.mockReset();
+  h.markKeyBackupPending.mockReset();
+  h.clearKeyBackupPending.mockReset();
   h.user = undefined;
 });
 
 describe("SignupDialog account creation", () => {
-  it("holds Continue back until the key has actually been backed up", async () => {
-    // The save step opens with one action. Continue is absent rather than
-    // disabled — a disabled button is a thing to try clicking and be told
-    // nothing by — and the only way to copy is to reveal the key first, which
-    // replaces the eye with a clipboard for good.
-    render(<SignupDialog isOpen onClose={vi.fn()} onComplete={vi.fn()} />);
-    await screen.findByText("save your secret key");
-
-    expect(screen.queryByRole("button", { name: "Continue" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Copy key" })).toBeNull();
-    expect(screen.getByRole("button", { name: "Save key" })).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "Show key" }));
-    expect(screen.queryByRole("button", { name: "Show key" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Continue" })).toBeNull();
-
-    fireEvent.click(screen.getByRole("button", { name: "Copy key" }));
-    expect(await screen.findByRole("button", { name: "Continue" })).toBeInTheDocument();
+  it("does nothing while closed", async () => {
+    render(<SignupDialog isOpen={false} onClose={vi.fn()} onComplete={vi.fn()} />);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(h.nsec).not.toHaveBeenCalled();
   });
 
   it("advances to the profile step only after the login has been persisted", async () => {
@@ -149,15 +123,13 @@ describe("SignupDialog account creation", () => {
     const onComplete = vi.fn();
 
     render(<SignupDialog isOpen onClose={onClose} onComplete={onComplete} />);
-    await reachContinue();
-
-    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    // Opening is the request: there is no key step to click through.
     await waitFor(() => expect(h.nsec).toHaveBeenCalledTimes(1));
 
     // The login is still in flight: the profile step renders on `user`, so
     // advancing before the login commits would blank the flow. It stays on the
-    // save step, and does not report itself finished.
-    expect(screen.getByText("save your secret key")).toBeInTheDocument();
+    // creating screen, and does not report itself finished.
+    expect(screen.getByText("creating your account…")).toBeInTheDocument();
     expect(onComplete).not.toHaveBeenCalled();
     expect(onClose).not.toHaveBeenCalled();
 
@@ -175,11 +147,8 @@ describe("SignupDialog account creation", () => {
     const onClose = vi.fn();
     const onComplete = vi.fn();
 
-    render(<SignupDialog isOpen onClose={onClose} onComplete={onComplete} />);
-    await reachContinue();
-
     h.user = { pubkey: "a".repeat(64) };
-    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    render(<SignupDialog isOpen onClose={onClose} onComplete={onComplete} />);
     await screen.findByText("set up your profile");
 
     // Skipping the profile leads to the relays; their Continue publishes the lists,
@@ -198,29 +167,28 @@ describe("SignupDialog account creation", () => {
     expect(h.setOnboardingActive).toHaveBeenLastCalledWith(false);
   });
 
-  it("does not advance when the login could not be persisted", async () => {
+  it("offers a retry when the login could not be persisted", async () => {
     // `addAndSwitchAccount` rejects when the durable login list cannot be
     // written. Advancing anyway would strand the user on a blank profile step
-    // for an account that does not exist — and the key it just made them back
-    // up is the only copy of one.
-    h.nsec.mockRejectedValue(new Error("secure storage unavailable"));
+    // for an account that does not exist.
+    h.nsec.mockRejectedValueOnce(new Error("secure storage unavailable"));
     const onClose = vi.fn();
     const onComplete = vi.fn();
 
     render(<SignupDialog isOpen onClose={onClose} onComplete={onComplete} />);
-    await reachContinue();
+    await screen.findByText("couldn't create your account");
 
-    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
-    await waitFor(() => expect(h.nsec).toHaveBeenCalledTimes(1));
-    // Give a fire-and-forget call every chance to run its continuation.
-    await new Promise((resolve) => setTimeout(resolve, 0));
-
-    expect(screen.getByText("save your secret key")).toBeInTheDocument();
     expect(onComplete).not.toHaveBeenCalled();
     expect(onClose).not.toHaveBeenCalled();
     // A failed login lowers the flag it raised, so nothing else is suppressed
-    // by a signup that never completed.
+    // by a signup that never completed, and its unused key awaits no backup.
     expect(h.setOnboardingActive).toHaveBeenLastCalledWith(false);
+    expect(h.clearKeyBackupPending).toHaveBeenCalled();
+
+    h.nsec.mockResolvedValueOnce(undefined);
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    await waitFor(() => expect(h.nsec).toHaveBeenCalledTimes(2));
+    expect(h.nsec.mock.calls[1][0]).toBe(h.nsec.mock.calls[0][0]);
   });
 
   it("opts the brand-new key out of the sync gate and the recovery prompt", async () => {
@@ -233,9 +201,6 @@ describe("SignupDialog account creation", () => {
     h.nsec.mockResolvedValue(undefined);
 
     render(<SignupDialog isOpen onClose={vi.fn()} onComplete={vi.fn()} />);
-    await reachContinue();
-
-    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
     await waitFor(() => expect(h.nsec).toHaveBeenCalledTimes(1));
 
     // The suppressions must name the account being created — the pubkey of the
@@ -246,6 +211,8 @@ describe("SignupDialog account creation", () => {
     expect(h.markRelayRecoveryPromptShown).toHaveBeenCalledWith(pubkey);
     // A minted key has no notifications document: its defaults are the policy.
     expect(h.markNotificationSettingsReady).toHaveBeenCalledWith(pubkey);
+    // Its only copy is on this device until the user backs it up.
+    expect(h.markKeyBackupPending).toHaveBeenCalledWith(pubkey);
     // The onboarding flag is raised before login so LoginSetup can't paint over
     // the profile step.
     expect(h.setOnboardingActive).toHaveBeenCalledWith(true);

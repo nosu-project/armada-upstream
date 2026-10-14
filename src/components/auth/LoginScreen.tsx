@@ -7,6 +7,7 @@ import { AlertTriangle, ChevronDown, ExternalLink, FileUp, Loader2, QrCode } fro
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ArmadaKey } from '@/components/brand/ArmadaCrest';
+import { SignupTerms } from '@/components/onboarding/SignupTerms';
 import { WizardShell } from '@/components/onboarding/WizardShell';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import {
@@ -404,6 +405,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ isOpen, onClose, onLogin, onS
                   >
                     Create account
                   </Button>
+                  <SignupTerms />
                   <div className='flex items-center gap-3'>
                     <div className='h-px flex-1 bg-border' />
                     <span className='text-xs uppercase tracking-wider text-muted-foreground'>
