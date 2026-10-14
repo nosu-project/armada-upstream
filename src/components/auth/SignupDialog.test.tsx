@@ -32,14 +32,6 @@ const h = vi.hoisted(() => ({
   user: undefined as { pubkey: string } | undefined,
 }));
 
-vi.mock("@/components/RelayListEditor", () => ({
-  RelayListEditor: ({ relays, onChange }: { relays: string[]; onChange: (r: string[]) => void }) => (
-    <div>
-      <p>{relays.join(" ")}</p>
-      <button onClick={() => onChange(["wss://mine.example"])}>Use my relay</button>
-    </div>
-  ),
-}));
 vi.mock("@/hooks/useAppContext", () => ({
   useAppContext: () => ({
     config: {
@@ -53,11 +45,6 @@ vi.mock("@/hooks/useAppContext", () => ({
 vi.mock("@/hooks/useSignupLists", () => ({
   useSignupLists: () => ({ seed: h.seed, publish: h.publish }),
 }));
-vi.mock("@/components/RelayLed", () => ({
-  RelayLed: () => null,
-  BlossomLed: () => null,
-}));
-
 vi.mock("@/components/onboarding/WizardShell", () => ({
   WizardShell: ({ children }: { children: ReactNode }) => <div>{children}</div>,
 }));
@@ -142,7 +129,7 @@ describe("SignupDialog account creation", () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
-  it("dismisses and reports complete when the relay step finishes", async () => {
+  it("publishes the default lists, dismisses and reports complete when the profile step finishes", async () => {
     h.nsec.mockResolvedValue(undefined);
     const onClose = vi.fn();
     const onComplete = vi.fn();
@@ -150,13 +137,11 @@ describe("SignupDialog account creation", () => {
     h.user = { pubkey: "a".repeat(64) };
     render(<SignupDialog isOpen onClose={onClose} onComplete={onComplete} />);
     await screen.findByText("set up your profile");
+    expect(onComplete).not.toHaveBeenCalled();
 
-    // Skipping the profile leads to the relays; their Continue publishes the lists,
+    // The profile is the last step: finishing it publishes the default lists,
     // ends onboarding, hands back to the caller, and dismisses.
     fireEvent.click(screen.getByRole("button", { name: "Skip for now" }));
-    await screen.findByText("your relays");
-    expect(onComplete).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
     expect(h.publish).toHaveBeenCalledWith(
       expect.any(String),
       expect.objectContaining({ home: ["wss://home.example"] }),
@@ -216,7 +201,7 @@ describe("SignupDialog account creation", () => {
     // The onboarding flag is raised before login so LoginSetup can't paint over
     // the profile step.
     expect(h.setOnboardingActive).toHaveBeenCalledWith(true);
-    // Home relays are seeded before login; the lists wait for the relay step.
+    // Home relays are seeded before login; the lists wait for the end.
     expect(h.seed).toHaveBeenCalledWith(pubkey, ["wss://home.example"]);
     expect(h.seed.mock.invocationCallOrder[0])
       .toBeLessThan(h.nsec.mock.invocationCallOrder[0]);

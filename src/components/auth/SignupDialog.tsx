@@ -6,7 +6,6 @@ import { ProfileStepBody } from '@/components/onboarding/ProfileStep';
 import { WizardShell } from '@/components/onboarding/WizardShell';
 import {
   CreatingAccountStepBody,
-  RelayStepBody,
   signupIdentity,
   useSignupKey,
 } from '@/components/onboarding/signupSteps';
@@ -41,10 +40,9 @@ const SignupDialog: React.FC<SignupDialogProps> = ({ isOpen, onClose, onComplete
   const signupKey = useSignupKey();
   const { config } = useAppContext();
   const signupLists = useSignupLists();
-  const [step, setStep] = useState<'create' | 'profile' | 'relays'>('create');
-  const [defaultSetup, setDefaultSetup] = useState(() => defaultSignupSetup(config.appRelays, config));
-  const [setup, setSetup] = useState(defaultSetup);
-  // The profile step's kind 0, re-sent to the relays chosen after it.
+  const [step, setStep] = useState<'create' | 'profile'>('create');
+  const [setup, setSetup] = useState(() => defaultSignupSetup(config.appRelays, config));
+  // The profile step's kind 0, re-sent to the full relay set at the end.
   const profileRef = useRef<NostrEvent | undefined>(undefined);
   // One login per attempt; `createFailed` offers the retry.
   const creatingRef = useRef(false);
@@ -63,7 +61,7 @@ const SignupDialog: React.FC<SignupDialogProps> = ({ isOpen, onClose, onComplete
       markRelayRecoveryPromptShown(identity.pubkey);
       markNotificationSettingsReady(identity.pubkey);
       markKeyBackupPending(identity.pubkey);
-      // Home relays only, so the profile step publishes there; the lists follow the relay step.
+      // Home relays only, so the profile step publishes there; the lists follow at the end.
       signupLists.seed(identity.pubkey, home);
     }
     // BEFORE login, so LoginSetup (z-[260]) never paints over the profile step (z-[255]).
@@ -85,7 +83,6 @@ const SignupDialog: React.FC<SignupDialogProps> = ({ isOpen, onClose, onComplete
     if (!isOpen) return;
     setStep('create');
     const fresh = defaultSignupSetup(config.appRelays, config);
-    setDefaultSetup(fresh);
     setSetup(fresh);
     profileRef.current = undefined;
     creatingRef.current = false;
@@ -96,7 +93,7 @@ const SignupDialog: React.FC<SignupDialogProps> = ({ isOpen, onClose, onComplete
   // Backstop for an unmount that skips finishOnboarding.
   useEffect(() => () => setOnboardingActive(false), []);
 
-  // Fresh key only: the sanctioned signup list publish. Closing accepts the lists shown.
+  // Fresh key only: the sanctioned signup list publish, of the default lists.
   const finishOnboarding = () => {
     signupLists.publish(signupKey.nsec, setup, profileRef.current);
     setOnboardingActive(false);
@@ -110,46 +107,33 @@ const SignupDialog: React.FC<SignupDialogProps> = ({ isOpen, onClose, onComplete
     return (
       <WizardShell
         index={0}
-        total={2}
+        total={0}
         stepKey="create"
         zClassName="z-[255]"
         onClose={createFailed ? onClose : undefined}
       >
         <CreatingAccountStepBody
           failed={createFailed}
-          onRetry={() => void createAccount(signupKey.nsec, defaultSetup.home)}
+          onRetry={() => void createAccount(signupKey.nsec, setup.home)}
         />
       </WizardShell>
     );
   }
 
-  // No back arrow on either: the account can't be un-created. Both wait for `user` to commit.
+  // No back arrow: the account can't be un-created. Waits for `user` to commit.
   if (step === 'profile' && user) {
     return (
-      <WizardShell index={0} total={2} stepKey="profile" zClassName="z-[255]" onClose={finishOnboarding}>
+      <WizardShell index={0} total={0} stepKey="profile" zClassName="z-[255]" onClose={finishOnboarding}>
         <ProfileStepBody
           expectedPubkey={signupKey.identity?.pubkey}
           onPublished={(event) => { profileRef.current = event; }}
-          onFinish={() => setStep('relays')}
+          onFinish={finishOnboarding}
         />
       </WizardShell>
     );
   }
 
-  if (step === 'relays' && user) {
-    return (
-      <WizardShell index={1} total={2} stepKey="relays" zClassName="z-[255]" onClose={finishOnboarding}>
-        <RelayStepBody
-          setup={setup}
-          defaults={defaultSetup}
-          onChange={setSetup}
-          onContinue={finishOnboarding}
-        />
-      </WizardShell>
-    );
-  }
-
-  // Login requested but `user` not yet committed; the save step stays rendered.
+  // Login landed but `user` not yet committed.
   return null;
 };
 

@@ -14,8 +14,7 @@ function setupHost(url: string): string {
 /**
  * One relay or media-server list as a collapsed row: its name, its first
  * entry's host and status light, and how many more it holds. Opens to the
- * list's editor. The signup wizard's relay step and Settings › Relays draw the
- * same rows with this, so the two read alike.
+ * list's editor. Settings › Relays draws its rows with this.
  */
 export function SetupListRow({
   label,

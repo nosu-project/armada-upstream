@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import type { NostrEvent } from "@nostrify/nostrify";
@@ -8,7 +8,6 @@ import { ProfileStepBody } from "@/components/onboarding/ProfileStep";
 import { WizardShell } from "@/components/onboarding/WizardShell";
 import {
   CreatingAccountStepBody,
-  RelayStepBody,
   useSignupKey,
 } from "@/components/onboarding/signupSteps";
 import { SignupTerms } from "@/components/onboarding/SignupTerms";
@@ -27,38 +26,14 @@ import { useLoginActions } from "@/hooks/useLoginActions";
 
 /**
  * Full-page account-creation wizard (Ditto-style): the minted key signs in at
- * once → profile (skippable) → relays. Backing the key up is asked for later
- * (`KeyBackupReminder`). Step bodies are shared with {@link SignupDialog}
- * (`signupSteps.tsx`); this adds the progress bar, a `/join` confirmation (whose
- * relays become the home relays) and an exit onto /discover. Lazy-loaded: the
- * landing doesn't need its deps.
+ * once → profile (skippable) → Discover, on the default relays. Backing the key
+ * up is asked for later (`KeyBackupReminder`). Step bodies are shared with
+ * {@link SignupDialog} (`signupSteps.tsx`); this adds a `/join` confirmation
+ * (whose relays become the home relays) and the exit onto /discover.
+ * Lazy-loaded: the landing doesn't need its deps.
  */
 
-const WIZARD_STEPS = ["profile", "relays"] as const;
-type WizardStep = (typeof WIZARD_STEPS)[number];
-
-/** The shared wizard chrome, positioned within this wizard's step sequence. */
-function SignupShell({ step, maxWidth, onBack, onClose, children }: {
-  step: WizardStep | "create";
-  /** Column width cap (a `max-w-*` class). Text-heavy steps go a size up. */
-  maxWidth?: "max-w-sm" | "max-w-md" | "max-w-xl";
-  onBack?: () => void;
-  onClose?: () => void;
-  children: ReactNode;
-}) {
-  return (
-    <WizardShell
-      index={step === "create" ? 0 : WIZARD_STEPS.indexOf(step)}
-      total={WIZARD_STEPS.length}
-      stepKey={step}
-      maxWidth={maxWidth}
-      onBack={onBack}
-      onClose={onClose}
-    >
-      {children}
-    </WizardShell>
-  );
-}
+type WizardStep = "create" | "profile";
 
 export interface SignupWizardProps {
   /** Leave without finishing (back off step one, close, or declining a join link). */
@@ -75,7 +50,7 @@ export function SignupWizard({ onExit }: SignupWizardProps) {
   // confirmation screen precedes key generation.
   const [join, setJoin] = useState<JoinLink | undefined>(() => peekPendingJoin());
   // `null` is the join confirmation step.
-  const [step, setStep] = useState<WizardStep | "create" | null>(() => (peekPendingJoin() ? null : "create"));
+  const [step, setStep] = useState<WizardStep | null>(() => (peekPendingJoin() ? null : "create"));
   const dismissJoin = () => {
     clearPendingJoin();
     setJoin(undefined);
@@ -85,19 +60,18 @@ export function SignupWizard({ onExit }: SignupWizardProps) {
   const creatingRef = useRef(false);
   const [createFailed, setCreateFailed] = useState(false);
   // Home relays are the join link's, else the app's; the rest follow the app defaults.
-  const [defaultSetup] = useState(() => defaultSignupSetup(join ? join.relays : config.appRelays, config));
-  const [setup, setSetup] = useState(defaultSetup);
+  const [setup] = useState(() => defaultSignupSetup(join ? join.relays : config.appRelays, config));
 
-  // Clear on any exit; it's set synchronously at login (handleContinue) to beat the race.
+  // Clear on any exit; it's set synchronously at login (createAccount) to beat the race.
   useEffect(() => () => setOnboardingActive(false), []);
 
   const signupLists = useSignupLists();
-  // The profile step's kind 0, re-sent to the relays chosen after it.
+  // The profile step's kind 0, re-sent to the full relay set at the end.
   const profileRef = useRef<NostrEvent | undefined>(undefined);
 
   // The ONE exception to never-auto-publish: a key minted moments ago has
-  // provably no existing list to overwrite. Closing counts as accepting the
-  // lists shown. Then exit onto Discover: browsing live communities beats a blank form.
+  // provably no existing list to overwrite. Closing the profile step finishes
+  // too. Then exit onto Discover: browsing live communities beats a blank form.
   const finishOnboarding = () => {
     signupLists.publish(signupKey.nsec, setup, profileRef.current);
     navigate("/discover");
@@ -123,8 +97,8 @@ export function SignupWizard({ onExit }: SignupWizardProps) {
 
     if (join) clearPendingJoin();
 
-    // Home relays only, so the profile step publishes there; the lists follow the relay step.
-    if (identity) signupLists.seed(identity.pubkey, defaultSetup.home);
+    // Home relays only, so the profile step publishes there; the lists follow at the end.
+    if (identity) signupLists.seed(identity.pubkey, setup.home);
 
     // Set BEFORE login so the first commit exposing the user already suppresses
     // the web-push opt-in and native notification step.
@@ -151,39 +125,28 @@ export function SignupWizard({ onExit }: SignupWizardProps) {
   if (step === "create") {
     return (
       // No way out mid-login: leaving would land a half-created account in the app.
-      <SignupShell
-        step="create"
+      <WizardShell
+        index={0}
+        total={0}
+        stepKey="create"
         onBack={createFailed ? onExit : undefined}
         onClose={createFailed ? onExit : undefined}
       >
         <CreatingAccountStepBody failed={createFailed} onRetry={() => void createAccount()} />
-      </SignupShell>
+      </WizardShell>
     );
   }
 
-  // No back arrow on either: the account exists now, and back would loop.
+  // No back arrow: the account exists now, and back would loop.
   if (user && step === "profile") {
     return (
-      <SignupShell step="profile" onClose={finishOnboarding}>
+      <WizardShell index={0} total={0} stepKey="profile" onClose={finishOnboarding}>
         <ProfileStepBody
           expectedPubkey={signupKey.identity?.pubkey}
           onPublished={(event) => { profileRef.current = event; }}
-          onFinish={() => setStep("relays")}
+          onFinish={finishOnboarding}
         />
-      </SignupShell>
-    );
-  }
-
-  if (user && step === "relays") {
-    return (
-      <SignupShell step="relays" onClose={finishOnboarding}>
-        <RelayStepBody
-          setup={setup}
-          defaults={defaultSetup}
-          onChange={setSetup}
-          onContinue={finishOnboarding}
-        />
-      </SignupShell>
+      </WizardShell>
     );
   }
 

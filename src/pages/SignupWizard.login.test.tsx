@@ -18,22 +18,14 @@ const h = vi.hoisted(() => ({
   toast: vi.fn(),
   seed: vi.fn(),
   publish: vi.fn(),
+  navigate: vi.fn(),
   markKeyBackupPending: vi.fn<(pubkey: string) => void>(),
   clearKeyBackupPending: vi.fn<(pubkey: string) => void>(),
   user: undefined as { pubkey: string } | undefined,
 }));
 
-vi.mock("@/components/RelayListEditor", () => ({
-  RelayListEditor: ({ relays, onChange }: { relays: string[]; onChange: (r: string[]) => void }) => (
-    <div>
-      <p>{relays.join(" ")}</p>
-      <button onClick={() => onChange(["wss://mine.example"])}>Use my relay</button>
-    </div>
-  ),
-}));
 vi.mock("@/hooks/useSignupLists", () => ({ useSignupLists: () => ({ seed: h.seed, publish: h.publish }) }));
-vi.mock("@/components/RelayLed", () => ({ RelayLed: () => null, BlossomLed: () => null }));
-vi.mock("react-router-dom", () => ({ useNavigate: () => vi.fn() }));
+vi.mock("react-router-dom", () => ({ useNavigate: () => h.navigate }));
 vi.mock("@/components/onboarding/WizardShell", () => ({
   WizardShell: ({ children }: { children: ReactNode }) => <div>{children}</div>,
 }));
@@ -79,6 +71,7 @@ beforeEach(() => {
   h.toast.mockReset();
   h.seed.mockReset();
   h.publish.mockReset();
+  h.navigate.mockReset();
   h.markKeyBackupPending.mockReset();
   h.clearKeyBackupPending.mockReset();
   h.user = undefined;
@@ -128,7 +121,7 @@ describe("SignupWizard account creation", () => {
     expect(h.nsec.mock.calls[1][0]).toBe(h.nsec.mock.calls[0][0]);
   });
 
-  it("asks for relays after the profile and publishes what is chosen", async () => {
+  it("publishes the default lists and exits onto Discover once the profile step finishes", async () => {
     h.nsec.mockImplementation(async () => {
       h.user = { pubkey: "a".repeat(64) };
     });
@@ -138,28 +131,16 @@ describe("SignupWizard account creation", () => {
     expect(h.seed).toHaveBeenCalledWith(expect.any(String), ["wss://home.example"]);
     expect(h.publish).not.toHaveBeenCalled();
 
+    // The profile is the last step: no relay screen follows.
     fireEvent.click(screen.getByRole("button", { name: "Skip for now" }));
-    await screen.findByText("your relays");
-    // Every list is one row; nothing is open until tapped.
-    for (const label of ["Home", "Messages", "Search", "Media", "Communities", "Broadcast"]) {
-      expect(screen.getByRole("button", { name: new RegExp(`^${label}`) })).toBeInTheDocument();
-    }
-    expect(screen.queryByRole("button", { name: "Use my relay" })).toBeNull();
-    // The heading's ⓘ explains relays on tap, not only on hover.
-    fireEvent.click(screen.getByRole("button", { name: "About relays" }));
-    expect((await screen.findAllByText(/Relays are servers/)).length).toBeGreaterThan(0);
-    fireEvent.click(screen.getByRole("button", { name: /^Home/ }));
-    // An open row says what it is for.
-    expect(await screen.findByText("Stores your profile, follows and settings.")).toBeInTheDocument();
-    fireEvent.click(await screen.findByRole("button", { name: "Use my relay" }));
-    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
     expect(h.publish).toHaveBeenCalledWith(
       h.nsec.mock.calls[0][0],
       expect.objectContaining({
-        home: ["wss://mine.example"],
+        home: ["wss://home.example"],
         search: ["wss://search.example"],
       }),
       undefined,
     );
+    expect(h.navigate).toHaveBeenCalledWith("/discover");
   });
 });
