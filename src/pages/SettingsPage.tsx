@@ -10,7 +10,9 @@ import {
   EyeOff,
   FileText,
   KeyRound,
+  LifeBuoy,
   Link2,
+  Mail,
   MessageSquare,
   MessageSquareLock,
   Mic,
@@ -23,6 +25,7 @@ import {
   ShieldAlert,
   ShieldCheck,
   Smile,
+  SpellCheck,
   UserCircle,
   UserX,
   Waypoints,
@@ -49,6 +52,7 @@ import { DiagnosticsSettings } from "@/components/settings/DiagnosticsSettings";
 import { KeyBackupSettings } from "@/components/settings/KeyBackupSettings";
 import { MediaPrivacySettings } from "@/components/settings/MediaPrivacySettings";
 import { MutedPeopleSettings } from "@/components/settings/MutedPeopleSettings";
+import { MutedWordsSettings } from "@/components/settings/MutedWordsSettings";
 import { ChatSearchBar } from "@/components/chat/ChatSearchBar";
 import { QuickReactionsSettings } from "@/components/settings/QuickReactionsSettings";
 import { SettingsRow } from "@/components/settings/SettingsSection";
@@ -74,7 +78,7 @@ import { useSearchRelayList } from "@/hooks/useSearchRelayList";
 import { toast } from "@/hooks/useToast";
 import { isDesktop } from "@/lib/desktop";
 import { APP_BLOSSOM_SERVERS, uploadTargets } from "@/lib/blossom";
-import { APP_RELAYS, BROADCAST_RELAYS, COMMUNITY_RELAYS, SEARCH_RELAYS } from "@/lib/platform";
+import { APP_RELAYS, BROADCAST_RELAYS, COMMUNITY_RELAYS, SEARCH_RELAYS, SUPPORT_EMAIL } from "@/lib/platform";
 import {
   getAudioProcessing,
   setAudioProcessing,
@@ -98,6 +102,7 @@ type SectionId =
   | "profile"
   | "notifications"
   | "muted"
+  | "muted-words"
   | "appearance"
   | "desktop"
   | "voice"
@@ -112,6 +117,7 @@ type SectionId =
   | "wallet"
   | "install"
   | "diagnostics"
+  | "support"
   | "danger";
 
 interface NavItem {
@@ -365,6 +371,7 @@ export function SettingsPage({
         { id: "notifications", title: "Notifications", icon: Bell },
         // The only place to unblock: blocked people appear in no other list.
         { id: "muted", title: "Blocked people", icon: UserX },
+        { id: "muted-words", title: "Muted words", icon: SpellCheck },
       );
     }
     const appItems: NavItem[] = [
@@ -403,6 +410,7 @@ export function SettingsPage({
     const groups: NavGroup[] = [
       { heading: "User settings", items: userItems },
       { heading: "App settings", items: appItems },
+      { heading: "Help", items: [{ id: "support", title: "Help & support", icon: LifeBuoy, inline: true }] },
     ];
     if (user) {
       groups.push({ heading: "Danger zone", items: [{ id: "danger", title: "Delete account", icon: AlertTriangle, inline: true }] });
@@ -444,6 +452,8 @@ export function SettingsPage({
         );
       case "muted":
         return <MutedPeopleSettings />;
+      case "muted-words":
+        return <MutedWordsSettings />;
       case "notifications":
         return (
           <SettingsRow>
@@ -945,6 +955,29 @@ export function SettingsPage({
         );
       case "diagnostics":
         return import.meta.env.VITE_PROFILE === "1" ? <DiagnosticsSettings /> : null;
+      case "support":
+        return (
+          <>
+            <Link to="/support" className={SECTION_HEADER_CLASS}>
+              <LifeBuoy className="size-4 shrink-0 text-muted-foreground" />
+              <div className="min-w-0 flex-1 space-y-0.5">
+                <div className="text-sm font-medium leading-tight">Help &amp; safety</div>
+                <div className="text-xs text-muted-foreground leading-snug">
+                  Blocking, hiding, muted words, reporting and getting help.
+                </div>
+              </div>
+            </Link>
+            <a href={`mailto:${SUPPORT_EMAIL}`} className={SECTION_HEADER_CLASS}>
+              <Mail className="size-4 shrink-0 text-muted-foreground" />
+              <div className="min-w-0 flex-1 space-y-0.5">
+                <div className="text-sm font-medium leading-tight">Contact support</div>
+                <div className="text-xs text-muted-foreground leading-snug">
+                  Report inappropriate activity or ask for help at {SUPPORT_EMAIL}.
+                </div>
+              </div>
+            </a>
+          </>
+        );
       case "danger":
         return (
           <SettingsRow
@@ -1102,6 +1135,11 @@ export function SettingsPage({
             <Link to="/privacy" className="flex items-center gap-1 hover:text-muted-foreground transition-colors">
               <Shield className="size-3" />
               Privacy
+            </Link>
+            <span aria-hidden className="text-muted-foreground/30">·</span>
+            <Link to="/support" className="flex items-center gap-1 hover:text-muted-foreground transition-colors">
+              <LifeBuoy className="size-3" />
+              Support
             </Link>
           </div>
         </div>

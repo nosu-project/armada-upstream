@@ -78,6 +78,7 @@ const RemoteLoginSuccessPage = lazy(lazyWithReload(() => import("@/pages/RemoteL
 const ServerPage = lazy(lazyWithReload(() => import("@/pages/ServerPage").then((m) => ({ default: m.ServerPage }))));
 const SettingsPage = lazy(lazyWithReload(() => import("@/pages/SettingsPage").then((m) => ({ default: m.SettingsPage }))));
 const SharePage = lazy(lazyWithReload(() => import("@/pages/SharePage").then((m) => ({ default: m.SharePage }))));
+const SupportPage = lazy(lazyWithReload(() => import("@/pages/SupportPage").then((m) => ({ default: m.SupportPage }))));
 const TermsPage = lazy(lazyWithReload(() => import("@/pages/TermsPage").then((m) => ({ default: m.TermsPage }))));
 
 /** Dispatch `/invite/<segment>`: an naddr is a Concord invite, anything else a relay (Buzz) invite. */
@@ -342,6 +343,7 @@ function AppRoutes() {
             <Route path="/downloads" element={<DownloadsPage />} />
             <Route path="/privacy" element={<PrivacyPolicyPage />} />
             <Route path="/terms" element={<TermsPage />} />
+            <Route path="/support" element={<SupportPage />} />
             <Route path="/share" element={<SharePage />} />
             {/* Callback target baked into nostrconnect:// URIs. */}
             <Route path="/remoteloginsuccess" element={<RemoteLoginSuccessPage />} />

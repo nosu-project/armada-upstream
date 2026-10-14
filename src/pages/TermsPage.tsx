@@ -1,8 +1,9 @@
 import { ArrowLeft } from "lucide-react";
+import { Link } from "react-router-dom";
 
 import { Button } from "@/components/ui/button";
 import { useBackOrHome } from "@/hooks/useBackOrHome";
-import { APP_NAME } from "@/lib/platform";
+import { APP_NAME, SUPPORT_EMAIL } from "@/lib/platform";
 
 export function TermsPage() {
   const back = useBackOrHome();
@@ -19,7 +20,7 @@ export function TermsPage() {
 
       <div className="flex-1 min-h-0 overflow-y-auto safe-area-bottom">
         <article className="max-w-2xl mx-auto px-4 sm:px-6 pb-16 pt-3 space-y-6 text-sm text-foreground/90 leading-relaxed">
-          <p className="text-xs text-muted-foreground">Last updated: August 28, 2026</p>
+          <p className="text-xs text-muted-foreground">Last updated: October 14, 2026</p>
 
           <section className="space-y-2">
             <h2 className="text-base font-bold text-foreground">What These Terms Are</h2>
@@ -77,8 +78,8 @@ export function TermsPage() {
             <ul className="list-disc list-inside space-y-1 ml-2">
               <li>
                 <strong>You</strong> can delete your own messages, instantly hide any message from your view,
-                block any user (removing their messages, reactions, and profile everywhere in the app), and
-                report any message or user.
+                block any user (removing their messages, reactions, and profile everywhere in the app), filter
+                out messages containing words you mute, and report any message or user.
               </li>
               <li>
                 <strong>Community moderators and server operators</strong> receive those reports for the spaces
@@ -132,10 +133,15 @@ export function TermsPage() {
             <p>
               To flag inappropriate activity, use the <strong>Report</strong> action available on every message
               and profile; it reaches the people who can act on it. To reach the team behind {APP_NAME} directly,
-              including to report inappropriate activity or ask about these terms, visit{" "}
-              <a href="https://soapbox.pub" className="text-primary hover:underline" target="_blank" rel="noopener noreferrer">
-                soapbox.pub
-              </a>.
+              including to report inappropriate activity or ask about these terms, email{" "}
+              <a href={`mailto:${SUPPORT_EMAIL}`} className="text-primary hover:underline">
+                {SUPPORT_EMAIL}
+              </a>{" "}
+              or visit{" "}
+              <Link to="/support" className="text-primary hover:underline">
+                Help &amp; Support
+              </Link>
+              .
             </p>
           </section>
         </article>
