@@ -1,4 +1,21 @@
-import { AppWindow, ArrowLeft, Check, Copy, Download, Globe, Laptop, RefreshCw, Smartphone, Terminal } from "lucide-react";
+import {
+  AppWindow,
+  ArrowLeft,
+  Check,
+  ChevronDown,
+  Copy,
+  Download,
+  Globe,
+  Info,
+  Laptop,
+  Package,
+  RefreshCw,
+  Share,
+  Smartphone,
+  SquarePlus,
+  TabletSmartphone,
+  Terminal,
+} from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
@@ -6,6 +23,7 @@ import { Link } from "react-router-dom";
 import { ArmadaCrest, ArmadaCrestKeyframes } from "@/components/brand/ArmadaCrest";
 import { AsciiSea } from "@/components/landing/AsciiSea";
 import { Button } from "@/components/ui/button";
+import { type PillTab, PillTabs } from "@/components/ui/pill-tabs";
 import { useBackOrHome } from "@/hooks/useBackOrHome";
 import { useReleaseArtifacts, useReleases } from "@/hooks/useReleases";
 import { toast } from "@/hooks/useToast";
@@ -24,6 +42,7 @@ import {
 import { formatBytes } from "@/lib/fileBytes";
 import { APP_NAME } from "@/lib/platform";
 import { featuredRelease, isStable, type Release, type ReleaseArtifact } from "@/lib/releases";
+import { cn } from "@/lib/utils";
 
 /**
  * The downloads deck, in the landing's visual language over the
@@ -36,7 +55,7 @@ const OS_ICON: Record<DownloadOs, LucideIcon> = {
   windows: AppWindow,
   macos: Laptop,
   android: Smartphone,
-  ios: Smartphone,
+  ios: TabletSmartphone,
 };
 
 /** A note the user needs BEFORE the download, not after it fails to open. */
@@ -44,6 +63,12 @@ const OS_CAVEAT: Partial<Record<DownloadOs, string>> = {
   macos: "Ad-hoc signed rather than notarized, so the first launch needs Control-click → Open, then Open Anyway.",
   android: "Sideloading the APK asks Android to allow installs from your browser.",
 };
+
+/** Earlier releases shown before "show all". */
+const OLDER_PREVIEW = 5;
+
+/** Opaque enough to read over the sea; the blur keeps the swell as texture. */
+const PANEL = "vessel backdrop-blur-md [--vessel-fill:hsl(var(--background)/0.86)]";
 
 /** True when the user has asked the OS to keep motion to a minimum. */
 function prefersReducedMotion() {
@@ -55,6 +80,16 @@ function displayVersion(version: string): string {
   return /^\d/.test(version) ? `v${version}` : version;
 }
 
+function displayDate(createdAt: number): string {
+  return new Date(createdAt * 1000).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+}
+
+/** Tab order; unplaceable artifacts sort last. */
+function osOrder(os: DownloadOs | undefined): number {
+  const index = DOWNLOAD_PLATFORMS.findIndex((platform) => platform.os === os);
+  return index === -1 ? DOWNLOAD_PLATFORMS.length : index;
+}
+
 /** The badge a prerelease wears; undefined for a stable release. */
 function prereleaseBadge(release: Release): string | undefined {
   if (isStable(release)) return undefined;
@@ -62,7 +97,7 @@ function prereleaseBadge(release: Release): string | undefined {
 }
 
 /**
- * The release's artifacts by platform card. `.deb`/`.flatpak` are omitted:
+ * The release's artifacts by platform. `.deb`/`.flatpak` are omitted:
  * they're served via pkg.soapbox.pub ({@link PACKAGE_MANAGERS}) but stay in
  * the release event for npkg.
  */
@@ -78,46 +113,14 @@ function groupByOs(artifacts: readonly ReleaseArtifact[] | undefined): Map<Downl
   return grouped;
 }
 
-/** The pkg.soapbox.pub install commands for a platform, if it has any. */
-function PackageManagers({ os }: { os: DownloadOs }) {
-  const managers = PACKAGE_MANAGERS.filter((manager) => manager.os === os);
-  if (managers.length === 0) return null;
-
-  return (
-    <div className="space-y-3">
-      {managers.map((manager) => (
-        <div key={manager.label} className="space-y-1.5">
-          <p className="font-mono text-xs lowercase tracking-wide text-muted-foreground">{manager.label}</p>
-          {manager.setup.map((command) => (
-            <CommandLine key={command} command={command} />
-          ))}
-          <CommandLine command={manager.install} />
-        </div>
-      ))}
-      <p className="text-xs text-muted-foreground/70 leading-relaxed">
-        Packages are republished from Nostr by{" "}
-        <a
-          href={`https://${NPKG_HOST}`}
-          target="_blank"
-          rel="noreferrer"
-          className="text-primary hover:underline"
-        >
-          {NPKG_HOST}
-        </a>
-        , which verifies each build against the hash its signed release names.
-      </p>
-    </div>
-  );
-}
-
-/** A copyable CLI command; the command scrolls so the copy button stays visible. */
-function CommandLine({ command }: { command: string }) {
+/** Copy-to-clipboard with a transient "copied" state. */
+function useCopy(text: string) {
   const [copied, setCopied] = useState(false);
   const resetTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
 
   const copy = async () => {
     try {
-      await writeClipboardText(command);
+      await writeClipboardText(text);
       setCopied(true);
       clearTimeout(resetTimer.current);
       resetTimer.current = setTimeout(() => setCopied(false), 2000);
@@ -130,157 +133,299 @@ function CommandLine({ command }: { command: string }) {
     }
   };
 
+  return { copied, copy };
+}
+
+function CopyButton({ text, label }: { text: string; label: string }) {
+  const { copied, copy } = useCopy(text);
   return (
-    <div className="flex items-center gap-1 clip-corner-lg bg-background/60 pl-2.5 pr-1">
-      <code className="min-w-0 flex-1 overflow-x-auto whitespace-pre py-1.5 font-mono text-2xs leading-relaxed text-muted-foreground">
-        <span aria-hidden="true" className="select-none text-[hsl(var(--accent2)/0.75)]">$ </span>
+    <Button
+      type="button"
+      size="icon"
+      variant="ghost"
+      onClick={copy}
+      aria-label={copied ? "Copied" : label}
+      className="size-7 touch:size-9 shrink-0 text-muted-foreground hover:text-foreground"
+    >
+      {copied ? <Check className="size-3.5 text-success" /> : <Copy className="size-3.5" />}
+    </Button>
+  );
+}
+
+/** A copyable shell line. Long URLs wrap rather than hide behind a scrollbar. */
+function CommandLine({ command }: { command: string }) {
+  return (
+    <div className="flex items-start gap-1 py-0.5">
+      <code className="min-w-0 flex-1 whitespace-pre-wrap break-all py-1.5 font-mono text-xs leading-relaxed text-foreground/85">
+        <span aria-hidden="true" className="select-none text-[hsl(var(--accent2))]">$ </span>
         {command}
       </code>
-      <Button
-        type="button"
-        size="icon"
-        variant="ghost"
-        onClick={copy}
-        aria-label={copied ? "Copied" : "Copy command"}
-        className="size-7 touch:size-9 shrink-0 text-muted-foreground hover:text-foreground"
-      >
-        {copied ? <Check className="size-3.5 text-success" /> : <Copy className="size-3.5" />}
-      </Button>
+      <CopyButton text={command} label="Copy command" />
     </div>
   );
 }
 
-/** One artifact: the button, and the shell line it needs afterwards if any. */
-function ArtifactButton({ artifact, primary }: { artifact: ReleaseArtifact; primary?: boolean }) {
-  const command = installCommand(artifact.filename);
-  return (
-    <div className="flex flex-col gap-1.5">
-      <Button
-        asChild
-        variant={primary ? "default" : "secondary"}
-        className="h-auto py-2.5 touch:py-3 justify-start text-left clip-corner-lg"
-      >
-        {/* Cross-origin `download` is ignored (Blossom); kept for same-origin mirrors. */}
-        <a href={artifact.url} download={artifact.filename}>
-          <Download className="size-4 shrink-0" />
-          <span className="flex flex-col gap-0.5 min-w-0">
-            <span className="font-medium leading-tight">
-              {artifact.label}
-              {artifact.size ? <span className="font-normal opacity-70"> · {formatBytes(artifact.size)}</span> : null}
-            </span>
-            <span className="text-xs font-normal opacity-70 leading-tight whitespace-normal break-all">
-              {artifact.filename}
-            </span>
-          </span>
-        </a>
-      </Button>
-      {command && <CommandLine command={command} />}
-    </div>
-  );
-}
-
-function TargetCard({ platform, artifacts, version, channel, featured }: {
-  platform: DownloadPlatform;
-  artifacts: ReleaseArtifact[];
-  version?: string;
-  channel?: string;
-  featured?: boolean;
+/** A terminal-styled block of commands; `tabs` swaps between alternatives. */
+function TerminalBlock({ children, tabs, copyAll }: {
+  children: React.ReactNode;
+  tabs?: React.ReactNode;
+  copyAll?: string;
 }) {
-  const Icon = OS_ICON[platform.os];
+  return (
+    <div className="clip-corner-lg bg-black/45">
+      {(tabs || copyAll) && (
+        <div className="flex items-center gap-2 bg-foreground/[0.04] px-2 py-1.5">
+          {tabs ?? <Terminal className="ml-1 size-3.5 text-muted-foreground" />}
+          {copyAll && (
+            <span className="ml-auto">
+              <CopyButton text={copyAll} label="Copy all commands" />
+            </span>
+          )}
+        </div>
+      )}
+      <div className="px-3 py-2">{children}</div>
+    </div>
+  );
+}
+
+/** A section heading inside the panel, with an optional chip. */
+function SectionLabel({ children, chip }: { children: React.ReactNode; chip?: string }) {
+  return (
+    <div className="mb-2.5 flex items-center gap-2">
+      <h3 className="font-mono text-xs lowercase tracking-wide text-muted-foreground">{children}</h3>
+      {chip && (
+        <span className="clip-corner bg-[hsl(var(--accent2)/0.12)] px-1.5 py-0.5 font-mono text-3xs lowercase tracking-wide text-[hsl(var(--accent2))]">
+          {chip}
+        </span>
+      )}
+    </div>
+  );
+}
+
+function Caveat({ children }: { children: React.ReactNode }) {
+  return (
+    <p className="flex gap-2.5 clip-corner-lg bg-amber-300/[0.07] px-3.5 py-3 text-xs leading-relaxed text-foreground/75">
+      <Info className="mt-px size-4 shrink-0 text-amber-300/90" />
+      <span>{children}</span>
+    </p>
+  );
+}
+
+/** A filled download tile: icon, label, and the line beneath it. */
+function Tile({ href, icon, title, meta, detail, external, download }: {
+  href: string;
+  icon: React.ReactNode;
+  title: string;
+  meta?: string;
+  detail: string;
+  external?: boolean;
+  download?: string;
+}) {
+  return (
+    <a
+      href={href}
+      download={download}
+      target={external ? "_blank" : undefined}
+      rel={external ? "noreferrer" : undefined}
+      className="group flex min-h-16 items-center gap-3 clip-corner-lg bg-foreground/[0.05] px-3.5 py-3 transition-colors hover:bg-foreground/[0.09] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+    >
+      <span className="flex size-9 shrink-0 items-center justify-center clip-corner bg-primary/10 text-primary transition-colors group-hover:bg-primary/20">
+        {icon}
+      </span>
+      <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <span className="text-sm font-medium leading-tight text-foreground">
+          {title}
+          {meta && <span className="font-normal text-muted-foreground"> · {meta}</span>}
+        </span>
+        <span className="break-all font-mono text-2xs leading-tight text-muted-foreground/80">{detail}</span>
+      </span>
+    </a>
+  );
+}
+
+/** One artifact, plus the shell line it needs afterwards if any. */
+function ArtifactTile({ artifact, icon, compact }: { artifact: ReleaseArtifact; icon?: LucideIcon; compact?: boolean }) {
+  const Icon = icon ?? Download;
+  const command = compact ? undefined : installCommand(artifact.filename);
+  return (
+    <div className={cn("flex flex-col gap-2", command && "sm:col-span-2")}>
+      {/* Cross-origin `download` is ignored (Blossom); kept for same-origin mirrors. */}
+      <Tile
+        href={artifact.url}
+        download={artifact.filename}
+        icon={<Icon className="size-4" />}
+        title={artifact.label}
+        meta={artifact.size ? formatBytes(artifact.size) : undefined}
+        detail={artifact.filename}
+      />
+      {command && (
+        <TerminalBlock>
+          <CommandLine command={command} />
+        </TerminalBlock>
+      )}
+    </div>
+  );
+}
+
+/** The pkg.soapbox.pub repositories for a platform, as one tabbed terminal. */
+function PackageManagers({ os }: { os: DownloadOs }) {
+  const managers = PACKAGE_MANAGERS.filter((manager) => manager.os === os);
+  const [selected, setSelected] = useState(managers[0]?.label);
+  const manager = managers.find((m) => m.label === selected) ?? managers[0];
+  if (!manager) return null;
+  const commands = [...manager.setup, manager.install];
+
+  return (
+    <section>
+      <SectionLabel chip="auto-updates">package repository</SectionLabel>
+      <TerminalBlock
+        copyAll={commands.join("\n")}
+        tabs={
+          managers.length > 1 ? (
+            <div className="flex min-w-0 flex-wrap gap-1">
+              {managers.map((m) => (
+                <button
+                  key={m.label}
+                  type="button"
+                  aria-pressed={m === manager}
+                  onClick={() => setSelected(m.label)}
+                  className={cn(
+                    "flex h-7 items-center gap-1.5 clip-corner px-2.5 font-mono text-xs transition-colors touch:h-9",
+                    m === manager
+                      ? "bg-foreground/10 text-foreground"
+                      : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
+                  )}
+                >
+                  <Package className="size-3.5 shrink-0" />
+                  {m.label}
+                </button>
+              ))}
+            </div>
+          ) : (
+            <Package className="ml-1 size-3.5 text-muted-foreground" />
+          )
+        }
+      >
+        {commands.map((command) => (
+          <CommandLine key={command} command={command} />
+        ))}
+      </TerminalBlock>
+      <p className="mt-2.5 text-xs leading-relaxed text-muted-foreground/80">
+        Republished from Nostr by{" "}
+        <a
+          href={`https://${NPKG_HOST}`}
+          target="_blank"
+          rel="noreferrer"
+          className="text-foreground/90 underline decoration-muted-foreground/30 underline-offset-4 transition-colors hover:decoration-current"
+        >
+          {NPKG_HOST}
+        </a>
+        , which verifies each build against the hash its signed release names.
+      </p>
+    </section>
+  );
+}
+
+function AndroidStores() {
+  return (
+    <section>
+      <SectionLabel chip="auto-updates">app stores</SectionLabel>
+      <div className="grid gap-2 sm:grid-cols-3">
+        {ANDROID_STORES.map((store) => (
+          <Tile
+            key={store.url}
+            href={store.url}
+            external
+            icon={<img src={store.icon} alt="" className="size-5" />}
+            title={store.label}
+            detail={store.hint}
+          />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+/** iOS: no App Store build yet; the web app (Add to Home Screen) is presented as a real install. */
+function IosInstructions({ platform }: { platform: DownloadPlatform }) {
+  const steps: { icon: LucideIcon; text: React.ReactNode }[] = [
+    { icon: Globe, text: <>Open {APP_NAME} in <strong className="text-foreground">Safari</strong></> },
+    { icon: Share, text: <>Tap the <strong className="text-foreground">Share</strong> button</> },
+    { icon: SquarePlus, text: <>Choose <strong className="text-foreground">Add to Home Screen</strong></> },
+  ];
+
+  return (
+    <section className="space-y-4">
+      <div>
+        <SectionLabel chip={platform.empty}>install the web app</SectionLabel>
+        <p className="text-sm leading-relaxed text-muted-foreground">
+          {APP_NAME} installs as a full-screen web app that lives on your Home Screen like any other.
+        </p>
+      </div>
+      <ol className="grid gap-2 sm:grid-cols-3">
+        {steps.map((step, i) => (
+          <li key={i} className="flex items-center gap-3 clip-corner-lg bg-foreground/[0.05] px-3.5 py-3 text-sm text-muted-foreground">
+            <span className="flex size-9 shrink-0 items-center justify-center clip-corner bg-primary/10 font-mono text-sm font-bold text-primary">
+              {i + 1}
+            </span>
+            <span className="leading-snug">{step.text}</span>
+          </li>
+        ))}
+      </ol>
+      <Button asChild variant="secondary" className="h-auto py-2.5 touch:py-3 clip-corner-lg">
+        <Link to="/">
+          <Globe className="size-4 shrink-0" />
+          Open {APP_NAME} in this browser
+        </Link>
+      </Button>
+    </section>
+  );
+}
+
+function PlatformPanel({ platform, artifacts }: { platform: DownloadPlatform; artifacts: ReleaseArtifact[] }) {
   const caveat = OS_CAVEAT[platform.os];
   const hasPackageManagers = PACKAGE_MANAGERS.some((manager) => manager.os === platform.os);
 
+  if (platform.os === "ios") return <IosInstructions platform={platform} />;
+
   return (
-    // Translucent so the swell shows through; the featured card is more solid.
-    <section
-      className={`clip-corner-lg p-4 space-y-3 ${featured ? "bg-background/60" : "bg-background/40"}`}
-    >
-      <header className="flex items-center gap-2">
-        <Icon className={`size-5 shrink-0 ${featured ? "text-primary" : "text-muted-foreground"}`} />
-        <h2 className="font-mono font-bold lowercase tracking-tight leading-tight">{platform.name}</h2>
-        {featured && (
-          <span className="font-mono text-3xs lowercase tracking-wide text-primary/80">your platform</span>
-        )}
-        {artifacts.length > 0 && version && (
-          <span className="ml-auto flex items-center gap-1.5 shrink-0">
-            {/* Only shown when nothing stable was ever tagged (`featuredRelease` prefers stable). */}
-            {channel && (
-              <span className="font-mono text-3xs lowercase tracking-wide text-primary/80">{channel}</span>
-            )}
-            <span className="font-mono text-xs text-muted-foreground">{version}</span>
-          </span>
-        )}
-      </header>
+    <div className="space-y-6">
+      {/* Package repos and stores lead: recommended, and the only paths that auto-update. */}
+      {hasPackageManagers && <PackageManagers os={platform.os} />}
+      {platform.os === "android" && <AndroidStores />}
 
-      {/* Package repos lead: recommended, and the only path that auto-updates. */}
-      <PackageManagers os={platform.os} />
-
-      {artifacts.length > 0 || platform.os === "android" ? (
-        <div className="space-y-2">
-          {hasPackageManagers && artifacts.length > 0 && (
-            <p className="font-mono text-xs lowercase tracking-wide text-muted-foreground">or download directly</p>
-          )}
+      {artifacts.length > 0 ? (
+        <section>
+          <SectionLabel>{hasPackageManagers || platform.os === "android" ? "or download directly" : "download"}</SectionLabel>
           <div className="grid gap-2 sm:grid-cols-2">
-          {artifacts.map((artifact, i) => (
-            <ArtifactButton key={artifact.id} artifact={artifact} primary={featured && i === 0} />
-          ))}
-          {platform.os === "android" &&
-            ANDROID_STORES.map((store) => (
-              <Button
-                key={store.url}
-                asChild
-                variant="secondary"
-                className="h-auto py-2.5 touch:py-3 justify-start text-left clip-corner-lg"
-              >
-                <a href={store.url} target="_blank" rel="noreferrer">
-                  <img src={store.icon} alt="" className="size-4 shrink-0" />
-                  <span className="flex flex-col gap-0.5 min-w-0">
-                    <span className="font-medium leading-tight">{store.label}</span>
-                    <span className="text-xs font-normal opacity-70 leading-tight whitespace-normal">{store.hint}</span>
-                  </span>
-                </a>
-              </Button>
+            {artifacts.map((artifact) => (
+              <ArtifactTile key={artifact.id} artifact={artifact} />
             ))}
           </div>
-        </div>
+        </section>
       ) : (
-        // iOS: no App Store build yet; the web app (Add to Home Screen) is presented as a real install.
-        <div className="space-y-2">
-          {platform.empty && (
-            <p className="font-mono text-xs lowercase tracking-wide text-primary/80">{platform.empty}</p>
-          )}
-          <p className="text-sm text-muted-foreground leading-relaxed">
-            {APP_NAME} already installs as a full-screen web app that lives on your Home
-            Screen like any other: open it in Safari, tap Share, then{" "}
-            <strong className="text-foreground/80">Add to Home Screen</strong>.
-          </p>
-          <Button asChild variant="secondary" className="h-auto py-2.5 touch:py-3 clip-corner-lg">
-            <Link to="/">
-              <Globe className="size-4 shrink-0" />
-              Open {APP_NAME} in this browser
-            </Link>
-          </Button>
-        </div>
+        <p className="text-sm text-muted-foreground">
+          This release has no {platform.name} build.
+        </p>
       )}
 
-      {caveat && artifacts.length > 0 && <p className="text-xs text-muted-foreground leading-relaxed">{caveat}</p>}
-    </section>
+      {caveat && artifacts.length > 0 && <Caveat>{caveat}</Caveat>}
+    </div>
   );
 }
 
-/** Placeholder cards while the relays are answering. */
-function TargetSkeleton() {
+function PanelSkeleton() {
   return (
-    <section className="clip-corner-lg bg-background/40 p-4 space-y-3">
-      <div className="flex items-center gap-2">
-        <div className="size-5 shrink-0 animate-pulse rounded bg-muted-foreground/20" />
-        <div className="h-4 w-24 animate-pulse rounded bg-muted-foreground/20" />
+    <div className="space-y-6">
+      <div className="space-y-2.5">
+        <div className="h-3 w-32 animate-pulse rounded bg-muted-foreground/20" />
+        <div className="h-28 animate-pulse clip-corner-lg bg-muted-foreground/10" />
       </div>
       <div className="grid gap-2 sm:grid-cols-2">
-        <div className="h-14 animate-pulse clip-corner-lg bg-muted-foreground/10" />
-        <div className="h-14 animate-pulse clip-corner-lg bg-muted-foreground/10" />
+        <div className="h-16 animate-pulse clip-corner-lg bg-muted-foreground/10" />
+        <div className="h-16 animate-pulse clip-corner-lg bg-muted-foreground/10" />
       </div>
-    </section>
+    </div>
   );
 }
 
@@ -288,34 +433,76 @@ function TargetSkeleton() {
 function OlderRelease({ release }: { release: Release }) {
   const [opened, setOpened] = useState(false);
   const artifacts = useReleaseArtifacts(opened ? release : undefined);
+  const badge = prereleaseBadge(release);
 
   return (
     <details
-      className="clip-corner-lg bg-background/30 px-4 py-3"
+      className="group/release"
       onToggle={(event) => { if (event.currentTarget.open) setOpened(true); }}
     >
-      <summary className="flex cursor-pointer items-center gap-2 font-mono text-sm text-muted-foreground marker:content-none hover:text-foreground">
-        <span className="font-bold">{displayVersion(release.version)}</span>
-        {prereleaseBadge(release) && (
-          <span className="font-mono text-3xs lowercase tracking-wide text-primary/70">{prereleaseBadge(release)}</span>
-        )}
-        <span className="ml-auto text-xs opacity-70">
-          {new Date(release.createdAt * 1000).toLocaleDateString()}
-        </span>
+      <summary className="flex min-h-11 cursor-pointer list-none items-center gap-3 clip-corner px-3 font-mono text-sm text-muted-foreground transition-colors marker:content-none hover:bg-foreground/[0.05] hover:text-foreground [&::-webkit-details-marker]:hidden">
+        <ChevronDown className="size-4 shrink-0 -rotate-90 transition-transform group-open/release:rotate-0 motion-reduce:transition-none" />
+        <span className="font-bold text-foreground/90">{displayVersion(release.version)}</span>
+        {badge && <span className="text-3xs lowercase tracking-wide text-primary/80">{badge}</span>}
+        <span className="ml-auto text-xs opacity-70">{displayDate(release.createdAt)}</span>
       </summary>
-      <div className="mt-3 grid gap-2 sm:grid-cols-2">
+      <div className="grid gap-2 px-1 pb-3 pt-1 sm:grid-cols-2">
         {artifacts.isPending ? (
           <>
-            <div className="h-14 animate-pulse clip-corner-lg bg-muted-foreground/10" />
-            <div className="h-14 animate-pulse clip-corner-lg bg-muted-foreground/10" />
+            <div className="h-16 animate-pulse clip-corner-lg bg-muted-foreground/10" />
+            <div className="h-16 animate-pulse clip-corner-lg bg-muted-foreground/10" />
           </>
         ) : (artifacts.data ?? [])
           .filter((artifact) => !isRepublishedPackage(artifact.filename))
+          .sort((a, b) => osOrder(a.os) - osOrder(b.os))
           .map((artifact) => (
-            <ArtifactButton key={artifact.id} artifact={artifact} />
+            <ArtifactTile
+              key={artifact.id}
+              artifact={artifact}
+              icon={artifact.os ? OS_ICON[artifact.os] : undefined}
+              compact
+            />
           ))}
       </div>
     </details>
+  );
+}
+
+function OlderReleases({ releases }: { releases: Release[] }) {
+  const [showAll, setShowAll] = useState(false);
+  const shown = showAll ? releases : releases.slice(0, OLDER_PREVIEW);
+
+  return (
+    <div className="vessel-lift">
+      <section className={cn(PANEL, "p-4 sm:p-5")}>
+        <header className="mb-2 flex items-baseline gap-2 px-1">
+          <h2 className="font-mono text-sm font-bold lowercase tracking-tight text-foreground">earlier releases</h2>
+          <span className="font-mono text-xs text-muted-foreground">{releases.length}</span>
+          <Link
+            to="/changelog"
+            className="ml-auto font-mono text-xs lowercase tracking-wide text-muted-foreground transition-colors hover:text-foreground"
+          >
+            changelog →
+          </Link>
+        </header>
+        <div className="divide-y divide-border/30">
+          {shown.map((release) => (
+            <OlderRelease key={release.id} release={release} />
+          ))}
+        </div>
+        {releases.length > OLDER_PREVIEW && (
+          <Button
+            type="button"
+            variant="ghost"
+            onClick={() => setShowAll((value) => !value)}
+            className="mt-2 w-full clip-corner-lg font-mono text-xs lowercase tracking-wide text-muted-foreground"
+          >
+            {showAll ? "show fewer" : `show all ${releases.length}`}
+            <ChevronDown className={cn("size-3.5 transition-transform", showAll && "rotate-180")} />
+          </Button>
+        )}
+      </section>
+    </div>
   );
 }
 
@@ -326,6 +513,7 @@ export function DownloadsPage() {
   const targetsRef = useRef<HTMLElement>(null);
   // Detected once: a featured card moving between renders is worse than a wrong guess.
   const detected = useMemo(() => detectCurrentOs(), []);
+  const [selectedOs, setSelectedOs] = useState<DownloadOs>(detected ?? DOWNLOAD_PLATFORMS[0].os);
 
   const releases = useReleases();
   // Newest STABLE leads, so a release candidate doesn't become everyone's download.
@@ -335,15 +523,17 @@ export function DownloadsPage() {
   const byOs = useMemo(() => groupByOs(artifacts.data), [artifacts.data]);
   const pending = releases.isPending || (!!latest && artifacts.isPending);
 
-  const platforms = useMemo(() => {
-    const ordered = [...DOWNLOAD_PLATFORMS];
-    ordered.sort((a, b) => Number(b.os === detected) - Number(a.os === detected));
-    return ordered;
-  }, [detected]);
+  const platformTabs = useMemo(
+    (): PillTab<DownloadOs>[] =>
+      DOWNLOAD_PLATFORMS.map((platform) => ({ id: platform.os, label: platform.name, icon: OS_ICON[platform.os] })),
+    [],
+  );
+  const selected = DOWNLOAD_PLATFORMS.find((platform) => platform.os === selectedOs) ?? DOWNLOAD_PLATFORMS[0];
 
   // On iOS the primary action is the web app; with no detection, the hero cues the list.
-  const featured = platforms.find((platform) => platform.os === detected);
+  const featured = DOWNLOAD_PLATFORMS.find((platform) => platform.os === detected);
   const heroArtifact = featured ? byOs.get(featured.os)?.[0] : undefined;
+  const channel = latest ? prereleaseBadge(latest) : undefined;
 
   const scrollToTargets = () => {
     targetsRef.current?.scrollIntoView({
@@ -370,27 +560,40 @@ export function DownloadsPage() {
       </Button>
 
       <div className="relative z-10">
-        <section className="mx-auto flex min-h-[100svh] max-w-xl flex-col items-center justify-center gap-8 px-6 py-16 text-center safe-area-top">
+        <section className="mx-auto flex min-h-[88svh] max-w-xl flex-col items-center justify-center gap-8 px-6 py-16 text-center safe-area-top">
           <ArmadaCrest size={130} />
-          <div className="space-y-2.5">
-            <h1 className="font-mono text-2xl font-bold lowercase tracking-tight text-foreground sm:text-3xl">
+          <div className="space-y-3">
+            <h1 className="font-mono text-3xl font-bold lowercase tracking-tight text-foreground sm:text-4xl">
               get {APP_NAME.toLowerCase()}
             </h1>
-            <p className="text-sm leading-relaxed text-muted-foreground sm:text-base">
-              The same {APP_NAME} on every deck: desktop, phone, and this browser.
-              Every build is published to Nostr and fetched by its hash, so what you
-              download is exactly what was released.
+            <p className="text-pretty text-sm leading-relaxed text-muted-foreground sm:text-base">
+              Desktop, phone or browser. Every build is published to Nostr and fetched
+              by its hash, so what you download is exactly what was released.
             </p>
           </div>
 
-          <div className="w-full max-w-sm">
+          <div className="flex w-full max-w-sm flex-col items-center">
             {heroArtifact && featured ? (
-              <Button size="lg" asChild className="h-12 w-full clip-corner-lg text-base font-medium">
-                <a href={heroArtifact.url} download={heroArtifact.filename}>
-                  <Download className="size-5" />
-                  Download for {featured.name}
-                </a>
-              </Button>
+              <>
+                <Button size="lg" asChild className="h-12 w-full clip-corner-lg text-base font-medium">
+                  <a href={heroArtifact.url} download={heroArtifact.filename}>
+                    <Download className="size-5" />
+                    Download for {featured.name}
+                  </a>
+                </Button>
+                <p className="mt-3 font-mono text-xs text-muted-foreground">
+                  {latest && displayVersion(latest.version)}
+                  {channel && <span className="text-primary/80"> {channel}</span>}
+                  <span className="text-muted-foreground/50"> · </span>
+                  {heroArtifact.label}
+                  {heroArtifact.size > 0 && (
+                    <>
+                      <span className="text-muted-foreground/50"> · </span>
+                      {formatBytes(heroArtifact.size)}
+                    </>
+                  )}
+                </p>
+              </>
             ) : featured?.os === "ios" ? (
               <Button size="lg" asChild className="h-12 w-full clip-corner-lg text-base font-medium">
                 <Link to="/">
@@ -404,9 +607,9 @@ export function DownloadsPage() {
             <button
               type="button"
               onClick={scrollToTargets}
-              className="group mt-5 flex w-full flex-col items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
+              className="group mt-6 flex w-full flex-col items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
             >
-              All platforms
+              {heroArtifact ? "Other formats & platforms" : "All platforms"}
               {/* U+2193: WGL4 core, so every system font has a glyph. */}
               <span
                 aria-hidden="true"
@@ -418,71 +621,66 @@ export function DownloadsPage() {
           </div>
         </section>
 
-        <section ref={targetsRef} className="mx-auto max-w-2xl scroll-mt-6 space-y-4 px-6 pb-12 pt-4">
-          {pending ? (
-            <>
-              <TargetSkeleton />
-              <TargetSkeleton />
-              <TargetSkeleton />
-            </>
-          ) : latest ? (
-            <>
-              {platforms.map((platform) => (
-                <TargetCard
-                  key={platform.os}
-                  platform={platform}
-                  artifacts={byOs.get(platform.os) ?? []}
-                  version={displayVersion(latest.version)}
-                  channel={prereleaseBadge(latest)}
-                  featured={platform.os === detected}
-                />
-              ))}
+        <section ref={targetsRef} className="mx-auto max-w-3xl scroll-mt-6 space-y-5 px-4 pb-12 pt-4 sm:px-6">
+          <div className="vessel-lift">
+            <div className={cn(PANEL, "p-4 sm:p-6")}>
+              <PillTabs<DownloadOs>
+                tabs={platformTabs}
+                value={selected.os}
+                onChange={setSelectedOs}
+                className="sm:w-full [&>button]:sm:flex-auto"
+              />
 
-              {older.length > 0 && (
-                <section className="space-y-2 pt-2">
-                  <h2 className="font-mono text-sm lowercase tracking-tight text-muted-foreground">
-                    earlier releases
-                  </h2>
-                  {older.map((release) => (
-                    <OlderRelease key={release.id} release={release} />
-                  ))}
-                </section>
+              {pending ? (
+                <div className="mt-6"><PanelSkeleton /></div>
+              ) : latest ? (
+                <>
+                  <header className="mb-6 mt-6 flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                    <h2 className="font-mono text-xl font-bold tracking-tight text-foreground">
+                      <span className="lowercase">{APP_NAME}</span>
+                      <span className="text-muted-foreground"> for </span>
+                      {selected.name}
+                    </h2>
+                    {selected.os !== "ios" && (
+                      <p className="font-mono text-xs text-muted-foreground">
+                        <span className="text-foreground/80">{displayVersion(latest.version)}</span>
+                        {/* Only shown when nothing stable was ever tagged (`featuredRelease` prefers stable). */}
+                        {channel && <span className="text-primary/80"> {channel}</span>}
+                        <span className="text-muted-foreground/50"> · </span>
+                        {displayDate(latest.createdAt)}
+                      </p>
+                    )}
+                  </header>
+                  <PlatformPanel platform={selected} artifacts={byOs.get(selected.os) ?? []} />
+                </>
+              ) : (
+                // No compiled-in fallback list; explain rather than render an empty page.
+                <div className="mt-6 space-y-3 py-4 text-center">
+                  <p className="font-mono text-sm lowercase tracking-tight text-foreground">no releases found</p>
+                  <p className="mx-auto max-w-md text-sm leading-relaxed text-muted-foreground">
+                    {APP_NAME}'s builds are published to Nostr relays, and none of them
+                    answered just now. This is almost always a connection problem rather
+                    than a missing release.
+                  </p>
+                  <Button
+                    variant="secondary"
+                    onClick={() => releases.refetch()}
+                    disabled={releases.isFetching}
+                    className="clip-corner-lg"
+                  >
+                    <RefreshCw className={cn("size-4", releases.isFetching && "animate-spin")} />
+                    Try again
+                  </Button>
+                </div>
               )}
+            </div>
+          </div>
 
-              <p className="text-xs text-muted-foreground/70 leading-relaxed">
-                See{" "}
-                <Link to="/changelog" className="text-primary hover:underline">
-                  the changelog
-                </Link>{" "}
-                for what shipped in each version.
-              </p>
-            </>
-          ) : (
-            // No compiled-in fallback list; explain rather than render an empty page.
-            <section className="clip-corner-lg bg-background/50 p-6 text-center space-y-3">
-              <p className="font-mono text-sm lowercase tracking-tight text-foreground">
-                no releases found
-              </p>
-              <p className="text-sm text-muted-foreground leading-relaxed">
-                {APP_NAME}'s builds are published to Nostr relays, and none of them
-                answered just now. This is almost always a connection problem rather
-                than a missing release.
-              </p>
-              <Button
-                variant="secondary"
-                onClick={() => releases.refetch()}
-                disabled={releases.isFetching}
-                className="clip-corner-lg"
-              >
-                <RefreshCw className={`size-4 ${releases.isFetching ? "animate-spin" : ""}`} />
-                Try again
-              </Button>
-            </section>
-          )}
+          {!pending && older.length > 0 && <OlderReleases releases={older} />}
         </section>
 
         {/* Sign-off: the landing's terminal prompt (`armada-caret` from the crest's keyframes). */}
-        <section className="mx-auto flex min-h-[50svh] max-w-xl flex-col items-center justify-center gap-8 px-6 py-16 text-center safe-area-bottom">
+        <section className="mx-auto flex min-h-[40svh] max-w-xl flex-col items-center justify-center gap-8 px-6 py-16 text-center safe-area-bottom">
           <p className="font-mono text-xl text-[hsl(var(--primary))] sm:text-2xl">
             <span className="text-[hsl(var(--accent2,180_90%_55%))]">$ </span>
             anchors aweigh
