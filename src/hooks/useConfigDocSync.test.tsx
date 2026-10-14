@@ -9,6 +9,12 @@ const h = vi.hoisted(() => ({
   publish: vi.fn(),
   updateConfig: vi.fn(),
   docs: {} as Record<string, unknown>,
+  notificationsReady: true,
+}));
+
+vi.mock("@/lib/notificationSettingsAuthority", () => ({
+  markNotificationSettingsReady: vi.fn(),
+  useNotificationSettingsReady: () => h.notificationsReady,
 }));
 
 vi.mock("@/hooks/useAppContext", () => ({
@@ -29,6 +35,7 @@ vi.mock("@/hooks/useSettingsDoc", () => ({
       doc: { theme: "light" },
       event: { id: "settings-v1", created_at: 1 },
       sources: [],
+      isFetched: true,
       update: h.publish,
       hasNip44Support: true,
     },
@@ -41,6 +48,7 @@ describe("useConfigDocSync automatic delivery", () => {
     h.publish.mockReset();
     h.updateConfig.mockReset();
     h.docs = {};
+    h.notificationsReady = true;
   });
 
   afterEach(() => {
@@ -149,6 +157,7 @@ describe("useConfigDocSync automatic delivery", () => {
     h.docs.dms = {
       doc: { closedDms: { peerB: remoteMarker } },
       event: { id: "dms-v1", created_at: 2 },
+      isFetched: true,
       update: h.publish,
       hasNip44Support: true,
     };
@@ -163,5 +172,40 @@ describe("useConfigDocSync automatic delivery", () => {
     // Both hides must survive: the local one (not on the incoming doc yet) and
     // the remote one. Wholesale replace drops `peerA`; a per-peer merge keeps it.
     expect(next.closedDms).toEqual({ peerA: localMarker, peerB: remoteMarker });
+  });
+
+  it("does not publish a slice before its stored document has been read", async () => {
+    h.docs.notifications = {
+      doc: null,
+      event: null,
+      sources: [],
+      isFetched: false,
+      update: h.publish,
+      hasNip44Support: true,
+    };
+    const { rerender } = renderHook(() => useConfigDocSync("notifications"));
+
+    h.config = { ...h.config, pushPrefs: { ...h.config.pushPrefs, reactions: false } };
+    rerender();
+    await act(() => vi.advanceTimersByTimeAsync(10_000));
+    expect(h.publish).not.toHaveBeenCalled();
+  });
+
+  it("does not publish notification settings an empty store has not proven absent", async () => {
+    h.notificationsReady = false;
+    h.docs.notifications = {
+      doc: null,
+      event: null,
+      sources: [],
+      isFetched: true,
+      update: h.publish,
+      hasNip44Support: true,
+    };
+    const { rerender } = renderHook(() => useConfigDocSync("notifications"));
+
+    h.config = { ...h.config, pushPrefs: { ...h.config.pushPrefs, reactions: false } };
+    rerender();
+    await act(() => vi.advanceTimersByTimeAsync(10_000));
+    expect(h.publish).not.toHaveBeenCalled();
   });
 });
