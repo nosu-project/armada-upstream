@@ -23,19 +23,14 @@ const flatpakProse = flatpakDocs.replace(/\s+/g, " ");
 
 describe("Flatpak documentation", () => {
   it("points installs at the pkg.soapbox.pub (npkg) remote", () => {
-    const addsRemote = shellBlocks.some(
+    const installsRef = shellBlocks.some(
       (commands) =>
-        commands.includes("flatpak remote-add --if-not-exists soapbox") &&
+        commands.includes("flatpak install --user") &&
         commands.includes(
-          "https://pkg.soapbox.pub/flatpak/soapbox.flatpakrepo",
+          "https://pkg.soapbox.pub/flatpak/soapbox.pub/buzz.armada.app/buzz.armada.app.flatpakref",
         ),
     );
-    expect(addsRemote).toBe(true);
-    expect(
-      shellBlocks.some((commands) =>
-        commands.includes("flatpak install soapbox buzz.armada.app"),
-      ),
-    ).toBe(true);
+    expect(installsRef).toBe(true);
     expect(flatpakProse).toContain("pkg.soapbox.pub");
   });
 

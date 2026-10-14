@@ -1,7 +1,7 @@
 /**
  * The platform side of `/downloads`: install targets, OS detection, install
  * commands and store listings. Release contents (files, hashes, URLs) come
- * from the kind-30622 event (`src/lib/releases.ts`).
+ * from the NIP-82 release events (`src/lib/releases.ts`).
  */
 
 export type DownloadOs = "linux" | "windows" | "macos" | "android" | "ios";
@@ -55,10 +55,9 @@ export const PACKAGE_MANAGERS: PackageManager[] = [
   {
     os: "linux",
     label: "Debian / Ubuntu (APT)",
+    // The .sources file carries the repo URL and its signing key inline.
     setup: [
-      "sudo install -d -m 0755 /etc/apt/keyrings",
-      `curl -fsSL https://${NPKG_HOST}/apt/key.asc | sudo tee /etc/apt/keyrings/soapbox.asc > /dev/null`,
-      `echo "deb [signed-by=/etc/apt/keyrings/soapbox.asc] https://${NPKG_HOST}/apt stable main" | sudo tee /etc/apt/sources.list.d/soapbox.list`,
+      `sudo curl -fsSL -o /etc/apt/sources.list.d/buzz.armada.app.sources https://${NPKG_HOST}/deb/soapbox.pub/buzz.armada.app/source`,
       "sudo apt update",
     ],
     install: "sudo apt install armada-desktop",
@@ -66,10 +65,9 @@ export const PACKAGE_MANAGERS: PackageManager[] = [
   {
     os: "linux",
     label: "Flatpak",
-    setup: [
-      `flatpak remote-add --if-not-exists soapbox https://${NPKG_HOST}/flatpak/soapbox.flatpakrepo`,
-    ],
-    install: "flatpak install soapbox buzz.armada.app",
+    setup: [],
+    // The flatpakref adds the `buzz.armada.app` remote and installs from it.
+    install: `flatpak install --user https://${NPKG_HOST}/flatpak/soapbox.pub/buzz.armada.app/buzz.armada.app.flatpakref`,
   },
 ];
 
@@ -94,7 +92,7 @@ export const ANDROID_STORES: AppStore[] = [
     label: "F-Droid",
     hint: "Add the Soapbox repository",
     // The npkg F-Droid repo; the link hands repo + pinned fingerprint to the F-Droid app.
-    url: `https://${NPKG_HOST}/fdroid/main/repo?fingerprint=CEA02E48815EC61244B5ECB35680B745A7A9A41A9257382F1D8BDDC14E533A17`,
+    url: `https://${NPKG_HOST}/fdroid/soapbox.pub/buzz.armada.app/repo?fingerprint=1b043939b45972c680a518799d5098dd25edcc78ddeda2c6476722ed1f571832`,
     icon: "/stores/fdroid.svg",
   },
   {

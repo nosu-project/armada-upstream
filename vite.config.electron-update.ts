@@ -1,8 +1,8 @@
 /**
  * Bundles the desktop shell's update feed into `electron/updateFeed.cjs`.
  *
- * `src/lib/desktopUpdate.ts` resolves the kind-30622 release event — the same
- * event `/downloads` renders — down to the one installer this machine can
+ * `src/lib/desktopUpdate.ts` resolves the NIP-82 release events — the same
+ * events `/downloads` renders — down to the one installer this machine can
  * self-update from. `electron/nostrUpdateProvider.js` requires this bundle and
  * wraps it in an electron-updater `Provider`; the split is what keeps the
  * event-parsing half testable by vitest with no Electron anywhere near it.

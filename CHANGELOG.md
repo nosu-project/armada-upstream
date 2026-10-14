@@ -4,6 +4,16 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.64.14] - 2026-10-13
+
+The downloads page and the desktop app's updater now read Armada's releases
+in the same standard format app stores like Zapstore use, so every past
+version, with all of its downloads, is listed in one place.
+
+### Changed
+- The downloads page and desktop updates read releases in the standard app-release format, and older versions load their downloads when expanded
+- A new default profile picture, Cyber Oni by KrakenM, replaces the sloth
+
 ## [0.64.13] - 2026-10-12
 
 Sent images now arrive with a preview that shows inline right away, and

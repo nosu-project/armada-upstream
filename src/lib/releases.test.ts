@@ -1,123 +1,177 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  ASSET_KIND,
   RELEASE_KIND,
+  artifactLabel,
   artifactOs,
   compareVersions,
   featuredRelease,
   foldReleases,
+  isStable,
+  parseAsset,
   parseRelease,
+  releaseArtifacts,
   type Release,
 } from "@/lib/releases";
 
-/** A real v0.55.3 artifact tag, hash and all. */
-const APPIMAGE = [
-  "artifact",
-  "url https://blossom.ditto.pub/aef4cd12f86e8afed97ca215ca2641b4fd12f6c1c88ea3d55769a387fffec7ef.AppImage",
-  "x aef4cd12f86e8afed97ca215ca2641b4fd12f6c1c88ea3d55769a387fffec7ef",
-  "m application/vnd.appimage",
-  "size 142871382",
-  "f linux-x86_64",
-  "filename Armada-v0.55.3.AppImage",
-  "alt Linux AppImage (x86_64)",
-];
+const PUBKEY = "781a1527055f74c1f70230f10384609b34548f8ab6a0a6caa74025827f9fdae5";
+const APPIMAGE_ID = "e1f2311e674b51e410f2a182dc0b4d4498b200396f833fb6b9884cc877b1c755";
+const APK_ID = "fc6236ca6a197c5463ad23295e9c797285d17baaa21f68d67382639d525ba767";
 
-function event(overrides: Partial<{ kind: number; tags: string[][]; content: string }> = {}) {
+/** The tags of the real 0.64.13 release, as `ngit release publish` wrote them. */
+function releaseEvent(overrides: Partial<{ kind: number; tags: string[][]; content: string }> = {}) {
   return {
     id: "a".repeat(64),
     kind: RELEASE_KIND,
-    pubkey: "781a1527055f74c1f70230f10384609b34548f8ab6a0a6caa74025827f9fdae5",
-    created_at: 1787332212,
-    content: "### Security\n- something",
+    pubkey: PUBKEY,
+    created_at: 1791789786,
+    content: "### Fixed\n- something",
     tags: [
-      ["d", "armada@v0.55.3"],
-      ["D", "armada"],
-      ["r", "refs/tags/v0.55.3"],
-      ["commit", "b2b4e840bee180905ea2b64f2be46f91e47ba6e9"],
-      ["version", "v0.55.3"],
-      ["title", "Armada v0.55.3"],
+      ["a", `32267:${PUBKEY}:buzz.armada.app`, "wss://relay.ngit.dev"],
+      ["i", "buzz.armada.app"],
+      ["version", "0.64.13"],
+      ["d", "buzz.armada.app@0.64.13"],
       ["c", "main"],
-      APPIMAGE,
+      ["e", APK_ID, "wss://relay.ngit.dev"],
+      ["e", APPIMAGE_ID, "wss://relay.ngit.dev"],
+      ["f", "android-arm64-v8a"],
       ["f", "linux-x86_64"],
+      ["commit", "9a9eb7190bee3af7c406fcf9786188726cfbcf0c"],
+    ],
+    ...overrides,
+  };
+}
+
+/** A real 0.64.13 asset. */
+function assetEvent(overrides: Partial<{ id: string; pubkey: string; tags: string[][] }> = {}) {
+  return {
+    id: APPIMAGE_ID,
+    kind: ASSET_KIND,
+    pubkey: PUBKEY,
+    created_at: 1791789780,
+    content: "",
+    tags: [
+      ["a", `32267:${PUBKEY}:buzz.armada.app`, "wss://relay.ngit.dev"],
+      ["i", "buzz.armada.app"],
+      ["m", "application/vnd.appimage"],
+      ["x", "74b21f2ef4833bf1e529d4bea1f757722d4dca0ea2e60b529baa5a5476a2663d"],
+      ["version", "0.64.13"],
+      ["url", "https://blossom.ditto.pub/74b21f2ef4833bf1e529d4bea1f757722d4dca0ea2e60b529baa5a5476a2663d"],
+      ["filename", "Armada-v0.64.13.AppImage"],
+      ["size", "147084818"],
+      ["f", "linux-x86_64"],
+      ["supported_nip", "01"],
     ],
     ...overrides,
   };
 }
 
 describe("parseRelease", () => {
-  it("reads a release and its artifacts", () => {
-    const release = parseRelease(event());
-    expect(release).toMatchObject({
-      repoId: "armada",
-      version: "v0.55.3",
-      title: "Armada v0.55.3",
+  it("reads a release and the ids of its assets", () => {
+    expect(parseRelease(releaseEvent())).toMatchObject({
+      appId: "buzz.armada.app",
+      version: "0.64.13",
       channel: "main",
-      commit: "b2b4e840bee180905ea2b64f2be46f91e47ba6e9",
+      commit: "9a9eb7190bee3af7c406fcf9786188726cfbcf0c",
+      assetIds: [APK_ID, APPIMAGE_ID],
     });
-    expect(release?.artifacts).toHaveLength(1);
-    expect(release?.artifacts[0]).toMatchObject({
-      hash: "aef4cd12f86e8afed97ca215ca2641b4fd12f6c1c88ea3d55769a387fffec7ef",
+  });
+
+  it("falls back to the d tag when i and version are absent, splitting on the last @", () => {
+    const release = parseRelease(releaseEvent({ tags: [["d", "my@app@1.2.3"], ["e", APK_ID]] }));
+    expect(release?.appId).toBe("my@app");
+    expect(release?.version).toBe("1.2.3");
+  });
+
+  it("defaults the channel to main", () => {
+    expect(parseRelease(releaseEvent({ tags: [["d", "buzz.armada.app@1.0.0"], ["e", APK_ID]] }))?.channel)
+      .toBe("main");
+  });
+
+  it("refuses anything it cannot render", () => {
+    expect(parseRelease(releaseEvent({ kind: 30622 }))).toBeUndefined();
+    // No version: it could be neither labelled nor ordered.
+    expect(parseRelease(releaseEvent({ tags: [["i", "buzz.armada.app"], ["e", APK_ID]] }))).toBeUndefined();
+    // No assets: a version with no downloads is worse than no entry at all.
+    expect(parseRelease(releaseEvent({ tags: [["d", "buzz.armada.app@1.0.0"], ["e", "not-an-id"]] })))
+      .toBeUndefined();
+  });
+});
+
+describe("parseAsset", () => {
+  it("reads an asset", () => {
+    expect(parseAsset(assetEvent())).toMatchObject({
+      id: APPIMAGE_ID,
+      hash: "74b21f2ef4833bf1e529d4bea1f757722d4dca0ea2e60b529baa5a5476a2663d",
       mime: "application/vnd.appimage",
-      size: 142871382,
-      platform: "linux-x86_64",
-      filename: "Armada-v0.55.3.AppImage",
+      size: 147084818,
+      platforms: ["linux-x86_64"],
+      filename: "Armada-v0.64.13.AppImage",
+      label: "Linux AppImage (x86_64)",
       os: "linux",
     });
   });
 
-  it("keeps the whole alt label, which contains spaces", () => {
-    // Splitting each field on every space rather than the first would truncate
-    // every human label to one word.
-    expect(parseRelease(event())?.artifacts[0].label).toBe("Linux AppImage (x86_64)");
-  });
-
-  it("falls back to the d tag when D is absent, splitting on the last @", () => {
-    const release = parseRelease(event({
-      tags: [["d", "my@repo@v1.2.3"], APPIMAGE],
-    }));
-    expect(release?.repoId).toBe("my@repo");
-    expect(release?.version).toBe("v1.2.3");
-  });
-
-  it("defaults the channel to main so an untagged release still sorts as stable", () => {
-    const release = parseRelease(event({ tags: [["d", "armada@v1.0.0"], APPIMAGE] }));
-    expect(release?.channel).toBe("main");
-  });
-
-  it("refuses anything it cannot render", () => {
-    expect(parseRelease(event({ kind: 1 }))).toBeUndefined();
-    // No version: it could be neither labelled nor ordered.
-    expect(parseRelease(event({ tags: [["D", "armada"], APPIMAGE] }))).toBeUndefined();
-    // No artifacts: a version with no downloads is worse than no card at all.
-    expect(parseRelease(event({ tags: [["d", "armada@v1.0.0"], ["version", "v1.0.0"]] }))).toBeUndefined();
-  });
-
-  it("drops an artifact missing the two fields a button needs", () => {
-    const release = parseRelease(event({
+  it("keeps every platform an APK names", () => {
+    const apk = parseAsset(assetEvent({
       tags: [
-        ["d", "armada@v1.0.0"],
-        ["version", "v1.0.0"],
-        ["D", "armada"],
-        ["artifact", "x abc", "m application/zip"],
-        APPIMAGE,
+        ["url", "https://blossom.example/x"],
+        ["filename", "Armada-v1.0.0.apk"],
+        ["f", "android-arm64-v8a"],
+        ["f", "android-armeabi-v7a"],
       ],
     }));
-    expect(release?.artifacts).toHaveLength(1);
+    expect(apk?.platforms).toEqual(["android-arm64-v8a", "android-armeabi-v7a"]);
+    expect(apk?.os).toBe("android");
+  });
+
+  it("drops an asset with no url, and names one with no filename after its url", () => {
+    expect(parseAsset(assetEvent({ tags: [["filename", "Armada.AppImage"]] }))).toBeUndefined();
+    expect(parseAsset(assetEvent({ tags: [["url", "https://files.example/Armada.AppImage"]] }))?.filename)
+      .toBe("Armada.AppImage");
+  });
+});
+
+describe("releaseArtifacts", () => {
+  const release = parseRelease(releaseEvent())!;
+
+  it("takes only assets the release names, by its own author, in its order", () => {
+    const apk = assetEvent({ id: APK_ID, tags: [["url", "https://b.example/apk"], ["filename", "Armada.apk"]] });
+    const unnamed = assetEvent({ id: "b".repeat(64) });
+    const impostor = assetEvent({ pubkey: "c".repeat(64) });
+    const artifacts = releaseArtifacts(release, [assetEvent(), unnamed, impostor, apk]);
+    expect(artifacts.map((a) => a.id)).toEqual([APK_ID, APPIMAGE_ID]);
+  });
+});
+
+describe("artifactLabel", () => {
+  it("labels each build CI publishes", () => {
+    expect(artifactLabel("Armada-v1.deb", ["linux-x86_64"])).toBe("Debian / Ubuntu package (x86_64)");
+    expect(artifactLabel("Armada-v1.flatpak", ["linux-x86_64"])).toBe("Flatpak bundle (x86_64)");
+    expect(artifactLabel("Armada-v1.exe", ["windows-x86_64"], "installer")).toBe("Windows installer (x64)");
+    expect(artifactLabel("Armada-v1-portable.exe", ["windows-x86_64"], "portable")).toBe("Windows portable (x64)");
+    expect(artifactLabel("Armada-v1-mac-arm64.zip", ["darwin-arm64"])).toBe("macOS (Apple silicon)");
+    expect(artifactLabel("Armada-v1-mac-x64.zip", ["darwin-x86_64"])).toBe("macOS (Intel)");
+    expect(artifactLabel("Armada-v1.apk", ["android-arm64-v8a", "android-armeabi-v7a"])).toBe("Android APK");
+  });
+
+  it("falls back to the filename", () => {
+    expect(artifactLabel("SHA256SUMS", [])).toBe("SHA256SUMS");
   });
 });
 
 describe("artifactOs", () => {
-  it("files each published platform token", () => {
+  it("files each NIP-82 platform id", () => {
     expect(artifactOs("linux-x86_64", "x.AppImage")).toBe("linux");
     expect(artifactOs("windows-x86_64", "x.exe")).toBe("windows");
-    expect(artifactOs("darwin-aarch64", "x.zip")).toBe("macos");
+    expect(artifactOs("darwin-arm64", "x.zip")).toBe("macos");
     expect(artifactOs("darwin-x86_64", "x.zip")).toBe("macos");
     expect(artifactOs("android-arm64-v8a", "x.apk")).toBe("android");
   });
 
-  it("falls back to the filename for a token this build doesn't know", () => {
-    // `f` is advisory: the published vocabulary is thin and still moving, so an
-    // unrecognized token must cost a grouping hint, never a download button.
+  it("falls back to the filename for an id this build doesn't know", () => {
+    // An unrecognized platform id must cost a grouping hint, never a download button.
     expect(artifactOs("linux-riscv64", "Armada.AppImage")).toBe("linux");
     expect(artifactOs("", "Armada-Setup.exe")).toBe("windows");
     expect(artifactOs("", "Armada.deb")).toBe("linux");
@@ -133,45 +187,52 @@ describe("artifactOs", () => {
 describe("compareVersions", () => {
   it("orders numerically, not lexically", () => {
     // The whole reason this exists: "0.9.0" > "0.55.3" as strings.
-    expect(compareVersions("v0.55.3", "v0.9.0")).toBeLessThan(0);
+    expect(compareVersions("0.55.3", "0.9.0")).toBeLessThan(0);
     expect([...["v0.9.0", "v0.55.3", "v0.10.1"]].sort(compareVersions))
       .toEqual(["v0.55.3", "v0.10.1", "v0.9.0"]);
   });
 
   it("ranks a release above its own prereleases", () => {
-    expect(compareVersions("v1.2.3", "v1.2.3-rc.1")).toBeLessThan(0);
-    expect(compareVersions("v1.2.3-rc.2", "v1.2.3-rc.1")).toBeLessThan(0);
+    expect(compareVersions("1.2.3", "1.2.3-rc.1")).toBeLessThan(0);
+    expect(compareVersions("1.2.3-rc.2", "1.2.3-rc.1")).toBeLessThan(0);
+  });
+});
+
+const rel = (version: string, channel = "main", createdAt = 1, id = version): Release => ({
+  id,
+  pubkey: "p",
+  createdAt,
+  appId: "buzz.armada.app",
+  version,
+  channel,
+  commit: undefined,
+  notes: "",
+  assetIds: [],
+});
+
+describe("isStable", () => {
+  it("requires the main channel and a version with no prerelease suffix", () => {
+    expect(isStable(rel("1.2.0"))).toBe(true);
+    expect(isStable(rel("1.3.0-rc.1", "beta"))).toBe(false);
+    // ngit defaults the channel to main, so a prerelease tag published without
+    // `--channel` must still not reach stable installs.
+    expect(isStable(rel("1.3.0-rc.1", "main"))).toBe(false);
   });
 });
 
 describe("featuredRelease", () => {
-  const rel = (version: string, channel: string): Release => ({
-    id: version,
-    pubkey: "p",
-    createdAt: 1,
-    repoId: "armada",
-    version,
-    title: version,
-    channel,
-    commit: undefined,
-    notes: "",
-    artifacts: [],
-  });
-
   it("skips a prerelease that sorts above the newest stable", () => {
-    // v1.3.0-rc.1 is genuinely newer than v1.2.0, so the head of the list is a
+    // 1.3.0-rc.1 is genuinely newer than 1.2.0, so the head of the list is a
     // release candidate. Featuring it would hand every visitor an rc build.
-    const featured = featuredRelease([rel("v1.3.0-rc.1", "rc"), rel("v1.2.0", "main")]);
-    expect(featured?.version).toBe("v1.2.0");
+    expect(featuredRelease([rel("1.3.0-rc.1", "beta"), rel("1.2.0")])?.version).toBe("1.2.0");
   });
 
   it("takes the newest stable when the list leads with one", () => {
-    expect(featuredRelease([rel("v1.2.0", "main"), rel("v1.1.0", "main")])?.version).toBe("v1.2.0");
+    expect(featuredRelease([rel("1.2.0"), rel("1.1.0")])?.version).toBe("1.2.0");
   });
 
   it("falls back to a prerelease when nothing stable was ever tagged", () => {
-    expect(featuredRelease([rel("v0.1.0-rc.2", "rc"), rel("v0.1.0-rc.1", "rc")])?.version)
-      .toBe("v0.1.0-rc.2");
+    expect(featuredRelease([rel("0.1.0-rc.2", "beta"), rel("0.1.0-rc.1", "beta")])?.version).toBe("0.1.0-rc.2");
   });
 
   it("has nothing to offer for an empty list", () => {
@@ -180,26 +241,13 @@ describe("featuredRelease", () => {
 });
 
 describe("foldReleases", () => {
-  const at = (version: string, createdAt: number, id: string): Release => ({
-    id,
-    pubkey: "p",
-    createdAt,
-    repoId: "armada",
-    version,
-    title: version,
-    channel: "main",
-    commit: undefined,
-    notes: "",
-    artifacts: [],
-  });
-
   it("keeps the newest event per version and sorts newest version first", () => {
     const folded = foldReleases([
-      at("v1.0.0", 100, "old"),
-      at("v1.0.0", 200, "republished"),
-      at("v1.1.0", 150, "next"),
+      rel("1.0.0", "main", 100, "old"),
+      rel("1.0.0", "main", 200, "republished"),
+      rel("1.1.0", "main", 150, "next"),
     ]);
-    expect(folded.map((r) => r.version)).toEqual(["v1.1.0", "v1.0.0"]);
-    expect(folded.find((r) => r.version === "v1.0.0")?.id).toBe("republished");
+    expect(folded.map((r) => r.version)).toEqual(["1.1.0", "1.0.0"]);
+    expect(folded.find((r) => r.version === "1.0.0")?.id).toBe("republished");
   });
 });

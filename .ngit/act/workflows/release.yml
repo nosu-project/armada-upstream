@@ -7,12 +7,13 @@ name: Release
 #
 # ── Why one workflow file ────────────────────────────────────────────────────
 # The `release` job publishes two releases listing all eight installers: the
-# kind-30622 NIP-34 repository release (docs/releases.md), which installed
-# desktop builds update from, and the NIP-82 software release (kinds
-# 32267/30063/3063, .ngit/release.yaml), which Zapstore reads. Both are
-# ADDRESSABLE: replacement is whole-event rather than a tag union, and Nostr
-# has no compare-and-swap, so two jobs publishing the same `d` silently lose one
-# side's artifacts. Exactly one writer is therefore required, and it has to run
+# NIP-82 software release (kinds 32267/30063/3063, .ngit/release.yaml;
+# docs/releases.md), which /downloads, desktop builds after v0.64.13, Zapstore
+# and npkg read, and the legacy kind-30622 release, which only desktop builds
+# up to v0.64.13 update from (kept until most installs have moved past them).
+# Both are ADDRESSABLE: replacement is whole-event rather than a tag union, and
+# Nostr has no compare-and-swap, so two jobs publishing the same `d` silently
+# lose one side's artifacts. Exactly one writer is therefore required, and it has to run
 # after every build.
 #
 # This used to be two files — release.yml (Android) and desktop.yml — firing on
@@ -261,8 +262,8 @@ jobs:
           fi
 
       # The bundle is unsigned: npkg (pkg.soapbox.pub) is the distribution
-      # channel, and it hash-verifies the bundle against the signed kind-30622
-      # release event and re-signs its own OSTree summary — so a signature here
+      # channel, and it hash-verifies the bundle against the signed NIP-82
+      # release and re-signs its own OSTree summary — so a signature here
       # would be discarded. There is no release GPG key any more.
       - name: Build Flatpak bundle
         run: cd electron && npm run dist:flatpak
@@ -697,9 +698,9 @@ jobs:
 
 
   # The single writer of both release events. `needs:` both build paths so it
-  # can name every artifact in one kind-30622 event (docs/releases.md) and one
-  # NIP-82 release — both addressable, replacement is whole-event rather than a
-  # tag union, and Nostr has no compare-and-swap, so a second publisher would
+  # can name every artifact in one legacy kind-30622 event and one NIP-82
+  # release (docs/releases.md) — both addressable, replacement is whole-event
+  # rather than a tag union, and Nostr has no compare-and-swap, so a second publisher would
   # silently drop one side's artifacts rather than merge with them.
   #
   # `always()` so the kind-30622 release still goes out when one platform
@@ -721,6 +722,9 @@ jobs:
       # No checkout step: dependent ngit-ci jobs bind the same working tree, so
       # the sources, the node_modules the android job installed, and the
       # .release-artifacts/ both build jobs staged into are all already here.
+
+      # The legacy kind-30622 event, for desktop builds up to v0.64.13, which
+      # update from nothing else. Remove once most installs are past them.
       - name: Publish the NIP-34 release event
         # The only deadline this step actually has. act parses a JOB's
         # `timeout-minutes` and merely debug-logs it — the `timeout-minutes: 30`
@@ -775,8 +779,8 @@ jobs:
         if: ${{ always() }}
 
       # The NIP-82 release (.ngit/release.yaml) of buzz.armada.app, which
-      # Zapstore reads. Runs whether or not the kind-30622 step above
-      # succeeded: the two are read by different clients and neither should
+      # /downloads, the desktop updater, Zapstore and npkg read. Runs whether or
+      # not the kind-30622 step above succeeded: the two are read by different clients and neither should
       # cost the other. Runs after it so the blobs are already on Blossom.
       - name: Publish the NIP-82 release
         id: nip82
@@ -794,8 +798,12 @@ jobs:
           # The checkout's remote is the coordinator's clone, so name the
           # repository. The checkout has the tagged commit but not the tag
           # itself, so the version and commit are given rather than found.
-          # Version without the "v", continuing buzz.armada.app@X.Y.Z.
-          ngit release publish "${TAG#v}" --defaults \
+          # Version without the "v", continuing buzz.armada.app@X.Y.Z. ngit
+          # defaults the channel to main, which would offer a prerelease tag to
+          # every stable install.
+          channel=main
+          case "$TAG" in *-*) channel=beta ;; esac
+          ngit release publish "${TAG#v}" --defaults --channel "$channel" \
             --repo nostr://npub10qdp2fc9ta6vraczxrcs8prqnv69fru2k6s2dj48gqjcylulmtjsg9arpj/relay.ngit.dev/armada \
             --commit "$GITHUB_SHA" \
             --nbunksec-file "$RUNNER_TEMP/nbunksec"
@@ -804,9 +812,9 @@ jobs:
       # first `a` tag as the release and installs the newest asset of ANY
       # platform. Re-sign the app and the APK asset so it reads them (see the
       # script's header). Same key as the NIP-82 release, through the 30622 one's
-      # session.
+      # session. Not for a prerelease, which this would make Zapstore's install.
       - name: Adapt the NIP-82 release for Zapstore
-        if: ${{ always() && steps.nip82.outcome == 'success' }}
+        if: ${{ always() && steps.nip82.outcome == 'success' && !contains(github.ref_name, '-') }}
         timeout-minutes: 10
         env:
           NOSTR_BUNKER_URL: ${{ secrets.ZAPSTORE_BUNKER_URL }}

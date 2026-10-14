@@ -200,9 +200,8 @@ After pushing, tell the user:
 - That CI will build and publish the artifacts: ngit-ci results and artifacts
   appear on gitworkshop.dev against the tagged commit, the AAB is published to
   Google Play (skipped if the Play service-account secret isn't provisioned),
-  and every installer is named by a kind-30622 release event, which is what
-  `/downloads` reads, and by a NIP-82 release of `buzz.armada.app`, which is
-  what Zapstore reads
+  and every installer is named by a NIP-82 release of `buzz.armada.app`,
+  which `/downloads`, the desktop updater, Zapstore and npkg all read
 - That the **macOS** `.dmg` and the GitLab Release/package links would come from
   the GitLab mirror pipeline, but we do NOT push to GitLab — the maintainer
   handles GitLab manually, if at all
@@ -243,16 +242,18 @@ build and shipped a release with no desktop installers.
    skipped when `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON` isn't provisioned.
    Build and publish share one job on purpose: act's local artifact
    server round-trips a multi-file wildcard upload back as a 3-byte stub.
-3. **release** — publishes the kind-30622 NIP-34 release event naming every
-   artifact by hash (`docs/releases.md`), uploading to Blossom only the blobs
-   ngit-ci's own artifact channel dropped. `needs: [android, desktop]`, so it is
-   the single writer of an addressable event that has no compare-and-swap. npkg
-   (`pkg.soapbox.pub`) then reads that event and rebuilds the apt/flatpak/fdroid
-   repositories from the `.deb`/`.flatpak`/`.apk` it names. It then runs
-   `ngit release publish` with `.ngit/release.yaml`, publishing the same eight
-   files as a NIP-82 release of `buzz.armada.app` (kinds 32267/30063/3063,
-   also sent to the Zapstore relay). That one is all-or-nothing: a missing
-   artifact fails it while the kind-30622 event still goes out. Last,
+3. **release** — first publishes the legacy kind-30622 release event
+   (`scripts/publish-release.mjs`), which desktop builds up to v0.64.13 update
+   from; it goes out even when a platform failed. Then it runs
+   `ngit release publish` with `.ngit/release.yaml`,
+   publishing all eight files as a NIP-82 release of `buzz.armada.app` (kinds
+   32267/30063/3063, also sent to the Zapstore relay; `docs/releases.md`). A
+   tag with a `-` goes out on the `beta` channel. `needs: [android, desktop]`,
+   so it is the single writer of an addressable event that has no
+   compare-and-swap. It is all-or-nothing: a missing artifact fails it. npkg
+   (`pkg.soapbox.pub`) then reads the release and rebuilds the
+   apt/flatpak/fdroid repositories from the `.deb`/`.flatpak`/`.apk` it names.
+   Last, for stable tags only,
    `scripts/zapstore-compat.mjs` re-signs the app event and the APK asset so
    Zapstore's current client finds the release notes and installs the APK
    rather than a desktop build (see its header).

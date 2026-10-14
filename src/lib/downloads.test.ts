@@ -99,9 +99,11 @@ describe("package repositories (pkg.soapbox.pub / npkg)", () => {
       const lines = [...manager.setup, manager.install].join("\n");
       expect(lines).toContain("pkg.soapbox.pub");
     }
-    // The flatpak path installs from the soapbox remote, not a local bundle.
+    // The flatpak path installs from npkg's per-app flatpakref, not a local bundle.
     const flatpak = linux.find((manager) => manager.label === "Flatpak");
-    expect(flatpak?.install).toBe("flatpak install soapbox buzz.armada.app");
+    expect(flatpak?.install).toBe(
+      "flatpak install --user https://pkg.soapbox.pub/flatpak/soapbox.pub/buzz.armada.app/buzz.armada.app.flatpakref",
+    );
   });
 
   it("lists the npkg F-Droid repository among the Android sources", () => {

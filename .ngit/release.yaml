@@ -67,8 +67,7 @@ publication:
   # The application was Android-only under zsp; the desktop builds add their
   # platforms to it.
   add_application_platforms: true
-# Named as the build jobs stage them. Platform ids are NIP-82's (darwin-arm64),
-# not kind 30622's (darwin-aarch64).
+# Named as the build jobs stage them.
 assets:
   # Package, version code, certificate and ABIs are read from the APK itself.
   - file: .release-artifacts/Armada-v{version}.apk
