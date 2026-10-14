@@ -405,7 +405,6 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ isOpen, onClose, onLogin, onS
                   >
                     Create account
                   </Button>
-                  <SignupTerms />
                   <div className='flex items-center gap-3'>
                     <div className='h-px flex-1 bg-border' />
                     <span className='text-xs uppercase tracking-wider text-muted-foreground'>
@@ -520,6 +519,9 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ isOpen, onClose, onLogin, onS
                   {isLoading ? 'Logging in…' : 'Log in'}
                 </Button>
               </form>
+
+              {/* Covers every method above: signer app, extension, key and Create account. */}
+              <SignupTerms action={joinMode ? 'continuing' : 'logging in'} />
             </>
           )}
         </div>
