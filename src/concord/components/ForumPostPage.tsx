@@ -14,6 +14,7 @@ import { useAndroidBack } from "@/hooks/useAndroidBack";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useHiddenMessages } from "@/hooks/useHiddenMessages";
+import { useMutedWordFilter } from "@/hooks/useMutedWords";
 import { useMessagePermalink } from "@/hooks/useMessagePermalink";
 import { useMutedPubkeys } from "@/hooks/useMuteList";
 import { cn } from "@/lib/utils";
@@ -70,14 +71,16 @@ export function ForumPostPage({
   // Comments bypass the timeline's mute/hide filter, so filter here.
   const { mutedPubkeys, ready: mutesReady } = useMutedPubkeys();
   const { hiddenIds } = useHiddenMessages();
+  const mutedWord = useMutedWordFilter();
   const comments = useMemo(() => {
     const all = threadRepliesFor?.(root.id) ?? [];
     const dropMuted = mutesReady && mutedPubkeys.size > 0;
-    if (!dropMuted && hiddenIds.size === 0) return all;
+    if (!dropMuted && hiddenIds.size === 0 && !mutedWord) return all;
     return all.filter(
-      (reply) => !hiddenIds.has(reply.id) && (!dropMuted || !mutedPubkeys.has(reply.pubkey)),
+      (reply) => !hiddenIds.has(reply.id) && !mutedWord?.(reply)
+        && (!dropMuted || !mutedPubkeys.has(reply.pubkey)),
     );
-  }, [threadRepliesFor, root.id, mutedPubkeys, mutesReady, hiddenIds]);
+  }, [threadRepliesFor, root.id, mutedPubkeys, mutesReady, hiddenIds, mutedWord]);
   const tree = useMemo(() => buildCommentTree(root.id, comments), [root.id, comments]);
   // Reading order, walked by "edit last" and permalinks.
   const ordered = useMemo(() => [root, ...flattenCommentTree(tree)], [root, tree]);
