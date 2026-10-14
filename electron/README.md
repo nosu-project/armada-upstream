@@ -366,16 +366,15 @@ The published Flatpak comes from **pkg.soapbox.pub**, run by
 NIP-82 releases (`docs/releases.md`), downloads the `.flatpak` bundle
 from Blossom, verifies its bytes against the `x` sha256 the signed asset
 event declares, imports it into its own OSTree repository, and re-signs the summary
-with its own key. Users add one remote and install:
+with its own key. Users install from its flatpakref, which adds the remote too:
 
 ```sh
-flatpak remote-add --if-not-exists soapbox \
-  https://pkg.soapbox.pub/flatpak/soapbox.flatpakrepo
-flatpak install soapbox buzz.armada.app
+flatpak install --user \
+  https://pkg.soapbox.pub/flatpak/soapbox.pub/buzz.armada.app/buzz.armada.app.flatpakref
 ```
 
 That is a normal remote-tracked install, so `flatpak update` upgrades the whole
-app — shell, native modules and web bundle — from the soapbox remote.
+app — shell, native modules and web bundle — from the `buzz.armada.app` remote.
 
 The same `.flatpak` bundle is also named in the release and rendered by
 `/downloads` for a direct sideload:
