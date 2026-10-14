@@ -1,12 +1,19 @@
-import { ArrowLeft, Check, ChevronDown, Copy, Download, Globe, Info, RefreshCw } from "lucide-react";
+import { ArrowLeft, ArrowUpRight, Check, ChevronDown, Copy, Download, Globe, Info, RefreshCw } from "lucide-react";
 import { type ComponentType, type ReactNode, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { ArmadaCrest, ArmadaCrestKeyframes } from "@/components/brand/ArmadaCrest";
-import { AndroidMark, AppleMark, IosMark, LinuxMark, WindowsMark } from "@/components/brand/PlatformMarks";
+import {
+  AndroidMark,
+  AppImageMark,
+  AppleMark,
+  DebianMark,
+  FlatpakMark,
+  LinuxMark,
+  WindowsMark,
+} from "@/components/brand/PlatformMarks";
 import { AsciiSea } from "@/components/landing/AsciiSea";
 import { Button } from "@/components/ui/button";
-import { type PillTab, PillTabs } from "@/components/ui/pill-tabs";
 import { useBackOrHome } from "@/hooks/useBackOrHome";
 import { useReleaseArtifacts, useReleases } from "@/hooks/useReleases";
 import { toast } from "@/hooks/useToast";
@@ -39,8 +46,35 @@ const OS_ICON: Record<DownloadOs, Icon> = {
   windows: WindowsMark,
   macos: AppleMark,
   android: AndroidMark,
-  ios: IosMark,
+  ios: AppleMark,
 };
+
+/** Picker labels: every one stays visible, so they must fit a fifth of a phone. */
+const SHORT_NAME: Record<DownloadOs, string> = {
+  linux: "Linux",
+  windows: "Windows",
+  macos: "macOS",
+  android: "Android",
+  ios: "iPhone",
+};
+
+/** Package-manager marks, keyed by `PackageManager.label`. */
+const METHOD_ICON: Record<string, Icon> = {
+  "Debian / Ubuntu (APT)": DebianMark,
+  Flatpak: FlatpakMark,
+};
+
+/**
+ * An artifact's name within its platform's tab: "Windows installer (x64)"
+ * becomes "Installer" over "x64", "macOS (Intel)" becomes "Intel".
+ */
+function artifactName(artifact: ReleaseArtifact): { title: string; detail?: string } {
+  const match = /^(.*?)\s*\(([^)]+)\)$/.exec(artifact.label);
+  const base = (match ? match[1] : artifact.label).replace(/^(Windows|Linux|macOS|Android)\s*/, "");
+  const paren = match?.[2];
+  if (!base) return { title: paren ?? artifact.label };
+  return { title: base.charAt(0).toUpperCase() + base.slice(1), detail: paren };
+}
 
 /** A note the user needs BEFORE the download, not after it fails to open. */
 const OS_CAVEAT: Partial<Record<DownloadOs, string>> = {
@@ -141,77 +175,119 @@ function CommandBlock({ commands }: { commands: string[] }) {
   );
 }
 
-/** Small segmented control for choosing between install methods. */
+/** Install-method chooser: each option is a filled chip with its mark. */
 function Segments<T extends string>({ options, value, onChange }: {
-  options: readonly { id: T; label: string }[];
+  options: readonly { id: T; label: string; icon: Icon }[];
   value: T;
   onChange: (id: T) => void;
 }) {
   return (
-    <div className="flex flex-wrap gap-1">
-      {options.map((option) => (
-        <button
-          key={option.id}
-          type="button"
-          aria-pressed={option.id === value}
-          onClick={() => onChange(option.id)}
-          className={cn(
-            "h-8 clip-corner px-3 text-sm transition-colors touch:h-11",
-            option.id === value
-              ? "bg-foreground/10 text-foreground"
-              : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
-          )}
-        >
-          {option.label}
-        </button>
-      ))}
+    <div className="flex flex-wrap gap-2">
+      {options.map((option) => {
+        const OptionIcon = option.icon;
+        const active = option.id === value;
+        return (
+          <button
+            key={option.id}
+            type="button"
+            aria-pressed={active}
+            onClick={() => onChange(option.id)}
+            className={cn(
+              "flex h-10 items-center gap-2 clip-corner-lg px-3.5 text-sm font-medium transition-colors touch:h-11",
+              active
+                ? "bg-primary/20 text-foreground"
+                : "bg-foreground/[0.05] text-muted-foreground hover:bg-foreground/[0.09] hover:text-foreground",
+            )}
+          >
+            <OptionIcon className={cn("size-4 shrink-0", active && "text-primary")} />
+            {option.label}
+          </button>
+        );
+      })}
     </div>
   );
 }
 
-/** A filled link tile: icon, name, and an optional muted trailing note. */
-function Tile({ href, icon, title, note, external, download, primary }: {
-  href: string;
+/** A filled link tile: an icon well, a name over a detail line, and a trailing cue. */
+function Tile({ href, to, icon, title, detail, external, download, primary }: {
+  href?: string;
+  /** An in-app route, followed by the router rather than a page load. */
+  to?: string;
   icon: ReactNode;
   title: string;
-  note?: string;
+  detail?: string;
   external?: boolean;
   download?: string;
   primary?: boolean;
 }) {
+  const Cue = external || to ? ArrowUpRight : Download;
+  const className = cn(
+    "group flex min-h-[4.5rem] items-center gap-3.5 clip-corner-lg px-4 py-3 transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+    primary
+      ? "bg-primary text-primary-foreground hover:bg-primary/90"
+      : "bg-foreground/[0.06] text-foreground hover:bg-foreground/[0.1]",
+  );
+  const body = (
+    <>
+      <span
+        className={cn(
+          "flex size-10 shrink-0 items-center justify-center clip-corner",
+          primary ? "bg-black/15" : "bg-foreground/[0.07]",
+        )}
+      >
+        {icon}
+      </span>
+      <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <span className="truncate text-[0.9375rem] font-semibold leading-tight">{title}</span>
+        {detail && (
+          <span className={cn("truncate text-xs leading-tight", primary ? "opacity-80" : "text-muted-foreground")}>
+            {detail}
+          </span>
+        )}
+      </span>
+      <Cue
+        className={cn(
+          "size-4 shrink-0 transition-transform motion-reduce:transition-none",
+          external || to ? "group-hover:-translate-y-0.5 group-hover:translate-x-0.5" : "group-hover:translate-y-0.5",
+          primary ? "opacity-90" : "text-muted-foreground group-hover:text-foreground",
+        )}
+      />
+    </>
+  );
+  if (to) return <Link to={to} className={className}>{body}</Link>;
   return (
     <a
       href={href}
       download={download}
       target={external ? "_blank" : undefined}
       rel={external ? "noreferrer" : undefined}
-      className={cn(
-        "flex min-h-12 items-center gap-3 clip-corner-lg px-4 py-3 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring touch:min-h-14",
-        primary
-          ? "bg-primary text-primary-foreground hover:bg-primary/90"
-          : "bg-foreground/[0.06] text-foreground hover:bg-foreground/[0.1]",
-      )}
+      className={className}
     >
-      {icon}
-      <span className="min-w-0 flex-1 truncate">{title}</span>
-      {note && <span className={cn("shrink-0 text-xs font-normal", primary ? "opacity-80" : "text-muted-foreground")}>{note}</span>}
+      {body}
     </a>
   );
 }
 
-function ArtifactTile({ artifact, icon: Icon = Download, primary }: {
+function ArtifactTile({ artifact, icon: TileIcon, primary, full }: {
   artifact: ReleaseArtifact;
-  icon?: Icon;
+  icon: Icon;
   primary?: boolean;
+  /** Keep the platform in the name, for lists that mix platforms. */
+  full?: boolean;
 }) {
+  const name = artifactName(artifact);
+  const size = artifact.size ? formatBytes(artifact.size) : undefined;
+  // Mixed lists keep "(Intel)"/"(Apple silicon)": they're the only difference between two macOS rows.
+  const title = full ? artifact.label.replace(/\s*\((x86_64|x64)\)$/, "") : name.title;
+  const detail = [full ? undefined : name.detail, size].filter(Boolean).join(" · ") || undefined;
   return (
     // Cross-origin `download` is ignored (Blossom); kept for same-origin mirrors.
     <Tile
       href={artifact.url}
       download={artifact.filename}
-      icon={<Icon className="size-4 shrink-0" />}
-      title={artifact.label}
-      note={artifact.size ? formatBytes(artifact.size) : undefined}
+      icon={<TileIcon className="size-5" />}
+      title={title}
+      detail={detail}
       primary={primary}
     />
   );
@@ -230,8 +306,12 @@ function Caveat({ children }: { children: ReactNode }) {
 function LinuxPanel({ artifacts }: { artifacts: ReleaseArtifact[] }) {
   const appImage = artifacts.find((artifact) => installCommand(artifact.filename));
   const options = [
-    ...PACKAGE_MANAGERS.filter((manager) => manager.os === "linux").map((manager) => ({ id: manager.label, label: manager.label })),
-    ...(appImage ? [{ id: "appimage", label: "AppImage" }] : []),
+    ...PACKAGE_MANAGERS.filter((manager) => manager.os === "linux").map((manager) => ({
+      id: manager.label,
+      label: manager.label.replace(/\s*\(.*\)$/, ""),
+      icon: METHOD_ICON[manager.label] ?? LinuxMark,
+    })),
+    ...(appImage ? [{ id: "appimage", label: "AppImage", icon: AppImageMark }] : []),
   ];
   const [method, setMethod] = useState(options[0]?.id ?? "appimage");
   const manager = PACKAGE_MANAGERS.find((m) => m.label === method);
@@ -244,7 +324,7 @@ function LinuxPanel({ artifacts }: { artifacts: ReleaseArtifact[] }) {
         <>
           <CommandBlock commands={[...manager.setup, manager.install]} />
           <p className="text-xs text-muted-foreground">
-            Updates arrive through your package manager, from{" "}
+            Paste into a terminal. Updates then arrive with the rest of your system, from{" "}
             <a
               href={`https://${NPKG_HOST}`}
               target="_blank"
@@ -258,13 +338,13 @@ function LinuxPanel({ artifacts }: { artifacts: ReleaseArtifact[] }) {
         </>
       ) : appImage ? (
         <>
-          <ArtifactTile artifact={appImage} primary />
+          <ArtifactTile artifact={appImage} icon={AppImageMark} primary />
           <CommandBlock commands={[installCommand(appImage.filename)!]} />
         </>
       ) : null}
       {others.length > 0 && (
         <div className="grid gap-2 sm:grid-cols-2">
-          {others.map((artifact) => <ArtifactTile key={artifact.id} artifact={artifact} />)}
+          {others.map((artifact) => <ArtifactTile key={artifact.id} artifact={artifact} icon={LinuxMark} />)}
         </div>
       )}
     </div>
@@ -274,25 +354,19 @@ function LinuxPanel({ artifacts }: { artifacts: ReleaseArtifact[] }) {
 function AndroidPanel({ artifacts }: { artifacts: ReleaseArtifact[] }) {
   return (
     <div className="space-y-4">
-      <div className="grid gap-2 sm:grid-cols-3">
+      <div className="grid gap-2 sm:grid-cols-2">
         {ANDROID_STORES.map((store) => (
           <Tile
             key={store.url}
             href={store.url}
             external
-            icon={<img src={store.icon} alt="" className="size-5 shrink-0" />}
+            icon={<img src={store.icon} alt="" className="size-6" />}
             title={store.label}
           />
         ))}
+        {artifacts.map((artifact) => <ArtifactTile key={artifact.id} artifact={artifact} icon={AndroidMark} />)}
       </div>
-      {artifacts.length > 0 && (
-        <>
-          <div className="grid gap-2 sm:grid-cols-2">
-            {artifacts.map((artifact) => <ArtifactTile key={artifact.id} artifact={artifact} />)}
-          </div>
-          <Caveat>{OS_CAVEAT.android}</Caveat>
-        </>
-      )}
+      {artifacts.length > 0 && <Caveat>{OS_CAVEAT.android}</Caveat>}
     </div>
   );
 }
@@ -310,19 +384,14 @@ function IosPanel() {
       <ol className="space-y-2.5">
         {steps.map((step, i) => (
           <li key={i} className="flex items-center gap-3 text-sm text-muted-foreground">
-            <span className="flex size-6 shrink-0 items-center justify-center clip-corner bg-primary/15 font-mono text-xs font-bold text-primary">
+            <span className="flex size-7 shrink-0 items-center justify-center clip-corner bg-primary/15 font-mono text-xs font-bold text-primary">
               {i + 1}
             </span>
             <span>{step}</span>
           </li>
         ))}
       </ol>
-      <Button asChild variant="secondary" className="h-auto py-2.5 touch:py-3 clip-corner-lg">
-        <Link to="/">
-          <Globe className="size-4 shrink-0" />
-          Open {APP_NAME} in this browser
-        </Link>
-      </Button>
+      <Tile to="/" icon={<Globe className="size-5" />} title={`Open ${APP_NAME} in this browser`} detail="Then add it to your Home Screen" />
       <p className="text-xs text-muted-foreground">A native iPhone app is on its way.</p>
     </div>
   );
@@ -340,9 +409,42 @@ function PlatformPanel({ os, artifacts }: { os: DownloadOs; artifacts: ReleaseAr
   return (
     <div className="space-y-4">
       <div className="grid gap-2 sm:grid-cols-2">
-        {artifacts.map((artifact, i) => <ArtifactTile key={artifact.id} artifact={artifact} primary={i === 0} />)}
+        {artifacts.map((artifact, i) => (
+          <ArtifactTile key={artifact.id} artifact={artifact} icon={OS_ICON[os]} primary={i === 0} />
+        ))}
       </div>
       {caveat && <Caveat>{caveat}</Caveat>}
+    </div>
+  );
+}
+
+/** The platform chooser: a row of large, always-labelled logo tiles. */
+function PlatformPicker({ value, onChange }: { value: DownloadOs; onChange: (os: DownloadOs) => void }) {
+  return (
+    <div role="radiogroup" aria-label="Platform" className="grid grid-cols-5 gap-1.5 sm:gap-2">
+      {DOWNLOAD_PLATFORMS.map((platform) => {
+        const Mark = OS_ICON[platform.os];
+        const active = platform.os === value;
+        return (
+          <button
+            key={platform.os}
+            type="button"
+            role="radio"
+            aria-checked={active}
+            aria-label={platform.name}
+            onClick={() => onChange(platform.os)}
+            className={cn(
+              "flex flex-col items-center gap-2 clip-corner-lg px-1 pb-2.5 pt-3.5 transition-colors sm:pb-3 sm:pt-4",
+              active
+                ? "bg-primary text-primary-foreground"
+                : "bg-foreground/[0.05] text-muted-foreground hover:bg-foreground/[0.09] hover:text-foreground",
+            )}
+          >
+            <Mark className="size-6 sm:size-7" />
+            <span className="text-xs font-medium sm:text-sm">{SHORT_NAME[platform.os]}</span>
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -383,7 +485,7 @@ function OlderRelease({ release }: { release: Release }) {
           .filter((artifact) => !isRepublishedPackage(artifact.filename))
           .sort((a, b) => osOrder(a.os) - osOrder(b.os))
           .map((artifact) => (
-            <ArtifactTile key={artifact.id} artifact={artifact} icon={artifact.os ? OS_ICON[artifact.os] : undefined} />
+            <ArtifactTile key={artifact.id} artifact={artifact} icon={artifact.os ? OS_ICON[artifact.os] : Download} full />
           ))}
       </div>
     </details>
@@ -426,6 +528,45 @@ function OlderReleases({ releases }: { releases: Release[] }) {
   );
 }
 
+/** The page's one call to action: the detected platform's mark, big, over its build details. */
+function HeroButton({ href, to, download, icon: Mark, title, detail }: {
+  href?: string;
+  to?: string;
+  download?: string;
+  icon: Icon;
+  title: string;
+  detail: string;
+}) {
+  const body = (
+    <>
+      <span className="flex size-12 shrink-0 items-center justify-center clip-corner bg-black/15">
+        <Mark className="size-7" />
+      </span>
+      <span className="flex min-w-0 flex-1 flex-col items-start gap-1 text-left">
+        <span className="text-lg font-semibold leading-tight">{title}</span>
+        <span className="truncate text-xs leading-tight opacity-80">{detail}</span>
+      </span>
+      {to ? (
+        <ArrowUpRight className="mr-1 size-5 shrink-0 opacity-90 transition-transform group-hover:-translate-y-0.5 group-hover:translate-x-0.5 motion-reduce:transition-none" />
+      ) : (
+        <Download className="mr-1 size-5 shrink-0 opacity-90 transition-transform group-hover:translate-y-0.5 motion-reduce:transition-none" />
+      )}
+    </>
+  );
+  const className = "group flex h-[4.5rem] w-full items-center gap-4 clip-corner-lg bg-primary px-3 text-primary-foreground transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
+
+  return (
+    // clip-path cuts a box-shadow, so the glow is a filter on a wrapper.
+    <div className="w-full [filter:drop-shadow(0_10px_30px_hsl(var(--primary)/0.35))]">
+      {to ? (
+        <Link to={to} className={className}>{body}</Link>
+      ) : (
+        <a href={href} download={download} className={className}>{body}</a>
+      )}
+    </div>
+  );
+}
+
 export function DownloadsPage() {
   const back = useBackOrHome();
   // The sea reads scrollTop imperatively, so a ref, never state.
@@ -443,11 +584,6 @@ export function DownloadsPage() {
   const byOs = useMemo(() => groupByOs(artifacts.data), [artifacts.data]);
   const pending = releases.isPending || (!!latest && artifacts.isPending);
 
-  const platformTabs = useMemo(
-    (): PillTab<DownloadOs>[] =>
-      DOWNLOAD_PLATFORMS.map((platform) => ({ id: platform.os, label: platform.name, icon: OS_ICON[platform.os] })),
-    [],
-  );
 
   // On iOS the primary action is the web app; with no detection, the hero cues the list.
   const featured = DOWNLOAD_PLATFORMS.find((platform) => platform.os === detected);
@@ -493,28 +629,21 @@ export function DownloadsPage() {
 
           <div className="flex w-full max-w-sm flex-col items-center">
             {heroArtifact && featured ? (
-              <>
-                <Button size="lg" asChild className="h-12 w-full clip-corner-lg text-base font-medium">
-                  <a href={heroArtifact.url} download={heroArtifact.filename}>
-                    <Download className="size-5" />
-                    Download for {featured.name}
-                  </a>
-                </Button>
-                <p className="mt-3 font-mono text-xs text-muted-foreground">
-                  {latest && displayVersion(latest.version)}
-                  {channel && <span className="text-primary/80"> {channel}</span>}
-                  {heroArtifact.size > 0 && <> · {formatBytes(heroArtifact.size)}</>}
-                </p>
-              </>
+              <HeroButton
+                href={heroArtifact.url}
+                download={heroArtifact.filename}
+                icon={OS_ICON[featured.os]}
+                title={`Download for ${featured.name}`}
+                detail={[
+                  artifactName(heroArtifact).title,
+                  latest && `${displayVersion(latest.version)}${channel ? ` ${channel}` : ""}`,
+                  heroArtifact.size > 0 && formatBytes(heroArtifact.size),
+                ].filter(Boolean).join(" · ")}
+              />
             ) : featured?.os === "ios" ? (
-              <Button size="lg" asChild className="h-12 w-full clip-corner-lg text-base font-medium">
-                <Link to="/">
-                  <Globe className="size-5" />
-                  Open {APP_NAME} in this browser
-                </Link>
-              </Button>
+              <HeroButton to="/" icon={AppleMark} title={`Open ${APP_NAME}`} detail="Then add it to your Home Screen" />
             ) : pending ? (
-              <div className="h-12 w-full animate-pulse clip-corner-lg bg-muted-foreground/15" />
+              <div className="h-[4.5rem] w-full animate-pulse clip-corner-lg bg-muted-foreground/15" />
             ) : null}
             <button
               type="button"
@@ -536,12 +665,7 @@ export function DownloadsPage() {
         <section ref={targetsRef} className="mx-auto max-w-2xl scroll-mt-6 space-y-4 px-4 pb-12 pt-4 sm:px-6">
           <div className="vessel-lift">
             <div className={cn(PANEL, "space-y-6 p-4 sm:p-6")}>
-              <PillTabs<DownloadOs>
-                tabs={platformTabs}
-                value={selectedOs}
-                onChange={setSelectedOs}
-                className="sm:w-full [&>button]:sm:flex-auto"
-              />
+              <PlatformPicker value={selectedOs} onChange={setSelectedOs} />
 
               {pending ? (
                 <PanelSkeleton />
