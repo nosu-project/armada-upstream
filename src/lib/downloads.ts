@@ -9,8 +9,6 @@ export type DownloadOs = "linux" | "windows" | "macos" | "android" | "ios";
 export interface DownloadPlatform {
   os: DownloadOs;
   name: string;
-  /** Shown when a release carries nothing for this platform. */
-  empty?: string;
 }
 
 /** Every platform card, in fallback order. iOS has no build here (App Store isn't in this pipeline). */
@@ -19,7 +17,7 @@ export const DOWNLOAD_PLATFORMS: DownloadPlatform[] = [
   { os: "windows", name: "Windows" },
   { os: "macos", name: "macOS" },
   { os: "android", name: "Android" },
-  { os: "ios", name: "iPhone & iPad", empty: "official app coming soon" },
+  { os: "ios", name: "iPhone & iPad" },
 ];
 
 /**
