@@ -197,11 +197,14 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ isOpen, onClose, onLogin, onS
     setShowQr(true);
   };
 
-  // Opens a signer app like Amber. Flip into the progress view *synchronously*
-  // so it's showing when the user returns.
+  // Hands the pairing link to a signer app. Flip into the progress view
+  // *synchronously* so it's showing when the user returns. On desktop the app may
+  // never launch (no handler for the scheme), so leave the QR and its link up as
+  // the fallback instead of an inert form.
   const handleOpenSignerApp = () => {
     const uri = nostrConnectUri || generateConnectSession();
     setHasOpenedSigner(true);
+    if (!isMobile) setShowQr(true);
     window.location.href = uri;
   };
 
@@ -535,23 +538,23 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ isOpen, onClose, onLogin, onS
                         <FileUp className='h-4 w-4' />
                         Select key file
                       </DropdownMenuItem>
-                      {isMobile ? (
-                        <DropdownMenuItem
-                          onSelect={handleOpenSignerApp}
-                          className='flex items-center gap-2 cursor-pointer'
-                        >
-                          <ExternalLink className='h-4 w-4' />
-                          Open signer app
-                        </DropdownMenuItem>
-                      ) : (
-                        <DropdownMenuItem
-                          onSelect={handleShowQr}
-                          className='flex items-center gap-2 cursor-pointer'
-                        >
-                          <QrCode className='h-4 w-4' />
-                          Connect remote signer
-                        </DropdownMenuItem>
-                      )}
+                      {/* Both hand-offs are offered everywhere: desktop signers
+                          (e.g. Opal, which registers the nostrconnect:// scheme)
+                          open from the same link mobile signers deep-link to. */}
+                      <DropdownMenuItem
+                        onSelect={handleShowQr}
+                        className='flex items-center gap-2 cursor-pointer'
+                      >
+                        <QrCode className='h-4 w-4' />
+                        Connect remote signer
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        onSelect={handleOpenSignerApp}
+                        className='flex items-center gap-2 cursor-pointer'
+                      >
+                        <ExternalLink className='h-4 w-4' />
+                        Open signer app
+                      </DropdownMenuItem>
                     </DropdownMenuContent>
                   </DropdownMenu>
                 </div>

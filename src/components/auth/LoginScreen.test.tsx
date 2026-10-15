@@ -10,8 +10,15 @@ const h = vi.hoisted(() => {
     connectUri: `nostrconnect://${clientPubkey}?relay=wss%3A%2F%2Frelay.example&secret=${secret}&name=Armada`,
     writeClipboardText: vi.fn(async (_text: string) => {}),
     toast: vi.fn(),
-    // Never settles: the handshake stays pending, so the QR view stays on screen.
-    nostrconnect: vi.fn(() => new Promise<void>(() => {})),
+    isMobile: false,
+    // Reports progress like the real handshake, then never settles: the view under
+    // test stays on screen.
+    nostrconnect: vi.fn(
+      async (_params: unknown, _signal?: AbortSignal, onStatus?: (s: string) => void) => {
+        onStatus?.("awaiting-connect");
+        await new Promise<void>(() => {});
+      },
+    ),
   };
 });
 
@@ -33,7 +40,7 @@ vi.mock("@/hooks/useLoginActions", () => ({
 }));
 vi.mock("@/lib/clipboard", () => ({ writeClipboardText: h.writeClipboardText }));
 vi.mock("@/hooks/useToast", () => ({ toast: h.toast }));
-vi.mock("@/hooks/useIsMobile", () => ({ useIsMobile: () => false }));
+vi.mock("@/hooks/useIsMobile", () => ({ useIsMobile: () => h.isMobile }));
 vi.mock("@/hooks/useLoggedInAccounts", () => ({
   useLoggedInAccounts: () => ({ currentUser: null, accounts: [] }),
 }));
@@ -44,13 +51,20 @@ vi.mock("@/components/auth/AndroidSignerOptions", () => ({ AndroidSignerOptions:
 import LoginScreen from "@/components/auth/LoginScreen";
 import { NOSTR_CONNECT_PERMS } from "@/lib/nostrConnectPerms";
 
-/** Desktop login, then "Connect remote signer" from the input's overflow menu. */
-const openConnectQr = async () => {
+/** The overflow menu's entries, opened the way a keyboard user opens it. */
+const openMenu = async () => {
   const trigger = screen.getByRole("button", { name: "More login options" });
   // jsdom has no `PointerEvent`, so the pointerdown Radix opens menus with is not
   // deliverable here; the keyboard path opens the same menu.
   fireEvent.keyDown(trigger, { key: "Enter" });
-  fireEvent.click(await screen.findByRole("menuitem", { name: "Connect remote signer" }));
+  await screen.findByRole("menuitem", { name: "Connect remote signer" });
+  return screen.getAllByRole("menuitem").map((item) => item.textContent?.trim());
+};
+
+/** Login, then "Connect remote signer", landing on the QR view. */
+const openConnectQr = async () => {
+  await openMenu();
+  fireEvent.click(screen.getByRole("menuitem", { name: "Connect remote signer" }));
   // The QR paints from a promise; awaiting it keeps the state update inside act.
   await screen.findByRole("img", { name: "QR code" });
 };
@@ -61,11 +75,46 @@ const CONNECT_URI = `${h.connectUri}&perms=${encodeURIComponent(NOSTR_CONNECT_PE
 const renderLogin = () =>
   render(<LoginScreen isOpen onClose={vi.fn()} onLogin={vi.fn()} />);
 
+/**
+ * Swap `window.location` for a stub while a hand-off runs. jsdom's own Location
+ * refuses navigation for an unregistered scheme and logs it, and its `href` is a
+ * non-configurable accessor on the instance, so the assignment is captured here
+ * instead of spied on.
+ */
+const stubLocation = () => {
+  const original = window.location;
+  const stub = { href: "" };
+  Object.defineProperty(window, "location", { configurable: true, value: stub });
+  return {
+    stub,
+    restore: () => Object.defineProperty(window, "location", { configurable: true, value: original }),
+  };
+};
+
 beforeEach(() => {
   vi.clearAllMocks();
+  h.isMobile = false;
 });
 
 describe("LoginScreen signer link", () => {
+  it("offers every sign-in method, on mobile too", async () => {
+    const desktop = renderLogin();
+    expect(await openMenu()).toEqual([
+      "Select key file",
+      "Connect remote signer",
+      "Open signer app",
+    ]);
+    desktop.unmount();
+
+    h.isMobile = true;
+    renderLogin();
+    expect(await openMenu()).toEqual([
+      "Select key file",
+      "Connect remote signer",
+      "Open signer app",
+    ]);
+  });
+
   it("offers the QR's link as text and copies exactly that", async () => {
     renderLogin();
     await openConnectQr();
@@ -98,5 +147,41 @@ describe("LoginScreen signer link", () => {
     // Still offering to copy: the failure must not look like the checkmark state.
     expect(screen.getByRole("button", { name: "Copy link" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Link copied" })).not.toBeInTheDocument();
+  });
+
+  it("keeps the QR and the link on screen when handing off on desktop", async () => {
+    renderLogin();
+    await openMenu();
+
+    const { stub, restore } = stubLocation();
+    try {
+      fireEvent.click(screen.getByRole("menuitem", { name: "Open signer app" }));
+      await screen.findByRole("img", { name: "QR code" });
+      expect(stub.href).toBe(CONNECT_URI);
+    } finally {
+      restore();
+    }
+
+    expect(h.nostrconnect).toHaveBeenCalled();
+    expect(await screen.findByLabelText("Signer connect link")).toHaveValue(CONNECT_URI);
+  });
+
+  it("shows progress instead of the QR when handing off on mobile", async () => {
+    h.isMobile = true;
+    renderLogin();
+    await openMenu();
+
+    const { stub, restore } = stubLocation();
+    try {
+      fireEvent.click(screen.getByRole("menuitem", { name: "Open signer app" }));
+      expect(
+        await screen.findByText("Waiting for signer connection…"),
+      ).toBeInTheDocument();
+      expect(stub.href).toBe(CONNECT_URI);
+    } finally {
+      restore();
+    }
+
+    expect(screen.queryByRole("img", { name: "QR code" })).not.toBeInTheDocument();
   });
 });
