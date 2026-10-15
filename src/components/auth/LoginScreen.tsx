@@ -3,7 +3,7 @@
 
 import React, { useRef, useState, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
-import { AlertTriangle, ChevronDown, ExternalLink, FileUp, Loader2, QrCode } from 'lucide-react';
+import { AlertTriangle, Check, ChevronDown, Copy, ExternalLink, FileUp, Loader2, QrCode } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ArmadaKey } from '@/components/brand/ArmadaCrest';
@@ -31,6 +31,8 @@ import { APP_NAME } from '@/lib/platform';
 import { shareOrigin } from '@/lib/shareOrigin';
 import { withConnectPerms } from "@/lib/nostrConnectPerms";
 import { useIsMobile } from '@/hooks/useIsMobile';
+import { toast } from '@/hooks/useToast';
+import { writeClipboardText } from '@/lib/clipboard';
 
 interface LoginScreenProps {
   isOpen: boolean;
@@ -91,6 +93,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ isOpen, onClose, onLogin, onS
   // progress until the user tapped "Open signer app".
   const [hasOpenedSigner, setHasOpenedSigner] = useState(false);
   const [showQr, setShowQr] = useState(false);
+  const [copiedConnectUri, setCopiedConnectUri] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const login = useLoginActions();
@@ -169,6 +172,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ isOpen, onClose, onLogin, onS
       setConnectStatus(null);
       setHasOpenedSigner(false);
       setShowQr(false);
+      setCopiedConnectUri(false);
       if (abortControllerRef.current) {
         abortControllerRef.current.abort();
       }
@@ -185,6 +189,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ isOpen, onClose, onLogin, onS
     setConnectStatus(null);
     setHasOpenedSigner(false);
     setShowQr(false);
+    setCopiedConnectUri(false);
   }, []);
 
   const handleShowQr = () => {
@@ -198,6 +203,25 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ isOpen, onClose, onLogin, onS
     const uri = nostrConnectUri || generateConnectSession();
     setHasOpenedSigner(true);
     window.location.href = uri;
+  };
+
+  // A signer on this same device has no camera to scan the QR with, so the link
+  // has to be pasteable. The field stays visible and selectable for a browser
+  // that refuses the clipboard API (a plain-http self-host is not a secure
+  // context), which is why the copy is not the only way to get the text.
+  const copyConnectUri = async () => {
+    try {
+      await writeClipboardText(nostrConnectUri);
+      setCopiedConnectUri(true);
+      setTimeout(() => setCopiedConnectUri(false), 2000);
+      toast({ title: 'Link copied', description: 'Paste it into your signer app.' });
+    } catch {
+      toast({
+        title: 'Copy failed',
+        description: 'Could not copy to the clipboard. Select the link and copy it manually.',
+        variant: 'destructive',
+      });
+    }
   };
 
   const handleExtensionLogin = async () => {
@@ -383,8 +407,33 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ isOpen, onClose, onLogin, onS
                 </div>
               )}
               <p className='text-sm text-muted-foreground text-center'>
-                Scan with a signer app to log in.
+                Scan with a signer app to log in, or copy the link if your signer is on this device.
               </p>
+              {nostrConnectUri && (
+                <div className='relative w-full'>
+                  <Input
+                    readOnly
+                    value={nostrConnectUri}
+                    aria-label='Signer connect link'
+                    className='pr-12 font-mono text-xs bg-background border-transparent clip-corner-lg'
+                  />
+                  <Button
+                    type='button'
+                    variant='ghost'
+                    size='icon'
+                    className='absolute right-0 top-0 h-full w-10 touch:w-11 clip-corner-lg text-muted-foreground hover:bg-muted/60'
+                    onClick={copyConnectUri}
+                    aria-label={copiedConnectUri ? 'Link copied' : 'Copy link'}
+                    title={copiedConnectUri ? 'Copied' : 'Copy link'}
+                  >
+                    {copiedConnectUri ? (
+                      <Check className='size-4 text-success' />
+                    ) : (
+                      <Copy className='size-4' />
+                    )}
+                  </Button>
+                </div>
+              )}
               <button
                 type='button'
                 onClick={handleConnectCancel}
