@@ -267,7 +267,7 @@ export function WalletSettings() {
               placeholder="https://mempool.space/api"
               className="flex-1"
             />
-            <Button variant="outline" size="sm" onClick={handleAddEsplora} disabled={!newEsplora.trim()}>
+            <Button variant="secondary" size="sm" onClick={handleAddEsplora} disabled={!newEsplora.trim()}>
               <Plus className="size-4" /> Add
             </Button>
           </div>

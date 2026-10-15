@@ -248,7 +248,7 @@ export function ThemeSelector() {
 
       {user && canShare && (
         <Button
-          variant="outline"
+          variant="secondary"
           className="w-full clip-corner-lg"
           onClick={shareTheme}
           disabled={sharing}

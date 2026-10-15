@@ -85,11 +85,7 @@ export function MutedPeopleSettings() {
   if (pubkeys.length === 0) {
     return (
       <SettingsRow>
-        <p className="text-sm text-muted-foreground">
-          You haven't blocked anyone. Blocking someone hides their messages,
-          reactions, notifications and profile everywhere in Armada. It is
-          private to you, and they are never told.
-        </p>
+        <p className="text-sm text-muted-foreground">You haven't blocked anyone.</p>
       </SettingsRow>
     );
   }

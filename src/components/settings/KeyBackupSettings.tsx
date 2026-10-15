@@ -150,8 +150,8 @@ export function KeyBackupSettings({ nsec, pubkey }: KeyBackupSettingsProps) {
           </div>
           <div className="flex gap-2">
             <Button
-              variant="outline"
-              className="flex-1"
+              variant="secondary"
+              className="flex-1 clip-corner-lg"
               onClick={() => copy(nsec, "nsec")}
             >
               {copied === "nsec" ? (
@@ -161,7 +161,7 @@ export function KeyBackupSettings({ nsec, pubkey }: KeyBackupSettingsProps) {
               )}
               Copy
             </Button>
-            <Button variant="outline" className="flex-1" onClick={backup}>
+            <Button variant="secondary" className="flex-1 clip-corner-lg" onClick={backup}>
               {Capacitor.isNativePlatform() ? (
                 <Share2 className="size-4" />
               ) : (
