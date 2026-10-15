@@ -1,8 +1,9 @@
-import { ChevronRight } from "lucide-react";
+import { ChevronRight, Info } from "lucide-react";
 import { useContext } from "react";
 import { Link } from "react-router-dom";
 
 import { SettingsPageTitleContext } from "@/components/settings/settingsNav";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 
 import type { LucideIcon } from "lucide-react";
@@ -34,19 +35,52 @@ export function SettingsIcon({ icon: Icon, tone = "muted", className }: { icon: 
   );
 }
 
+/**
+ * An ⓘ button whose popover holds the long explanation a row would otherwise
+ * print. Never place one inside a pressable row: it would nest a button.
+ */
+export function InfoTip({ label = "More info", children, className }: { label?: string; children: ReactNode; className?: string }) {
+  return (
+    <>
+      <Popover>
+        <PopoverTrigger asChild>
+          <button
+            type="button"
+            aria-label={label}
+            className={cn(
+              // The hit area grows on touch without moving the layout around it.
+              "relative inline-flex size-5 shrink-0 items-center justify-center align-middle text-muted-foreground/70 transition-colors hover:text-foreground focus-visible:outline-none focus-visible:text-foreground touch:after:absolute touch:after:-inset-3",
+              className,
+            )}
+          >
+            <Info className="size-3.5" />
+          </button>
+        </PopoverTrigger>
+        <PopoverContent className="w-72 p-3 text-xs font-normal normal-case leading-snug tracking-normal text-muted-foreground">
+          {children}
+        </PopoverContent>
+      </Popover>
+      {/* Settings search filters by rendered text, and the popover is portaled away. */}
+      <span hidden>{children}</span>
+    </>
+  );
+}
+
 interface SettingsGroupProps {
   /** Anchor for deep links (`/settings#<id>`). */
   id?: string;
   title?: ReactNode;
-  /** Explanatory copy under the card, as native settings put it. */
+  /** Explanatory copy under the card, as native settings put it. Keep it to a line. */
   footer?: ReactNode;
+  /** Longer explanation, behind an ⓘ beside the title. Needs `title`. */
+  info?: ReactNode;
   /** No card: for a section that is already its own surface (the profile editor). */
   bare?: boolean;
   children: ReactNode;
   className?: string;
 }
 
-export function SettingsGroup({ id, title, footer, bare, children, className }: SettingsGroupProps) {
+export function SettingsGroup({ id, title, footer, info, bare, children, className }: SettingsGroupProps) {
   const pageTitle = useContext(SettingsPageTitleContext);
   const searchTitle = [pageTitle, typeof title === "string" ? title : ""].filter(Boolean).join(" ");
   return (
@@ -57,7 +91,10 @@ export function SettingsGroup({ id, title, footer, bare, children, className }: 
       className={cn("scroll-mt-4 space-y-1.5", className)}
     >
       {title && (
-        <h3 className="px-4 text-2xs font-semibold uppercase tracking-wider text-muted-foreground">{title}</h3>
+        <h3 className="flex items-center gap-1 px-4 text-2xs font-semibold uppercase tracking-wider text-muted-foreground">
+          {title}
+          {info && <InfoTip label={typeof title === "string" ? `About ${title.toLowerCase()}` : undefined}>{info}</InfoTip>}
+        </h3>
       )}
       <div
         data-settings-body
@@ -73,7 +110,10 @@ export function SettingsGroup({ id, title, footer, bare, children, className }: 
 interface SettingsRowProps {
   /** Row label (left). When omitted, `children` fills the whole row. */
   label?: ReactNode;
+  /** One short line under the label. */
   description?: ReactNode;
+  /** Longer explanation, behind an ⓘ beside the label. Not for pressable rows. */
+  info?: ReactNode;
   /** Leading icon tile. */
   icon?: LucideIcon;
   tone?: SettingsTone;
@@ -100,6 +140,7 @@ const PRESSABLE_CLASS = "transition-colors hover:bg-accent/40 active:bg-accent/6
 export function SettingsRow({
   label,
   description,
+  info,
   icon,
   tone,
   value,
@@ -129,7 +170,12 @@ export function SettingsRow({
         <span className="hidden sm:contents"><SettingsIcon icon={icon} tone={tone} /></span>
       ) : <SettingsIcon icon={icon} tone={tone} />)}
       <div className="min-w-0 flex-1 space-y-0.5">
-        <div className={cn("text-sm font-medium leading-tight", destructive && "text-destructive")}>{label}</div>
+        <div className={cn("text-sm font-medium leading-tight", destructive && "text-destructive")}>
+          {label}
+          {info && !pressable && (
+            <InfoTip label={typeof label === "string" ? `About ${label}` : undefined} className="-my-1 ml-1">{info}</InfoTip>
+          )}
+        </div>
         {description && (
           <div className="text-xs text-muted-foreground leading-snug">{description}</div>
         )}

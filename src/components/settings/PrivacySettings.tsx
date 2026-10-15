@@ -21,7 +21,7 @@ export function PrivacySettings() {
       {user && (
         <SettingsGroup
           title="Blocking"
-          footer="Blocked people and muted words are hidden everywhere in Armada. Only you see these lists, and nobody is told."
+          info="Blocked people and muted words are hidden everywhere in Armada. Only you see these lists, and nobody is told."
         >
           {/* The only place to unblock: blocked people appear in no other list. */}
           <SettingsRow
@@ -66,8 +66,7 @@ export function PrivacySettings() {
           label="Show all content"
           description={
             <>
-              Show everything posted to your relays, not just curated picks and
-              people you follow.
+              Not just curated picks and people you follow.
               {config.discoverAllContent && (
                 <span className="mt-1 flex items-start gap-1.5 text-destructive">
                   <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />

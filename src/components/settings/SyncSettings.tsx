@@ -75,12 +75,16 @@ export function SyncSettings() {
       id="sync"
       title="Sync"
       footer={userWriteRelayUrls.length === 0
-        ? "Publish a relay list under Relays › Home to copy your lists, settings and communities to your other devices."
+        ? "Publish a relay list under Relays › Home to sync across devices."
+        : undefined}
+      info={userWriteRelayUrls.length === 0
+        ? "Publishing a relay list lets Armada copy your lists, settings and communities to your other devices. Device, audio and wallet settings always stay on this device."
         : "Device, audio and wallet settings always stay on this device."}
     >
       <SettingsRow
         label="Automatic settings sync"
-        description="Keep private settings and your DM list the same on your other devices. Applies to this device only."
+        description="Keep settings and your DM list the same everywhere."
+        info="Keeps private settings and your DM list the same on your other devices. This switch applies to this device only."
       >
         <Switch
           checked={config.automaticSettingsSync !== false}
@@ -93,9 +97,14 @@ export function SyncSettings() {
           label={portableSetup.isConfigured ? "Synchronize setup" : "Set up synchronization"}
           description={portableSetup.isConfigured
             ? portableSetup.isAutomatic
-              ? "Your setup syncs automatically. Sync now pushes it to every relay again."
-              : "Communities and servers sync; private settings wait for Sync now."
-            : "Copy your lists, settings and communities to your NIP-65 relays."}
+              ? "Your setup syncs automatically."
+              : "Private settings wait for Sync now."
+            : "Copy your setup to your relays."}
+          info={portableSetup.isConfigured
+            ? portableSetup.isAutomatic
+              ? "Sync now pushes your setup to every relay again. Pull latest reads it back."
+              : "Communities and servers sync on their own; private settings are sent only when you tap Sync now."
+            : "Copies your lists, settings and communities to the relays in your published (NIP-65) relay list."}
         >
           <div className="grid w-full gap-2 sm:grid-cols-2">
             <Button

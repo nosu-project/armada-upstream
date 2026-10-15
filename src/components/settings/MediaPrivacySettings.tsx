@@ -15,14 +15,16 @@ import { DEFAULT_MEDIA_PROXY, fillUriTemplate, mediaHost, normalizeMediaProxy } 
 import type { MediaAutoload } from "@/concord/lib/mediaTrust";
 
 const AUTOLOAD_DESCRIPTIONS: Record<MediaAutoload, string> = {
-  trusted:
-    "Images, videos and link previews from members who are new to you wait for you to tap "
-    + "Load, and nothing is fetched until you do. Everyone else loads: moderators, people you "
-    + "follow or talk with, members who were already here when you arrived, and members "
-    + "you've seen here for a day.",
-  always: "Every image, video and link preview loads as soon as it's on screen, whoever posted it.",
+  trusted: "Media from members new to you waits for you to tap Load.",
+  always: "Everything loads as soon as it's on screen.",
   never: "Nothing loads until you tap Load.",
 };
+
+const AUTOLOAD_INFO =
+  "Images, videos and link previews from members who are new to you wait for you to tap "
+  + "Load, and nothing is fetched until you do. Everyone else loads: moderators, people you "
+  + "follow or talk with, members who were already here when you arrived, and members "
+  + "you've seen here for a day.";
 
 /**
  * What loads without asking: the community media hold (`concord/lib/mediaTrust.ts`) by
@@ -44,6 +46,7 @@ export function MediaPrivacySettings() {
         stack
         label="Load community media from"
         description={AUTOLOAD_DESCRIPTIONS[config.communityMediaAutoload]}
+        info={config.communityMediaAutoload === "trusted" ? AUTOLOAD_INFO : undefined}
       >
         <Select
           value={config.communityMediaAutoload}
@@ -61,9 +64,10 @@ export function MediaPrivacySettings() {
       </SettingsRow>
       <SettingsRow
         label="Ask before loading from other sites"
-        description={
+        description={enabled ? "Not needed while images load through a proxy." : "Media from unfamiliar sites waits for Load."}
+        info={
           enabled
-            ? "Not needed while images load through a proxy: the sites see the proxy, not you."
+            ? "The sites see the proxy, not you."
             : "Media posted from a site other than your media servers (Relays › Media), the sites "
               + "below or the common Nostr hosts waits for Load, whoever posted it. Loading it tells "
               + "that site your address."
@@ -78,14 +82,16 @@ export function MediaPrivacySettings() {
         <SettingsRow
           stack
           label="Sites you trust"
-          description={`Media from these loads without asking. Always included: your media servers (Relays › Media) and ${KNOWN_MEDIA_HOSTS.join(", ")}.`}
+          description="Media from these loads without asking."
+          info={`Always included: your media servers (Relays › Media) and ${KNOWN_MEDIA_HOSTS.join(", ")}.`}
         >
           <TrustedHostListEditor hosts={config.trustedMediaHosts} onChange={setTrustedHosts} />
         </SettingsRow>
       )}
       <SettingsRow
         label="Load images through a proxy"
-        description={
+        description="Hide your address from the sites images come from."
+        info={
           "Every image in a message is a request from your device to whatever site the sender "
           + "named, which tells that site your address. With this on, images are fetched through a "
           + "proxy that sees the site instead of you. Turn it off to load images directly."
@@ -97,7 +103,7 @@ export function MediaPrivacySettings() {
         <SettingsRow
           stack
           label="Proxy addresses"
-          description={
+          info={
             "Each proxy rewrites an image URL: use {href} where the target goes (percent-encoded), or "
             + "{+href} to pass it raw as some proxies (corsfix) expect; a bare address ending in ? or / "
             + "gets the URL appended automatically. Add more than one to spread images across them and "

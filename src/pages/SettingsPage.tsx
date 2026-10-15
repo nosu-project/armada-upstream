@@ -195,7 +195,7 @@ function useSettingsPages(): { pages: Partial<Record<SettingsPageId, PageDef>>; 
         render: () => (
           <SettingsGroup
             id="muted"
-            footer="Blocking someone hides their messages, reactions, notifications and profile everywhere in Armada. It is private to you, and they are never told."
+            footer="Hidden everywhere in Armada. They are never told."
           >
             <MutedPeopleSettings />
           </SettingsGroup>
@@ -345,8 +345,11 @@ function RootList({
               tone="primary"
               label="Install Armada"
               description={compact ? undefined : needsManualInstall
-                ? "In Safari, tap Share → Add to Home Screen, keep Open as Web App on, then launch Armada from its new icon."
+                ? "Add to your Home Screen from Safari."
                 : "Add to your home screen or desktop for a standalone app."}
+              info={needsManualInstall
+                ? "In Safari, tap Share → Add to Home Screen, keep Open as Web App on, then launch Armada from its new icon."
+                : undefined}
               onClick={canInstall ? () => install() : undefined}
               className={compact ? "min-h-11 py-2" : undefined}
             />

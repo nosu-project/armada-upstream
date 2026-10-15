@@ -2,6 +2,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Globe, Keyboard, Mic, MicOff, Volume2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 
+import { InfoTip } from "@/components/settings/SettingsSection";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
@@ -575,6 +576,11 @@ export function VoiceDeviceSettings() {
           <label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
             Voice server
           </label>
+          <InfoTip label="About the voice server">
+            Used for direct-message calls and for communities that set no voice servers of their
+            own; a community that sets them uses only those, and this is ignored there. A custom
+            address replaces the built-in Armada voice servers on every synced client.
+          </InfoTip>
         </div>
         <Input
           value={voiceServer}
@@ -600,11 +606,8 @@ export function VoiceDeviceSettings() {
           </p>
         )}
         <p className="text-xs text-muted-foreground">
-          Used for direct-message calls and for communities that set no voice servers of their
-          own; a community that sets them uses only those, and this is ignored there. Leave empty
-          for the default
-          {CONCORD_AV_SERVERS[0] ? ` (${CONCORD_AV_SERVERS[0]})` : ""}. A custom address replaces
-          the built-in Armada voice servers on every synced client.
+          Leave empty for the default
+          {CONCORD_AV_SERVERS[0] ? ` (${CONCORD_AV_SERVERS[0]})` : ""}.
         </p>
       </div>
     </div>

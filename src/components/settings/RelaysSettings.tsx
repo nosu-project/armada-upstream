@@ -134,7 +134,7 @@ export function RelaysSettings() {
       <SettingsGroup
         id="app-relays"
         title="Your relays"
-        footer="Relays are servers that store and pass along your profile, messages and lists. Armada picked these for you; change any of them here, just as at sign-up."
+        info="Relays are servers that store and pass along your profile, messages and lists. Armada picked these for you; change any of them here, just as at sign-up."
       >
         {!config.useAppRelays && !(config.useUserRelays && userRelayUrls.length > 0) && (
           <SettingsRow>
@@ -171,10 +171,10 @@ export function RelaysSettings() {
                     <div className="text-sm font-medium leading-tight">Published relay list</div>
                     <div className="text-xs text-muted-foreground leading-snug">
                       {userRelayUrls.length === 0
-                        ? "Not published yet, so other Nostr apps can't find where your account lives. Publish your home relays to fix that."
+                        ? "Not published, so other Nostr apps can't find you."
                         : publishedMatchesHome
-                          ? "Other Nostr apps find your account through this signed list (NIP-65). It matches your home relays."
-                          : <>Other Nostr apps find your account through this signed list (NIP-65). It names {hostList(userRelayUrls)}, which differs from your home relays above.</>}
+                          ? "How other Nostr apps find you. Matches Home."
+                          : <>How other Nostr apps find you. Names {hostList(userRelayUrls)}, unlike Home.</>}
                     </div>
                   </div>
                   <ChevronDown
@@ -290,11 +290,13 @@ export function RelaysSettings() {
 
       <SettingsGroup
         title="Advanced"
-        footer={userRelayUrls.length > 0
-          ? "Which relays Armada reads and writes your account data on: the Home list above, the relay list you published for other apps, or both."
-          : "Which relays Armada reads and writes your account data on. Publish a relay list under Home to choose it here."}
       >
-        <SettingsRow label="Connect to">
+        <SettingsRow
+          label="Connect to"
+          info={userRelayUrls.length > 0
+            ? "Which relays Armada reads and writes your account data on: the Home list above, the relay list you published for other apps, or both."
+            : "Which relays Armada reads and writes your account data on. Publish a relay list under Home to choose it here."}
+        >
           <Select value={relaySources} onValueChange={setRelaySources}>
             <SelectTrigger className="w-44 sm:w-52" aria-label="Connect to">
               <SelectValue placeholder="None" />

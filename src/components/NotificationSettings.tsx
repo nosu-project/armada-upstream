@@ -59,7 +59,8 @@ export function NotificationSettings() {
         {native.enabled && <BatteryOptimizationWarning />}
         <NotificationToggles
           title="Background notifications"
-          description="Armada stays connected in the background to notify you, without Google services."
+          description="Get notified even when Armada is closed."
+          info="Armada stays connected in the background to notify you, without Google services."
           enabled={native.enabled}
           busy={native.busy}
           blocked={false}
@@ -271,28 +272,26 @@ function NotificationSoundSettings() {
   };
 
   return (
-    <SettingsGroup
-      title="Sound"
-      footer={(
-        <>
-          Background push and Android use the sound selected by your device. Browsers may require
-          one interaction with Armada before allowing in-page audio. Sounds are CC0 or CC BY-SA;
-          see the{" "}
-          <a
-            className="underline underline-offset-2 hover:text-foreground"
-            href="/sounds/notifications/LICENSES.md"
-            target="_blank"
-            rel="noreferrer"
-          >
-            sound credits
-          </a>
-          .
-        </>
-      )}
-    >
+    <SettingsGroup title="Sound">
       <SettingsRow
         label="Notification sound"
-        description="Play a chosen sound for new activity while Armada is open."
+        description="Plays for new activity while Armada is open."
+        info={(
+          <>
+            Background push and Android use the sound selected by your device. Browsers may require
+            one interaction with Armada before allowing in-page audio. Sounds are CC0 or CC BY-SA;
+            see the{" "}
+            <a
+              className="underline underline-offset-2 hover:text-foreground"
+              href="/sounds/notifications/LICENSES.md"
+              target="_blank"
+              rel="noreferrer"
+            >
+              sound credits
+            </a>
+            .
+          </>
+        )}
       >
         <Switch
           checked={settings.enabled}
@@ -389,9 +388,7 @@ function BatteryOptimizationWarning() {
           <AlertTriangle className="mt-0.5 size-4 shrink-0 text-warning" />
           <div className="min-w-0 flex-1">
             <p className="text-xs">
-              Battery optimization is enabled for Armada. Android may close the background
-              connection while your device is idle and prevent notifications from resuming
-              after a reboot.
+              Battery optimization can stop notifications while your device is idle or after a reboot.
             </p>
             <Button
               size="sm"
@@ -464,12 +461,13 @@ function WebPushSettings() {
       title="Enable push notifications"
       description={!ready
         ? "Preparing secure background notifications…"
+        : "Get notified even when Armada is closed."}
+      info={!ready || hasNappPush()
+        ? undefined
         : hasIosPush()
           // No Notification Service Extension yet, so the lock screen shows the gateway's fixed text.
-          ? "Get notified even when Armada is closed. Notifications don't name the sender or quote the message. Armada decrypts it when you open it."
-          : hasNappPush()
-            ? "Get notified even when Armada is closed."
-            : "Get notified even when Armada is closed. Armada repairs expired browser subscriptions whenever you return."}
+          ? "Notifications don't name the sender or quote the message. Armada decrypts it when you open it."
+          : "Armada repairs expired browser subscriptions whenever you return."}
       enabled={enabled}
       busy={busy}
       blocked={permission === "denied"}
@@ -603,8 +601,11 @@ function ForegroundOnlySettings() {
     <NotificationToggles
       title="Notifications while Armada is open"
       description={desktop
+        ? "Including when minimized to the tray."
+        : "This browser can't notify you while Armada is closed."}
+      info={desktop
         ? "Armada shows a system notification for new messages while it's running, including when it's minimized to the tray."
-        : "This browser doesn't support background push, so notifications only arrive while Armada is open. You'll get a system notification for new messages when you're not looking at the conversation."}
+        : "This browser doesn't support background push, so you'll get a system notification for new messages only while Armada is open and you're not looking at the conversation. For notifications when Armada is closed, use a browser that supports Web Push (Chrome, Firefox, or Brave with Google push services enabled), or the Android app."}
       enabled={enabled}
       busy={false}
       blocked={blocked}
@@ -618,9 +619,6 @@ function ForegroundOnlySettings() {
           : "Your browser hasn't allowed notifications yet. Turn this on to ask."
         : undefined}
       prefs={prefs}
-      footer={desktop
-        ? undefined
-        : "For notifications when Armada is closed, use a browser that supports Web Push (Chrome, Firefox, or Brave with Google push services enabled), or the Android app."}
       onToggle={(v) => setEnabled(v).catch(() => {})}
       onSetPrefs={setPrefs}
     />
@@ -630,18 +628,18 @@ function ForegroundOnlySettings() {
 function NotificationToggles(props: {
   title: string;
   description?: string;
+  info?: string;
   enabled: boolean;
   busy: boolean;
   blocked: boolean;
   blockedMessage?: string;
   /** An advisory note below the description — unlike `blocked`, actionable. */
   hint?: string;
-  footer?: ReactNode;
   prefs: PushPrefs;
   onToggle: (value: boolean) => void;
   onSetPrefs: (next: PushPrefs) => void;
 }) {
-  const { title, description, enabled, busy, blocked, blockedMessage, hint, footer, prefs } = props;
+  const { title, description, info, enabled, busy, blocked, blockedMessage, hint, prefs } = props;
 
   const setPref = (key: keyof PushPrefs) => (value: boolean) => {
     props.onSetPrefs({ ...prefs, [key]: value });
@@ -653,9 +651,10 @@ function NotificationToggles(props: {
 
   return (
     <>
-      <SettingsGroup id="notifications" footer={footer}>
+      <SettingsGroup id="notifications">
         <SettingsRow
           label={title}
+          info={info}
           description={(
             <>
               {description}
@@ -706,7 +705,8 @@ function NotificationToggles(props: {
             <SettingsRow
               stack
               label="Message requests"
-              description="DMs from people you don't follow. A stranger controls the text, name and picture a notification shows."
+              description="DMs from people you don't follow."
+              info="A stranger controls the text, name and picture a notification shows."
               className="pl-8"
             >
               <Select

@@ -1,7 +1,7 @@
 import { Plus, X } from "lucide-react";
 import { useState } from "react";
 
-import { SettingsRow } from "@/components/settings/SettingsSection";
+import { InfoTip, SettingsRow } from "@/components/settings/SettingsSection";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useAppContext } from "@/hooks/useAppContext";
@@ -32,8 +32,10 @@ export function MutedWordsSettings() {
     <SettingsRow>
       <div className="space-y-1.5">
         <p className="pb-1 text-xs text-muted-foreground leading-snug">
-          Hide messages that contain any of these words or phrases. Matching ignores case and only counts
-          whole words. Your own messages are never hidden.
+          Hide messages that contain any of these words or phrases.
+          <InfoTip label="About muted words" className="-my-1 ml-1">
+            Matching ignores case and only counts whole words. Your own messages are never hidden.
+          </InfoTip>
         </p>
         {words.map((word) => (
           <div key={word} className="flex items-center gap-2 clip-corner bg-background/40 px-3 py-2.5">

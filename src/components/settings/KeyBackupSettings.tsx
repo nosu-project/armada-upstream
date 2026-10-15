@@ -42,10 +42,15 @@ function KeyStorageRow() {
       label="Storage on this device"
       description={
         encrypted
-          ? "Your key is encrypted at rest using your system's credential store."
+          ? "Encrypted by your system's credential store."
           : status.available
-            ? "No system keyring was found, so your key is only obfuscated on disk. Installing a keyring (GNOME Keyring or KWallet) enables real encryption."
-            : "Your key is stored unencrypted on this device."
+            ? "Only obfuscated on disk."
+            : "Stored unencrypted on this device."
+      }
+      info={
+        !encrypted && status.available
+          ? "No system keyring was found, so your key is only obfuscated on disk. Installing a keyring (GNOME Keyring or KWallet) enables real encryption."
+          : undefined
       }
     >
       {encrypted ? (
@@ -116,9 +121,8 @@ export function KeyBackupSettings({ nsec, pubkey }: KeyBackupSettingsProps) {
             </span>
           </div>
           <p className="text-xs text-warning">
-            Your secret key is the only way to access your account. There is no password reset.
-            Anyone who sees it controls your identity. Store it somewhere safe, like a password
-            manager.
+            It's the only way into your account, with no reset, and anyone who sees it controls
+            your identity. Keep it in a password manager.
           </p>
         </div>
       </SettingsRow>
