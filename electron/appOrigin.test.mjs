@@ -3,7 +3,7 @@ import { createRequire } from "node:module";
 import { describe, expect, it } from "vitest";
 
 const require = createRequire(import.meta.url);
-const { isArmadaAppUrl, isExternallyOpenableUrl, internalAppLinkPath } =
+const { isArmadaAppUrl, isExternallyOpenableUrl, isSignerHandoffUrl, internalAppLinkPath } =
   require("./appOrigin.js");
 
 describe("packaged Electron origin", () => {
@@ -46,6 +46,19 @@ describe("opening a link in the system browser", () => {
     expect(isExternallyOpenableUrl("javascript:alert(1)")).toBe(false);
     expect(isExternallyOpenableUrl("")).toBe(false);
     expect(isExternallyOpenableUrl("not a URL")).toBe(false);
+  });
+});
+
+describe("handing a pairing link to a signer app", () => {
+  it("recognizes nostrconnect: and nothing else", () => {
+    expect(isSignerHandoffUrl("nostrconnect://" + "a".repeat(64) + "?relay=wss%3A%2F%2Fr.example")).toBe(true);
+    expect(isSignerHandoffUrl("bunker://" + "a".repeat(64))).toBe(false);
+    expect(isSignerHandoffUrl("https://example.com")).toBe(false);
+    expect(isSignerHandoffUrl("not a URL")).toBe(false);
+  });
+
+  it("is not a scheme window.open may reach", () => {
+    expect(isExternallyOpenableUrl("nostrconnect://" + "a".repeat(64))).toBe(false);
   });
 });
 

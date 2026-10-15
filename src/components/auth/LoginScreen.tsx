@@ -30,7 +30,6 @@ import { useLoggedInAccounts } from '@/hooks/useLoggedInAccounts';
 import { APP_NAME } from '@/lib/platform';
 import { shareOrigin } from '@/lib/shareOrigin';
 import { withConnectPerms } from "@/lib/nostrConnectPerms";
-import { useIsMobile } from '@/hooks/useIsMobile';
 import { toast } from '@/hooks/useToast';
 import { writeClipboardText } from '@/lib/clipboard';
 
@@ -52,6 +51,12 @@ const nsecRejectionMessage = (input: string) => {
     ? "That doesn't look like a complete secret key. Check you copied the whole nsec."
     : 'Enter a secret key starting with nsec1, or a bunker:// URI.';
 };
+
+// A phone's browser is backgrounded while the signer runs, and it has a callback
+// to return through. Decided by device, not width: a narrow desktop window with no
+// handler for the scheme still needs the QR and its link left up.
+const isMobileDevice = () =>
+  typeof navigator !== 'undefined' && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 
 const validateBunkerUri = (uri: string) => {
   return uri.startsWith('bunker://');
@@ -107,23 +112,24 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ isOpen, onClose, onLogin, onS
   useEffect(() => { onCloseRef.current = onClose; }, [onClose]);
   useEffect(() => { loginRef.current = login; }, [login]);
 
-  const isMobile = useIsMobile();
+  const [isMobile] = useState(isMobileDevice);
+  const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(copiedTimerRef.current), []);
   const hasExtension = 'nostr' in window;
 
   // Returns the URI so the mobile deeplink can use it immediately.
   const generateConnectSession = useCallback((): string => {
     const relayUrls = login.getRelayUrls();
     const params = generateNostrConnectParams(relayUrls);
-    const isMobileDevice = typeof navigator !== 'undefined' && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
     const uri = withConnectPerms(generateNostrConnectURI(params, {
       name: APP_NAME,
-      callback: isMobileDevice ? `${callbackOrigin}/remoteloginsuccess` : undefined,
+      callback: isMobile ? `${callbackOrigin}/remoteloginsuccess` : undefined,
     }));
     setNostrConnectParams(params);
     setNostrConnectUri(uri);
     setConnectError(null);
     return uri;
-  }, [login, callbackOrigin]);
+  }, [login, callbackOrigin, isMobile]);
 
   // Deps limited to `nostrConnectParams`: re-running on parent renders would
   // cancel an in-flight subscription and swallow the signer's approval.
@@ -216,7 +222,8 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ isOpen, onClose, onLogin, onS
     try {
       await writeClipboardText(nostrConnectUri);
       setCopiedConnectUri(true);
-      setTimeout(() => setCopiedConnectUri(false), 2000);
+      clearTimeout(copiedTimerRef.current);
+      copiedTimerRef.current = setTimeout(() => setCopiedConnectUri(false), 2000);
       toast({ title: 'Link copied', description: 'Paste it into your signer app.' });
     } catch {
       toast({

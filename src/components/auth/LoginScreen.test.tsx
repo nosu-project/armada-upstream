@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const h = vi.hoisted(() => {
   const clientPubkey = "a".repeat(64);
@@ -40,7 +40,6 @@ vi.mock("@/hooks/useLoginActions", () => ({
 }));
 vi.mock("@/lib/clipboard", () => ({ writeClipboardText: h.writeClipboardText }));
 vi.mock("@/hooks/useToast", () => ({ toast: h.toast }));
-vi.mock("@/hooks/useIsMobile", () => ({ useIsMobile: () => h.isMobile }));
 vi.mock("@/hooks/useLoggedInAccounts", () => ({
   useLoggedInAccounts: () => ({ currentUser: null, accounts: [] }),
 }));
@@ -91,9 +90,20 @@ const stubLocation = () => {
   };
 };
 
+const PHONE_UA = "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 Mobile Safari/537.36";
+const DESKTOP_UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/140.0 Safari/537.36";
+
 beforeEach(() => {
   vi.clearAllMocks();
   h.isMobile = false;
+  vi.spyOn(window.navigator, "userAgent", "get").mockImplementation(() =>
+    h.isMobile ? PHONE_UA : DESKTOP_UA,
+  );
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  window.innerWidth = 1024;
 });
 
 describe("LoginScreen signer link", () => {
@@ -149,7 +159,10 @@ describe("LoginScreen signer link", () => {
     expect(screen.queryByRole("button", { name: "Link copied" })).not.toBeInTheDocument();
   });
 
-  it("keeps the QR and the link on screen when handing off on desktop", async () => {
+  // A narrow desktop window is still a desktop: no handler may be registered for
+  // the scheme, so the QR and its link have to stay up.
+  it.each([1440, 600])("keeps the QR and the link on screen when handing off on a %ipx desktop", async (width) => {
+    window.innerWidth = width;
     renderLogin();
     await openMenu();
 
