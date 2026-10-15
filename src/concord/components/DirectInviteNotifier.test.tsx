@@ -11,7 +11,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, render } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { InviteInboxItem } from "@/concord/hooks/useDirectInvites";
 import type { InviteBundle } from "@/concord/lib/invite";
@@ -50,7 +50,10 @@ vi.mock("@/concord/hooks/useCommunityList", () => ({
 }));
 vi.mock("@/concord/hooks/useControlPlane", () => ({
   useControlFold: () => ({ data: fold }),
+  invalidateControl: () => undefined,
 }));
+const sweep = vi.hoisted(() => vi.fn(async () => []));
+vi.mock("@/concord/lib/planeSync", () => ({ sweepControl: sweep }));
 const dissolved = vi.hoisted(() => ({ value: false }));
 vi.mock("@nostrify/react", () => ({ useNostr: () => ({ nostr: {} }) }));
 vi.mock("@/concord/hooks/useCommunityActions", () => {
@@ -127,8 +130,18 @@ function mount() {
 }
 
 const flush = () => act(async () => {});
+/** Past the window in which a refusal is read as the Grant's fold lagging. */
+const outlastGrace = () => act(async () => {
+  await vi.advanceTimersByTimeAsync(20_000);
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 beforeEach(() => {
+  vi.useFakeTimers();
+  sweep.mockClear();
   updateList.mockClear();
   toast.mockClear();
   items = [];
@@ -174,6 +187,8 @@ describe("DirectInviteNotifier: a granted channel key", () => {
     items = [catchUpFrom(PEER)];
     mount();
     await flush();
+    expect(toast).not.toHaveBeenCalled();
+    await outlastGrace();
     expect(updateList).not.toHaveBeenCalled();
     expect(toast).toHaveBeenCalledWith(expect.objectContaining({ title: "New channel keys offered" }));
   });
@@ -184,8 +199,38 @@ describe("DirectInviteNotifier: a granted channel key", () => {
     items = [catchUpFrom(ADMIN)];
     mount();
     await flush();
+    await outlastGrace();
     expect(updateList).not.toHaveBeenCalled();
     expect(toast).toHaveBeenCalledWith(expect.objectContaining({ title: "New channel keys offered" }));
+  });
+
+  it("is applied silently when the fold has the community but not yet the member's Grant", async () => {
+    // The admin's key outran the Grant it follows: the fold exists, but refuses.
+    const stale = entitledFold();
+    stale.roster.grants = [{ member: ADMIN, roleIds: ["staff"] }];
+    fold = stale;
+    items = [catchUpFrom(ADMIN)];
+    const view = mount();
+    await flush();
+    expect(updateList).not.toHaveBeenCalled();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(4_000);
+    });
+    // The plane is re-read once for a Grant the live subscription missed.
+    expect(sweep).toHaveBeenCalledTimes(1);
+
+    fold = entitledFold();
+    view.rerender(
+      <QueryClientProvider client={new QueryClient()}>
+        <MemoryRouter initialEntries={["/c/x"]}>
+          <DirectInviteNotifier />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    await flush();
+    await outlastGrace();
+    expect(updateList).toHaveBeenCalledTimes(1);
+    expect(toast).not.toHaveBeenCalledWith(expect.objectContaining({ title: "New channel keys offered" }));
   });
 
   it("is applied at most once per wrap across re-renders", async () => {
