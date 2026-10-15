@@ -2,6 +2,7 @@ import { clearRevealedMedia } from "@/components/chat/revealedMedia";
 import { clearRenderedPlaintext } from "@/hooks/dmRenderCache";
 import { clearAudioMetadata } from "@/hooks/useAudioMetadata";
 import { clearRecentDecrypts } from "@/lib/AppSigner";
+import { clearCharacterCardCache } from "@/lib/characterCard";
 import { ARMADA_DB_NAME, purgeArmadaDB } from "@/lib/db/armadaDB";
 import { resetKvCaches } from "@/lib/db/kvCache";
 import { resetDecryptConsent } from "@/lib/decryptConsent";
@@ -144,6 +145,7 @@ function clearSessionMemos(): void {
   clearMuteListMemos();
   clearGroupListMemo();
   clearAttachmentCache();
+  clearCharacterCardCache();
   clearMediaCacheMemory();
   clearBuzzMediaCache();
   clearProfileSyncMemory();

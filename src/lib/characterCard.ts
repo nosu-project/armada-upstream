@@ -158,45 +158,103 @@ function decodeCardPayload(b64: string): unknown {
   return JSON.parse(new TextDecoder().decode(bytes));
 }
 
-/**
- * Walk a PNG's chunks for a `tEXt` card payload (`chara`, else the V3 writer's
- * `ccv3`). Validity of other chunks is not checked: extraction stops at the
- * first parseable card, malformed chunk framing ends the walk.
- */
-export function characterCardFromPngBytes(bytes: Uint8Array): CharaCard | null {
-  if (bytes.length < 8 + 8) return null;
-  for (let i = 0; i < 8; i++) {
-    if (bytes[i] !== PNG_SIGNATURE[i]) return null;
-  }
+/** Whether the bytes open with the PNG signature. */
+export function isPngBytes(bytes: Uint8Array): boolean {
+  if (bytes.length < PNG_SIGNATURE.length) return false;
+  return PNG_SIGNATURE.every((b, i) => bytes[i] === b);
+}
+
+interface PngChunk {
+  type: string;
+  /** Whole chunk, length through CRC. */
+  start: number;
+  end: number;
+  dataStart: number;
+  dataEnd: number;
+}
+
+/** The chunk framing up to IEND or the first malformed chunk; `complete` = IEND reached. */
+function pngChunks(bytes: Uint8Array): { chunks: PngChunk[]; complete: boolean } | null {
+  if (bytes.length < 8 + 8 || !isPngBytes(bytes)) return null;
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.length);
+  const chunks: PngChunk[] = [];
   let offset = 8;
   while (offset + 8 <= bytes.length) {
     const length = view.getUint32(offset);
-    const type = ascii(bytes, offset + 4, 4);
     const dataStart = offset + 8;
-    if (dataStart + length > bytes.length) return null;
-    if (type === "tEXt" && length > 0) {
-      // The keyword is NUL-terminated Latin-1, the payload everything after.
-      let nul = -1;
-      for (let i = dataStart; i < dataStart + length; i++) {
-        if (bytes[i] === 0) {
-          nul = i;
-          break;
-        }
-      }
-      if (nul > dataStart && CARD_TEXT_KEYWORDS.has(ascii(bytes, dataStart, nul - dataStart))) {
-        try {
-          const card = parseCharacterCardJson(decodeCardPayload(ascii(bytes, nul + 1, dataStart + length - nul - 1)));
-          if (card) return card;
-        } catch {
-          // Not a card payload after all — later chunks may hold one.
-        }
-      }
-    }
-    if (type === "IEND") return null;
-    offset = dataStart + length + 4; // + CRC
+    const end = dataStart + length + 4; // + CRC
+    if (end > bytes.length) break;
+    const type = ascii(bytes, offset + 4, 4);
+    chunks.push({ type, start: offset, end, dataStart, dataEnd: dataStart + length });
+    if (type === "IEND") return { chunks, complete: true };
+    offset = end;
   }
-  return null;
+  return { chunks, complete: false };
+}
+
+/** A `tEXt` chunk's NUL-terminated Latin-1 keyword, or undefined. */
+function textKeyword(bytes: Uint8Array, chunk: PngChunk): string | undefined {
+  if (chunk.type !== "tEXt") return undefined;
+  for (let i = chunk.dataStart; i < chunk.dataEnd; i++) {
+    if (bytes[i] === 0) return i > chunk.dataStart ? ascii(bytes, chunk.dataStart, i - chunk.dataStart) : undefined;
+  }
+  return undefined;
+}
+
+function cardFromChunk(bytes: Uint8Array, chunk: PngChunk, keyword: string): CharaCard | null {
+  const payloadStart = chunk.dataStart + keyword.length + 1;
+  try {
+    return parseCharacterCardJson(decodeCardPayload(ascii(bytes, payloadStart, chunk.dataEnd - payloadStart)));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Read a PNG's `tEXt` card payload. A V3 writer keeps a `chara` copy for older
+ * readers beside its `ccv3`, which is the one that wins. Other chunks' validity
+ * is not checked, and malformed framing ends the walk.
+ */
+export function characterCardFromPngBytes(bytes: Uint8Array): CharaCard | null {
+  const walked = pngChunks(bytes);
+  if (!walked) return null;
+  let fallback: CharaCard | null = null;
+  for (const chunk of walked.chunks) {
+    const keyword = textKeyword(bytes, chunk);
+    if (!keyword || !CARD_TEXT_KEYWORDS.has(keyword)) continue;
+    const card = cardFromChunk(bytes, chunk, keyword);
+    if (!card) continue;
+    if (keyword === "ccv3") return card;
+    fallback ??= card;
+  }
+  return fallback;
+}
+
+/** Metadata chunks a card upload drops: EXIF, XMP (`iTXt`), compressed text and timestamps. */
+const STRIPPED_CHUNKS = new Set(["eXIf", "iTXt", "zTXt", "tIME"]);
+
+/**
+ * The card PNG with every other metadata chunk removed, byte-for-byte otherwise:
+ * image data and the card's own `tEXt` chunks (`chara`, `ccv3`, `chara_ext-*`)
+ * are copied verbatim, CRCs and all. Null unless the framing walks to IEND.
+ */
+export function stripNonCardMetadata(bytes: Uint8Array): Uint8Array<ArrayBuffer> | null {
+  const walked = pngChunks(bytes);
+  if (!walked?.complete) return null;
+  const kept = walked.chunks.filter((chunk) => {
+    if (STRIPPED_CHUNKS.has(chunk.type)) return false;
+    if (chunk.type !== "tEXt") return true;
+    const keyword = textKeyword(bytes, chunk);
+    return keyword !== undefined && (CARD_TEXT_KEYWORDS.has(keyword) || keyword.startsWith("chara_ext-"));
+  });
+  const out = new Uint8Array(8 + kept.reduce((n, c) => n + (c.end - c.start), 0));
+  out.set(bytes.subarray(0, 8), 0);
+  let at = 8;
+  for (const chunk of kept) {
+    out.set(bytes.subarray(chunk.start, chunk.end), at);
+    at += chunk.end - chunk.start;
+  }
+  return out;
 }
 
 /** Sniff-worthy by filename or declared MIME; other types short-circuit before any fetch. */
@@ -210,9 +268,17 @@ export function isCharacterCardCandidate(url: string, mime?: string): boolean {
 /** A card PNG is image data, but sniffing never justifies a video's worth of bytes. */
 const SNIFF_MAX_BYTES = 48 * 1024 * 1024;
 
-/** Resolved cards (and failures) by URL; sniffing runs once per unique attachment. */
+/**
+ * Sniff results by attachment, card or "not a card". A failed fetch is dropped
+ * so the next mount retries. Holds decrypted card text: cleared on logout.
+ */
 const sniffCache = new Map<string, Promise<CharaCard | null>>();
 const SNIFF_CACHE_MAX = 64;
+
+/** Forget every sniffed card (purgeClientStorage). */
+export function clearCharacterCardCache(): void {
+  sniffCache.clear();
+}
 
 async function sniffPngBytes(ref: CharacterCardRef, sources: readonly string[]): Promise<Uint8Array> {
   if (ref.encryption?.algorithm) {
@@ -243,9 +309,14 @@ export function sniffCharacterCard(
     : ref.url;
   const hit = sniffCache.get(key);
   if (hit) return hit;
-  const promise = (sources.length > 0 ? sniffPngBytes(ref, sources) : Promise.reject<Uint8Array>(new Error("no source")))
-    .then((bytes) => characterCardFromPngBytes(bytes))
-    .catch((): null => null);
+  if (sources.length === 0) return Promise.resolve(null);
+  const promise: Promise<CharaCard | null> = sniffPngBytes(ref, sources).then(
+    (bytes) => characterCardFromPngBytes(bytes),
+    (): null => {
+      if (sniffCache.get(key) === promise) sniffCache.delete(key);
+      return null;
+    },
+  );
   if (sniffCache.size >= SNIFF_CACHE_MAX) {
     const oldest = sniffCache.keys().next().value;
     if (oldest !== undefined) sniffCache.delete(oldest);

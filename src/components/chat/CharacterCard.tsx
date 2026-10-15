@@ -244,9 +244,9 @@ function CharacterCardDialog({ card, image, onClose }: { card: CharaCard; image:
 }
 
 /**
- * The in-chat preview of a PNG that sniffed as a character card: a bordered
- * row naming the card, opening the full explorer on tap. Modeled on the other
- * special embeds (XdcAttachment, EmbeddedNote): everything else stays text.
+ * The in-chat marker on a PNG that sniffed as a character card: a caption bar
+ * laid over the card's own art (the parent positions it), naming the card and
+ * opening the full explorer on tap.
  */
 export function CharacterCardEmbed({
   card,
@@ -270,22 +270,20 @@ export function CharacterCardEmbed({
         }}
         aria-label={`View character card: ${card.name}`}
         className={cn(
-          "group my-1.5 flex w-full max-w-sm items-center gap-3 clip-hairline-lg",
-          "[--edge:var(--border)/0.5] [--fill:var(--secondary)/0.3] [--fill-hover:var(--secondary)/0.5]",
-          "px-3 py-2.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary",
+          "group flex items-center gap-2 rounded-b bg-gradient-to-t from-black/85 via-black/60 to-transparent",
+          "px-2.5 pb-2 pt-6 text-left text-white",
+          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary",
           className,
         )}
       >
-        <span className="flex size-10 shrink-0 items-center justify-center overflow-hidden clip-corner-lg bg-primary/10 text-primary">
-          <CharacterCardArt image={image} imgClassName="size-full object-cover" iconClassName="size-5" />
-        </span>
+        <IdCard className="size-4 shrink-0" aria-hidden />
         <span className="min-w-0 flex-1">
           <span className="block truncate text-sm font-semibold">{card.name}</span>
-          <span className="block truncate text-2xs text-muted-foreground">
+          <span className="block truncate text-2xs text-white/75">
             Character card{creator ? ` · by ${creator}` : ""}
           </span>
         </span>
-        <span className="shrink-0 text-xs text-muted-foreground transition-colors group-hover:text-foreground">
+        <span className="shrink-0 rounded bg-white/15 px-2 py-0.5 text-xs font-medium transition-colors group-hover:bg-white/25 touch:py-1.5">
           View
         </span>
       </button>

@@ -1752,19 +1752,40 @@ function useShownImage(image: ImageRef) {
 /** Covered by a spoiler: no menu handlers and out of tab order; reachable only via reveal. */
 const COVERED_IMAGE_PROPS = { tabIndex: -1 } as const;
 
+/** Starts a sniff a little before the image scrolls in, like the browser's own lazy load. */
+const CARD_SNIFF_MARGIN = "600px";
+
 /**
  * An image that may secretly be a character card (the PNG `tEXt` payload).
- * Renders the image while the sniff runs; a found card swaps it for the
- * bordered card preview, like the other special embeds in ChatContent.
+ * The sniff reads the full file, so it waits until the image nears the
+ * viewport; a found card is laid OVER the image, so nothing moves when it lands.
  */
 function ImageOrCharacterCard({ image, onOpen }: { image: ImageRef; onOpen: () => void }) {
   // Buzz blobs need a signed GET the sniffer doesn't do; those stay plain images.
   const sniffable = !isBuzzMediaUrl(image.url);
-  const { sources } = useRoutedCandidates(sniffable ? image.url : undefined, image.fallbacks);
+  const boxRef = useRef<HTMLDivElement>(null);
+  const [near, setNear] = useState(false);
+  useEffect(() => {
+    if (!sniffable || near) return;
+    const el = boxRef.current;
+    if (!el || typeof IntersectionObserver === "undefined") {
+      setNear(true);
+      return;
+    }
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) setNear(true);
+      },
+      { rootMargin: CARD_SNIFF_MARGIN },
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [sniffable, near]);
+  const { sources } = useRoutedCandidates(sniffable && near ? image.url : undefined, image.fallbacks);
   const [card, setCard] = useState<CharaCard | null>(null);
   const { url, mime, encryption, fallbacks } = image;
   useEffect(() => {
-    if (!sniffable || sources.length === 0) return;
+    if (sources.length === 0) return;
     let cancelled = false;
     void sniffCharacterCard({ url, mime, encryption, fallbacks }, sources).then((found) => {
       if (!cancelled && found) setCard(found);
@@ -1772,9 +1793,14 @@ function ImageOrCharacterCard({ image, onOpen }: { image: ImageRef; onOpen: () =
     return () => {
       cancelled = true;
     };
-  }, [sniffable, url, mime, encryption, fallbacks, sources]);
-  if (card) return <CharacterCardEmbed card={card} image={image} />;
-  return <InlineImage image={image} onOpen={onOpen} />;
+  }, [url, mime, encryption, fallbacks, sources]);
+  return (
+    <div ref={boxRef} className="relative w-fit max-w-full">
+      <InlineImage image={image} onOpen={onOpen} />
+      {/* The image button's own `my-1.5`: the bar sits on the image's bottom edge. */}
+      {card && <CharacterCardEmbed card={card} image={image} className="absolute inset-x-0 bottom-1.5" />}
+    </div>
+  );
 }
 
 function InlineImage({ image, onOpen }: { image: ImageRef; onOpen: () => void }) {

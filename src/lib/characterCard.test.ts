@@ -1,9 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   characterCardFromPngBytes,
+  clearCharacterCardCache,
   isCharacterCardCandidate,
   parseCharacterCardJson,
+  sniffCharacterCard,
 } from "@/lib/characterCard";
 
 const encoder = new TextEncoder();
@@ -150,6 +152,14 @@ describe("characterCardFromPngBytes", () => {
     expect(card!.spec).toBe("v3");
   });
 
+  it("prefers the `ccv3` payload over the `chara` copy a V3 writer keeps for older readers", () => {
+    const v3 = { ...V2_CARD, spec: "chara_card_v3", data: { ...V2_CARD.data, name: "Nail v3" } };
+    const png = pngOf([ihdr, textChunk("chara", b64(V2_CARD)), textChunk("ccv3", b64(v3)), iend]);
+    const card = characterCardFromPngBytes(png);
+    expect(card!.spec).toBe("v3");
+    expect(card!.name).toBe("Nail v3");
+  });
+
   it("decodes UTF-8 names through the base64 layer", () => {
     const png = pngOf([textChunk("chara", b64({ name: "Séréna 🐉", description: "Accentué" })), iend]);
     const card = characterCardFromPngBytes(png);
@@ -200,5 +210,35 @@ describe("isCharacterCardCandidate", () => {
     expect(isCharacterCardCandidate("https://x.example/pic.jpg")).toBe(false);
     expect(isCharacterCardCandidate("https://x.example/pic.png", "image/jpeg")).toBe(false);
     expect(isCharacterCardCandidate("https://x.example/pic.pngx")).toBe(false);
+  });
+});
+
+describe("sniffCharacterCard", () => {
+  const card = pngOf([textChunk("chara", b64(V2_CARD)), { type: "IEND", data: new Uint8Array(0) }]);
+  const ok = () => new Response(card.slice().buffer);
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    clearCharacterCardCache();
+  });
+
+  it("retries an attachment whose fetch failed rather than remembering it as no card", async () => {
+    const fetchMock = vi.fn().mockRejectedValueOnce(new TypeError("offline")).mockResolvedValue(ok());
+    vi.stubGlobal("fetch", fetchMock);
+    const ref = { url: "https://x.example/retry.png" };
+    expect(await sniffCharacterCard(ref, [ref.url])).toBeNull();
+    expect((await sniffCharacterCard(ref, [ref.url]))?.name).toBe("Nail");
+  });
+
+  it("forgets every sniffed card on clear", async () => {
+    const fetchMock = vi.fn().mockImplementation(async () => ok());
+    vi.stubGlobal("fetch", fetchMock);
+    const ref = { url: "https://x.example/clear.png" };
+    await sniffCharacterCard(ref, [ref.url]);
+    await sniffCharacterCard(ref, [ref.url]);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    clearCharacterCardCache();
+    await sniffCharacterCard(ref, [ref.url]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });
