@@ -45,6 +45,20 @@ function isExternallyOpenableUrl(value) {
 }
 
 /**
+ * Whether a URL is the NIP-46 pairing link the login screen hands to a signer
+ * app (a desktop signer like Opal registers the scheme). Not in
+ * EXTERNAL_SCHEMES: it is honoured only for a navigation the app's own main
+ * frame started, never for a window.open any embedded frame can reach.
+ */
+function isSignerHandoffUrl(value) {
+  try {
+    return new URL(value).protocol === "nostrconnect:";
+  } catch {
+    return false;
+  }
+}
+
+/**
  * The in-app router path of a link to our OWN public web host, or null.
  *
  * A "Copy message link" produces `https://<host>/<chat-path>/m/<id>` — the same
@@ -77,4 +91,9 @@ function internalAppLinkPath(value, host) {
   }
 }
 
-module.exports = { isArmadaAppUrl, isExternallyOpenableUrl, internalAppLinkPath };
+module.exports = {
+  isArmadaAppUrl,
+  isExternallyOpenableUrl,
+  isSignerHandoffUrl,
+  internalAppLinkPath,
+};

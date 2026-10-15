@@ -3181,7 +3181,7 @@ export function ConcordPage() {
             )}
           </ChatHeader>
 
-          <CallStageSlot active={inThisVoice} />
+          <CallStageSlot active={inThisVoice && view === "channel"} />
 
           {appScope && <AppStageSlot scope={appScope} />}
 

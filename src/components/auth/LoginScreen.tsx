@@ -3,7 +3,7 @@
 
 import React, { useRef, useState, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
-import { AlertTriangle, ChevronDown, ExternalLink, FileUp, Loader2, QrCode } from 'lucide-react';
+import { AlertTriangle, Check, ChevronDown, Copy, ExternalLink, FileUp, Loader2, QrCode } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ArmadaKey } from '@/components/brand/ArmadaCrest';
@@ -30,7 +30,8 @@ import { useLoggedInAccounts } from '@/hooks/useLoggedInAccounts';
 import { APP_NAME } from '@/lib/platform';
 import { shareOrigin } from '@/lib/shareOrigin';
 import { withConnectPerms } from "@/lib/nostrConnectPerms";
-import { useIsMobile } from '@/hooks/useIsMobile';
+import { toast } from '@/hooks/useToast';
+import { writeClipboardText } from '@/lib/clipboard';
 
 interface LoginScreenProps {
   isOpen: boolean;
@@ -50,6 +51,12 @@ const nsecRejectionMessage = (input: string) => {
     ? "That doesn't look like a complete secret key. Check you copied the whole nsec."
     : 'Enter a secret key starting with nsec1, or a bunker:// URI.';
 };
+
+// A phone's browser is backgrounded while the signer runs, and it has a callback
+// to return through. Decided by device, not width: a narrow desktop window with no
+// handler for the scheme still needs the QR and its link left up.
+const isMobileDevice = () =>
+  typeof navigator !== 'undefined' && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 
 const validateBunkerUri = (uri: string) => {
   return uri.startsWith('bunker://');
@@ -91,6 +98,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ isOpen, onClose, onLogin, onS
   // progress until the user tapped "Open signer app".
   const [hasOpenedSigner, setHasOpenedSigner] = useState(false);
   const [showQr, setShowQr] = useState(false);
+  const [copiedConnectUri, setCopiedConnectUri] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const login = useLoginActions();
@@ -104,23 +112,24 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ isOpen, onClose, onLogin, onS
   useEffect(() => { onCloseRef.current = onClose; }, [onClose]);
   useEffect(() => { loginRef.current = login; }, [login]);
 
-  const isMobile = useIsMobile();
+  const [isMobile] = useState(isMobileDevice);
+  const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(copiedTimerRef.current), []);
   const hasExtension = 'nostr' in window;
 
   // Returns the URI so the mobile deeplink can use it immediately.
   const generateConnectSession = useCallback((): string => {
     const relayUrls = login.getRelayUrls();
     const params = generateNostrConnectParams(relayUrls);
-    const isMobileDevice = typeof navigator !== 'undefined' && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
     const uri = withConnectPerms(generateNostrConnectURI(params, {
       name: APP_NAME,
-      callback: isMobileDevice ? `${callbackOrigin}/remoteloginsuccess` : undefined,
+      callback: isMobile ? `${callbackOrigin}/remoteloginsuccess` : undefined,
     }));
     setNostrConnectParams(params);
     setNostrConnectUri(uri);
     setConnectError(null);
     return uri;
-  }, [login, callbackOrigin]);
+  }, [login, callbackOrigin, isMobile]);
 
   // Deps limited to `nostrConnectParams`: re-running on parent renders would
   // cancel an in-flight subscription and swallow the signer's approval.
@@ -169,6 +178,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ isOpen, onClose, onLogin, onS
       setConnectStatus(null);
       setHasOpenedSigner(false);
       setShowQr(false);
+      setCopiedConnectUri(false);
       if (abortControllerRef.current) {
         abortControllerRef.current.abort();
       }
@@ -185,6 +195,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ isOpen, onClose, onLogin, onS
     setConnectStatus(null);
     setHasOpenedSigner(false);
     setShowQr(false);
+    setCopiedConnectUri(false);
   }, []);
 
   const handleShowQr = () => {
@@ -192,12 +203,35 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ isOpen, onClose, onLogin, onS
     setShowQr(true);
   };
 
-  // Opens a signer app like Amber. Flip into the progress view *synchronously*
-  // so it's showing when the user returns.
+  // Hands the pairing link to a signer app. Flip into the progress view
+  // *synchronously* so it's showing when the user returns. On desktop the app may
+  // never launch (no handler for the scheme), so leave the QR and its link up as
+  // the fallback instead of an inert form.
   const handleOpenSignerApp = () => {
     const uri = nostrConnectUri || generateConnectSession();
     setHasOpenedSigner(true);
+    if (!isMobile) setShowQr(true);
     window.location.href = uri;
+  };
+
+  // A signer on this same device has no camera to scan the QR with, so the link
+  // has to be pasteable. The field stays visible and selectable for a browser
+  // that refuses the clipboard API (a plain-http self-host is not a secure
+  // context), which is why the copy is not the only way to get the text.
+  const copyConnectUri = async () => {
+    try {
+      await writeClipboardText(nostrConnectUri);
+      setCopiedConnectUri(true);
+      clearTimeout(copiedTimerRef.current);
+      copiedTimerRef.current = setTimeout(() => setCopiedConnectUri(false), 2000);
+      toast({ title: 'Link copied', description: 'Paste it into your signer app.' });
+    } catch {
+      toast({
+        title: 'Copy failed',
+        description: 'Could not copy to the clipboard. Select the link and copy it manually.',
+        variant: 'destructive',
+      });
+    }
   };
 
   const handleExtensionLogin = async () => {
@@ -383,8 +417,33 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ isOpen, onClose, onLogin, onS
                 </div>
               )}
               <p className='text-sm text-muted-foreground text-center'>
-                Scan with a signer app to log in.
+                Scan with a signer app to log in, or copy the link if your signer is on this device.
               </p>
+              {nostrConnectUri && (
+                <div className='relative w-full'>
+                  <Input
+                    readOnly
+                    value={nostrConnectUri}
+                    aria-label='Signer connect link'
+                    className='pr-12 font-mono text-xs bg-background border-transparent clip-corner-lg'
+                  />
+                  <Button
+                    type='button'
+                    variant='ghost'
+                    size='icon'
+                    className='absolute right-0 top-0 h-full w-10 touch:w-11 clip-corner-lg text-muted-foreground hover:bg-muted/60'
+                    onClick={copyConnectUri}
+                    aria-label={copiedConnectUri ? 'Link copied' : 'Copy link'}
+                    title={copiedConnectUri ? 'Copied' : 'Copy link'}
+                  >
+                    {copiedConnectUri ? (
+                      <Check className='size-4 text-success' />
+                    ) : (
+                      <Copy className='size-4' />
+                    )}
+                  </Button>
+                </div>
+              )}
               <button
                 type='button'
                 onClick={handleConnectCancel}
@@ -486,23 +545,23 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ isOpen, onClose, onLogin, onS
                         <FileUp className='h-4 w-4' />
                         Select key file
                       </DropdownMenuItem>
-                      {isMobile ? (
-                        <DropdownMenuItem
-                          onSelect={handleOpenSignerApp}
-                          className='flex items-center gap-2 cursor-pointer'
-                        >
-                          <ExternalLink className='h-4 w-4' />
-                          Open signer app
-                        </DropdownMenuItem>
-                      ) : (
-                        <DropdownMenuItem
-                          onSelect={handleShowQr}
-                          className='flex items-center gap-2 cursor-pointer'
-                        >
-                          <QrCode className='h-4 w-4' />
-                          Connect remote signer
-                        </DropdownMenuItem>
-                      )}
+                      {/* Both hand-offs are offered everywhere: desktop signers
+                          (e.g. Opal, which registers the nostrconnect:// scheme)
+                          open from the same link mobile signers deep-link to. */}
+                      <DropdownMenuItem
+                        onSelect={handleShowQr}
+                        className='flex items-center gap-2 cursor-pointer'
+                      >
+                        <QrCode className='h-4 w-4' />
+                        Connect remote signer
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        onSelect={handleOpenSignerApp}
+                        className='flex items-center gap-2 cursor-pointer'
+                      >
+                        <ExternalLink className='h-4 w-4' />
+                        Open signer app
+                      </DropdownMenuItem>
                     </DropdownMenuContent>
                   </DropdownMenu>
                 </div>
