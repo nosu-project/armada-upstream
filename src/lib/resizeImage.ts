@@ -1,3 +1,4 @@
+import { characterCardFromPngBytes, isPngBytes, stripNonCardMetadata } from "@/lib/characterCard";
 import { hasStrippableMetadata, isAnimatedImage, METADATA_SCAN_BYTES } from "@/lib/imageMetadata";
 
 /** Maximum dimension (width or height) for resized images. */
@@ -28,6 +29,25 @@ export async function resizeImage(file: File): Promise<ResizedImage> {
   if (animated || (!needsResize && !hasStrippableMetadata(head))) {
     bitmap.close();
     return { file, dimensions: `${width}x${height}` };
+  }
+
+  // A character-card PNG (tEXt `chara` payload, the tavern interchange format)
+  // would lose its payload to the canvas round-trip below: the file IS the card,
+  // so it uploads at full size with only its other metadata chunks dropped.
+  // Judged by signature, since a picked file's `type` may be empty.
+  if (isPngBytes(head)) {
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    // The user's own file: no size cap, which exists for sender-chosen sniffs.
+    const parsed = characterCardFromPngBytes(bytes, { maxChunkBytes: Infinity });
+    const stripped = parsed ? stripNonCardMetadata(bytes) : null;
+    if (stripped) {
+      bitmap.close();
+      const card = new File([stripped], replaceExtension(file.name, ".png"), {
+        type: "image/png",
+        lastModified: file.lastModified,
+      });
+      return { file: card, dimensions: `${width}x${height}` };
+    }
   }
 
   const scale = needsResize ? MAX_DIMENSION / Math.max(width, height) : 1;

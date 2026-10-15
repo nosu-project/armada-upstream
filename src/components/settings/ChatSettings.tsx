@@ -49,6 +49,18 @@ export function ChatSettings() {
               updateConfig((current) => ({ ...current, dmTypingIndicators }))}
           />
         </SettingsRow>
+        {!isTouch && (
+          <SettingsRow
+            label="Message actions on hover"
+            description="Show reactions and actions when hovering a message. Off, right-click a message for them."
+          >
+            <Switch
+              checked={config.messageHoverActions}
+              onCheckedChange={(messageHoverActions) =>
+                updateConfig((current) => ({ ...current, messageHoverActions }))}
+            />
+          </SettingsRow>
+        )}
         {Capacitor.getPlatform() === "android" && (
           // Per-device: leave the app vs. walk history from the revealed list pane.
           <SettingsRow

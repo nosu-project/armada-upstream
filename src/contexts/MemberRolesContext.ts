@@ -11,9 +11,14 @@ export interface MemberRole {
   color: number;
 }
 
+/** The member list's staff tiers, shown beside a name. */
+export type StaffTier = "owner" | "admin" | "moderator";
+
 export interface MemberRolesValue {
   /** This member's roles, highest authority first. Empty when they hold none. */
   rolesOf: (pubkey: string) => MemberRole[];
+  /** This member's staff tier, or undefined for a regular member. */
+  staffTierOf: (pubkey: string) => StaffTier | undefined;
 }
 
 export const MemberRolesContext = createContext<MemberRolesValue | undefined>(undefined);

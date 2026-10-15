@@ -1,6 +1,6 @@
 import {
   Award, Brain, CalendarDays, Check, Eye, EyeOff, ExternalLink, FileDigit,
-  FileQuestion, FileText, Film, Gem, Image as ImageIcon, Layers, List, MapPin,
+  FileQuestion, FileText, Film, Gem, Highlighter, Image as ImageIcon, Layers, List, MapPin,
   Mic, Mountain, Music, Package, Palette, RotateCw, Server, Shield, Sparkles, Swords,
   Tag, User, Users, Zap,
 } from "lucide-react";
@@ -84,6 +84,7 @@ const KIND_META: Record<number, KindMeta> = {
   22: { label: "Short video", Icon: Film },
   8333: { label: "Zap", Icon: Zap },
   9735: { label: "Zap receipt", Icon: Zap },
+  9802: { label: "Highlight", Icon: Highlighter },
   10002: { label: "Relay list", Icon: Server },
   30000: { label: "People list", Icon: Users },
   30009: { label: "Badge", Icon: Award },
@@ -286,6 +287,8 @@ function GenericEventCard({ event, sourceUrl, className }: { event: NostrRumor; 
           <EmbeddedMagicDeckCard event={event} />
         ) : event.kind === 37516 ? (
           <EmbeddedTreasureCard event={event} />
+        ) : event.kind === 9802 ? (
+          <EmbeddedHighlightCard event={event} />
         ) : meta ? (
           <TagPreviewCard event={event} meta={meta} />
         ) : (
@@ -906,6 +909,32 @@ function EmbeddedTreasureCard({ event }: { event: NostrRumor }) {
         />
       )}
     </div>
+  );
+}
+
+/**
+ * NIP-84 highlight: the author's `comment` tag (a quote highlight) above the
+ * excerpt in `content`, then the source URL from an `r` tag not marked `mention`.
+ */
+function EmbeddedHighlightCard({ event }: { event: NostrRumor }) {
+  const comment = event.tags.find(([n]) => n === "comment")?.[1]?.trim();
+  const excerpt = event.content.trim();
+  const source = externalUrl(event.tags.find(([n, , marker]) => n === "r" && marker !== "mention")?.[1]);
+
+  return (
+    <EmbedTruncatedBody>
+      <div className="space-y-1.5 min-w-0">
+        {comment && (
+          <ChatContent event={event} contentOverride={comment} className="text-sm leading-relaxed" disableNoteEmbeds />
+        )}
+        {excerpt && (
+          <blockquote className="border-l-2 border-primary/60 pl-2.5 text-sm italic leading-relaxed text-foreground/90 whitespace-pre-wrap break-words">
+            {excerpt}
+          </blockquote>
+        )}
+        {source && <SourceLink url={source} />}
+      </div>
+    </EmbedTruncatedBody>
   );
 }
 

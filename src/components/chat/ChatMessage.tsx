@@ -412,7 +412,9 @@ const ChatMessageInner = memo(function ChatMessageInner({
   const { user } = useCurrentUser();
   const isTouch = useIsTouch();
   // `useContext`, not `useAppContext` (which throws): mountable bare in tests.
-  const sendOnEnter = sendsOnEnter(useContext(AppContext)?.config.sendOnEnter, isTouch);
+  const appConfig = useContext(AppContext)?.config;
+  const sendOnEnter = sendsOnEnter(appConfig?.sendOnEnter, isTouch);
+  const hoverActions = appConfig?.messageHoverActions ?? true;
   const composerBoundsRef = useComposerBoundsRef();
   // The author name is resolved by MessageRow, not here. A bot command reads as
   // an action line rather than raw arguments.
@@ -907,8 +909,9 @@ const ChatMessageInner = memo(function ChatMessageInner({
           // NIP-48: bridged in from another network.
           proxy={parseProxyTag(event.tags)}
           nameBadge={nameBadge}
-          // Touch uses the long-press sheet: the strip can't fit on a phone.
-          actions={isTouch ? undefined : toolbar}
+          // Touch uses the long-press sheet: the strip can't fit on a phone. Off,
+          // desktop keeps the right-click menu, which carries the reactions too.
+          actions={isTouch || !hoverActions ? undefined : toolbar}
           beforeBody={hasReplyContext ? replyContext : undefined}
           afterBody={afterBody}
           continuation={

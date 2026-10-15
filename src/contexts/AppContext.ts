@@ -248,6 +248,11 @@ export interface AppConfig {
    */
   sendOnEnter?: SendOnEnterPref;
   /**
+   * Whether hovering a message shows its action strip on desktop (default on).
+   * Off, reactions and actions live in the right-click menu only. Synced.
+   */
+  messageHoverActions: boolean;
+  /**
    * Bluetooth-mesh incognito (default on): announce `anon<peerid>` instead of the
    * display name, like bitchat. Per-device.
    */
@@ -320,6 +325,7 @@ export const METADATA_CONFIG_KEYS = [
   "communityMediaKnownHostsOnly",
   "trustedMediaHosts",
   "sendOnEnter",
+  "messageHoverActions",
   "currencyDisplay",
   "defaultZapMethod",
   "zapsEnabled",
@@ -413,6 +419,7 @@ export const defaultConfig: AppConfig = {
   communityMediaAutoload: "trusted",
   communityMediaKnownHostsOnly: true,
   trustedMediaHosts: [],
+  messageHoverActions: true,
   meshIncognito: true,
   meshEnabled: false,
   androidBackLeavesApp: true,

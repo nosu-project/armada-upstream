@@ -17,6 +17,8 @@ import { channelGitRepositoryAttachments } from "@/concord/lib/types";
 import { heldChannelKeys, liveEntries, rehydrateCommunity, type CommunityListEntry } from "@/concord/lib/communityList";
 import { controlGroups } from "@/concord/lib/control";
 import { guestbookGroups } from "@/concord/lib/guestbook";
+import { isTitledPost } from "@/concord/lib/forum";
+import { forumAsChatIds, showsAsFeed } from "@/concord/lib/forumPresentation";
 import { KIND_MESSAGE } from "@/concord/lib/kinds";
 import { warmupCommunities } from "@/concord/lib/loginWarmup";
 import { openPlaneWrapsChunked } from "@/concord/lib/planeSync";
@@ -136,11 +138,15 @@ async function communityDotted(communityIdHex: string, channels: Channel[], ctx:
     channels.map((c) => c.idHex),
     { perChannel: DOT_SCAN_WINDOW },
   );
+  const asChat = forumAsChatIds();
+  const feedOnly = new Set(channels.filter((c) => showsAsFeed(c, asChat)).map((c) => c.idHex));
   for (const [idHex, rumors] of byChannel) {
     const lastRead = ctx.readState[concordReadKey(idHex)] ?? 0;
     const muted = ctx.isMuted("c2", communityIdHex, idHex);
+    const titledOnly = feedOnly.has(idHex);
     for (const r of rumors) {
       if (r.kind !== KIND_MESSAGE) continue;
+      if (titledOnly && !isTitledPost(r)) continue;
       if (r.author === ctx.pubkey) continue;
       if (r.createdAt <= lastRead) continue;
       if (!muted) return true;

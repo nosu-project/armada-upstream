@@ -403,7 +403,8 @@ function ArmedPreviewCard({
   const moderation = useUserModeration(pubkey);
   return (
     <>
-      <Popover open={open} onOpenChange={onOpenChange}>
+      {/* Modal, so a click outside only dismisses rather than also landing on what's beneath. */}
+      <Popover modal open={open} onOpenChange={onOpenChange}>
         <PopoverTrigger
           asChild
           onPointerEnter={() => prefetchTheme(pubkey)}

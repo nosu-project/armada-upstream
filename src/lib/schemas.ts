@@ -145,6 +145,7 @@ export const AppConfigSchema = z.object({
   communityMediaKnownHostsOnly: z.boolean().catch(defaultConfig.communityMediaKnownHostsOnly),
   trustedMediaHosts: z.array(z.string()).catch(defaultConfig.trustedMediaHosts),
   sendOnEnter: SendOnEnterSchema.optional().catch(undefined),
+  messageHoverActions: z.boolean().catch(defaultConfig.messageHoverActions),
   currencyDisplay: z.enum(["usd", "sats"]).catch(defaultConfig.currencyDisplay),
   defaultZapMethod: z.enum(PAYMENT_METHOD_TYPES).catch(defaultConfig.defaultZapMethod),
   zapsEnabled: z.boolean().catch(defaultConfig.zapsEnabled),
@@ -194,6 +195,8 @@ export const MetadataDocSchema = z.looseObject({
   /** Hosts whose community media loads without asking. */
   trustedMediaHosts: z.array(z.string()).optional(),
   sendOnEnter: SendOnEnterSchema.optional(),
+  /** Desktop hover action strip on messages. */
+  messageHoverActions: z.boolean().optional(),
   currencyDisplay: z.enum(["usd", "sats"]).optional(),
   defaultZapMethod: z.enum(PAYMENT_METHOD_TYPES).optional(),
   zapsEnabled: z.boolean().optional(),

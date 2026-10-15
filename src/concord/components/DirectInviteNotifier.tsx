@@ -6,12 +6,21 @@ import { Link, useLocation } from "react-router-dom";
 import { ToastAction } from "@/components/ui/toast";
 import { assertNotDissolved, bundleToEntry, DissolvedCommunityError } from "@/concord/hooks/useCommunityActions";
 import { useCommunity, useCommunityEntry, useUpdateCommunityList } from "@/concord/hooks/useCommunityList";
-import { useControlFold } from "@/concord/hooks/useControlPlane";
+import { invalidateControl, useControlFold } from "@/concord/hooks/useControlPlane";
 import { useInviteInbox, type ParkedInvite } from "@/concord/hooks/useDirectInvites";
 import { judgeCatchUp, type CatchUpVerdict } from "@/concord/lib/catchUpAdoption";
 import { catchUpChannelIds, heldMembershipOf } from "@/concord/lib/directInvite";
+import { sweepControl } from "@/concord/lib/planeSync";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { toast } from "@/hooks/useToast";
+
+/**
+ * How long a staff-sent catch-up the fold refuses is treated as fold lag: the key
+ * is sent right after the Grant that entitles it, so it often outruns it.
+ */
+const CATCH_UP_GRACE_MS = 20_000;
+/** When, within the grace, to re-read the Control Plane for a Grant the live sub missed. */
+const CATCH_UP_RESWEEP_MS = 4_000;
 
 /**
  * Passive notifier for direct Concord invites (CORD-05 §6): a toast pointing
@@ -109,9 +118,30 @@ function CatchUpAdopter({
     return judgeCatchUp(folded, user.pubkey, invite.sender, invite.bundle, held);
   }, [folded, user, invite, held]);
 
+  // A refusal that a Grant still in flight would overturn waits out the grace
+  // (re-reading the plane once) before it becomes a manual Accept.
+  const mayBeLag = verdict === "not-entitled" || verdict === "sender-not-staff";
+  const [graceOver, setGraceOver] = useState(false);
+  const sweepRef = useRef<() => void>(() => undefined);
+  sweepRef.current = () => {
+    if (!community) return;
+    void sweepControl(nostr, community)
+      .then(() => invalidateControl(queryClient, community.idHex))
+      .catch(() => undefined);
+  };
   useEffect(() => {
-    onVerdict(invite.wrapId, verdict);
-  }, [invite.wrapId, verdict, onVerdict]);
+    if (!mayBeLag || graceOver) return;
+    const resweep = setTimeout(() => sweepRef.current(), CATCH_UP_RESWEEP_MS);
+    const expire = setTimeout(() => setGraceOver(true), CATCH_UP_GRACE_MS);
+    return () => {
+      clearTimeout(resweep);
+      clearTimeout(expire);
+    };
+  }, [mayBeLag, graceOver]);
+
+  useEffect(() => {
+    onVerdict(invite.wrapId, mayBeLag && !graceOver ? "no-fold" : verdict);
+  }, [invite.wrapId, verdict, mayBeLag, graceOver, onVerdict]);
 
   useEffect(() => {
     if (verdict !== "adopt" || applied.current || !held) return;
