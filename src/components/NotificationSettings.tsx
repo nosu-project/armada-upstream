@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { AlertTriangle, Play } from "lucide-react";
 
+import { SettingsGroup, SettingsRow } from "@/components/settings/SettingsSection";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useForegroundNotificationSettings } from "@/hooks/useForegroundNotificationSettings";
 import {
@@ -49,15 +50,17 @@ export function NotificationSettings() {
   const native = useNativeNotifications();
 
   if (!user) {
-    return <p className="text-sm text-muted-foreground">Log in to enable notifications.</p>;
+    return <NoticeGroup>Log in to enable notifications.</NoticeGroup>;
   }
 
   if (native.supported) {
     return (
-      <div className="space-y-4">
+      <>
+        {native.enabled && <BatteryOptimizationWarning />}
         <NotificationToggles
           title="Background notifications"
-          description="Armada stays connected in the background to notify you, without Google services."
+          description="Get notified even when Armada is closed."
+          info="Armada stays connected in the background to notify you, without Google services."
           enabled={native.enabled}
           busy={native.busy}
           blocked={false}
@@ -66,16 +69,26 @@ export function NotificationSettings() {
           onSetPrefs={(p) => native.setPrefs(p).catch(() => {})}
         />
         <NativeNotificationHealthPanel native={native} />
-        {native.enabled && <BatteryOptimizationWarning />}
-      </div>
+      </>
     );
   }
 
   return (
-    <div className="space-y-6">
+    <>
       <WebPushSettings />
       {!isNativeRuntime() && <NotificationSoundSettings />}
-    </div>
+    </>
+  );
+}
+
+/** A group holding only explanatory copy, for states with nothing to toggle. */
+function NoticeGroup({ children }: { children: ReactNode }) {
+  return (
+    <SettingsGroup>
+      <SettingsRow>
+        <div className="space-y-2 text-sm text-muted-foreground">{children}</div>
+      </SettingsRow>
+    </SettingsGroup>
   );
 }
 
@@ -110,9 +123,9 @@ function NativeNotificationHealthPanel({
   };
 
   return (
-    <div className="space-y-3">
+    <SettingsGroup title="Status">
       {(blocked || degraded || callsBlocked) && (
-        <div className="clip-hairline-lg [--edge:var(--warning)/0.4] [--fill:var(--warning)/0.1] [--fill-hover:var(--warning)/0.1] p-3">
+        <SettingsRow className="bg-warning/10">
           <div className="flex items-start gap-2">
             <AlertTriangle className="mt-0.5 size-4 shrink-0 text-warning" />
             <div className="min-w-0 flex-1 space-y-2">
@@ -141,7 +154,7 @@ function NativeNotificationHealthPanel({
                 {(appBlocked || messagesBlocked || messagesQuiet) && (
                   <Button
                     size="sm"
-                    variant="outline"
+                    variant="secondary"
                     className="h-8 text-xs touch:h-11"
                     onClick={() => open(appBlocked ? undefined : "messages")}
                   >
@@ -151,7 +164,7 @@ function NativeNotificationHealthPanel({
                 {(callsBlocked || callsQuiet) && (
                   <Button
                     size="sm"
-                    variant="outline"
+                    variant="secondary"
                     className="h-8 text-xs touch:h-11"
                     onClick={() => open("calls")}
                   >
@@ -161,7 +174,7 @@ function NativeNotificationHealthPanel({
                 {serviceBlocked && (
                   <Button
                     size="sm"
-                    variant="outline"
+                    variant="secondary"
                     className="h-8 text-xs touch:h-11"
                     onClick={() => open("service")}
                   >
@@ -171,11 +184,11 @@ function NativeNotificationHealthPanel({
               </div>
             </div>
           </div>
-        </div>
+        </SettingsRow>
       )}
 
-      <details className="clip-hairline-lg [--edge:var(--border)/0.5] [--fill-hover:var(--background)/0.4] px-3 py-2 text-xs">
-        <summary className="cursor-pointer font-medium">Notification diagnostics</summary>
+      <details className="px-4 py-3.5 text-xs">
+        <summary className="cursor-pointer text-sm font-medium">Notification diagnostics</summary>
         <dl className="mt-3 grid grid-cols-[minmax(0,1fr)_auto] gap-x-4 gap-y-1 text-muted-foreground">
           <dt>Service / config</dt>
           <dd className="text-right text-foreground">
@@ -225,7 +238,7 @@ function NativeNotificationHealthPanel({
           Refresh
         </Button>
       </details>
-    </div>
+    </SettingsGroup>
   );
 }
 
@@ -259,86 +272,82 @@ function NotificationSoundSettings() {
   };
 
   return (
-    <div className="space-y-4 border-t border-border pt-5">
-      <label className="flex cursor-pointer items-center justify-between gap-4">
-        <span className="text-sm font-medium">
-          Notification sound
-          <span className="block text-xs font-normal text-muted-foreground">
-            Play a chosen sound for new activity while Armada is open.
-          </span>
-        </span>
+    <SettingsGroup title="Sound">
+      <SettingsRow
+        label="Notification sound"
+        description="Plays for new activity while Armada is open."
+        info={(
+          <>
+            Background push and Android use the sound selected by your device. Browsers may require
+            one interaction with Armada before allowing in-page audio. Sounds are CC0 or CC BY-SA;
+            see the{" "}
+            <a
+              className="underline underline-offset-2 hover:text-foreground"
+              href="/sounds/notifications/LICENSES.md"
+              target="_blank"
+              rel="noreferrer"
+            >
+              sound credits
+            </a>
+            .
+          </>
+        )}
+      >
         <Switch
           checked={settings.enabled}
           onCheckedChange={(enabled) => update({ enabled })}
         />
-      </label>
+      </SettingsRow>
 
       {settings.enabled && (
-        <div className="space-y-4">
-          <div className="flex items-end gap-2">
-            <label className="min-w-0 flex-1 space-y-1.5">
-              <span className="text-xs font-medium text-muted-foreground">Sound</span>
-              <Select
-                value={settings.sound}
-                onValueChange={(sound) => update({ sound: sound as NotificationSoundId })}
-              >
-                <SelectTrigger aria-label="Notification sound">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {NOTIFICATION_SOUNDS.map((sound) => (
-                    <SelectItem key={sound.id} value={sound.id}>
-                      {sound.label} by {sound.creator}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </label>
+        <SettingsRow stack label="Sound">
+          <div className="flex items-center gap-2">
+            <Select
+              value={settings.sound}
+              onValueChange={(sound) => update({ sound: sound as NotificationSoundId })}
+            >
+              <SelectTrigger aria-label="Notification sound" className="min-w-0 flex-1 sm:w-56">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {NOTIFICATION_SOUNDS.map((sound) => (
+                  <SelectItem key={sound.id} value={sound.id}>
+                    {sound.label} by {sound.creator}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
             <Button
               type="button"
-              size="sm"
-              variant="outline"
-              className="h-10 gap-2 touch:h-11"
+              size="icon"
+              variant="secondary"
+              aria-label="Preview sound"
+              className="size-10 shrink-0 clip-corner touch:size-11"
               onClick={() => playNotificationSound({ settings, preview: true })}
             >
               <Play className="size-4" />
-              Preview
             </Button>
           </div>
+        </SettingsRow>
+      )}
 
-          <label className="block space-y-2">
-            <span className="flex items-center justify-between gap-4 text-xs font-medium text-muted-foreground">
-              <span>Volume</span>
-              <span>{Math.round(settings.volume * 100)}%</span>
-            </span>
+      {settings.enabled && (
+        <SettingsRow stack label="Volume">
+          <div className="flex items-center gap-3 sm:w-72">
             <Slider
               aria-label="Notification sound volume"
-              className="touch:h-11"
+              className="flex-1 touch:h-11"
               min={0}
               max={1}
               step={0.05}
               value={[settings.volume]}
               onValueChange={([volume]) => update({ volume })}
             />
-          </label>
-        </div>
+            <span className="w-11 shrink-0 text-right text-sm tabular-nums">{Math.round(settings.volume * 100)}%</span>
+          </div>
+        </SettingsRow>
       )}
-
-      <p className="text-xs text-muted-foreground">
-        Background push and Android use the sound selected by your device. Browsers may require
-        one interaction with Armada before allowing in-page audio. Sounds are CC0 or CC BY-SA;
-        see the{" "}
-        <a
-          className="underline underline-offset-2 hover:text-foreground"
-          href="/sounds/notifications/LICENSES.md"
-          target="_blank"
-          rel="noreferrer"
-        >
-          sound credits
-        </a>
-        .
-      </p>
-    </div>
+    </SettingsGroup>
   );
 }
 
@@ -373,26 +382,26 @@ function BatteryOptimizationWarning() {
   if (!optimized) return null;
 
   return (
-    <div className="clip-hairline-lg [--edge:var(--warning)/0.4] [--fill:var(--warning)/0.1] [--fill-hover:var(--warning)/0.1] p-3">
-      <div className="flex items-start gap-2">
-        <AlertTriangle className="mt-0.5 size-4 shrink-0 text-warning" />
-        <div className="min-w-0 flex-1">
-          <p className="text-xs">
-            Battery optimization is enabled for Armada. Android may close the background
-            connection while your device is idle and prevent notifications from resuming
-            after a reboot.
-          </p>
-          <Button
-            size="sm"
-            variant="outline"
-            className="mt-2 h-8 text-xs"
-            onClick={() => requestIgnoreBatteryOptimizations()}
-          >
-            Disable battery optimization
-          </Button>
+    <SettingsGroup>
+      <SettingsRow className="bg-warning/10">
+        <div className="flex items-start gap-2">
+          <AlertTriangle className="mt-0.5 size-4 shrink-0 text-warning" />
+          <div className="min-w-0 flex-1">
+            <p className="text-xs">
+              Battery optimization can stop notifications while your device is idle or after a reboot.
+            </p>
+            <Button
+              size="sm"
+              variant="secondary"
+              className="mt-2 h-8 text-xs touch:h-11"
+              onClick={() => requestIgnoreBatteryOptimizations()}
+            >
+              Disable battery optimization
+            </Button>
+          </div>
         </div>
-      </div>
-    </div>
+      </SettingsRow>
+    </SettingsGroup>
   );
 }
 
@@ -431,15 +440,19 @@ function WebPushSettings() {
 
   if (error) {
     return (
-      <div className="space-y-3">
-        <div className="flex items-start gap-2 text-sm text-muted-foreground">
-          <AlertTriangle className="mt-0.5 size-4 shrink-0 text-warning" />
-          <p>{error}</p>
-        </div>
-        <Button size="sm" variant="outline" onClick={retry}>
-          Retry notification setup
-        </Button>
-      </div>
+      <SettingsGroup>
+        <SettingsRow>
+          <div className="space-y-3">
+            <div className="flex items-start gap-2 text-sm text-muted-foreground">
+              <AlertTriangle className="mt-0.5 size-4 shrink-0 text-warning" />
+              <p>{error}</p>
+            </div>
+            <Button size="sm" variant="secondary" className="touch:h-11" onClick={retry}>
+              Retry notification setup
+            </Button>
+          </div>
+        </SettingsRow>
+      </SettingsGroup>
     );
   }
 
@@ -448,12 +461,13 @@ function WebPushSettings() {
       title="Enable push notifications"
       description={!ready
         ? "Preparing secure background notifications…"
+        : "Get notified even when Armada is closed."}
+      info={!ready || hasNappPush()
+        ? undefined
         : hasIosPush()
           // No Notification Service Extension yet, so the lock screen shows the gateway's fixed text.
-          ? "Get notified even when Armada is closed. Notifications don't name the sender or quote the message. Armada decrypts it when you open it."
-          : hasNappPush()
-            ? "Get notified even when Armada is closed."
-            : "Get notified even when Armada is closed. Armada repairs expired browser subscriptions whenever you return."}
+          ? "Notifications don't name the sender or quote the message. Armada decrypts it when you open it."
+          : "Armada repairs expired browser subscriptions whenever you return."}
       enabled={enabled}
       busy={busy}
       blocked={permission === "denied"}
@@ -472,7 +486,15 @@ function WebPushSettings() {
  * absent (Lockdown Mode or content blockers), not installed (Add to Home
  * Screen), or installed without push (iOS 16.4+ / re-add).
  */
-function IosNotificationHint({
+function IosNotificationHint(props: { standalone: boolean; reason?: WebPushUnavailableReason }) {
+  return (
+    <NoticeGroup>
+      <IosNotificationHintText {...props} />
+    </NoticeGroup>
+  );
+}
+
+function IosNotificationHintText({
   standalone,
   reason,
 }: {
@@ -567,50 +589,46 @@ function ForegroundOnlySettings() {
 
   if (!apiAvailable) {
     return (
-      <p className="text-sm text-muted-foreground">
+      <NoticeGroup>
         {desktop
           ? "This version of Armada can't show notifications."
           : "This browser doesn't support notifications. Use Chrome, Firefox, or the Android app."}
-      </p>
+      </NoticeGroup>
     );
   }
 
   return (
-    <div className="space-y-4">
-      <NotificationToggles
-        title="Notifications while Armada is open"
-        description={desktop
-          ? "Armada shows a system notification for new messages while it's running, including when it's minimized to the tray."
-          : "This browser doesn't support background push, so notifications only arrive while Armada is open. You'll get a system notification for new messages when you're not looking at the conversation."}
-        enabled={enabled}
-        busy={false}
-        blocked={blocked}
-        blockedMessage={desktop
-          ? "Notifications are blocked. Allow Armada in your system notification settings."
-          : "Notifications are blocked in your browser settings."}
-        // Permission never asked: the master wish defaults on, so without this it looks enabled but never fires.
-        hint={apiAvailable && permission === "default"
-          ? desktop
-            ? "Armada isn't allowed to notify yet. Turn this on to ask."
-            : "Your browser hasn't allowed notifications yet. Turn this on to ask."
-          : undefined}
-        prefs={prefs}
-        onToggle={(v) => setEnabled(v).catch(() => {})}
-        onSetPrefs={setPrefs}
-      />
-      {!desktop && (
-        <p className="text-xs text-muted-foreground">
-          For notifications when Armada is closed, use a browser that supports Web Push (Chrome,
-          Firefox, or Brave with Google push services enabled), or the Android app.
-        </p>
-      )}
-    </div>
+    <NotificationToggles
+      title="Notifications while Armada is open"
+      description={desktop
+        ? "Including when minimized to the tray."
+        : "This browser can't notify you while Armada is closed."}
+      info={desktop
+        ? "Armada shows a system notification for new messages while it's running, including when it's minimized to the tray."
+        : "This browser doesn't support background push, so you'll get a system notification for new messages only while Armada is open and you're not looking at the conversation. For notifications when Armada is closed, use a browser that supports Web Push (Chrome, Firefox, or Brave with Google push services enabled), or the Android app."}
+      enabled={enabled}
+      busy={false}
+      blocked={blocked}
+      blockedMessage={desktop
+        ? "Notifications are blocked. Allow Armada in your system notification settings."
+        : "Notifications are blocked in your browser settings."}
+      // Permission never asked: the master wish defaults on, so without this it looks enabled but never fires.
+      hint={apiAvailable && permission === "default"
+        ? desktop
+          ? "Armada isn't allowed to notify yet. Turn this on to ask."
+          : "Your browser hasn't allowed notifications yet. Turn this on to ask."
+        : undefined}
+      prefs={prefs}
+      onToggle={(v) => setEnabled(v).catch(() => {})}
+      onSetPrefs={setPrefs}
+    />
   );
 }
 
 function NotificationToggles(props: {
   title: string;
   description?: string;
+  info?: string;
   enabled: boolean;
   busy: boolean;
   blocked: boolean;
@@ -621,7 +639,7 @@ function NotificationToggles(props: {
   onToggle: (value: boolean) => void;
   onSetPrefs: (next: PushPrefs) => void;
 }) {
-  const { title, description, enabled, busy, blocked, blockedMessage, hint, prefs } = props;
+  const { title, description, info, enabled, busy, blocked, blockedMessage, hint, prefs } = props;
 
   const setPref = (key: keyof PushPrefs) => (value: boolean) => {
     props.onSetPrefs({ ...prefs, [key]: value });
@@ -632,27 +650,29 @@ function NotificationToggles(props: {
   };
 
   return (
-    <div className="space-y-5">
-      <label className="flex items-center justify-between gap-4 cursor-pointer">
-        <span className="text-sm font-medium">
-          {title}
-          {description && (
-            <span className="block text-xs font-normal text-muted-foreground">{description}</span>
+    <>
+      <SettingsGroup id="notifications">
+        <SettingsRow
+          label={title}
+          info={info}
+          description={(
+            <>
+              {description}
+              {blocked && blockedMessage && (
+                <span className="block text-destructive">{blockedMessage}</span>
+              )}
+              {!blocked && hint && (
+                <span className="block text-warning">{hint}</span>
+              )}
+            </>
           )}
-          {blocked && blockedMessage && (
-            <span className="block text-xs font-normal text-destructive">{blockedMessage}</span>
-          )}
-          {!blocked && hint && (
-            <span className="block text-xs font-normal text-warning">{hint}</span>
-          )}
-        </span>
-        <Switch checked={enabled} disabled={busy || blocked} onCheckedChange={props.onToggle} />
-      </label>
+        >
+          <Switch checked={enabled} disabled={busy || blocked} onCheckedChange={props.onToggle} aria-label={title} />
+        </SettingsRow>
+      </SettingsGroup>
 
       {enabled && (
-        <div className="space-y-4 border-t border-border pt-4">
-          <h3 className="text-sm font-semibold text-muted-foreground">Notify me about</h3>
-
+        <SettingsGroup title="Notify me about">
           <PrefRow
             label="Mentions"
             description="When someone @-mentions you in a channel."
@@ -682,20 +702,19 @@ function NotificationToggles(props: {
             onChange={setPref("directMessages")}
           />
           {prefs.directMessages && (
-            <label className="flex items-center justify-between gap-4 pl-4">
-              <span className="min-w-0">
-                <span className="block text-sm font-medium">Message requests</span>
-                <span className="block text-xs font-normal text-muted-foreground">
-                  DMs from people you don't follow. A stranger controls the text,
-                  name and picture a notification shows.
-                </span>
-              </span>
+            <SettingsRow
+              stack
+              label="Message requests"
+              description="DMs from people you don't follow."
+              info="A stranger controls the text, name and picture a notification shows."
+              className="pl-8"
+            >
               <Select
                 value={prefs.dmRequests}
                 onValueChange={(v) => setDmRequests(v as DmRequestLevel)}
                 disabled={busy}
               >
-                <SelectTrigger className="w-36 shrink-0">
+                <SelectTrigger className="w-full sm:w-36" aria-label="Message requests">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -704,7 +723,7 @@ function NotificationToggles(props: {
                   <SelectItem value="off">Don't notify</SelectItem>
                 </SelectContent>
               </Select>
-            </label>
+            </SettingsRow>
           )}
           <PrefRow
             label="All channel messages"
@@ -713,9 +732,9 @@ function NotificationToggles(props: {
             disabled={busy}
             onChange={setPref("allGroupMessages")}
           />
-        </div>
+        </SettingsGroup>
       )}
-    </div>
+    </>
   );
 }
 
@@ -727,12 +746,13 @@ function PrefRow(props: {
   onChange: (value: boolean) => void;
 }) {
   return (
-    <label className="flex items-center justify-between gap-4 cursor-pointer">
-      <span className="min-w-0">
-        <span className="block text-sm font-medium">{props.label}</span>
-        <span className="block text-xs text-muted-foreground">{props.description}</span>
-      </span>
-      <Switch checked={props.checked} disabled={props.disabled} onCheckedChange={props.onChange} />
-    </label>
+    <SettingsRow label={props.label} description={props.description}>
+      <Switch
+        checked={props.checked}
+        disabled={props.disabled}
+        onCheckedChange={props.onChange}
+        aria-label={props.label}
+      />
+    </SettingsRow>
   );
 }

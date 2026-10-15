@@ -7,6 +7,7 @@ import { AlertTriangle, ChevronDown, ExternalLink, FileUp, Loader2, QrCode } fro
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ArmadaKey } from '@/components/brand/ArmadaCrest';
+import { SignupTerms } from '@/components/onboarding/SignupTerms';
 import { WizardShell } from '@/components/onboarding/WizardShell';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import {
@@ -518,6 +519,9 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ isOpen, onClose, onLogin, onS
                   {isLoading ? 'Logging in…' : 'Log in'}
                 </Button>
               </form>
+
+              {/* Covers every method above: signer app, extension, key and Create account. */}
+              <SignupTerms action={joinMode ? 'continuing' : 'logging in'} />
             </>
           )}
         </div>

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import type { NostrEvent } from "@nostrify/nostrify";
@@ -7,10 +7,10 @@ import { ArmadaIdentity } from "@/components/brand/ArmadaCrest";
 import { ProfileStepBody } from "@/components/onboarding/ProfileStep";
 import { WizardShell } from "@/components/onboarding/WizardShell";
 import {
-  RelayStepBody,
-  SaveKeyStepBody,
+  CreatingAccountStepBody,
   useSignupKey,
 } from "@/components/onboarding/signupSteps";
+import { SignupTerms } from "@/components/onboarding/SignupTerms";
 import { Button } from "@/components/ui/button";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
@@ -18,45 +18,22 @@ import { suppressNextSyncGate } from "@/hooks/useFreshLogin";
 import { setOnboardingActive } from "@/hooks/useOnboarding";
 import { useSignupLists } from "@/hooks/useSignupLists";
 import { clearPendingJoin, peekPendingJoin, type JoinLink } from "@/lib/joinLink";
+import { clearKeyBackupPending, markKeyBackupPending } from "@/lib/keyBackup";
 import { defaultSignupSetup } from "@/lib/signupLists";
 import { markNotificationSettingsReady } from "@/lib/notificationSettingsAuthority";
 import { markRelayRecoveryPromptShown } from "@/lib/relayRecoveryPrompt";
 import { useLoginActions } from "@/hooks/useLoginActions";
-import { toast } from "@/hooks/useToast";
 
 /**
- * Full-page account-creation wizard (Ditto-style): save the minted key
- * (Continue only after a backup) → profile (skippable) → relays. Step bodies
- * are shared with {@link SignupDialog} (`signupSteps.tsx`); this adds the
- * progress bar, a `/join` confirmation (whose relays become the home relays)
- * and an exit onto /discover. Lazy-loaded: the landing doesn't need its deps.
+ * Full-page account-creation wizard (Ditto-style): the minted key signs in at
+ * once → profile (skippable) → Discover, on the default relays. Backing the key
+ * up is asked for later (`KeyBackupReminder`). Step bodies are shared with
+ * {@link SignupDialog} (`signupSteps.tsx`); this adds a `/join` confirmation
+ * (whose relays become the home relays) and the exit onto /discover.
+ * Lazy-loaded: the landing doesn't need its deps.
  */
 
-const WIZARD_STEPS = ["download", "profile", "relays"] as const;
-type WizardStep = (typeof WIZARD_STEPS)[number];
-
-/** The shared wizard chrome, positioned within this wizard's step sequence. */
-function SignupShell({ step, maxWidth, onBack, onClose, children }: {
-  step: WizardStep;
-  /** Column width cap (a `max-w-*` class). Text-heavy steps go a size up. */
-  maxWidth?: "max-w-sm" | "max-w-md" | "max-w-xl";
-  onBack?: () => void;
-  onClose?: () => void;
-  children: ReactNode;
-}) {
-  return (
-    <WizardShell
-      index={WIZARD_STEPS.indexOf(step)}
-      total={WIZARD_STEPS.length}
-      stepKey={step}
-      maxWidth={maxWidth}
-      onBack={onBack}
-      onClose={onClose}
-    >
-      {children}
-    </WizardShell>
-  );
-}
+type WizardStep = "create" | "profile";
 
 export interface SignupWizardProps {
   /** Leave without finishing (back off step one, close, or declining a join link). */
@@ -73,37 +50,38 @@ export function SignupWizard({ onExit }: SignupWizardProps) {
   // confirmation screen precedes key generation.
   const [join, setJoin] = useState<JoinLink | undefined>(() => peekPendingJoin());
   // `null` is the join confirmation step.
-  const [step, setStep] = useState<WizardStep | null>(() => (peekPendingJoin() ? null : "download"));
+  const [step, setStep] = useState<WizardStep | null>(() => (peekPendingJoin() ? null : "create"));
   const dismissJoin = () => {
     clearPendingJoin();
     setJoin(undefined);
     onExit();
   };
-  // Keeps the save step rendered while `login.nsec` persists (otherwise
-  // neither branch matches and nothing renders).
-  const [loggingIn, setLoggingIn] = useState(false);
+  // One login per attempt; `createFailed` offers the retry.
+  const creatingRef = useRef(false);
+  const [createFailed, setCreateFailed] = useState(false);
   // Home relays are the join link's, else the app's; the rest follow the app defaults.
-  const [defaultSetup] = useState(() => defaultSignupSetup(join ? join.relays : config.appRelays, config));
-  const [setup, setSetup] = useState(defaultSetup);
+  const [setup] = useState(() => defaultSignupSetup(join ? join.relays : config.appRelays, config));
 
-  // Clear on any exit; it's set synchronously at login (handleContinue) to beat the race.
+  // Clear on any exit; it's set synchronously at login (createAccount) to beat the race.
   useEffect(() => () => setOnboardingActive(false), []);
 
   const signupLists = useSignupLists();
-  // The profile step's kind 0, re-sent to the relays chosen after it.
+  // The profile step's kind 0, re-sent to the full relay set at the end.
   const profileRef = useRef<NostrEvent | undefined>(undefined);
 
   // The ONE exception to never-auto-publish: a key minted moments ago has
-  // provably no existing list to overwrite. Closing counts as accepting the
-  // lists shown. Then exit onto Discover: browsing live communities beats a blank form.
+  // provably no existing list to overwrite. Closing the profile step finishes
+  // too. Then exit onto Discover: browsing live communities beats a blank form.
   const finishOnboarding = () => {
     signupLists.publish(signupKey.nsec, setup, profileRef.current);
     navigate("/discover");
   };
 
-  // Log in as the new account (only reachable once the key is backed up).
-  const handleContinue = async () => {
-    if (loggingIn) return;
+  // Log in as the new account; its backup is asked for later.
+  const createAccount = async () => {
+    if (creatingRef.current) return;
+    creatingRef.current = true;
+    setCreateFailed(false);
     const { identity, nsec } = signupKey;
     // Brand-new account: skip the post-login SyncGate, whose overlay (z-100)
     // would cover the wizard (z-50).
@@ -113,70 +91,62 @@ export function SignupWizard({ onExit }: SignupWizardProps) {
       // The skipped gate is what would prove it, but a key minted moments ago has
       // no notifications document anywhere: the defaults are its policy.
       markNotificationSettingsReady(identity.pubkey);
+      // Before login: the login may reload the app (adding an account is a switch).
+      markKeyBackupPending(identity.pubkey);
     }
 
     if (join) clearPendingJoin();
 
-    // Home relays only, so the profile step publishes there; the lists follow the relay step.
-    if (identity) signupLists.seed(identity.pubkey, defaultSetup.home);
+    // Home relays only, so the profile step publishes there; the lists follow at the end.
+    if (identity) signupLists.seed(identity.pubkey, setup.home);
 
     // Set BEFORE login so the first commit exposing the user already suppresses
     // the web-push opt-in and native notification step.
     setOnboardingActive(true);
-    setLoggingIn(true);
     try {
       // Awaited: advancing before the login persists blanks the wizard and
-      // leaves a rejected persist unhandled for a key only just backed up.
+      // leaves a rejected persist unhandled.
       await login.nsec(nsec);
     } catch {
-      setLoggingIn(false);
+      creatingRef.current = false;
+      setCreateFailed(true);
       setOnboardingActive(false);
-      toast({
-        title: "Couldn't sign in",
-        description:
-          "Your key was created but could not be saved to this device. Keep your backup and try again.",
-        variant: "destructive",
-      });
+      if (identity) clearKeyBackupPending(identity.pubkey);
       return;
     }
     setStep("profile");
   };
 
-  if (!user && step === "download") {
+  useEffect(() => {
+    if (step === "create") void createAccount();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step]);
+
+  if (step === "create") {
     return (
-      <SignupShell
-        step="download"
-        onBack={onExit}
-        onClose={onExit}
+      // No way out mid-login: leaving would land a half-created account in the app.
+      <WizardShell
+        index={0}
+        total={0}
+        stepKey="create"
+        onBack={createFailed ? onExit : undefined}
+        onClose={createFailed ? onExit : undefined}
       >
-        <SaveKeyStepBody signupKey={signupKey} loggingIn={loggingIn} onContinue={handleContinue} />
-      </SignupShell>
+        <CreatingAccountStepBody failed={createFailed} onRetry={() => void createAccount()} />
+      </WizardShell>
     );
   }
 
-  // No back arrow on either: the account exists now, and back would loop.
+  // No back arrow: the account exists now, and back would loop.
   if (user && step === "profile") {
     return (
-      <SignupShell step="profile" onClose={finishOnboarding}>
+      <WizardShell index={0} total={0} stepKey="profile" onClose={finishOnboarding}>
         <ProfileStepBody
           expectedPubkey={signupKey.identity?.pubkey}
           onPublished={(event) => { profileRef.current = event; }}
-          onFinish={() => setStep("relays")}
+          onFinish={finishOnboarding}
         />
-      </SignupShell>
-    );
-  }
-
-  if (user && step === "relays") {
-    return (
-      <SignupShell step="relays" onClose={finishOnboarding}>
-        <RelayStepBody
-          setup={setup}
-          defaults={defaultSetup}
-          onChange={setSetup}
-          onContinue={finishOnboarding}
-        />
-      </SignupShell>
+      </WizardShell>
     );
   }
 
@@ -210,7 +180,7 @@ export function SignupWizard({ onExit }: SignupWizardProps) {
             <Button
               size="lg"
               className="h-12 w-full clip-corner-lg text-base font-medium"
-              onClick={() => setStep("download")}
+              onClick={() => setStep("create")}
             >
               Create my account
             </Button>
@@ -221,6 +191,7 @@ export function SignupWizard({ onExit }: SignupWizardProps) {
             >
               Not now
             </Button>
+            <SignupTerms />
           </div>
         </div>
       </WizardShell>

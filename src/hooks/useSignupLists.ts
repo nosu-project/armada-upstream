@@ -13,8 +13,8 @@ import type { NostrEvent } from "@nostrify/nostrify";
  * A freshly generated account's lists ({@link buildSignupLists}), in two parts.
  * `seed` runs BEFORE login and only points the account at its home relays
  * (`updateConfig` still names the outgoing account then), so the profile step
- * publishes there. `publish` runs from the relay step, after login, so NIP-42
- * AUTH relays get the new signer; it re-sends the profile to the chosen relays.
+ * publishes there. `publish` runs when signup finishes, after login, so NIP-42
+ * AUTH relays get the new signer; it re-sends the profile to the full relay set.
  */
 export function useSignupLists() {
   const { nostr } = useNostr();

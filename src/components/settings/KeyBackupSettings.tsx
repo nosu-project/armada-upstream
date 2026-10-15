@@ -10,6 +10,7 @@ import { toast } from "@/hooks/useToast";
 import { writeClipboardText } from "@/lib/clipboard";
 import { saveNsec } from "@/lib/credentialManager";
 import { desktopSecretsStatus, isDesktop } from "@/lib/desktop";
+import { clearKeyBackupPending } from "@/lib/keyBackup";
 import { share } from "@/lib/share";
 
 import type { SecretsStatus } from "@/lib/desktop";
@@ -41,10 +42,15 @@ function KeyStorageRow() {
       label="Storage on this device"
       description={
         encrypted
-          ? "Your key is encrypted at rest using your system's credential store."
+          ? "Encrypted by your system's credential store."
           : status.available
-            ? "No system keyring was found, so your key is only obfuscated on disk. Installing a keyring (GNOME Keyring or KWallet) enables real encryption."
-            : "Your key is stored unencrypted on this device."
+            ? "Only obfuscated on disk."
+            : "Stored unencrypted on this device."
+      }
+      info={
+        !encrypted && status.available
+          ? "No system keyring was found, so your key is only obfuscated on disk. Installing a keyring (GNOME Keyring or KWallet) enables real encryption."
+          : undefined
       }
     >
       {encrypted ? (
@@ -71,6 +77,7 @@ export function KeyBackupSettings({ nsec, pubkey }: KeyBackupSettingsProps) {
     try {
       await writeClipboardText(text);
       setCopied(which);
+      if (which === "nsec") clearKeyBackupPending(pubkey);
       setTimeout(() => setCopied(null), 2000);
     } catch {
       toast({
@@ -93,6 +100,8 @@ export function KeyBackupSettings({ nsec, pubkey }: KeyBackupSettingsProps) {
       } else {
         await saveNsec(npub, nsec);
       }
+      // Neither path reports a cancel; a deliberate backup from here counts.
+      clearKeyBackupPending(pubkey);
     } catch {
       toast({
         title: "Backup failed",
@@ -112,9 +121,8 @@ export function KeyBackupSettings({ nsec, pubkey }: KeyBackupSettingsProps) {
             </span>
           </div>
           <p className="text-xs text-warning">
-            Your secret key is the only way to access your account. There is no password reset.
-            Anyone who sees it controls your identity. Store it somewhere safe, like a password
-            manager.
+            It's the only way into your account, with no reset, and anyone who sees it controls
+            your identity. Keep it in a password manager.
           </p>
         </div>
       </SettingsRow>
@@ -146,8 +154,8 @@ export function KeyBackupSettings({ nsec, pubkey }: KeyBackupSettingsProps) {
           </div>
           <div className="flex gap-2">
             <Button
-              variant="outline"
-              className="flex-1"
+              variant="secondary"
+              className="flex-1 clip-corner-lg"
               onClick={() => copy(nsec, "nsec")}
             >
               {copied === "nsec" ? (
@@ -157,7 +165,7 @@ export function KeyBackupSettings({ nsec, pubkey }: KeyBackupSettingsProps) {
               )}
               Copy
             </Button>
-            <Button variant="outline" className="flex-1" onClick={backup}>
+            <Button variant="secondary" className="flex-1 clip-corner-lg" onClick={backup}>
               {Capacitor.isNativePlatform() ? (
                 <Share2 className="size-4" />
               ) : (

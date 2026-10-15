@@ -42,6 +42,7 @@ import { useAutosizeTextarea } from "@/hooks/useAutosizeTextarea";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useChatScope } from "@/hooks/useChatScope";
 import { useHiddenMessages } from "@/hooks/useHiddenMessages";
+import { useMutedWordFilter } from "@/hooks/useMutedWords";
 import { useMutedPubkeys } from "@/hooks/useMuteList";
 import { useUserModeration } from "@/hooks/useUserModeration";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
@@ -559,14 +560,16 @@ export function ThreadPanel({ root, rootTitle, transport, relayUrl, groupId, can
   // uses the filtered list, or an empty thread would read "1 reply".
   const { mutedPubkeys, ready: mutesReady } = useMutedPubkeys();
   const { hiddenIds } = useHiddenMessages();
+  const mutedWord = useMutedWordFilter();
   const replies = useMemo(() => {
     const all = threadRepliesFor?.(root.id) ?? [];
     const dropMuted = mutesReady && mutedPubkeys.size > 0;
-    if (!dropMuted && hiddenIds.size === 0) return all;
+    if (!dropMuted && hiddenIds.size === 0 && !mutedWord) return all;
     return all.filter(
-      (reply) => !hiddenIds.has(reply.id) && (!dropMuted || !mutedPubkeys.has(reply.pubkey)),
+      (reply) => !hiddenIds.has(reply.id) && !mutedWord?.(reply)
+        && (!dropMuted || !mutedPubkeys.has(reply.pubkey)),
     );
-  }, [threadRepliesFor, root.id, mutedPubkeys, mutesReady, hiddenIds]);
+  }, [threadRepliesFor, root.id, mutedPubkeys, mutesReady, hiddenIds, mutedWord]);
   // Treat a muted root (reachable by permalink) like an unloadable one.
   const rootMuted = mutesReady && mutedPubkeys.has(root.pubkey);
   const { config } = useAppContext();

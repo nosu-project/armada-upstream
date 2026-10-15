@@ -66,45 +66,6 @@ export interface PushSubscriptionInput {
   concord: Array<ConcordSub & { muted?: boolean }>;
 }
 
-/**
- * Make an app-local id globally unique for nostr-push (ids are server-global):
- * owner + domain + installation, since registration is REPLACE and native builds
- * share the web origin. Readable id plus a 128-bit digest (ids cap at 64 chars).
- * Legacy web ids lacked installation; `pushRegistry.ts` handles that migration.
- */
-export function scopePushSubscriptionId(
-  logicalId: string,
-  pubkey: string,
-  domain: string,
-  installation?: string,
-): string {
-  const scope = [domain, pubkey, ...(installation ? [installation] : [])]
-    .map((part) => part.toLowerCase())
-    .join("\0");
-  const tag = bytesToHex(sha256(new TextEncoder().encode(scope))).slice(0, 32);
-  const prefix = logicalId.slice(0, 64 - tag.length - 1);
-  return `${prefix}-${tag}`;
-}
-
-/**
- * The subscription with a non-empty fallback body. On web the empty body is
- * replaced instantly; on iOS an unrewritten notification (event too large to
- * inline, or a NIP-46/07 login that can't decrypt) stays on the lock screen.
- * Not `{{content}}`: that is resolved server-side and would expose plaintext.
- */
-export function standaloneNotification(
-  spec: PushSubscriptionSpec,
-): { title: string; body: string; data: PushNotifData } {
-  const { title, body, data } = spec.notification;
-  return {
-    title,
-    body: body || (data.scope === "group-mention"
-      ? "Someone mentioned you"
-      : "New message in a channel"),
-    data,
-  };
-}
-
 /** Short deterministic tag from a relay set (for concord subscription ids). */
 function relaySetTag(relays: string[]): string {
   const key = [...relays].sort().join(",");

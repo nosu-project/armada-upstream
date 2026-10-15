@@ -15,7 +15,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { PaymentMethodIcon } from "@/components/PaymentMethodIcon";
-import { SettingsRow } from "@/components/settings/SettingsSection";
+import { InfoTip, SettingsRow } from "@/components/settings/SettingsSection";
 import { PAYMENT_METHOD_LIST, type PaymentTargetType } from "@/lib/paymentTargets";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
@@ -115,11 +115,13 @@ export function WalletSettings() {
         <>
       <SettingsRow>
         <div className="space-y-2">
-          <div className="text-sm font-medium">Connect a wallet (NWC)</div>
-          <p className="text-xs text-muted-foreground">
-            Paste a Nostr Wallet Connect string from your wallet (Alby Hub, Coinos, Primal,
-            lnbits…). It authorizes payments, so it stays on this device and is never synced.
-          </p>
+          <div className="text-sm font-medium">
+            Connect a wallet (NWC)
+            <InfoTip label="About wallet connections" className="-my-1 ml-1">
+              Paste a Nostr Wallet Connect string from your wallet (Alby Hub, Coinos, Primal,
+              lnbits…). It authorizes payments, so it stays on this device and is never synced.
+            </InfoTip>
+          </div>
           <Input
             value={uri}
             onChange={(e) => setUri(e.target.value)}
@@ -236,11 +238,13 @@ export function WalletSettings() {
 
       <SettingsRow>
         <div className="space-y-2">
-          <div className="text-sm font-medium">Bitcoin explorers (Esplora)</div>
-          <p className="text-xs text-muted-foreground">
-            Blockchain data sources for on-chain zaps (UTXOs, fees, broadcast). Tried in
-            order; the first that responds is used. Stays on this device only.
-          </p>
+          <div className="text-sm font-medium">
+            Bitcoin explorers (Esplora)
+            <InfoTip label="About Bitcoin explorers" className="-my-1 ml-1">
+              Blockchain data sources for on-chain zaps (UTXOs, fees, broadcast). Tried in
+              order; the first that responds is used. Stays on this device only.
+            </InfoTip>
+          </div>
           <div className="space-y-1">
             {esploraUrls.map((url, i) => (
               <div key={url} className="flex items-center gap-1.5">
@@ -267,7 +271,7 @@ export function WalletSettings() {
               placeholder="https://mempool.space/api"
               className="flex-1"
             />
-            <Button variant="outline" size="sm" onClick={handleAddEsplora} disabled={!newEsplora.trim()}>
+            <Button variant="secondary" size="sm" onClick={handleAddEsplora} disabled={!newEsplora.trim()}>
               <Plus className="size-4" /> Add
             </Button>
           </div>

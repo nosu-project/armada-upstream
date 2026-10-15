@@ -7,7 +7,7 @@ import { onLateColdLaunchDeepLink } from "@/lib/coldLaunchDeepLink";
 import { markDeepLinkNavigation } from "@/lib/deepLinkNav";
 import { isRouterPath, pathFromDeepLinkUrl } from "@/lib/deepLinkUrl";
 import { isDesktop, onDesktopDeepLink } from "@/lib/desktop";
-import { ArmadaPush, hasIosPush } from "@/lib/nativePush";
+import { ArmadaPush, hasIosPush, reportActiveRoute } from "@/lib/nativePush";
 import { signalDeepLinkNavigated } from "@/lib/webReady";
 
 /**
@@ -38,6 +38,10 @@ export function useNotificationNavigation(): void {
     gatePending.current = false;
     signalDeepLinkNavigated();
   }, [location]);
+
+  useEffect(() => {
+    void reportActiveRoute(location.pathname);
+  }, [location.pathname]);
 
   useEffect(() => {
     if (!isNativeRuntime()) return;

@@ -195,6 +195,11 @@ export interface AppConfig {
    */
   showDmPreviews: boolean;
   /**
+   * Words and phrases whose messages are hidden from timelines, threads and
+   * forum comments (whole-word, case-insensitive; never the user's own). Synced.
+   */
+  mutedWords: string[];
+  /**
    * Whether the rail shows the recent-unread DM strip (capped at
    * {@link MAX_RAIL_RECENT_DMS}; default on). Display only. Synced.
    */
@@ -305,6 +310,7 @@ export const METADATA_CONFIG_KEYS = [
   "dmsDisabled",
   "showDmRequests",
   "showDmPreviews",
+  "mutedWords",
   "showRecentRailDms",
   "discoverAllContent",
   "discoverCuration",
@@ -398,6 +404,7 @@ export const defaultConfig: AppConfig = {
   startedDms: [],
   showDmRequests: true,
   showDmPreviews: true,
+  mutedWords: [],
   showRecentRailDms: true,
   discoverAllContent: false,
   discoverCuration: "",

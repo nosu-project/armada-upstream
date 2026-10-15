@@ -24,7 +24,6 @@ import {
   type PushPlane,
 } from "@/lib/nappPush";
 import { queryDm17Conversations } from "@/lib/nip17/dm17Store";
-import type { PushRelayPool } from "@/lib/nostrPush";
 import {
   base64urlToBytes,
   isUnknownClientError,
@@ -32,6 +31,7 @@ import {
   NostrPush2Client,
   webPushConnection,
   type NostrPush2Identity,
+  type PushRelayPool,
 } from "@/lib/nostrPush2";
 import {
   isNativeRuntime,
@@ -76,7 +76,7 @@ import {
  * incomplete snapshot from pruning happens before, in `mutatePushRegistrations`.
  */
 export interface PushTarget {
-  kind: "web" | "napp";
+  kind: "web" | "napp" | "apns";
   limits: NappLimits;
   /** Hand the list over. False when superseded before it landed. */
   set(
@@ -200,7 +200,7 @@ interface PushClearJob {
   target: PushTarget;
 }
 
-type PushMutationJob = PushSyncJob | PushClearJob;
+export type PushMutationJob = PushSyncJob | PushClearJob;
 
 export interface PushMutationResult {
   /** False when a newer generation superseded this mutation. */

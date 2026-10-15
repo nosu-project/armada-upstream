@@ -36,9 +36,9 @@ private final class OneShotHandler {
 /// The Notification Service Extension: the only place on iOS where an incoming
 /// message can be decrypted before the user sees it.
 ///
-/// The push gateway is content-blind — it matches kinds and tags and sends a
-/// fixed string — so without this the lock screen could only ever say that
-/// something arrived. iOS runs this process for a few seconds when a payload
+/// The push gateway (nostr-push2) is content-blind — it matches kinds and tags
+/// and forwards the still-encrypted event under a fixed string — so without
+/// this the lock screen could only ever say that something arrived. iOS runs this process for a few seconds when a payload
 /// carries `mutable-content: 1`, with the app not running and usually the
 /// device locked, and whatever it hands back is what is shown.
 ///
@@ -57,9 +57,10 @@ private final class OneShotHandler {
 ///    never conditioned on this object still being alive.
 ///  - **Never spend the budget.** ~24 MB and a few seconds, after which
 ///    `serviceExtensionTimeWillExpire` fires and iOS shows whatever is left.
-///    The one thing that waits on the network is the avatar, which is bounded
-///    and cached (`AvatarLoader`); names and room titles are read from the
-///    ArmadaDB file in the App Group, or not at all.
+///    What waits on the network — an event too large to inline, a bunker
+///    decrypt, the avatar — is bounded, and the avatar is cached
+///    (`AvatarLoader`); names and room titles are read from the ArmadaDB file
+///    in the App Group, or not at all.
 class NotificationService: UNNotificationServiceExtension {
 
     private var deliver: OneShotHandler?
@@ -76,9 +77,8 @@ class NotificationService: UNNotificationServiceExtension {
             ?? UNMutableNotificationContent()
         bestAttempt = content
 
-        // No config (push disabled, logged out, or a login whose key stays off
-        // the device), or an event this key cannot open: keep what the gateway
-        // sent.
+        // No config (push disabled or logged out), or an event that could not
+        // be fetched or placed: keep what the gateway sent.
         guard let prepared = ArmadaPushRuntime.prepare(userInfo: request.content.userInfo) else {
             return deliver(content)
         }
@@ -108,9 +108,9 @@ class NotificationService: UNNotificationServiceExtension {
         }
         if let path = prepared.path {
             // Read back by `ArmadaPushBridge.path(from:)` when the notification
-            // is tapped. Merged into the payload's own keys rather than
-            // replacing them, so the gateway's `event_id` and
-            // `subscription_id` survive for anything that wants them.
+            // is tapped, and by `willPresent` to tell whether the app is
+            // already showing this room. Merged into the payload's own keys
+            // rather than replacing them, so `event_id` survives.
             var userInfo = content.userInfo
             userInfo["url"] = path
             content.userInfo = userInfo

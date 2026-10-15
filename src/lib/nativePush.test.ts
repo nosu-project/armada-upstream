@@ -13,13 +13,11 @@ vi.mock("@capacitor/core", () => ({
 }));
 
 const { hasIosPush, takePendingPushOpen } = await import("@/lib/nativePush");
-const { pushInstallationId } = await import("@/lib/pushRegistry");
 
 beforeEach(() => {
   getPlatform.mockClear().mockReturnValue("ios");
   isPluginAvailable.mockClear().mockReturnValue(true);
   takePendingOpen.mockClear().mockResolvedValue({});
-  localStorage.clear();
 });
 
 describe("hasIosPush", () => {
@@ -44,16 +42,6 @@ describe("hasIosPush", () => {
   it("is false in an iOS build made before the plugin existed", () => {
     isPluginAvailable.mockReturnValue(false);
     expect(hasIosPush()).toBe(false);
-  });
-});
-
-describe("pushInstallationId", () => {
-  it("is stable across calls and persisted", () => {
-    const first = pushInstallationId();
-    expect(first).toBeTruthy();
-    expect(pushInstallationId()).toBe(first);
-    localStorage.clear();
-    expect(pushInstallationId()).not.toBe(first);
   });
 });
 

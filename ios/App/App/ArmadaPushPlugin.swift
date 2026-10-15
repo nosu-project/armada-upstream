@@ -9,13 +9,13 @@ import UserNotifications
 /// iOS is the one platform where Armada cannot listen for its own events in the
 /// background: there is no equivalent of the Android foreground service, and
 /// WKWebView has no Web Push. So the app takes a device token from Apple and
-/// hands it to the content-blind nostr-push gateway as a `type: "apns"`
-/// subscription. Every filter, preference and per-channel level above that is
-/// shared TypeScript; this file knows nothing about them.
+/// hands it to the content-blind nostr-push2 gateway as an `apn` connection.
+/// Every filter, preference and per-channel level above that is shared
+/// TypeScript; this file knows nothing about them.
 ///
-/// Deliberately nothing but the token, the permission, the extension's config
-/// and the tap. It does NOT render: the Notification Service Extension
-/// (`ArmadaNotify`) opens and rewrites each push.
+/// Deliberately nothing but the token, the permission, the extension's config,
+/// the tap and the route on screen. It does NOT render: the Notification
+/// Service Extension (`ArmadaNotify`) opens and rewrites each push.
 @objc(ArmadaPushPlugin)
 public class ArmadaPushPlugin: CAPPlugin, CAPBridgedPlugin {
 
@@ -30,6 +30,7 @@ public class ArmadaPushPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "writeConfig", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "clearConfig", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "recordStatus", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "setActiveRoute", returnType: CAPPluginReturnPromise),
     ]
 
     /// How long to wait for APNs to hand back a token before giving up.
@@ -210,6 +211,13 @@ public class ArmadaPushPlugin: CAPPlugin, CAPBridgedPlugin {
         call.resolve()
     }
 
+    /// The route the WebView is showing, so a push about that room can arrive
+    /// without a banner while one about any other room still interrupts.
+    @objc func setActiveRoute(_ call: CAPPluginCall) {
+        ArmadaPushBridge.shared.setActiveRoute(call.getString("path"))
+        call.resolve()
+    }
+
     /// The notification tap that launched this process, consumed once.
     ///
     /// A cold launch delivers the tap long before the WebView has loaded a
@@ -241,6 +249,7 @@ final class ArmadaPushBridge: NSObject, UNUserNotificationCenterDelegate {
     private var token: String?
     private var waiters: [(Result<String, Error>) -> Void] = []
     private var pendingOpen: String?
+    private var activeRoute: String?
 
     /// Install as the notification delegate. Must happen before the app
     /// finishes launching, or iOS drops the tap that launched it.
@@ -338,6 +347,12 @@ final class ArmadaPushBridge: NSObject, UNUserNotificationCenterDelegate {
 
     // MARK: - taps
 
+    func setActiveRoute(_ path: String?) {
+        lock.lock()
+        activeRoute = path
+        lock.unlock()
+    }
+
     func takePendingOpen() -> String? {
         lock.lock()
         defer { lock.unlock() }
@@ -350,31 +365,23 @@ final class ArmadaPushBridge: NSObject, UNUserNotificationCenterDelegate {
     ///
     /// A leading `//` (or `/\`, which URL parsers fold to the same thing) is a
     /// PROTOCOL-RELATIVE URL rather than a path — resolved against the WebView
-    /// it names another origin. The `url` field is chosen by the push gateway,
-    /// which is content-blind but not trusted to pick where a tap lands, so the
-    /// check is here as well as in `deepLinkUrl.ts`.
+    /// it names another origin. The `url` field sits in a payload the gateway
+    /// delivers and is built from what senders wrote, neither of which is
+    /// trusted to pick where a tap lands, so the check is here as well as in
+    /// `deepLinkUrl.ts`.
     private static func isRouterPath(_ path: String) -> Bool {
         guard path.hasPrefix("/") else { return false }
         let second = path.dropFirst().first
         return second != "/" && second != "\\"
     }
 
-    /// Where a tapped notification should land in the app.
-    ///
-    /// The APNs transport hoists the subscription's `notification.data` keys to
-    /// the payload's top level, so the routing hints registered in
-    /// `pushSubscriptions.ts` arrive as plain top-level entries. Only DMs name
-    /// a destination today: a group or community wake-up carries no room id
-    /// (the gateway is content-blind and the event is not opened here), so
-    /// those taps just bring the app forward.
+    /// Where a tapped notification should land in the app: the `url` the
+    /// extension wrote once it had opened (or at least placed) the event. A
+    /// push it could not place names nothing, and its tap just brings the app
+    /// forward.
     private static func path(from userInfo: [AnyHashable: Any]) -> String? {
-        if let url = userInfo["url"] as? String, isRouterPath(url) {
-            return url
-        }
-        if let scope = userInfo["scope"] as? String, scope == "dm" {
-            return "/dm"
-        }
-        return nil
+        guard let url = userInfo["url"] as? String, isRouterPath(url) else { return nil }
+        return url
     }
 
     func userNotificationCenter(
@@ -399,20 +406,27 @@ final class ArmadaPushBridge: NSObject, UNUserNotificationCenterDelegate {
 
     /// What to do with a push that arrives while Armada is open.
     ///
-    /// No banner and no sound: the app is on screen, its channel rail already
-    /// shows the unread, and the payload carries no room id — so there is no
-    /// way to tell a message in another channel from the one being read, and
-    /// interrupting for the latter is worse than not interrupting for the
-    /// former. It still lands in Notification Center, so nothing is lost.
+    /// A banner and sound, unless the message is in the room already on
+    /// screen (where it is appearing in the timeline anyway) or the extension
+    /// made it passive (a sync, or a quiet request ping). Either way it lands
+    /// in Notification Center.
     func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         willPresent notification: UNNotification,
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
     ) {
-        if #available(iOS 14.0, *) {
-            completionHandler([.list, .badge])
+        let content = notification.request.content
+        lock.lock()
+        let route = activeRoute
+        lock.unlock()
+
+        let onScreen = Self.path(from: content.userInfo).map {
+            ForegroundPresentation.isShowing(path: $0, activeRoute: route)
+        } ?? false
+        if onScreen || content.interruptionLevel == .passive {
+            completionHandler([.list])
         } else {
-            completionHandler([.badge])
+            completionHandler([.banner, .list, .sound])
         }
     }
 }

@@ -8,6 +8,7 @@ import { NostrSync } from "@/components/NostrSync";
 import { PublishOutbox } from "@/components/PublishOutbox";
 import { ScreenSharePicker } from "@/components/ScreenSharePicker";
 import { SyncGate } from "@/components/SyncGate";
+import { KeyBackupReminder } from "@/components/auth/KeyBackupReminder";
 import { LoginSetup } from "@/components/onboarding/LoginSetup";
 import { useResumePendingJoins } from "@/concord/hooks/useCommunityActions";
 import { useResumeOutgoing } from "@/concord/hooks/useResumeOutgoing";
@@ -53,6 +54,7 @@ export function SignedInPushServices() {
       <ControlPlaneSync />
       <ScreenSharePicker />
       <LoginSetup />
+      <KeyBackupReminder />
     </>
   );
 }

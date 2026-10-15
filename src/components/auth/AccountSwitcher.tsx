@@ -2,7 +2,7 @@
 // It is important that all functionality in this file is preserved, and should only be modified if explicitly requested.
 
 import { useContext, useRef, useState } from 'react';
-import { ChevronDown, IdCard, LogOut, QrCode, Smile, UserIcon, UserPen, UserPlus, Wallet } from 'lucide-react';
+import { ChevronDown, IdCard, KeyRound, LogOut, QrCode, Smile, UserIcon, UserPen, UserPlus, Wallet } from 'lucide-react';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -23,6 +23,9 @@ import { StatusDialog } from '@/components/dialogs/StatusDialog';
 import { WalletDialog } from '@/components/dialogs/WalletDialog';
 import { beginAccountExit } from '@/components/accountExitState';
 import { finalLogout } from '@/lib/finalLogout';
+import { BackupKeyDialog } from '@/components/auth/BackupKeyDialog';
+import { useActiveNsec } from '@/hooks/useActiveNsec';
+import { clearKeyBackupPending, useKeyBackupRemindAt } from '@/lib/keyBackup';
 import { SettingsOverlayContext } from '@/lib/settingsOverlay';
 import { useAppContext } from '@/hooks/useAppContext';
 import { cn } from '@/lib/utils';
@@ -65,6 +68,9 @@ export function AccountSwitcher({ onAddAccountClick }: AccountSwitcherProps) {
   const settings = useContext(SettingsOverlayContext);
   // Finger press on the trigger; null for mouse/pen (Radix press-to-open).
   const touchPress = useRef<{ x: number; y: number; wasOpen: boolean } | null>(null);
+  const activeNsec = useActiveNsec();
+  const backupPending = useKeyBackupRemindAt(activeNsec?.pubkey) !== null;
+  const [backupOpen, setBackupOpen] = useState<'backup' | 'logout' | null>(null);
 
   if (!currentUser) return null;
 
@@ -74,6 +80,18 @@ export function AccountSwitcher({ onAddAccountClick }: AccountSwitcherProps) {
   const handleLogout = () => {
     // Close the dropdown first to avoid React error #300
     setIsOpen(false);
+    // Logging out would destroy a key that exists nowhere else.
+    if (backupPending) {
+      setBackupOpen('logout');
+      return;
+    }
+    logOut();
+  };
+
+  const logOut = () => {
+    setBackupOpen(null);
+    // A user who signs back in typed the key, so it's backed up by then.
+    clearKeyBackupPending(currentUser.pubkey);
     // Last account: full storage purge and hard redirect.
     const isLastAccount = otherUsers.length === 0;
     // Raise the exit overlay synchronously, before any teardown.
@@ -123,7 +141,7 @@ export function AccountSwitcher({ onAddAccountClick }: AccountSwitcherProps) {
                   {profileIncomplete ? <UserIcon className='size-4' /> : getDisplayName(currentUser).charAt(0)}
                 </AvatarFallback>
               </Avatar>
-              {profileIncomplete && (
+              {(profileIncomplete || backupPending) && (
                 <span className='absolute -top-0.5 -right-0.5 size-2.5 rounded-full bg-primary ring-2 ring-background' aria-hidden />
               )}
             </span>
@@ -141,6 +159,16 @@ export function AccountSwitcher({ onAddAccountClick }: AccountSwitcherProps) {
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent className='w-60 p-2 animate-scale-in'>
+        {backupPending && (
+          <DropdownMenuItem
+            onClick={() => { setIsOpen(false); setBackupOpen('backup'); }}
+            className='flex items-center gap-2 cursor-pointer p-2 clip-corner-lg text-primary focus:text-primary bg-primary/10'
+          >
+            <KeyRound className='w-4 h-4' />
+            <span>Back up your secret key</span>
+            <span className='ml-auto size-2 rounded-full bg-primary' aria-hidden />
+          </DropdownMenuItem>
+        )}
         <DropdownMenuItem
           onClick={() => settings.show('profile')}
           className={cn(
@@ -242,6 +270,15 @@ export function AccountSwitcher({ onAddAccountClick }: AccountSwitcherProps) {
     <MountWhenOpened open={walletOpen}>
       <WalletDialog open={walletOpen} onOpenChange={setWalletOpen} />
     </MountWhenOpened>
+    {activeNsec && (
+      <BackupKeyDialog
+        open={backupOpen !== null}
+        onOpenChange={(open) => { if (!open) setBackupOpen(null); }}
+        nsec={activeNsec.nsec}
+        pubkey={activeNsec.pubkey}
+        onLogout={backupOpen === 'logout' ? logOut : undefined}
+      />
+    )}
     </>
   );
 }

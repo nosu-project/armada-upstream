@@ -56,10 +56,9 @@ public struct PreparedPush {
 /// The third port of this pipeline: `worker.ts` + `pushRuntime.ts` on the web,
 /// `Dm17.kt` + `ServiceStore.kt` on Android, this on iOS.
 ///
-/// Every step is best-effort and non-fatal. Anything that fails returns nil and
-/// the caller keeps the gateway's static wake-up, which is why a login whose
-/// key this doesn't hold, a message too big to inline, and a config that hasn't
-/// been written yet all degrade to the same safe place.
+/// Every step is best-effort and non-fatal. An event that cannot be opened
+/// gets its plane's fallback text, and one that cannot even be placed (not
+/// fetched, forged, not ours) leaves the gateway's static wake-up.
 ///
 /// STORING HAPPENS BEFORE PRESENTING, deliberately: the notification is a side
 /// effect of a message arriving, and the message arriving is the part that has
@@ -78,66 +77,149 @@ struct PushProcessor {
 
     /// Where a refusal goes.
     ///
-    /// Returning nil is this type's ONLY way to decline, and it means six
-    /// different things — an event the gateway could not inline, a login with
-    /// no key, a bunker that did not answer, a wrap for somebody else, an
-    /// expired message, a scope that is not ours. They are indistinguishable
-    /// from outside and they are all invisible: the user sees the gateway's
-    /// static text either way, so the trace names which one ran.
+    /// A decline means many different things — an event that could not be
+    /// fetched, a forged one, a login with no key, a bunker that did not
+    /// answer, an expired message, an event that is not ours. They are
+    /// indistinguishable from outside, so the trace names which one ran.
     ///
     /// A STATUS only — never content, pubkeys or event ids. Defaults to a
     /// no-op, so the Linux suite and any other caller pay nothing for it.
     let trace: (String) -> Void
 
+    /// Fetches an event the gateway could not inline: `(id, relays)`. Defaults
+    /// to finding nothing, so the Linux suite never touches the network.
+    let fetch: (String, [String]) -> [String: Any]?
+
     init(
         store: NotifyStore?,
         config: PushConfig,
         now: Int = Int(Date().timeIntervalSince1970),
-        trace: @escaping (String) -> Void = { _ in }
+        trace: @escaping (String) -> Void = { _ in },
+        fetch: @escaping (String, [String]) -> [String: Any]? = { _, _ in nil }
     ) {
         self.store = store
         self.config = config
         self.now = now
         self.trace = trace
+        self.fetch = fetch
     }
 
-    /// `userInfo` is the APNs payload. The gateway hoists every key of the
-    /// subscription's `notification.data` to the TOP LEVEL for APNs rather than
-    /// nesting it, so `scope`, `relays` and the inlined `event` are read from
-    /// there.
+    /// The `$type` of nostr-push2's payload (Tenna's `napp.push.payload`).
+    static let payloadType = "napp.push.payload"
+
+    /// `userInfo` is the APNs payload: nostr-push2 puts the `napp.push.payload`
+    /// keys (`event_id`, `relays`, and `event` when it fit) at the top level
+    /// beside `aps`.
+    ///
+    /// Nil means nothing could be placed, and the caller keeps the gateway's
+    /// generic text. An event whose plane is known but which cannot be opened
+    /// gets that plane's fallback instead, so it still says what it is and
+    /// still opens somewhere useful.
     func prepare(userInfo: [AnyHashable: Any]) -> PreparedPush? {
-        guard let scope = userInfo["scope"] as? String else {
-            trace("no-scope")
+        guard userInfo["$type"] as? String == Self.payloadType,
+              let eventId = userInfo["event_id"] as? String
+        else {
+            trace("not-napp-payload")
             return nil
         }
-        // The absence of an event is NOT a decrypt failure and must not be
-        // reported as one: the gateway inlines it only if the whole payload
-        // fits APNs' 4 KB, and drops it silently otherwise (see
-        // `pushSubscriptions.ts`). A gift wrap is nested base64 and can be a
-        // couple of kilobytes on its own, so this is an ordinary outcome for a
-        // long message rather than a fault — and it is indistinguishable from
-        // a broken decrypt unless it is named.
-        guard let rawEvent = userInfo["event"] as? [String: Any] else {
-            trace("no-inlined-event(\(scope))")
-            return nil
+        let relays = ((userInfo["relays"] as? [Any]) ?? []).compactMap { $0 as? String }
+
+        var rawEvent = userInfo["event"] as? [String: Any]
+        if rawEvent == nil {
+            rawEvent = fetch(eventId, relays)
+            if rawEvent == nil {
+                trace("not-inlined-unfetched")
+                return nil
+            }
         }
-        guard let event = NostrEvent.parse(rawEvent) else {
-            trace("unparseable-event(\(scope))")
+        guard let raw = rawEvent, let event = NostrEvent.parse(raw) else {
+            trace("unparseable-event")
             return nil
         }
 
-        switch scope {
-        case "dm":
-            return prepareDm(wrap: event)
-        case "c2":
-            return prepareConcord(wrap: event)
-        case "group", "group-mention":
-            let relays = (userInfo["relays"] as? [String]) ?? []
-            return prepareGroup(event: event, relays: relays)
-        default:
-            trace("unknown-scope(\(scope))")
+        // The relay that delivered it, and the gateway in between, are exactly
+        // the parties this pipeline does not trust. For a NIP-29 message the
+        // signature is the only thing binding it to an author, whose stored
+        // kind-0 would otherwise be borrowed for a forged notification.
+        guard let id = event.id, id == eventId, id == event.computedId else {
+            trace("bad-id")
             return nil
         }
+        guard let sig = event.sig,
+              let signedDigest = Hex.decode(id),
+              Secp256k1.schnorrVerify(
+                  message: signedDigest, pubkeyHex: event.pubkey, signatureHex: sig
+              )
+        else {
+            trace("bad-sig")
+            return nil
+        }
+
+        guard let scope = Self.scope(of: event, config: config) else {
+            trace("unplaced(\(event.kind))")
+            return nil
+        }
+        switch scope {
+        case .dm:
+            return prepareDm(wrap: event) ?? Self.fallback(.dm, path: "/dm")
+        case .c2:
+            return prepareConcord(wrap: event)
+                ?? Self.fallback(.c2, path: Concord.stream(for: event, in: config.concord).map {
+                    "/c/\(escape($0.communityId))/\(escape($0.channelId))"
+                })
+        case .group, .groupMention:
+            return prepareGroup(event: event, relays: relays)
+        }
+    }
+
+    /// Which plane an event belongs to, from the event alone — nostr-push2
+    /// merges every subscription into one list and says nothing about which
+    /// matched. Mirrors `pushScope` in `pushRuntime.ts`.
+    enum Scope: Equatable {
+        case dm, c2, group, groupMention
+    }
+
+    private static let groupKinds: Set<Int> = [9, 1111, 7]
+
+    static func scope(of event: NostrEvent, config: PushConfig) -> Scope? {
+        let addressedToSelf = event.hasTag("p", value: config.selfPubkey)
+        if event.kind == 1059 {
+            // Routing is by author: a Concord wrap is signed by its stream
+            // address, a NIP-17 wrap by a throwaway key.
+            if Concord.stream(for: event, in: config.concord) != nil { return .c2 }
+            return addressedToSelf ? .dm : nil
+        }
+        if event.kind == 4 { return .dm }
+        if groupKinds.contains(event.kind), event.uniqueTag("h") != nil {
+            return addressedToSelf ? .groupMention : .group
+        }
+        return nil
+    }
+
+    /// What an event of a known plane shows when it cannot be opened: a bunker
+    /// that did not answer, a login whose key never reaches the device, a
+    /// legacy kind-4 DM. Mirrors the web worker's `FALLBACK_TEXT`.
+    static func fallback(_ scope: Scope, path: String?) -> PreparedPush {
+        let body: String
+        let threadId: String
+        switch scope {
+        case .dm:
+            body = "New direct message"
+            threadId = "armada-dm"
+        case .c2:
+            body = "New message in a community"
+            threadId = "armada-c2"
+        case .group:
+            body = "New message in a channel"
+            threadId = "armada-groups"
+        case .groupMention:
+            body = "Someone mentioned you"
+            threadId = "armada-groups"
+        }
+        return PreparedPush(
+            drop: false, title: "New message", body: body, threadId: threadId,
+            path: path, quiet: false, sender: nil
+        )
     }
 
     // MARK: - DM
@@ -425,39 +507,18 @@ struct PushProcessor {
 
     // MARK: - NIP-29
 
-    /// A NIP-29 group message, which arrives in the clear.
+    /// A NIP-29 group message, which arrives in the clear. Its signature has
+    /// already been checked by `prepare`.
     ///
-    /// Deliberately NOT stored. A group id names nothing without its relay, and
-    /// the push payload carries no source-relay attribution — only the
-    /// subscription's whole relay list — so filing it would mean guessing a
-    /// tenant. Nothing is lost: the message is plaintext on a relay the app
-    /// re-reads on open, which is exactly the case the "no relay, no store"
-    /// rule calls refetchable.
+    /// Deliberately NOT stored. nostr-push2 names the relay the event arrived
+    /// from, but it reads its OWN relays rather than the group's, so that is
+    /// not necessarily the group's host and filing it there would be a guess
+    /// at a tenant. Nothing is lost: the message is plaintext on a relay the
+    /// app re-reads on open, which is exactly the case the "no relay, no
+    /// store" rule calls refetchable.
     private func prepareGroup(event: NostrEvent, relays: [String]) -> PreparedPush? {
-        guard let groupId = event.uniqueTag("h") else {
+        guard let groupId = event.uniqueTag("h"), let eventId = event.id else {
             trace("grp-no-h")
-            return nil
-        }
-
-        // This event arrives in the CLEAR, so unlike the NIP-17 and Concord
-        // paths there is no decryption that already proves who wrote it: the
-        // signature is the only thing that does. Unchecked, `pubkey` is a
-        // string the sender chose, and it is used below to look up the
-        // viewer's own stored kind-0 — so a forger would get a real contact's
-        // name and avatar on a Communication Notification. A hostile gateway
-        // or relay is exactly the party this pipeline does not trust; failing
-        // here degrades to the gateway's static text.
-        guard let eventId = event.id, eventId == event.computedId else {
-            trace("grp-bad-id")
-            return nil
-        }
-        guard let sig = event.sig,
-              let signedDigest = Hex.decode(eventId),
-              Secp256k1.schnorrVerify(
-                  message: signedDigest, pubkeyHex: event.pubkey, signatureHex: sig
-              )
-        else {
-            trace("grp-bad-sig")
             return nil
         }
 

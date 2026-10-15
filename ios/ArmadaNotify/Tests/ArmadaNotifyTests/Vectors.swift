@@ -26,8 +26,8 @@ func vectorObject(_ key: String) -> [String: Any] { vectors[key] as! [String: An
 /// payload.
 ///
 /// NIP-29 group messages are the one plane that arrives in the CLEAR, so
-/// nothing about opening them establishes who wrote them and `prepareGroup`
-/// checks the signature itself. That makes an unsigned fixture indistinguishable
+/// nothing about opening them establishes who wrote them and `prepare` checks
+/// the signature itself. That makes an unsigned fixture indistinguishable
 /// from a forgery — correctly — so group tests have to sign, which is what this
 /// is for. `id` is computed rather than supplied so it always agrees with the
 /// body; pass `forgedPubkey` to keep a valid signature while claiming to be
@@ -60,4 +60,15 @@ func signedEvent(
     event["id"] = id
     event["sig"] = sig
     return event
+}
+
+/// `event` as nostr-push2 delivers it over APNs: the `napp.push.payload` keys
+/// at the top level of `userInfo`.
+func napp(_ event: [String: Any], relays: [String] = []) -> [AnyHashable: Any] {
+    [
+        "$type": "napp.push.payload",
+        "event_id": event["id"] as? String ?? "",
+        "event": event,
+        "relays": relays,
+    ]
 }

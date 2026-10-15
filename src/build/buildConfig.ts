@@ -33,8 +33,6 @@ export const CONFIG_NAMES = [
   "BRIDGE_PORTAL_URL",
   // KLIPY GIF API key. Unset = the keyless GIFverse backend.
   "KLIPY_API_KEY",
-  "NOSTR_PUSH_PUBKEY",
-  "NOSTR_PUSH_RELAYS",
   "NOSTR_PUSH2_PUBKEY",
   "NOSTR_PUSH2_RELAYS",
   // NIP-82 application id whose releases `/downloads` and the updater offer. Unset = "buzz.armada.app".

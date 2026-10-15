@@ -4,7 +4,15 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useMediaPolicyConfig } from "@/hooks/useMediaPolicy";
+import {
+  mutatePushRegistrations,
+  type PushMutationJob,
+  type PushMutationResult,
+  type PushTarget,
+} from "@/hooks/useNostrPush";
 import { usePushWatchSet } from "@/hooks/usePushWatchSet";
+import { registerBeforeAccountExit } from "@/lib/beforeAccountExit";
+import { NOSTR_PUSH2_LIMITS, type PushPlane } from "@/lib/nappPush";
 import {
   ArmadaPush,
   clearIosPushConfig,
@@ -13,37 +21,32 @@ import {
   recordPushStatus,
 } from "@/lib/nativePush";
 import { queryDm17Conversations } from "@/lib/nip17/dm17Store";
-import { NostrPushClient, type PushRelayPool, type PushSigner } from "@/lib/nostrPush";
 import {
-  NOSTR_PUSH_PUBKEY,
-  NOSTR_PUSH_RELAYS,
-  nostrPushConfigured,
+  isUnknownClientError,
+  loadNostrPush2ClientKey,
+  NostrPush2Client,
+  type ApnsConnection,
+  type PushRelayPool,
+} from "@/lib/nostrPush2";
+import {
+  NOSTR_PUSH2_PUBKEY,
+  NOSTR_PUSH2_RELAYS,
+  nostrPush2Configured,
 } from "@/lib/platform";
 import {
   type PushPrefs,
   type UsePushNotificationsReturn,
 } from "@/lib/pushPrefs";
-import {
-  loadPushIntent,
-  loadRegisteredPushIds,
-  pushInstallationId,
-  savePushIntent,
-  savePushPrefs,
-  saveRegisteredPushIds,
-} from "@/lib/pushRegistry";
-import {
-  scopePushSubscriptionId,
-  standaloneNotification,
-} from "@/lib/pushSubscriptions";
-import { PUBLIC_WEB_ORIGIN } from "@/lib/shareOrigin";
+import { LatestSerialRunner } from "@/lib/pushRegistration";
+import { loadPushIntent, savePushIntent, savePushPrefs } from "@/lib/pushRegistry";
 
 /**
- * Background notifications for the iOS app via the same content-blind NIP-PUSH gateway as
- * the web: registers an APNs token as a `type: "apns"` subscription with the same filters as
- * `useNostrPush` (`usePushWatchSet`).
- * The Notification Service Extension (`ios/App/NotificationService`) decrypts the inlined event and
- * rewrites the notification; `writeIosPushConfig` gives it what it needs, since it has no WebView or
- * localStorage.
+ * Background notifications for the iOS app through the same nostr-push2
+ * gateway as the web: the APNs token is this install's connection, and the
+ * subscription list is the web's (`usePushWatchSet` → `mutatePushRegistrations`).
+ * The Notification Service Extension (`ios/App/NotificationService`) opens the
+ * event and rewrites the notification; `writeIosPushConfig` gives it what it
+ * needs, since it has no WebView or localStorage.
  */
 
 /** Retries for a transient sync failure, matching the web controller. */
@@ -58,16 +61,73 @@ function errorText(err: unknown): string {
 }
 
 /**
- * NIP-PUSH wants a hostname matching the app's origin, but WKWebView uses the shared
- * `capacitor://localhost`, so use the public deployment's host (as `shareOrigin()` does).
- * Subscription ids carry an installation id (`pushInstallationId`) since the web shares the domain.
+ * APNs as a {@link PushTarget}. The token is re-taken on every hand-over,
+ * since APNs may rotate it silently; `register()` prompts for nothing after
+ * the first authorization.
  */
-function pushDomain(): string {
-  try {
-    return new URL(PUBLIC_WEB_ORIGIN).hostname;
-  } catch {
-    return "armada.buzz";
-  }
+export function apnsPushTarget(
+  client: NostrPush2Client,
+  onPermission: (permission: NotificationPermission) => void,
+): PushTarget {
+  // What the gateway was last told by this target. `create` is repeated when
+  // the token changes, and once per session regardless, so a client the
+  // gateway reaped is recreated without waiting for an error.
+  let created: string | undefined;
+
+  return {
+    kind: "apns",
+    limits: NOSTR_PUSH2_LIMITS,
+    async set(subscriptions, isCurrent) {
+      const registration = await ArmadaPush.register();
+      if (!registration.granted) {
+        onPermission("denied");
+        throw new Error("Notification permission not granted");
+      }
+      if (!registration.token || !registration.bundleId) {
+        throw new Error(registration.error || "APNs returned no device token");
+      }
+      onPermission("granted");
+      if (!isCurrent()) return false;
+
+      const connection: ApnsConnection = {
+        method: "apn",
+        token: registration.token,
+        topic: registration.bundleId,
+        environment: registration.environment ?? "production",
+      };
+      const status = `env=${connection.environment} token=…${connection.token.slice(-6)}`;
+      try {
+        const fingerprint = `${connection.token}\0${connection.topic}\0${connection.environment}`;
+        if (created !== fingerprint) {
+          await client.create(connection);
+          created = fingerprint;
+        }
+        try {
+          await client.set(subscriptions);
+        } catch (err) {
+          if (!isUnknownClientError(err)) throw err;
+          await client.create(connection);
+          await client.set(subscriptions);
+        }
+      } catch (err) {
+        await recordPushStatus(`FAILED ${status} — ${errorText(err)}`);
+        throw err;
+      }
+      // The gateway's answer is otherwise unobservable on the device.
+      await recordPushStatus(`ok ${subscriptions.length} subs ${status}`);
+      return isCurrent();
+    },
+    async clear() {
+      created = undefined;
+      await client.delete();
+    },
+    // The extension's config is written by its own effect, which needs no
+    // kill switch: without a config the extension opens nothing.
+    async activate(prepareConfig, isCurrent) {
+      await prepareConfig();
+      return isCurrent();
+    },
+  };
 }
 
 export function useIosPush(): UsePushNotificationsReturn {
@@ -77,7 +137,7 @@ export function useIosPush(): UsePushNotificationsReturn {
 
   const unavailableReason = !hasIosPush()
     ? "native-runtime" as const
-    : !nostrPushConfigured()
+    : !nostrPush2Configured()
       ? "gateway" as const
       : undefined;
   const supported = unavailableReason === undefined;
@@ -101,7 +161,11 @@ export function useIosPush(): UsePushNotificationsReturn {
     dmSk,
     dmBunker,
     configReady,
-    watchSetLoading,
+    notificationSettingsReady,
+    groupPlaneReady,
+    dmPlaneReady,
+    concordPlaneReady,
+    watchSetReady,
   } = usePushWatchSet(prefs);
   const mediaPolicy = useMediaPolicyConfig();
 
@@ -196,18 +260,28 @@ export function useIosPush(): UsePushNotificationsReturn {
     mediaPolicy,
   ]);
 
-  const client = useMemo(() => {
-    if (!supported || !user || !NOSTR_PUSH_PUBKEY) return undefined;
-    return new NostrPushClient({
-      serverPubkey: NOSTR_PUSH_PUBKEY,
-      relays: NOSTR_PUSH_RELAYS,
-      signer: user.signer as unknown as PushSigner,
-      pool: nostr as unknown as PushRelayPool,
-    });
+  const target = useMemo(() => {
+    if (!supported || !user || !NOSTR_PUSH2_PUBKEY) return undefined;
+    return apnsPushTarget(
+      new NostrPush2Client({
+        servicePubkey: NOSTR_PUSH2_PUBKEY,
+        relays: NOSTR_PUSH2_RELAYS,
+        secretKey: loadNostrPush2ClientKey(),
+        pool: nostr as unknown as PushRelayPool,
+      }),
+      setPermission,
+    );
   }, [supported, user, nostr]);
 
-  // Read authorization without prompting; no worker or VAPID key needed, so enable needn't be
-  // gesture-bound.
+  const runnerRef = useRef<LatestSerialRunner<PushMutationJob, PushMutationResult> | null>(null);
+  if (!runnerRef.current) runnerRef.current = new LatestSerialRunner(mutatePushRegistrations);
+  const runner = runnerRef.current;
+
+  useEffect(() => {
+    if (!notificationSettingsReady) runner.invalidate();
+  }, [notificationSettingsReady, runner]);
+
+  // Read authorization without prompting; enable needn't be gesture-bound.
   useEffect(() => {
     if (!supported) {
       setReady(false);
@@ -230,142 +304,79 @@ export function useIosPush(): UsePushNotificationsReturn {
     };
   }, [supported, nonce]);
 
-  /**
-   * The token is re-taken on every sync since APNs may rotate it silently; `register()` prompts
-   * for nothing after the first authorization.
-   */
+  const planes = useMemo<Record<PushPlane, boolean>>(() => ({
+    groups: groupPlaneReady,
+    dm: dmPlaneReady,
+    concord: concordPlaneReady,
+  }), [groupPlaneReady, dmPlaneReady, concordPlaneReady]);
+
+  // Empty while nothing has loaded is "not loaded", never an instruction to clear.
+  const nothingLoaded = !watchSetReady
+    && specs.length === 0
+    && !groupPlaneReady
+    && !dmPlaneReady
+    && !concordPlaneReady;
+
   const sync = useCallback(async () => {
-    if (!client || !user) throw new Error("Push not ready");
-    const registration = await ArmadaPush.register();
-    if (!registration.granted) {
-      setPermission("denied");
-      throw new Error("Notification permission not granted");
-    }
-    if (!registration.token || !registration.bundleId) {
-      throw new Error(registration.error || "APNs returned no device token");
-    }
-    setPermission("granted");
+    if (!target || !user) throw new Error("Push not ready");
+    if (!notificationSettingsReady || nothingLoaded) return undefined;
+    return runner.run({
+      kind: "sync",
+      target,
+      pubkey: user.pubkey,
+      specs,
+      notificationSettingsReady,
+      planes,
+      prepareConfig: async () => {},
+    });
+  }, [target, user, notificationSettingsReady, nothingLoaded, runner, specs, planes]);
 
-    const domain = pushDomain();
-    const pushSubscription = {
-      type: "apns" as const,
-      device_token: registration.token,
-      bundle_id: registration.bundleId,
-      ...(registration.environment ? { environment: registration.environment } : {}),
-    };
+  const clearTarget = useCallback(async () => {
+    if (!target) return;
+    await runner.runExclusive({ kind: "clear", target });
+  }, [target, runner]);
 
-    const installation = pushInstallationId();
-    const scopedSpecs = specs.map((spec) => ({
-      ...spec,
-      id: scopePushSubscriptionId(spec.id, user.pubkey, domain, installation),
-      replacementIds: (spec.replaces ?? []).map((logicalId) =>
-        scopePushSubscriptionId(logicalId, user.pubkey, domain, installation)),
-      notification: standaloneNotification(spec),
-    }));
+  // Logout purges storage and a switch reloads, both too fast for a
+  // render-driven cleanup. The extension's keys go first and locally; the
+  // gateway's list is best-effort, and a client it never hears from again
+  // expires on its own.
+  useEffect(() => {
+    if (!user || !supported) return;
+    return registerBeforeAccountExit(async () => {
+      runner.invalidate();
+      await clearIosPushConfig();
+      await clearTarget();
+    });
+  }, [user, supported, runner, clearTarget]);
 
-    // One at a time: the gateway REFUSES new ids past its per (pubkey, domain) quota, so partial
-    // success is real and the failing index is reported.
-    let registered = 0;
-    const trackedIds = new Set(loadRegisteredPushIds());
-    try {
-      for (const spec of scopedSpecs) {
-        const registerAs = (id: string) => client.registerSubscription({
-          subscription_id: id,
-          domain,
-          filter: spec.filter,
-          relays: spec.relays,
-          notification: spec.notification,
-          push_subscription: pushSubscription,
-        });
-        const removed: string[] = [];
-        // A flat NIP-29 record may hold the last quota slot; release it on an authoritative pass
-        // before the per-relay PUTs.
-        if (!watchSetLoading) {
-          for (const oldId of spec.replacementIds) {
-            if (!trackedIds.has(oldId) || oldId === spec.id) continue;
-            await client.deleteSubscription(oldId, domain);
-            trackedIds.delete(oldId);
-            removed.push(oldId);
-            saveRegisteredPushIds([...trackedIds]);
-          }
-        }
-        try {
-          await registerAs(spec.id);
-        } catch (error) {
-          // Best-effort rollback; replaced again on the next retry.
-          for (const oldId of removed) {
-            await registerAs(oldId).then(() => {
-              trackedIds.add(oldId);
-              saveRegisteredPushIds([...trackedIds]);
-            }).catch(() => undefined);
-          }
-          throw error;
-        }
-        trackedIds.add(spec.id);
-        saveRegisteredPushIds([...trackedIds]);
-        registered += 1;
-      }
-    } catch (err) {
-      const reason = err instanceof Error ? err.message : String(err);
-      await recordPushStatus(
-        `FAILED after ${registered}/${scopedSpecs.length} on ${domain}`
-          + ` env=${registration.environment ?? "?"} token=…${registration.token.slice(-6)}`
-          + ` — ${reason}`,
-      );
-      throw err;
-    }
-
-    // Prune only once the watch set has settled: registering from a partial set is harmless,
-    // deleting from one silently stops notifications.
-    const currentIds = new Set(scopedSpecs.map((s) => s.id));
-    // `watchSetLoading` already waits for Concord folds, so an empty Concord set here is real.
-    const registeredIds = [...trackedIds];
-    if (watchSetLoading) {
-      await recordPushStatus(
-        `ok ${registered} subs on ${domain} (partial — prune deferred)`
-          + ` env=${registration.environment ?? "?"} token=…${registration.token.slice(-6)}`,
-      );
-      return;
-    }
-    for (const id of registeredIds) {
-      if (!currentIds.has(id)) {
-        await client.deleteSubscription(id, domain).catch(() => {});
-      }
-    }
-    saveRegisteredPushIds([...currentIds]);
-    // Recorded because the gateway's own relay set (`NOSTR_PUSH_RELAYS`) can make a broken watch
-    // set look healthy.
-    const dmRelays = specs.find((spec) => spec.id === "armada-dm17")?.relays ?? [];
-    await recordPushStatus(
-      `ok ${registered} subs on ${domain} dmRelays=[${dmRelays.join(" ")}]`
-        + ` env=${registration.environment ?? "?"} token=…${registration.token.slice(-6)}`,
-    );
-  }, [client, user, specs, watchSetLoading]);
-
-  // Auto-(re)sync on watch-set changes while intent + permission hold, like the web controller.
+  // Auto-(re)sync on every load and whenever the watch set changes, while intent + permission
+  // hold. Every load hands the list over at least once, which also keeps the gateway's client
+  // from expiring.
   const syncSig = useMemo(
-    () => JSON.stringify({ pubkey: user?.pubkey, specs }),
-    [user?.pubkey, specs],
+    () => JSON.stringify({
+      pubkey: user?.pubkey,
+      notificationSettingsReady,
+      planes,
+      authoritative: watchSetReady,
+      specs,
+    }),
+    [user?.pubkey, notificationSettingsReady, planes, watchSetReady, specs],
   );
   const lastSynced = useRef<string | null>(null);
   const retry = useRef(0);
-  const hadSpecs = useRef(false);
   useEffect(() => {
-    if (!supported || !ready || !client || !user) return;
+    if (!supported || !ready || !target || !user) return;
     if (permission !== "granted") return;
     if (!loadPushIntent()) return;
-    // Empty specs is ambiguous (loading vs. now nothing); only the latter should sync to prune.
-    // The persisted id list survives relaunches.
-    if (specs.length === 0 && !hadSpecs.current && loadRegisteredPushIds().length === 0) return;
-    if (specs.length > 0) hadSpecs.current = true;
+    if (!notificationSettingsReady || nothingLoaded) return;
     if (lastSynced.current === syncSig) return;
 
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     (async () => {
       try {
-        await sync();
-        if (cancelled) return;
+        const outcome = await sync();
+        if (cancelled || !outcome?.completed) return;
         lastSynced.current = syncSig;
         retry.current = 0;
         setError(undefined);
@@ -386,7 +397,18 @@ export function useIosPush(): UsePushNotificationsReturn {
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-  }, [supported, ready, permission, client, user, specs.length, syncSig, sync, nonce]);
+  }, [
+    supported,
+    ready,
+    permission,
+    target,
+    user,
+    notificationSettingsReady,
+    nothingLoaded,
+    syncSig,
+    sync,
+    nonce,
+  ]);
 
   // On foreground: clear the badge and delivered notifications, and recheck permission.
   useEffect(() => {
@@ -412,15 +434,22 @@ export function useIosPush(): UsePushNotificationsReturn {
   }, [supported]);
 
   const enable = useCallback(async () => {
-    if (!supported || !ready || !user) return;
+    if (!supported || !ready || !user || !target) return;
     setBusy(true);
     setError(undefined);
     try {
       savePushIntent(true);
       lastSynced.current = null;
-      await sync();
-      lastSynced.current = syncSig;
-      setEnabled(true);
+      const outcome = await sync();
+      if (outcome?.completed) {
+        lastSynced.current = syncSig;
+        setEnabled(true);
+      } else {
+        // Nothing default-derived is handed over before the notification
+        // settings are authoritative; the standing sync effect finishes then.
+        setEnabled(false);
+        setError("Armada is still restoring your notification settings. Background notifications will finish enabling automatically.");
+      }
     } catch (err) {
       // A refused prompt is the user's answer, not a fault.
       const { status } = await ArmadaPush.permission().catch(() => ({ status: permission }));
@@ -432,30 +461,26 @@ export function useIosPush(): UsePushNotificationsReturn {
     } finally {
       setBusy(false);
     }
-  }, [supported, ready, user, sync, syncSig, permission]);
+  }, [supported, ready, user, target, sync, syncSig, permission]);
 
   const disable = useCallback(async () => {
     setBusy(true);
     try {
       // Intent first and locally: "off" must not depend on the gateway honoring deletes.
       savePushIntent(false);
-      const domain = pushDomain();
-      if (client) {
-        for (const id of loadRegisteredPushIds()) {
-          await client.deleteSubscription(id, domain).catch(() => {});
-        }
-      }
-      saveRegisteredPushIds([]);
-      // Deleting gateway records stops pushes; this also drops the unused token.
-      await ArmadaPush.unregister().catch(() => {});
+      runner.invalidate();
       // The identity key must not outlive the session that could use it.
       await clearIosPushConfig();
+      await clearTarget().catch((err) => {
+        console.warn("[ios-push] clearing subscriptions failed:", err);
+      });
+      await ArmadaPush.unregister().catch(() => {});
       lastSynced.current = null;
       setEnabled(false);
     } finally {
       setBusy(false);
     }
-  }, [client]);
+  }, [runner, clearTarget]);
 
   const setPrefs = useCallback(async (next: PushPrefs) => {
     savePushPrefs(next, user?.pubkey);

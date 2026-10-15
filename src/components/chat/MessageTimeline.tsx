@@ -21,6 +21,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { markBootPainted } from "@/lib/bootGate";
 import { useHiddenMessages } from "@/hooks/useHiddenMessages";
 import { useMutedPubkeys } from "@/hooks/useMuteList";
+import { useMutedWordFilter } from "@/hooks/useMutedWords";
 import { usePerfMilestone } from "@/hooks/usePerfMilestone";
 import { cn } from "@/lib/utils";
 
@@ -366,23 +367,25 @@ export function MessageTimeline({
     [entries, messages],
   );
 
-  // Mutes and hidden messages are filtered here, where every surface funnels
+  // Mutes, muted words and hidden messages are filtered here, where every surface funnels
   // through. Mutes are skipped while cold (`!ready`) rather than hiding rows
   // without basis.
   const { mutedPubkeys, ready: mutesReady } = useMutedPubkeys();
   const { hiddenIds } = useHiddenMessages();
+  const mutedWord = useMutedWordFilter();
   const timelineEntries = useMemo<readonly ChannelTimelineEntry[]>(() => {
     const dropMuted = mutesReady && mutedPubkeys.size > 0;
-    if (!dropMuted && hiddenIds.size === 0) return allEntries;
+    if (!dropMuted && hiddenIds.size === 0 && !mutedWord) return allEntries;
     const kept = allEntries.filter((entry) => {
       if (entry.type === "chat" && hiddenIds.has(entry.message.id)) return false;
+      if (entry.type === "chat" && mutedWord?.(entry.message)) return false;
       if (!dropMuted) return true;
       const author = timelineEntryAuthor(entry);
       return !author || !mutedPubkeys.has(author);
     });
     // Preserve identity when nothing was removed (the prepend anchor compares it).
     return kept.length === allEntries.length ? allEntries : kept;
-  }, [allEntries, mutedPubkeys, mutesReady, hiddenIds]);
+  }, [allEntries, mutedPubkeys, mutesReady, hiddenIds, mutedWord]);
 
   // Once populated, a transient empty array shows the skeleton rather than the
   // empty state; reset while a fresh load is in flight. Tracked on UNFILTERED
