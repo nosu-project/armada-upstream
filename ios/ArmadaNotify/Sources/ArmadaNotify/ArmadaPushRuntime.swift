@@ -9,8 +9,13 @@ import Foundation
 /// notification, with no log anyone sees).
 public enum ArmadaPushRuntime {
 
-    /// Open the event the gateway inlined, store it, and say what to show — or
-    /// nil to keep the gateway's static wake-up.
+    /// Budget for fetching an event too large to inline. It comes out of the
+    /// same ~30 s as a bunker decrypt, and the banner waits on both.
+    static let fetchTimeout: TimeInterval = 5
+
+    /// Open the event the gateway inlined (or fetch it, when it did not fit),
+    /// store it, and say what to show — or nil to keep the gateway's static
+    /// wake-up.
     ///
     /// Never throws. Every failure path in this pipeline means the same thing
     /// to the caller ("show what you were given"), and an extension that threw
@@ -35,7 +40,10 @@ public enum ArmadaPushRuntime {
             // been enough to act on.
             var why = "unopened"
             guard let prepared = PushProcessor(
-                store: store, config: config, trace: { why = $0 }
+                store: store, config: config, trace: { why = $0 },
+                fetch: { id, relays in
+                    RelayFetch.event(id: id, relays: relays, timeout: fetchTimeout)
+                }
             ).prepare(userInfo: userInfo) else {
                 Breadcrumb.record(store == nil ? "\(why)+no-store" : why)
                 return nil

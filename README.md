@@ -118,14 +118,13 @@ in `index.html`, which link-preview crawlers read without running scripts.
   user's own Nostr key and hands back an ordinary invite link. Must be an
   `http(s)` URL; anything else is treated as unset.
 - `NOSTR_PUSH2_PUBKEY` / `NOSTR_PUSH2_RELAYS` — override the
-  nostr-push2 gateway web and Home-Screen installs register with for Web Push
-  while Armada is closed, and the comma-separated Nostr relays its encrypted
-  RPC is carried over (relays the gateway itself reads). Unset, they default to
-  the public service (`4c812266…e174c7` on `wss://relay.ditto.pub` and
-  `wss://relay.dreamith.to`). Inside Tenna Armada uses the host's
-  `window.napp.push` instead and needs neither.
-- `NOSTR_PUSH_PUBKEY` / `NOSTR_PUSH_RELAYS` — the older NIP-PUSH
-  gateway the iOS app registers its APNs token with.
+  nostr-push2 gateway that web and Home-Screen installs (Web Push) and the iOS
+  app (APNs) register with for notifications while Armada is closed, and the
+  comma-separated Nostr relays its encrypted RPC is carried over (relays the
+  gateway itself reads). Unset, they default to the public service
+  (`4c812266…e174c7` on `wss://relay.ditto.pub` and `wss://relay.dreamith.to`).
+  Inside Tenna Armada uses the host's `window.napp.push` instead and needs
+  neither.
 - `APP_NAME` — display name.
 
 ## Packaging

@@ -2,8 +2,6 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildPushSubscriptions,
-  scopePushSubscriptionId,
-  standaloneNotification,
   type PushSubscriptionInput,
 } from "@/lib/pushSubscriptions";
 import { DEFAULT_PUSH_PREFS } from "@/lib/pushPrefs";
@@ -390,14 +388,7 @@ describe("buildPushSubscriptions", () => {
   });
 });
 
-describe("scopePushSubscriptionId", () => {
-  it("is deterministic and stays within the server's 64-character limit", () => {
-    const id = scopePushSubscriptionId("armada-groups", ME, "armada.buzz");
-    expect(id).toBe(scopePushSubscriptionId("armada-groups", ME, "armada.buzz"));
-    expect(id).toMatch(/^armada-groups-[0-9a-f]{32}$/);
-    expect(id.length).toBeLessThanOrEqual(64);
-  });
-
+describe("inline_event", () => {
   it("asks for the inlined event on every subscription the worker can open", () => {
     // The worker renders from the real event and stores it; the gateway's
     // static title/body are only the fallback. A subscription that forgot to
@@ -429,108 +420,6 @@ describe("scopePushSubscriptionId", () => {
     for (const spec of specs) {
       expect(spec.notification.data.inline_event, spec.id)
         .toBe(spec.id === "armada-dm" ? undefined : true);
-    }
-  });
-
-  it("does not collide across users or web origins", () => {
-    const first = scopePushSubscriptionId("armada-groups", ME, "armada.buzz");
-    const otherUser = scopePushSubscriptionId(
-      "armada-groups",
-      "other".padEnd(64, "0"),
-      "armada.buzz",
-    );
-    const otherDomain = scopePushSubscriptionId("armada-groups", ME, "chat.example.com");
-
-    expect(new Set([first, otherUser, otherDomain])).toHaveLength(3);
-  });
-
-  it("truncates long logical ids before appending the scope digest", () => {
-    const id = scopePushSubscriptionId("x".repeat(100), ME, "armada.buzz");
-    expect(id).toHaveLength(64);
-    expect(id).toMatch(/^x{31}-[0-9a-f]{32}$/);
-  });
-
-  it("separates installs sharing one account and domain", () => {
-    // Registering an id REPLACES, and the native builds share armada.buzz as
-    // their domain with the hosted client. Without the installation dimension
-    // signing in on a phone would take over the browser's records, and the
-    // browser's next sync would take them back.
-    const web = scopePushSubscriptionId("armada-dm17", ME, "armada.buzz");
-    const phone = scopePushSubscriptionId("armada-dm17", ME, "armada.buzz", "install-a");
-    const tablet = scopePushSubscriptionId("armada-dm17", ME, "armada.buzz", "install-b");
-
-    expect(new Set([web, phone, tablet])).toHaveLength(3);
-    expect(phone).toBe(scopePushSubscriptionId("armada-dm17", ME, "armada.buzz", "install-a"));
-    expect(phone.length).toBeLessThanOrEqual(64);
-  });
-
-  it("leaves the web ids untouched when no installation is given", () => {
-    // Changing them would make every existing install prune and re-register.
-    // The digest is sha256("armada.buzz\0<pubkey>") truncated to 128 bits, the
-    // value the pre-installation implementation produced for this input.
-    expect(scopePushSubscriptionId("armada-groups", ME, "armada.buzz"))
-      .toBe("armada-groups-9499c671775bd76106853ef22515d79e");
-  });
-});
-
-describe("standaloneNotification", () => {
-  const specs = buildPushSubscriptions(
-    baseInput({
-      relayUrls: ["wss://r"],
-      groupIds: ["g1", "g2"],
-      mentionOnlyGroupIds: ["g2"],
-      dmRelays: ["wss://dm"],
-      dmFollows: ["friend".padEnd(64, "0")],
-      concord: [{
-        relays: ["wss://c"],
-        communityId: "c".padEnd(64, "0"),
-        communityName: "C",
-        channelId: "ch".padEnd(64, "0"),
-        channelName: "general",
-        streams: [{ pk: "pk".padEnd(64, "0"), convKey: "k".padEnd(64, "0"), epoch: "1" }],
-        timerSecs: 0,
-        gitAttachments: [],
-      }],
-    }),
-  );
-
-  it("gives every subscription a body that can stand on its own", () => {
-    // A client with no decrypt stage shows exactly what is registered, and the
-    // group scopes carry an empty body for the web worker to overwrite.
-    for (const spec of specs) {
-      const notification = standaloneNotification(spec);
-      expect(notification.title, spec.id).toBeTruthy();
-      expect(notification.body, spec.id).toBeTruthy();
-    }
-  });
-
-  it("distinguishes a mention from an ordinary channel message", () => {
-    const groups = replacing(specs, "armada-groups")!;
-    const mention = replacing(specs, "armada-groups-mention")!;
-    expect(standaloneNotification(groups).body).toBe("New message in a channel");
-    expect(standaloneNotification(mention).body).toBe("Someone mentioned you");
-  });
-
-  it("keeps a body the spec already provides", () => {
-    const dm = specs.find((s) => s.id === "armada-dm17")!;
-    expect(standaloneNotification(dm).body).toBe("New direct message");
-  });
-
-  it("passes the decrypt stage's payload through untouched", () => {
-    // The iOS Notification Service Extension opens the inlined event exactly
-    // as the service worker does, so `inline_event` and `relays` must survive:
-    // filling the body is about the FALLBACK, not about replacing the render.
-    for (const spec of specs) {
-      expect(standaloneNotification(spec).data, spec.id).toBe(spec.notification.data);
-    }
-    const dm = specs.find((s) => s.id === "armada-dm17")!;
-    expect(standaloneNotification(dm).data.url).toBe("/dm");
-    expect(standaloneNotification(dm).data.inline_event).toBe(true);
-  });
-
-  it("leaves the title alone", () => {
-    for (const spec of specs) {
-      expect(standaloneNotification(spec).title, spec.id).toBe(spec.notification.title);
     }
   });
 });

@@ -11,7 +11,7 @@ import {
 } from "@/lib/nostrPush2";
 
 import type { NostrEvent, NostrFilter } from "@nostrify/types";
-import type { PushRelayPool } from "@/lib/nostrPush";
+import type { PushRelayPool } from "@/lib/nostrPush2";
 
 /**
  * One relay with a nostr-push2 service on it: requests addressed to the

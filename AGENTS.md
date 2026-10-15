@@ -315,36 +315,37 @@ surface dead UI or throw: the `ArmadaNotification` background relay service
 touching it), NIP-55 external signers (Amber), the Bluetooth mesh, and
 the Credential Manager nsec export (itself Android 14+ only — see Conventions).
 
-### Notifications: APNs through the legacy nostr-push gateway
+### Notifications: APNs through nostr-push2
 
 iOS is the one platform that cannot listen for its own events in the
 background — no equivalent of Android's foreground service, and no Web Push in
 WKWebView — so it takes an APNs device token (`ios/App/App/ArmadaPushPlugin.swift`,
-`src/lib/nativePush.ts`) and registers it with the content-blind nostr-push
-gateway, as NIP-PUSH's `type: "apns"` subscription. The web client has moved to
-nostr-push2 (next section); this path has not, so `nostrPush.ts`,
-`NOSTR_PUSH_*` and the per-record id bookkeeping below are iOS-only now. `useIosPush.ts` is the controller; it and `useNostrPush.ts`
-register one watch set (`usePushWatchSet.ts`) and expose one
+`src/lib/nativePush.ts`) and hands it to the same nostr-push2 gateway as the
+web (next section), as an `apn` connection. `useIosPush.ts` is the controller:
+`apnsPushTarget` is a third `PushTarget` beside the web's two, so the list it
+sets is built, carried forward and serialized by the same
+`mutatePushRegistrations`, and both controllers expose one
 `UsePushNotificationsReturn`, so the settings UI never learns which it has.
 Apple is unavoidably in the delivery path; what survives is that the GATEWAY
-still matches kinds and tags and sends a fixed string, never a rendered
-message.
+still matches kinds and tags and forwards the still-encrypted event under a
+fixed string, never a rendered message.
 
 - **The message is decrypted on the device, by the Notification Service
   Extension.** `ios/App/NotificationService` is the target; all of its work is
   in `ios/ArmadaNotify`, the THIRD port of the decrypt/store/present pipeline
   (`src/sw/worker.ts`+`pushRuntime.ts` on web, `Dm17.kt`+`ServiceStore.kt` on Android).
-  The gateway inlines the matched event, the extension opens it, writes it into
-  the same ArmadaDB the WebView reads — which is why the database was put in
-  the App Group before anything was stored in it — and rewrites the
-  notification from the plaintext. `standaloneNotification()` only fills the
-  empty body the group scopes register, for the two ordinary ways an
-  un-rewritten notification still reaches the screen: an event too large for
-  the gateway to inline (best-effort, 4096-byte APNs payload) and a NIP-46/07
-  login whose key never reaches the device. Deliberately NOT solved with
-  NIP-PUSH's `{{content}}` template — that is resolved server-side, which would
-  route message text through a gateway whose whole point is that it never
-  handles plaintext.
+  The gateway puts the `napp.push.payload` keys beside `aps`; the extension
+  reads the plane off the event (`PushProcessor.scope`, the port of
+  `pushScope`), opens it, writes it into the same ArmadaDB the WebView reads —
+  which is why the database was put in the App Group before anything was
+  stored in it — and rewrites the notification from the plaintext. An event
+  too large for the 4 KB APNs payload arrives as `event_id` and is fetched
+  from the named relay first (`RelayFetch`, 5 s), as the worker does. Every
+  event, inlined or fetched, has its id and signature checked before anything
+  else. One whose plane is known but which cannot be opened (a bunker that did
+  not answer, a NIP-07 login, a kind-4 DM) gets that plane's fallback text and
+  destination (`PushProcessor.fallback`); only an event that cannot be placed
+  at all keeps the gateway's generic text.
 - **`ios/ArmadaNotify` is a SwiftPM package so its suite runs on Linux**, like
   `ios/ArmadaDB` and for a sharper reason: this is the code that decides
   whether a rumor is authentic. Its vectors were generated with the very
@@ -396,7 +397,7 @@ message.
   is present only where the sender is ALREADY named in the body, which is what
   keeps a message request — whose whole point is that a stranger controls
   their own name and picture — from becoming a person on the lock screen.
-- **The avatar is the one thing here that touches the network**, because the
+- **The avatar has to be fetched in the extension**, because the
   image has to be bytes in hand when the content handler is called; there is no
   URL the system will fetch for us. It is bounded on every axis (`https` only,
   4s, 256 KB) and cached per sender in the App Group (`AvatarCache`, keyed by
@@ -417,25 +418,22 @@ message.
   provisioning profile and sends it with the token; an App Store build embeds
   no profile, which is itself the production answer. Requires Push
   Notifications on the App ID, like Associated Domains and App Groups.
-- **Subscription ids carry an installation id.** nostr-push indexes
-  `subscription_id` globally and registering REPLACES, and the native builds
-  have no origin of their own worth naming so they share `armada.buzz` as their
-  `domain` with the hosted client. Without the extra dimension
-  (`pushInstallationId`), signing in on an iPhone would silently take over the
-  same account's browser records and the browser's next sync would take them
-  back. (Browsers no longer register here at all.)
-- **The gateway is build-time config, and iOS has no CI to set it.**
-  `NOSTR_PUSH_PUBKEY` / `NOSTR_PUSH_RELAYS` must be in the
-  environment of the `npm run build` that precedes `npx cap sync ios`, or the
-  app ships with `unavailableReason: "gateway"` and no push path at all.
-- Taps are routed by the plugin, not by a URL. A tap that LAUNCHED the process
-  is buffered natively and read by `coldLaunchDeepLink` alongside the launch
-  URL, so both settle the one race against `HomeRedirect`; a warm tap is the
-  `pushOpened` listener in `useNotificationNavigation`. Only DMs name a
-  destination — a group/community wake-up carries no room id, the gateway being
-  content-blind. A push arriving while the app is open lands in Notification
-  Center without a banner or sound, since the payload cannot distinguish the
-  channel being read from any other.
+- **The gateway client is its own key** (`loadNostrPush2ClientKey`, no VAPID
+  half), so bunker and extension logins register without a signer prompt. The
+  account-exit hook clears the extension's config first, locally, then deletes
+  the client best-effort; a client the gateway never hears from again expires
+  after 30 days.
+- Taps are routed by the plugin, not by a URL. The extension writes the room's
+  route into the notification as `url`; a tap that LAUNCHED the process is
+  buffered natively and read by `coldLaunchDeepLink` alongside the launch URL,
+  so both settle the one race against `HomeRedirect`, and a warm tap is the
+  `pushOpened` listener in `useNotificationNavigation`.
+- **A push while the app is open gets a banner unless it is about the room on
+  screen.** `useNotificationNavigation` reports the route through
+  `setActiveRoute`, and `willPresent` compares it with the notification's
+  `url` (`ForegroundPresentation`, tested on Linux): the same room, or a
+  passive notification, goes to Notification Center only. The page shows no OS
+  notifications of its own on native, so this is the one foreground path.
 
 Deep links: armada.buzz **universal links work**, via the
 `com.apple.developer.associated-domains` entitlement in
@@ -457,8 +455,8 @@ iOS can produce one.
 
 ### Web notifications: nostr-push2 and `window.napp.push`
 
-The web build has two ways to be woken while closed, and `useNostrPush.ts`
-drives both: Tenna's `window.napp.push` when Armada runs there as an nsite
+The web build has two ways to be woken while closed (iOS uses the same
+gateway through a third target; see above), and `useNostrPush.ts` drives both: Tenna's `window.napp.push` when Armada runs there as an nsite
 (`~/Projects/tenna/NAPP.md`), and Web Push through a
 nostr-push2 (`nostr://npub1q3sle0kvfsehgsuexttt3ugjd8xdklxfwwkh559wxckmzddywnws6cd26p/git.shakespeare.diy/nostr-push2`)
 gateway everywhere else (`nostrPush2.ts`; the public service is hardcoded in

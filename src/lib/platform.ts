@@ -286,11 +286,7 @@ export function bridgePortalUrl(path: "/" | "/import" = "/"): string | null {
   return path === "/" ? BRIDGE_PORTAL_URL : `${BRIDGE_PORTAL_URL}${path}`;
 }
 
-/**
- * nostr-push gateway: `NOSTR_PUSH_PUBKEY` (npub or hex, `#p`-tagged on
- * kind-25742 RPCs) and `NOSTR_PUSH_RELAYS` (rendezvous relays). Both empty
- * ⇒ no iOS APNs push.
- */
+/** A push gateway's pubkey, as npub or hex. */
 function decodePushPubkey(raw: string): string | undefined {
   const value = raw.trim();
   if (!value) return undefined;
@@ -304,25 +300,11 @@ function decodePushPubkey(raw: string): string | undefined {
   return undefined;
 }
 
-export const NOSTR_PUSH_PUBKEY: string | undefined = decodePushPubkey(
-  config("NOSTR_PUSH_PUBKEY") ?? "",
-);
-
-export const NOSTR_PUSH_RELAYS: string[] = (config("NOSTR_PUSH_RELAYS") ?? "")
-  .split(",")
-  .map((url: string) => normalizeRelayUrl(url))
-  .filter((url: string | undefined): url is string => Boolean(url));
-
-/** True when the nostr-push gateway is configured for this build. */
-export function nostrPushConfigured(): boolean {
-  return Boolean(NOSTR_PUSH_PUBKEY) && NOSTR_PUSH_RELAYS.length > 0;
-}
-
 /**
- * nostr-push2, the gateway browser Web Push goes through (`nostrPush2.ts`);
- * the legacy `NOSTR_PUSH_*` pair above serves only iOS APNs. Neither value is
- * secret, so the public service is the default and `NOSTR_PUSH2_PUBKEY` (npub
- * or hex) / `NOSTR_PUSH2_RELAYS` (relays the service itself reads) override it.
+ * nostr-push2, the gateway browser Web Push and iOS APNs go through
+ * (`nostrPush2.ts`). Neither value is secret, so the public service is the
+ * default and `NOSTR_PUSH2_PUBKEY` (npub or hex) / `NOSTR_PUSH2_RELAYS`
+ * (relays the service itself reads) override it.
  * Empty counts as unset: CI passes an unprovisioned secret as "". Inside
  * Tenna, `window.napp.push` needs neither.
  */

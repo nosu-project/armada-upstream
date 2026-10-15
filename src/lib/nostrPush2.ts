@@ -1,18 +1,17 @@
 /**
  * nostr-push2 client (kind 25742 + NIP-44; see nostr-push2's NIP.md).
  *
- * Stands in for `window.napp.push` in a plain browser: takes the same
- * `NappSubscription[]` (`nappPush.ts`), watches its own relays, and Web Pushes
- * the worker the same `napp.push.payload` a Tenna host would deliver.
- *
- * Unlike the legacy nostr-push client (`nostrPush.ts`, iOS APNs only):
+ * Stands in for `window.napp.push` in a plain browser and on iOS: takes the
+ * same `NappSubscription[]` (`nappPush.ts`), watches its own relays, and
+ * delivers the same `napp.push.payload` a Tenna host would — by Web Push to
+ * the worker, or by APNs to the Notification Service Extension.
  *
  *   - The client is an EPHEMERAL per-install key, never the person's own, so
  *     requests need no signer prompt or login NIP-44 (bunker and extension
  *     logins get push too) and the gateway learns nothing about whose device
  *     it is.
- *   - The install generates its own VAPID key once and hands the private half
- *     over in `create`; the browser subscription is made against it.
+ *   - A browser install generates its own VAPID key once and hands the private
+ *     half over in `create`; the browser subscription is made against it.
  *
  * `set` replaces the list whole; keeping a partial snapshot from pruning is the
  * caller's job (`carryForwardWatches`).
@@ -22,14 +21,23 @@ import { NSecSigner } from "@nostrify/nostrify";
 import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
 import { generateSecretKey } from "nostr-tools";
 
-import type { NostrFilter } from "@nostrify/types";
+import type { NostrEvent, NostrFilter } from "@nostrify/types";
 import type { NappSubscription } from "@/lib/nappPush";
-import type { PushRelayPool } from "@/lib/nostrPush";
 
 /** Requests and responses both. Ephemeral: relays pass it on, store nothing. */
 export const KIND_NOSTR_PUSH2_RPC = 25742;
 
 const RPC_TIMEOUT_MS = 20_000;
+
+export interface PushRelayPool {
+  relay(url: string): {
+    event(event: NostrEvent, opts?: { signal?: AbortSignal }): Promise<void>;
+    req(
+      filters: NostrFilter[],
+      opts?: { signal?: AbortSignal },
+    ): AsyncIterable<(string | NostrEvent)[]>;
+  };
+}
 
 /** How the gateway reaches a browser: `PushSubscription.toJSON()` plus our VAPID key. */
 export interface WebPushConnection {
@@ -42,6 +50,21 @@ export interface WebPushConnection {
   /** base64url, 32 bytes: the JWK `d` of the key the browser subscribed with. */
   vapid_private_key: string;
 }
+
+/**
+ * How the gateway reaches the iOS app. A token is minted against exactly one
+ * APNs host, so `environment` comes from the build's `aps-environment`.
+ */
+export interface ApnsConnection {
+  method: "apn";
+  /** 64 hex characters. */
+  token: string;
+  /** The bundle id. */
+  topic: string;
+  environment: "sandbox" | "production";
+}
+
+export type PushConnection = WebPushConnection | ApnsConnection;
 
 export class NostrPush2Error extends Error {}
 
@@ -87,7 +110,7 @@ export class NostrPush2Client {
   }
 
   /** Register, or replace, how this client is reached. Keeps its subscriptions. */
-  async create(connection: WebPushConnection): Promise<void> {
+  async create(connection: PushConnection): Promise<void> {
     await this.call("create", connection);
   }
 
@@ -269,6 +292,30 @@ export async function loadNostrPush2Identity(): Promise<NostrPush2Identity> {
     memoryIdentity = identity;
   }
   return identity;
+}
+
+const CLIENT_KEY = "armada:nostr-push2-client:v1";
+let memoryClientKey: Uint8Array | undefined;
+
+/**
+ * The client key alone, for an install that needs no VAPID key (iOS, whose
+ * connection is an APNs token). Kept and purged like the identity above.
+ */
+export function loadNostrPush2ClientKey(): Uint8Array {
+  try {
+    const stored = localStorage.getItem(CLIENT_KEY);
+    if (stored && /^[0-9a-f]{64}$/.test(stored)) return hexToBytes(stored);
+  } catch {
+    // Unreadable: mint a new one below.
+  }
+  if (memoryClientKey) return memoryClientKey;
+  const key = generateSecretKey();
+  try {
+    localStorage.setItem(CLIENT_KEY, bytesToHex(key));
+  } catch {
+    memoryClientKey = key;
+  }
+  return key;
 }
 
 /** The `create` params for a browser subscription made against `identity`. */

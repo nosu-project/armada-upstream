@@ -6,9 +6,9 @@ import type { MediaPolicyConfig } from "@/lib/mediaPolicy";
 
 /**
  * Bridge to `ArmadaPushPlugin.swift` (iOS APNs). iOS can't run a background
- * relay listener, so the APNs token goes to the same content-blind nostr-push
- * gateway as web (`type: "apns"`); see `useIosPush.ts`. No Android version:
- * no Play Services, and its background service is better anyway.
+ * relay listener, so the APNs token goes to the same content-blind nostr-push2
+ * gateway as web (an `apn` connection); see `useIosPush.ts`. No Android
+ * version: no Play Services, and its background service is better anyway.
  */
 
 /** Whether the OS has been asked, and what it said. */
@@ -50,6 +50,8 @@ export interface ArmadaPushPlugin {
   recordStatus(options: { line: string }): Promise<void>;
   /** The tap that cold-launched this process (buffered by the plugin), consumed once; `{}` otherwise. */
   takePendingOpen(): Promise<NativePushOpen>;
+  /** The route on screen, so a push about that room arrives without a banner. */
+  setActiveRoute(options: { path: string }): Promise<void>;
   /** A notification tapped while the app was already running. */
   addListener(
     eventName: "pushOpened",
@@ -114,6 +116,12 @@ export async function clearIosPushConfig(): Promise<void> {
 export async function recordPushStatus(line: string): Promise<void> {
   if (!hasIosPush()) return;
   await ArmadaPush.recordStatus({ line }).catch(() => {});
+}
+
+/** Best-effort; never throws. */
+export async function reportActiveRoute(path: string): Promise<void> {
+  if (!hasIosPush()) return;
+  await ArmadaPush.setActiveRoute({ path }).catch(() => {});
 }
 
 /** iOS with the plugin present (not `isNativePlatform()`: Android would hit an empty proxy). */

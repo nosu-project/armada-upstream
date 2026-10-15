@@ -239,9 +239,7 @@ final class StorelessTests: XCTestCase {
             secretKeyHex: vectorString("bobSk"), kind: 9,
             tags: [["h", "general"]], content: "shipped it"
         )
-        let prepared = processor.prepare(userInfo: [
-            "scope": "group", "relays": ["wss://relay.example"], "event": event,
-        ])
+        let prepared = processor.prepare(userInfo: napp(event, relays: ["wss://relay.example"]))
 
         XCTAssertNotNil(prepared, "a decrypted message must still be shown")
         XCTAssertEqual(prepared?.body, "Anonymous: shipped it")
@@ -267,7 +265,7 @@ final class StorelessTests: XCTestCase {
             tags: [["h", "general"]], content: "shipped it",
             forgedPubkey: vectorString("alicePk")
         )
-        XCTAssertNil(processor.prepare(userInfo: ["scope": "group", "event": forged]))
+        XCTAssertNil(processor.prepare(userInfo: napp(forged)))
 
         // And an event whose body was edited after signing, so its id no longer
         // hashes to the content the signature covers.
@@ -276,7 +274,7 @@ final class StorelessTests: XCTestCase {
             tags: [["h", "general"]], content: "shipped it"
         )
         tampered["content"] = "shipped nothing"
-        XCTAssertNil(processor.prepare(userInfo: ["scope": "group", "event": tampered]))
+        XCTAssertNil(processor.prepare(userInfo: napp(tampered)))
 
         // An unsigned one is refused too — there is nothing else to go on.
         var unsigned = signedEvent(
@@ -284,7 +282,7 @@ final class StorelessTests: XCTestCase {
             tags: [["h", "general"]], content: "shipped it"
         )
         unsigned.removeValue(forKey: "sig")
-        XCTAssertNil(processor.prepare(userInfo: ["scope": "group", "event": unsigned]))
+        XCTAssertNil(processor.prepare(userInfo: napp(unsigned)))
     }
 
     func testStillDropsTheViewersOwnMessageWithNoStore() {
@@ -301,7 +299,7 @@ final class StorelessTests: XCTestCase {
             secretKeyHex: vectorString("aliceSk"), kind: 9,
             tags: [["h", "general"]], content: "mine"
         )
-        let prepared = processor.prepare(userInfo: ["scope": "group", "event": event])
+        let prepared = processor.prepare(userInfo: napp(event))
         XCTAssertEqual(prepared?.drop, true)
     }
 
@@ -326,7 +324,7 @@ final class StorelessTests: XCTestCase {
         )
         let processor = PushProcessor(store: nil, config: config, now: 1_700_000_000)
         let prepared = processor.prepare(
-            userInfo: ["scope": "c2", "event": concord["wrap"] as! [String: Any]]
+            userInfo: napp(concord["wrap"] as! [String: Any])
         )
         XCTAssertEqual(prepared?.drop, true, "a banned member's message must not notify")
     }
@@ -350,7 +348,7 @@ final class StorelessTests: XCTestCase {
             policy: .generic, selfPubkey: self_, knownPeers: [], secretKey: nil,
             nip46: nil, concord: [stream]
         )
-        let wrap: [String: Any] = ["scope": "c2", "event": concord["wrap"] as! [String: Any]]
+        let wrap: [AnyHashable: Any] = napp(concord["wrap"] as! [String: Any])
         // A clock well behind the vector's rumor: it reads as future and holds.
         XCTAssertEqual(
             PushProcessor(store: nil, config: config, now: 1_699_000_000)
@@ -402,14 +400,14 @@ final class StorelessTests: XCTestCase {
         // the all-`a` viewer) notifies.
         XCTAssertNotEqual(
             processor(mentionOnly: false)
-                .prepare(userInfo: ["scope": "c2", "event": wrap])?.drop,
+                .prepare(userInfo: napp(wrap))?.drop,
             true,
             "a non-mention notifies a channel set to all messages"
         )
         // Mentions-only: the same non-mention wrap is dropped.
         XCTAssertEqual(
             processor(mentionOnly: true)
-                .prepare(userInfo: ["scope": "c2", "event": wrap])?.drop,
+                .prepare(userInfo: napp(wrap))?.drop,
             true,
             "a non-mention must not notify a mentions-only channel"
         )
@@ -447,14 +445,14 @@ final class StorelessTests: XCTestCase {
         // Baseline: not muted, the same wrap notifies.
         XCTAssertNotEqual(
             processor(muted: false)
-                .prepare(userInfo: ["scope": "c2", "event": wrap])?.drop,
+                .prepare(userInfo: napp(wrap))?.drop,
             true,
             "a message on an unmuted channel notifies"
         )
         // Muted: the same wrap is dropped rather than shown.
         XCTAssertEqual(
             processor(muted: true)
-                .prepare(userInfo: ["scope": "c2", "event": wrap])?.drop,
+                .prepare(userInfo: napp(wrap))?.drop,
             true,
             "a message on a muted channel must not notify"
         )
@@ -617,7 +615,7 @@ final class SenderIdentityTests: XCTestCase {
             secretKeyHex: vectorString("bobSk"), kind: 9,
             tags: [["h", "general"]], content: "shipped it"
         )
-        let prepared = processor.prepare(userInfo: ["scope": "group", "event": event])
+        let prepared = processor.prepare(userInfo: napp(event))
 
         XCTAssertEqual(prepared?.sender?.id, bob, "the pubkey is the conversation's identity")
         XCTAssertEqual(prepared?.sender?.name, "Anonymous")
@@ -640,7 +638,7 @@ final class SenderIdentityTests: XCTestCase {
             now: 1_700_000_000
         )
         let prepared = processor.prepare(
-            userInfo: ["scope": "dm", "event": vectorObject("dmWrap")]
+            userInfo: napp(vectorObject("dmWrap"))
         )
 
         XCTAssertEqual(prepared?.title, "Message requests", "the request ping, not the message")
@@ -660,7 +658,7 @@ final class SenderIdentityTests: XCTestCase {
             now: 1_700_000_000
         )
         let prepared = processor.prepare(
-            userInfo: ["scope": "dm", "event": vectorObject("dmWrap")]
+            userInfo: napp(vectorObject("dmWrap"))
         )
 
         XCTAssertEqual(prepared?.sender?.id, bobPk)
