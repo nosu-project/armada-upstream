@@ -135,7 +135,8 @@ export function MeshProfilePreviewCard({
   const [open, setOpen] = useState(false);
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    // Modal, so a click outside only dismisses rather than also landing on what's beneath.
+    <Popover modal open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>{children}</PopoverTrigger>
       <PopoverContent
         side="bottom"
