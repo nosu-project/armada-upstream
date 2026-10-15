@@ -44,6 +44,7 @@ import buzz.armada.app.db.SelfState;
 import buzz.armada.app.db.ServiceStore;
 import buzz.armada.app.relayfleet.CircuitBreakerPolicy;
 import buzz.armada.app.relayfleet.CursorGate;
+import buzz.armada.app.relayfleet.DmRelayCover;
 import buzz.armada.app.relayfleet.FloodBreaker;
 import buzz.armada.app.relayfleet.GitRelayCover;
 import buzz.armada.app.relayfleet.Keepalive;
@@ -235,6 +236,16 @@ public class NotificationRelayService extends Service {
     /** Room count past which quiet rooms' keys are swept out of a budget map. */
     private static final int ALERT_BURST_SWEEP_AT = 64;
     private final java.util.Map<String, java.util.ArrayDeque<Long>> alertBurst = new java.util.HashMap<>();
+    private final AlertPolicy alertPolicy = new AlertPolicy();
+    // Messages waiting out activity on another device (AlertPolicy), oldest
+    // first. Decrypted text: cleared with the account.
+    private final List<HeldMessage> heldMessages = new ArrayList<>();
+    private static final int MAX_HELD_MESSAGES = 64;
+    private boolean heldFlushPosted = false;
+    // Newest read stamp (unix s) per read-state key seen from another device,
+    // so a held message read there is dropped instead of posted.
+    private final Map<String, Long> lastReadByKey = new HashMap<>();
+    private final Runnable flushHeldRunnable = this::flushHeldMessages;
     private final java.util.Map<String, java.util.ArrayDeque<Long>> mentionBurst = new java.util.HashMap<>();
 
     // ── Incoming DM calls ─────────────────────────────────────────────────────
@@ -292,23 +303,49 @@ public class NotificationRelayService extends Service {
         }
         return quietLimitByUrl.getOrDefault(relayUrl, Keepalive.DEFAULT_QUIET_MS);
     }
+    // Awake past the probe timeout long enough to drop a dead socket and redial it.
+    private static final long WATCHDOG_RECONNECT_GRACE_MS = 15_000;
     private final Runnable keepaliveCheck = () -> {
-        long now = SystemClock.uptimeMillis();
+        long now = SystemClock.elapsedRealtime();
         for (RelayConnection rc : this.connections) rc.checkProbe(now);
     };
+    // Quiet is measured in elapsedRealtime, which counts deep sleep: the
+    // handler's clock (uptime) stops while the CPU is suspended, so a socket
+    // whose NAT mapping expired overnight would otherwise read as just used.
     private final Runnable keepaliveTick = new Runnable() {
         @Override
         public void run() {
-            long now = SystemClock.uptimeMillis();
-            boolean probed = false;
-            for (RelayConnection rc : connections) probed |= rc.keepalive(now);
-            if (probed) {
-                handler.removeCallbacks(keepaliveCheck);
-                handler.postDelayed(keepaliveCheck, Keepalive.PROBE_TIMEOUT_MS);
-            }
+            keepaliveSweep();
             handler.postDelayed(this, Keepalive.TICK_MS);
         }
     };
+
+    /** Probe every quiet socket now (handler thread). Whether any probe went out. */
+    private boolean keepaliveSweep() {
+        long now = SystemClock.elapsedRealtime();
+        boolean probed = false;
+        for (RelayConnection rc : connections) probed |= rc.keepalive(now);
+        if (probed) {
+            handler.removeCallbacks(keepaliveCheck);
+            handler.postDelayed(keepaliveCheck, Keepalive.PROBE_TIMEOUT_MS);
+        }
+        return probed;
+    }
+
+    /**
+     * The watchdog alarm woke a live service: sweep now, since the uptime tick
+     * may not come round before the device sleeps again, and stay awake until
+     * a dead socket has been dropped and redialed.
+     */
+    static void onWatchdogWake(Context ctx) {
+        NotificationRelayService svc = instance;
+        if (svc == null) return;
+        android.os.PowerManager pm = (android.os.PowerManager) ctx.getSystemService(Context.POWER_SERVICE);
+        android.os.PowerManager.WakeLock wl = pm == null ? null
+                : pm.newWakeLock(android.os.PowerManager.PARTIAL_WAKE_LOCK, "armada:keepalive");
+        if (wl != null) wl.acquire(Keepalive.PROBE_TIMEOUT_MS + WATCHDOG_RECONNECT_GRACE_MS);
+        svc.handler.post(svc::keepaliveSweep);
+    }
 
     /**
      * Decides, per relay, whether to hold a background socket at all, when to
@@ -386,6 +423,10 @@ public class NotificationRelayService extends Service {
     // suppression happens per event in wantsNotification.
     private final Set<String> mentionOnlyGroupKeys = new LinkedHashSet<>();
     private final Set<String> dmRelays = new LinkedHashSet<>();
+    // The subset of dmRelays subscribed on (see DmRelayCover). Publishing
+    // still goes to every dmRelay.
+    private final Set<String> dmWatchRelays = new LinkedHashSet<>();
+    static final int DM_RELAYS_WATCHED = 2;
     // Established DM peers (hex): follows, explicit accepts/1:1 pins and peers
     // recovered from authored encrypted-index rows. The historical config key
     // is `dmFollows`; kind-4 subscriptions use it as an author allow-list.
@@ -422,6 +463,10 @@ public class NotificationRelayService extends Service {
     // scoping self-state to them would mean never watching the relays their
     // settings are actually published to.
     private final Set<String> selfRelays = new LinkedHashSet<>();
+    // The subset of selfRelays subscribed on: another device publishes each
+    // document to all of them, so a couple carry it.
+    private final Set<String> selfWatchRelays = new LinkedHashSet<>();
+    static final int SELF_RELAYS_WATCHED = 2;
     // The `d` tags of Armada's own NIP-78 settings documents, supplied by the
     // WebView so a fork that changes APP_ID renames them here too. Falls
     // back to the built-in set when the pref is absent — on a cold boot before
@@ -847,6 +892,29 @@ public class NotificationRelayService extends Service {
         }
     }
 
+    /** The arguments of an {@link #enqueueRoomMessage} call held by {@link AlertPolicy}. */
+    private static final class HeldMessage {
+        final CommunityRef community;
+        final String roomKey, roomTitle, url, senderPubkey, senderName, senderPicture, text;
+        final long timestampMs;
+        final boolean mention;
+
+        HeldMessage(CommunityRef community, String roomKey, String roomTitle, String url,
+                    String senderPubkey, String senderName, String senderPicture,
+                    String text, long timestampMs, boolean mention) {
+            this.community = community;
+            this.roomKey = roomKey;
+            this.roomTitle = roomTitle;
+            this.url = url;
+            this.senderPubkey = senderPubkey;
+            this.senderName = senderName;
+            this.senderPicture = senderPicture;
+            this.text = text;
+            this.timestampMs = timestampMs;
+            this.mention = mention;
+        }
+    }
+
     /**
      * One message line held in a room's notification. Raw data, not a built
      * MessagingStyle.Message: a sender avatar resolves late (network fetch),
@@ -929,7 +997,7 @@ public class NotificationRelayService extends Service {
             if (svc.shouldWatchDm()) {
                 for (RelayConnection rc : svc.connections) {
                     if (rc.closed || !rc.socketOpen || !rc.dm17Live || rc.dm17ReqAtMs <= 0) continue;
-                    if (!svc.dmRelays.contains(rc.relayUrl)) continue;
+                    if (!svc.dmWatchRelays.contains(rc.relayUrl)) continue;
                     try {
                         out.put(rc.relayUrl, rc.dm17ReqAtMs);
                     } catch (JSONException ignored) {
@@ -1313,6 +1381,10 @@ public class NotificationRelayService extends Service {
      * resurrecting read lines. A room with a newer unread message is left up.
      */
     private void applyDismissRead(java.util.Map<String, Long> readByKey) {
+        for (Map.Entry<String, Long> e : readByKey.entrySet()) {
+            Long prev = lastReadByKey.get(e.getKey());
+            if (prev == null || e.getValue() > prev) lastReadByKey.put(e.getKey(), e.getValue());
+        }
         NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
         if (manager == null) return;
         java.util.Iterator<Map.Entry<String, RoomNotif>> it = roomNotifs.entrySet().iterator();
@@ -1749,6 +1821,8 @@ public class NotificationRelayService extends Service {
             // Decoded images of the outgoing account's contacts and communities.
             avatarCache.evictAll();
             groupImageCache.evictAll();
+            heldMessages.clear();
+            lastReadByKey.clear();
         }
         userPubkey = nextUserPubkey;
         relayUrls.clear();
@@ -1823,6 +1897,8 @@ public class NotificationRelayService extends Service {
         healthSignerStatus = nativeSigner != null
                 ? "ready" : (sealedSigner != null ? "unavailable" : "missing");
 
+        coverSelfRelays();
+        coverDmRelays();
         coverConcordRelays();
         pruneGitRelays();
 
@@ -1830,8 +1906,8 @@ public class NotificationRelayService extends Service {
         // relays ∪ the general relays carrying the user's own documents.
         Set<String> allRelays = new LinkedHashSet<>(relayUrls);
         allRelays.addAll(relayToGroupIds.keySet());
-        allRelays.addAll(dmRelays);
-        allRelays.addAll(selfRelays);
+        allRelays.addAll(dmWatchRelays);
+        allRelays.addAll(selfWatchRelays);
         allRelays.addAll(relayToPks2.keySet());
         allRelays.addAll(gitRepositoriesByRelay.keySet());
 
@@ -1892,8 +1968,8 @@ public class NotificationRelayService extends Service {
             // socket that can never deliver a notification. It gets no
             // connection at all (rather than an idle one the policy refuses),
             // so it never appears in health totals or catches a queued reply.
-            if (!relayDeliverable(url, relayToGroupIds, dmRelays, dmWatchable,
-                    relayToPks2, gitRepositoriesByRelay, selfRelays, userPubkey)) {
+            if (!relayDeliverable(url, relayToGroupIds, dmWatchRelays, dmWatchable,
+                    relayToPks2, gitRepositoriesByRelay, selfWatchRelays, userPubkey)) {
                 curatedOut++;
                 continue;
             }
@@ -2188,6 +2264,31 @@ public class NotificationRelayService extends Service {
     }
 
     /**
+     * Subscribe on {@link #SELF_RELAYS_WATCHED} of the self-state relays,
+     * preferring DM inbox relays so the DM cover can reuse them.
+     */
+    private void coverSelfRelays() {
+        Set<String> held = new HashSet<>(relayToGroupIds.keySet());
+        Set<String> preferred = new HashSet<>(dmRelays);
+        selfWatchRelays.clear();
+        selfWatchRelays.addAll(DmRelayCover.choose(selfRelays, held, preferred, SELF_RELAYS_WATCHED));
+    }
+
+    /**
+     * Subscribe on {@link #DM_RELAYS_WATCHED} of the inbox relays (see
+     * {@link DmRelayCover}). Runs before the Concord cover, preferring relays
+     * a community lists so that cover can reuse them.
+     */
+    private void coverDmRelays() {
+        Set<String> held = new HashSet<>(relayToGroupIds.keySet());
+        held.addAll(selfWatchRelays);
+        Set<String> preferred = new HashSet<>();
+        for (Set<String> relays : communityRelays.values()) preferred.addAll(relays);
+        dmWatchRelays.clear();
+        dmWatchRelays.addAll(DmRelayCover.choose(dmRelays, held, preferred, DM_RELAYS_WATCHED));
+    }
+
+    /**
      * Watch each Concord community on {@link #CONCORD_RELAYS_PER_COMMUNITY} of
      * its relays (see {@link RelayCover}) rather than all of them. Runs after
      * the NIP-29, DM and self-state planes are parsed, since their relays are free.
@@ -2195,8 +2296,8 @@ public class NotificationRelayService extends Service {
     private void coverConcordRelays() {
         relayToPks2.clear();
         Set<String> held = new HashSet<>(relayToGroupIds.keySet());
-        held.addAll(dmRelays);
-        held.addAll(selfRelays);
+        held.addAll(dmWatchRelays);
+        held.addAll(selfWatchRelays);
         Map<String, Set<String>> assignment = RelayCover.assign(
                 communityRelays, held, CONCORD_RELAYS_PER_COMMUNITY, concordRefusedRelays);
         for (Map.Entry<String, Set<String>> e : assignment.entrySet()) {
@@ -2215,8 +2316,8 @@ public class NotificationRelayService extends Service {
      */
     private void pruneGitRelays() {
         Set<String> held = new HashSet<>(relayToGroupIds.keySet());
-        held.addAll(dmRelays);
-        held.addAll(selfRelays);
+        held.addAll(dmWatchRelays);
+        held.addAll(selfWatchRelays);
         held.addAll(relayToPks2.keySet());
         Map<String, List<String>> byRepository = new HashMap<>();
         for (Map.Entry<String, Set<String>> e : gitRepositoriesByRelay.entrySet()) {
@@ -2447,7 +2548,7 @@ public class NotificationRelayService extends Service {
             // A DM inbox reconnects at once: its NIP-17 and call subscriptions
             // are live-only, so time spent settling there is lost, not delayed.
             // Every other plane resumes from its cursor.
-            boolean liveOnly = dmRelays.contains(relayUrl) && shouldWatchDm();
+            boolean liveOnly = dmWatchRelays.contains(relayUrl) && shouldWatchDm();
             long settle = liveOnly ? 0 : NetworkSettle.delayMs(
                     SystemClock.elapsedRealtime(), lastNetworkChangeAt, NetworkSettle.SETTLE_MS);
             settle = Math.max(settle, unvalidatedDelayMs());
@@ -2496,7 +2597,7 @@ public class NotificationRelayService extends Service {
                 public void onOpen(WebSocket webSocket, Response response) {
                     if (BuildConfig.DEBUG) Log.d(TAG, "WS open: " + relayUrl);
                     if (ServiceProfiler.ON) ServiceProfiler.count("socket.open");
-                    lastInboundAt = SystemClock.uptimeMillis();
+                    lastInboundAt = SystemClock.elapsedRealtime();
                     probeSentAt = 0;
                     // A fresh socket session: CLOSED-resubscribe backoff starts
                     // over, and a pending auth re-send belongs to the old session.
@@ -2514,7 +2615,7 @@ public class NotificationRelayService extends Service {
 
                 @Override
                 public void onMessage(WebSocket webSocket, String text) {
-                    lastInboundAt = SystemClock.uptimeMillis();
+                    lastInboundAt = SystemClock.elapsedRealtime();
                     if (ServiceProfiler.ON) {
                         // Frames by subscription family, bytes, and how deep the
                         // handler queue gets behind them (every frame is a post).
@@ -2622,7 +2723,7 @@ public class NotificationRelayService extends Service {
                 // (NOT the NIP-29 group relays — DMs don't live there). Scoped to
                 // `authors:[...dmFollows]` so only DMs from established peers notify.
                 // No established peers ⇒ no DM subscription.
-                if (dmRelays.contains(relayUrl) && !dmFollows.isEmpty()) {
+                if (dmWatchRelays.contains(relayUrl) && !dmFollows.isEmpty()) {
                     JSONArray dmAuthors = new JSONArray();
                     for (String pk : dmFollows) {
                         if (dmNotificationEnabled(pk)) dmAuthors.put(pk);
@@ -2648,7 +2749,7 @@ public class NotificationRelayService extends Service {
                 // created_at is up to 2 days in the past, so `since = sinceSec`
                 // never matches a live wrap) and `limit: 0` skips the stored
                 // replay that rewind would otherwise pull in (live-only).
-                if (dmRelays.contains(relayUrl) && shouldWatchDm()) {
+                if (dmWatchRelays.contains(relayUrl) && shouldWatchDm()) {
                     JSONObject f6 = new JSONObject();
                     f6.put("kinds", new JSONArray().put(1059));
                     f6.put("#p", new JSONArray().put(userPubkey));
@@ -2739,7 +2840,7 @@ public class NotificationRelayService extends Service {
          */
         void sendSelfReq(WebSocket webSocket, boolean resuming) throws JSONException {
             if (userPubkey != null && !userPubkey.isEmpty()
-                    && shouldSyncSelfStateFromRelay(relayUrl, selfRelays)) {
+                    && shouldSyncSelfStateFromRelay(relayUrl, selfWatchRelays)) {
                 JSONArray me = new JSONArray().put(userPubkey);
 
                 JSONArray selfKinds = new JSONArray();
@@ -3034,6 +3135,11 @@ public class NotificationRelayService extends Service {
                 Log.w(TAG, "Quarantined " + relayUrl + " (" + outcome
                         + "); no retry until a network/config/foreground change");
                 recordHealthError("relay_quarantined");
+                // Move the communities this carried onto their other relays.
+                if (relayToPks2.containsKey(relayUrl) && concordRefusedRelays.add(relayUrl)) {
+                    handler.removeCallbacks(recoverConcordRunnable);
+                    handler.postDelayed(recoverConcordRunnable, 1_000);
+                }
             }
             updateSocketHealth();
         }
@@ -3065,7 +3171,7 @@ public class NotificationRelayService extends Service {
             if (!wasOpen || ours || !byPeer || lastInboundAt == 0) return;
             if (SystemClock.elapsedRealtime() - lastNetworkChangeAt < NETWORK_DROP_GRACE_MS) return;
             long current = quietLimitFor(relayUrl);
-            long learned = Keepalive.learn(current, SystemClock.uptimeMillis() - lastInboundAt);
+            long learned = Keepalive.learn(current, SystemClock.elapsedRealtime() - lastInboundAt);
             if (learned < current) {
                 quietLimitByUrl.put(relayUrl, learned);
                 getSharedPreferences(KEEPALIVE_PREFS, Context.MODE_PRIVATE).edit().putLong(relayUrl, learned).apply();
@@ -4274,7 +4380,10 @@ public class NotificationRelayService extends Service {
                 if (ServiceStore.isExpired(seal)) return;
                 final String peer = seal.optString("pubkey", "");
                 if (peer.length() != 64) return;
-                if (peer.equals(userPubkey)) return; // our own sent copy
+                if (peer.equals(userPubkey)) { // our own sent copy
+                    handler.post(this::noteOtherDeviceActivity);
+                    return;
+                }
                 signer.decrypt44(peer, seal.optString("content", ""), (rumorJson, unavailable2) -> {
                     if (rumorJson == null) {
                         if (unavailable2 && notifyFloorSec == 0 && prefBool("directMessages", true)) notifyOpaqueDm17();
@@ -5182,6 +5291,11 @@ public class NotificationRelayService extends Service {
             // WebView to open.
             if (kind == SelfState.KIND_APP_SPECIFIC && userPubkey != null) {
                 byte[] key = readStateKeys.get(event.optString("pubkey"));
+                // A fresh read-state edition: the user is reading somewhere.
+                if ((key != null || isReadStateDoc(event))
+                        && System.currentTimeMillis() / 1000 - event.optLong("created_at") < 120) {
+                    noteOtherDeviceActivity();
+                }
                 if (key != null) applyReadStateDismiss(ConcordCrypto.decrypt(key, event.optString("content")));
                 else if (userPubkey.equals(event.optString("pubkey")) && isReadStateDoc(event)) {
                     applyReadStateDismiss(event);
@@ -5306,6 +5420,7 @@ public class NotificationRelayService extends Service {
             int rumorKind = rumor.optInt("kind", -1);
             final String author2 = rumor.optString("pubkey");
             if (author2.equals(userPubkey)) {
+                noteOtherDeviceActivity();
                 return; // our own message / reaction echoed back
             }
 
@@ -5414,6 +5529,7 @@ public class NotificationRelayService extends Service {
 
         String author = event.optString("pubkey");
         if (author.equals(userPubkey)) {
+            noteOtherDeviceActivity();
             return;
         }
 
@@ -5959,6 +6075,13 @@ public class NotificationRelayService extends Service {
             CommunityRef community, String roomKey, String roomTitle, String url,
             String senderPubkey, String senderName, String senderPicture,
             String text, long timestampMs, boolean mention) {
+        // The NIP-17 path arrives here on the signer's executor; the room,
+        // budget and hold state are handler-confined.
+        if (android.os.Looper.myLooper() != handler.getLooper()) {
+            handler.post(() -> enqueueRoomMessage(community, roomKey, roomTitle, url,
+                    senderPubkey, senderName, senderPicture, text, timestampMs, mention));
+            return;
+        }
         // Suppress the notification entirely when the user is already looking at
         // this room — the live `relayEvent` feed already
         // painted the message in the timeline, so a tray entry would be
@@ -5966,6 +6089,17 @@ public class NotificationRelayService extends Service {
         // deserves attention even on the visible channel. The active-room keys
         // are heartbeat-bound, so a dead WebView cannot leave one suppressed.
         if (!mention && roomKey != null && freshActiveRoomKeys().contains(roomKey)) {
+            return;
+        }
+        if (alertPolicy.holding(SystemClock.elapsedRealtime())) {
+            if (heldMessages.size() >= MAX_HELD_MESSAGES) heldMessages.remove(0);
+            heldMessages.add(new HeldMessage(community, roomKey, roomTitle, url, senderPubkey,
+                    senderName, senderPicture, text, timestampMs, mention));
+            if (BuildConfig.DEBUG) Log.d(TAG, "HOLD (other device active): " + roomKey);
+            if (!heldFlushPosted) {
+                heldFlushPosted = true;
+                handler.postDelayed(flushHeldRunnable, AlertPolicy.HOLD_RECHECK_MS);
+            }
             return;
         }
         // Past the room's alert budget the notification is still posted and
@@ -5984,7 +6118,11 @@ public class NotificationRelayService extends Service {
             // its current author to the global peer set to relax unrelated 1:1s.
             trusted = dmKnownConversations.contains(roomKey.substring(3));
         }
-        boolean alert = trusted || alertAllowed(roomKey, mention);
+        boolean direct = mention || (roomKey != null && roomKey.startsWith("dm"));
+        // Channels share their community's throttle; DMs and mentions keep their own.
+        String throttleKey = !direct && community != null ? community.groupKey : roomKey;
+        boolean alert = (trusted || alertAllowed(roomKey, mention))
+                && alertPolicy.shouldAlert(throttleKey, direct, SystemClock.elapsedRealtime());
         // Post immediately without the avatar, then re-post with it once loaded
         // so image I/O never delays the notification.
         Bitmap cachedAvatar = senderPicture != null ? avatarCache.get(senderPicture) : null;
@@ -6003,6 +6141,40 @@ public class NotificationRelayService extends Service {
                 }
             });
         }
+    }
+
+    /** Post what {@link AlertPolicy} held, once the other device has gone quiet. */
+    private void flushHeldMessages() {
+        heldFlushPosted = false;
+        if (heldMessages.isEmpty()) return;
+        if (alertPolicy.holding(SystemClock.elapsedRealtime())) {
+            heldFlushPosted = true;
+            handler.postDelayed(flushHeldRunnable, AlertPolicy.HOLD_RECHECK_MS);
+            return;
+        }
+        List<HeldMessage> due = new ArrayList<>(heldMessages);
+        heldMessages.clear();
+        for (HeldMessage m : due) {
+            String readKey = readKeyForRoom(m.roomKey);
+            Long readSec = readKey != null ? lastReadByKey.get(readKey) : null;
+            if (readSec != null && readSec * 1000L >= m.timestampMs) {
+                if (BuildConfig.DEBUG) Log.d(TAG, "HELD read elsewhere: " + m.roomKey);
+                continue;
+            }
+            enqueueRoomMessage(m.community, m.roomKey, m.roomTitle, m.url, m.senderPubkey,
+                    m.senderName, m.senderPicture, m.text, m.timestampMs, m.mention);
+        }
+    }
+
+    /**
+     * The user acted on another device. Only counted while this phone is not
+     * in use: an echo of its own read or send then can't hold its alerts, and
+     * with the screen already on an alert costs no wake.
+     */
+    private void noteOtherDeviceActivity() {
+        android.os.PowerManager pm = (android.os.PowerManager) getSystemService(Context.POWER_SERVICE);
+        if (pm != null && pm.isInteractive()) return;
+        alertPolicy.noteOtherDeviceActivity(SystemClock.elapsedRealtime());
     }
 
     /**
@@ -6328,6 +6500,8 @@ public class NotificationRelayService extends Service {
                 // A silent refresh (e.g. late avatar) must not re-buzz; only a
                 // genuine new message alerts.
                 .setOnlyAlertOnce(!alert)
+                // onlyAlertOnce covers updates only; a first post needs this to stay quiet.
+                .setSilent(!alert)
                 // Ties the notification to the conversation shortcut pushed in
                 // postRoomMessage — the key that promotes it into the
                 // conversation space where the shortcut's avatar (sender for

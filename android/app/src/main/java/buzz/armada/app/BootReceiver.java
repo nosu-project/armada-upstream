@@ -64,6 +64,7 @@ public class BootReceiver extends BroadcastReceiver {
         boolean allowRetry = Intent.ACTION_BOOT_COMPLETED.equals(action)
                 || Intent.ACTION_MY_PACKAGE_REPLACED.equals(action);
         NotificationRelayService.startIfConfigured(context, allowRetry);
+        if (ACTION_WATCHDOG.equals(action)) NotificationRelayService.onWatchdogWake(context);
         Log.d(TAG, "Ensured NotificationRelayService (" + action + ")");
 
         // Keep the self-healing chain alive while configured.

@@ -4,7 +4,10 @@ import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useSettingsDoc } from "@/hooks/useSettingsDoc";
 import { hasMigratedKeys, resolveLegacy } from "@/lib/settingsDocs";
-import { markNotificationSettingsReady } from "@/lib/notificationSettingsAuthority";
+import {
+  markNotificationSettingsReady,
+  useNotificationSettingsReady,
+} from "@/lib/notificationSettingsAuthority";
 import { configSnapshot, docToConfigPatch, type ConfigDocName } from "@/lib/syncedConfig";
 
 import type { AppConfig } from "@/contexts/AppContext";
@@ -44,7 +47,8 @@ export function useConfigDocSync(name: ConfigDocName): void {
   const { user } = useCurrentUser();
   const { config, updateConfig } = useAppContext();
   const automaticSettingsSync = config.automaticSettingsSync !== false;
-  const { doc, event, update, hasNip44Support } = useSettingsDoc(name);
+  const { doc, event, isFetched, update, hasNip44Support } = useSettingsDoc(name);
+  const notificationPolicyReady = useNotificationSettingsReady(user?.pubkey);
   const metadata = useSettingsDoc("metadata");
   const configRef = useRef(config);
   configRef.current = config;
@@ -113,6 +117,7 @@ export function useConfigDocSync(name: ConfigDocName): void {
     : metadata.sources.find((source) => hasMigratedKeys(source.doc, name)))
     ?? (metadata.doc && metadata.event ? { doc: metadata.doc, event: metadata.event } : null);
   const resolved = name === "metadata" ? split : resolveLegacy(name, split, legacy);
+  const resolvedId = resolved?.event.id;
 
   useEffect(() => {
     if (!automaticSettingsSync || !user?.pubkey || !resolved) return;
@@ -158,6 +163,12 @@ export function useConfigDocSync(name: ConfigDocName): void {
     if (!automaticSettingsSync || !user?.pubkey || !hasNip44Support || metadata.doc === null) {
       return;
     }
+    // A publish carries the WHOLE slice, so it must not run before the stored
+    // version is folded in: a field still at its local default would replace the
+    // user's real value everywhere. For notifications, a store with no copy is
+    // not proof of absence either (see notificationSettingsAuthority).
+    if (!isFetched || (resolvedId && appliedId.current !== resolvedId)) return;
+    if (name === "notifications" && !notificationPolicyReady) return;
 
     const snapshot = JSON.stringify(configSnapshot(config, name));
     if (lastPublished.current === undefined) {
@@ -208,6 +219,9 @@ export function useConfigDocSync(name: ConfigDocName): void {
     automaticSettingsSync,
     user?.pubkey,
     hasNip44Support,
+    isFetched,
+    resolvedId,
+    notificationPolicyReady,
     config,
     name,
     metadata.doc,

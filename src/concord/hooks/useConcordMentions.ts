@@ -107,11 +107,15 @@ export function useConcordMentions(community: Community | undefined, channels: C
   // Re-derive when the persisted quarantine memory warms or grows.
   const memoryRev = useSyncExternalStore(subscribeQuarantineMemory, quarantineMemoryRevision);
 
-  // Outside the query so a mute or fold applies without a re-scan, and so
+  const banned = folded?.banned;
+
+  // Outside the query so a mute, ban or fold applies without a re-scan, and so
   // `hasNew` derives from the same list the tab renders.
   const mentions = useMemo(() => {
     void memoryRev;
     let list = mutedPubkeys.size === 0 ? allMentions : allMentions.filter((m) => !mutedPubkeys.has(m.pubkey));
+    // The index bypasses the timeline fold, so its Banlist drop is repeated here (CORD-04 §4).
+    if (banned && banned.size > 0) list = list.filter((m) => !banned.has(m.pubkey));
     // Drop mentions quarantined as floods in their channel. A cross-channel `#p`
     // scan can't be re-folded live, so this reads the durable per-channel verdicts
     // (quarantineMemory); rumorIds are unique across channels.
@@ -126,7 +130,7 @@ export function useConcordMentions(community: Community | undefined, channels: C
       if (quarantined && quarantined.size > 0) list = list.filter((m) => !quarantined.has(m.id));
     }
     return list;
-  }, [allMentions, mutedPubkeys, communityIdHex, channelIds, memoryRev]);
+  }, [allMentions, mutedPubkeys, banned, communityIdHex, channelIds, memoryRev]);
 
   useWireScopes((scopes) => {
     for (const idHex of channelIds) {
