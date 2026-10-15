@@ -37,7 +37,9 @@ export async function resizeImage(file: File): Promise<ResizedImage> {
   // Judged by signature, since a picked file's `type` may be empty.
   if (isPngBytes(head)) {
     const bytes = new Uint8Array(await file.arrayBuffer());
-    const stripped = characterCardFromPngBytes(bytes) ? stripNonCardMetadata(bytes) : null;
+    // The user's own file: no size cap, which exists for sender-chosen sniffs.
+    const parsed = characterCardFromPngBytes(bytes, { maxChunkBytes: Infinity });
+    const stripped = parsed ? stripNonCardMetadata(bytes) : null;
     if (stripped) {
       bitmap.close();
       const card = new File([stripped], replaceExtension(file.name, ".png"), {

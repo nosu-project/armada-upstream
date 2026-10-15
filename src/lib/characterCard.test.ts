@@ -4,6 +4,7 @@ import {
   characterCardFromPngBytes,
   clearCharacterCardCache,
   isCharacterCardCandidate,
+  MAX_CARD_CHUNK_BYTES,
   parseCharacterCardJson,
   sniffCharacterCard,
 } from "@/lib/characterCard";
@@ -38,7 +39,9 @@ function textChunk(keyword: string, payload: string): { type: string; data: Uint
 
 /** Base64 of UTF-8, as card writers emit it. */
 function b64(value: unknown): string {
-  return btoa(String.fromCharCode(...encoder.encode(JSON.stringify(value))));
+  let bin = "";
+  for (const byte of encoder.encode(JSON.stringify(value))) bin += String.fromCharCode(byte);
+  return btoa(bin);
 }
 
 const V2_CARD = {
@@ -185,6 +188,13 @@ describe("characterCardFromPngBytes", () => {
     expect(characterCardFromPngBytes(encoder.encode("not a png at all"))).toBeNull();
     expect(characterCardFromPngBytes(pngOf([ihdr, iend]))).toBeNull();
     expect(characterCardFromPngBytes(pngOf([textChunk("Description", btoa("some note")), iend]))).toBeNull();
+  });
+
+  it("skips a card chunk over the size cap unless the caller lifts it", () => {
+    const padded = { ...V2_CARD, data: { ...V2_CARD.data, description: "x".repeat(MAX_CARD_CHUNK_BYTES) } };
+    const png = pngOf([textChunk("chara", b64(padded)), iend]);
+    expect(characterCardFromPngBytes(png)).toBeNull();
+    expect(characterCardFromPngBytes(png, { maxChunkBytes: Infinity })?.name).toBe("Nail");
   });
 
   it("stops the walk at truncated framing instead of throwing", () => {

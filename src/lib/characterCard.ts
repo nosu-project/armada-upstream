@@ -144,11 +144,23 @@ const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
 /** `tEXt` keywords carrying a card payload; `chara_ext-*` siblings are asset pointers, not cards. */
 const CARD_TEXT_KEYWORDS = new Set(["chara", "ccv3"]);
 
+/**
+ * A card `tEXt` chunk past this is not decoded: real payloads sit well under
+ * it, and a sniff decodes a sender-chosen file synchronously on the main thread.
+ */
+export const MAX_CARD_CHUNK_BYTES = 4 * 1024 * 1024;
+
+/** PNG keywords are 1–79 bytes, so the NUL is within the first 80. */
+const MAX_KEYWORD_SCAN = 80;
+
+/** For short fields (chunk types, keywords) only; payloads go through {@link latin1}. */
 function ascii(bytes: Uint8Array, start: number, length: number): string {
   let out = "";
   for (let i = start; i < start + length; i++) out += String.fromCharCode(bytes[i]);
   return out;
 }
+
+const latin1 = new TextDecoder("latin1");
 
 /** Base64 of UTF-8 (TextDecoder), tolerant of the whitespace some writers wrap in. */
 function decodeCardPayload(b64: string): unknown {
@@ -195,7 +207,8 @@ function pngChunks(bytes: Uint8Array): { chunks: PngChunk[]; complete: boolean }
 /** A `tEXt` chunk's NUL-terminated Latin-1 keyword, or undefined. */
 function textKeyword(bytes: Uint8Array, chunk: PngChunk): string | undefined {
   if (chunk.type !== "tEXt") return undefined;
-  for (let i = chunk.dataStart; i < chunk.dataEnd; i++) {
+  const scanEnd = Math.min(chunk.dataEnd, chunk.dataStart + MAX_KEYWORD_SCAN);
+  for (let i = chunk.dataStart; i < scanEnd; i++) {
     if (bytes[i] === 0) return i > chunk.dataStart ? ascii(bytes, chunk.dataStart, i - chunk.dataStart) : undefined;
   }
   return undefined;
@@ -204,7 +217,7 @@ function textKeyword(bytes: Uint8Array, chunk: PngChunk): string | undefined {
 function cardFromChunk(bytes: Uint8Array, chunk: PngChunk, keyword: string): CharaCard | null {
   const payloadStart = chunk.dataStart + keyword.length + 1;
   try {
-    return parseCharacterCardJson(decodeCardPayload(ascii(bytes, payloadStart, chunk.dataEnd - payloadStart)));
+    return parseCharacterCardJson(decodeCardPayload(latin1.decode(bytes.subarray(payloadStart, chunk.dataEnd))));
   } catch {
     return null;
   }
@@ -213,15 +226,20 @@ function cardFromChunk(bytes: Uint8Array, chunk: PngChunk, keyword: string): Cha
 /**
  * Read a PNG's `tEXt` card payload. A V3 writer keeps a `chara` copy for older
  * readers beside its `ccv3`, which is the one that wins. Other chunks' validity
- * is not checked, and malformed framing ends the walk.
+ * is not checked, and malformed framing ends the walk. Chunks over
+ * `maxChunkBytes` are skipped; the user's own upload passes `Infinity`.
  */
-export function characterCardFromPngBytes(bytes: Uint8Array): CharaCard | null {
+export function characterCardFromPngBytes(
+  bytes: Uint8Array,
+  { maxChunkBytes = MAX_CARD_CHUNK_BYTES }: { maxChunkBytes?: number } = {},
+): CharaCard | null {
   const walked = pngChunks(bytes);
   if (!walked) return null;
   let fallback: CharaCard | null = null;
   for (const chunk of walked.chunks) {
     const keyword = textKeyword(bytes, chunk);
     if (!keyword || !CARD_TEXT_KEYWORDS.has(keyword)) continue;
+    if (chunk.dataEnd - chunk.dataStart > maxChunkBytes) continue;
     const card = cardFromChunk(bytes, chunk, keyword);
     if (!card) continue;
     if (keyword === "ccv3") return card;
@@ -230,8 +248,17 @@ export function characterCardFromPngBytes(bytes: Uint8Array): CharaCard | null {
   return fallback;
 }
 
-/** Metadata chunks a card upload drops: EXIF, XMP (`iTXt`), compressed text and timestamps. */
-const STRIPPED_CHUNKS = new Set(["eXIf", "iTXt", "zTXt", "tIME"]);
+/**
+ * Chunks a card upload keeps besides its own `tEXt`: image data and how to
+ * render it. An allowlist, since anything else (EXIF, XMP, C2PA `caBX`,
+ * private chunks) is metadata the canvas path would have dropped.
+ */
+const KEPT_CHUNKS = new Set([
+  "IHDR", "PLTE", "IDAT", "IEND", "tRNS",
+  "gAMA", "cHRM", "sRGB", "iCCP", "sBIT", "cICP", "mDCV", "cLLI",
+  "bKGD", "pHYs",
+  "acTL", "fcTL", "fdAT",
+]);
 
 /**
  * The card PNG with every other metadata chunk removed, byte-for-byte otherwise:
@@ -242,8 +269,7 @@ export function stripNonCardMetadata(bytes: Uint8Array): Uint8Array<ArrayBuffer>
   const walked = pngChunks(bytes);
   if (!walked?.complete) return null;
   const kept = walked.chunks.filter((chunk) => {
-    if (STRIPPED_CHUNKS.has(chunk.type)) return false;
-    if (chunk.type !== "tEXt") return true;
+    if (chunk.type !== "tEXt") return KEPT_CHUNKS.has(chunk.type);
     const keyword = textKeyword(bytes, chunk);
     return keyword !== undefined && (CARD_TEXT_KEYWORDS.has(keyword) || keyword.startsWith("chara_ext-"));
   });
@@ -273,7 +299,8 @@ const SNIFF_MAX_BYTES = 48 * 1024 * 1024;
  * so the next mount retries. Holds decrypted card text: cleared on logout.
  */
 const sniffCache = new Map<string, Promise<CharaCard | null>>();
-const SNIFF_CACHE_MAX = 64;
+/** A card's text can be up to {@link MAX_CARD_CHUNK_BYTES}, so this bounds what the cache retains. */
+const SNIFF_CACHE_MAX = 32;
 
 /** Forget every sniffed card (purgeClientStorage). */
 export function clearCharacterCardCache(): void {

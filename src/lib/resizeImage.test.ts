@@ -97,6 +97,9 @@ describe("resizeImage", () => {
       ["tEXt", keyed("parameters", "prompt, seed 42")],
       ["iTXt", keyed("XML:com.adobe.xmp", "<x:xmpmeta/>")],
       ["tEXt", keyed("chara_ext-asset", "pointer")],
+      ["caBX", new TextEncoder().encode("c2pa-manifest")],
+      ["prVt", new TextEncoder().encode("private-note")],
+      ["pHYs", new Uint8Array(9)],
     ]);
     const file = new File([png], "card", { type: "" });
 
@@ -109,7 +112,10 @@ describe("resizeImage", () => {
     expect(text).toContain("chara\0");
     expect(text).toContain("chara_ext-asset");
     expect(text).toContain("IDAT");
-    for (const gone of ["eXIf", "parameters", "xmpmeta"]) expect(text).not.toContain(gone);
+    expect(text).toContain("pHYs");
+    for (const gone of ["eXIf", "parameters", "xmpmeta", "c2pa-manifest", "private-note"]) {
+      expect(text).not.toContain(gone);
+    }
   });
 
   it("still re-encodes an oversized PNG that carries no card", async () => {
