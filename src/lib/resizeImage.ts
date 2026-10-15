@@ -1,3 +1,4 @@
+import { characterCardFromPngBytes } from "@/lib/characterCard";
 import { hasStrippableMetadata, isAnimatedImage, METADATA_SCAN_BYTES } from "@/lib/imageMetadata";
 
 /** Maximum dimension (width or height) for resized images. */
@@ -26,6 +27,14 @@ export async function resizeImage(file: File): Promise<ResizedImage> {
   const animated = isAnimatedImage(file.type, head);
 
   if (animated || (!needsResize && !hasStrippableMetadata(head))) {
+    bitmap.close();
+    return { file, dimensions: `${width}x${height}` };
+  }
+
+  // A character-card PNG (tEXt `chara` payload, the tavern interchange format)
+  // loses its payload to the canvas round-trip below, like an APNG loses its
+  // frames: the file IS the card, so it uploads byte-for-byte.
+  if (file.type === "image/png" && characterCardFromPngBytes(new Uint8Array(await file.arrayBuffer()))) {
     bitmap.close();
     return { file, dimensions: `${width}x${height}` };
   }

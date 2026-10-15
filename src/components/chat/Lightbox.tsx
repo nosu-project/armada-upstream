@@ -41,6 +41,8 @@ interface LightboxProps {
   onClose: () => void;
   onNext: () => void;
   onPrev: () => void;
+  /** Merged onto the root; e.g. a higher z-index when opened from a dialog. */
+  className?: string;
 }
 
 const EASING = "cubic-bezier(0.25, 0.46, 0.45, 0.94)";
@@ -60,7 +62,7 @@ function slotTransform(delta: number, offsetPx: number): string {
  * mount. Every gesture stands down when started on a `<video>`, whose native
  * controls are drags too.
  */
-export function Lightbox({ media, currentIndex, onClose, onNext, onPrev }: LightboxProps) {
+export function Lightbox({ media, currentIndex, onClose, onNext, onPrev, className }: LightboxProps) {
   const hasMultiple = media.length > 1;
   const canGoNext = currentIndex < media.length - 1;
   const canGoPrev = currentIndex > 0;
@@ -285,7 +287,7 @@ export function Lightbox({ media, currentIndex, onClose, onNext, onPrev }: Light
   return createPortal(
     <div
       ref={containerRef}
-      className="fixed inset-0 z-[200] animate-in fade-in duration-200"
+      className={cn("fixed inset-0 z-[200] animate-in fade-in duration-200", className)}
       onClick={handleBackdropClick}
       // React bubbles through the portal to the message row, whose own menu would
       // open on top of the image's.

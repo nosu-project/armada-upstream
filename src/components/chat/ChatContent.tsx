@@ -7,6 +7,7 @@ import { Link } from "react-router-dom";
 import { BlurhashCanvas } from "@/components/BlurhashCanvas";
 import { AudioMessage } from "@/components/chat/AudioMessage";
 import { CashuToken } from "@/components/chat/CashuToken";
+import { CharacterCardEmbed } from "@/components/chat/CharacterCard";
 import { emojify } from "@/components/chat/emojify";
 import { EmbeddedNaddr, EmbeddedNote } from "@/components/chat/EmbeddedNote";
 import { FileAttachment } from "@/components/chat/FileAttachment";
@@ -34,6 +35,7 @@ import { type MentionNameMap, useMentionNameMap } from "@/hooks/useMentionNameMa
 import { useCustomEmojis } from "@/hooks/useCustomEmojis";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { CASHU_TOKEN_PATTERN, parseCashuToken } from "@/lib/cashu";
+import { isCharacterCardCandidate, sniffCharacterCard } from "@/lib/characterCard";
 import { buildEmojiMap } from "@/lib/customEmoji";
 import { canCopyImages, writeClipboardImage, writeClipboardText } from "@/lib/clipboard";
 import { dittoHashtagUrl, dittoNip19Url } from "@/lib/dittoUrl";
@@ -68,6 +70,7 @@ import { useWallet } from "@/hooks/useWallet";
 import { useChatImageMenu } from "@/contexts/ChatImageMenuContext";
 
 import type { AddrCoords } from "@/hooks/useEvent";
+import type { CharaCard } from "@/lib/characterCard";
 import type { ChatRoute } from "@/lib/routes";
 import type { MessageActionItem } from "@/components/chat/messageActions";
 import type { ImetaEncryption, ImetaEntry } from "@/lib/imeta";
@@ -1182,10 +1185,21 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
         const held = heldReason(token.url) ?? (token.thumb ? heldReason(token.thumb) : undefined);
         if (held !== undefined) return <HeldMedia key={key} kind="image" host={held || undefined} onLoad={loadMedia} />;
         const imgIndex = topIndex !== null ? tokenImageIndex.get(topIndex) ?? 0 : 0;
+        const image = imageRefOf(token);
+        // A spoilered PNG keeps its cover: the card preview would reveal its art.
+        if (!image.spoiler && isCharacterCardCandidate(image.url, image.mime)) {
+          return (
+            <ImageOrCharacterCard
+              key={key}
+              image={image}
+              onOpen={() => setLightboxIndex(imgIndex)}
+            />
+          );
+        }
         return (
           <InlineImage
             key={key}
-            image={imageRefOf(token)}
+            image={image}
             onOpen={() => setLightboxIndex(imgIndex)}
           />
         );
@@ -1737,6 +1751,31 @@ function useShownImage(image: ImageRef) {
 
 /** Covered by a spoiler: no menu handlers and out of tab order; reachable only via reveal. */
 const COVERED_IMAGE_PROPS = { tabIndex: -1 } as const;
+
+/**
+ * An image that may secretly be a character card (the PNG `tEXt` payload).
+ * Renders the image while the sniff runs; a found card swaps it for the
+ * bordered card preview, like the other special embeds in ChatContent.
+ */
+function ImageOrCharacterCard({ image, onOpen }: { image: ImageRef; onOpen: () => void }) {
+  // Buzz blobs need a signed GET the sniffer doesn't do; those stay plain images.
+  const sniffable = !isBuzzMediaUrl(image.url);
+  const { sources } = useRoutedCandidates(sniffable ? image.url : undefined, image.fallbacks);
+  const [card, setCard] = useState<CharaCard | null>(null);
+  const { url, mime, encryption, fallbacks } = image;
+  useEffect(() => {
+    if (!sniffable || sources.length === 0) return;
+    let cancelled = false;
+    void sniffCharacterCard({ url, mime, encryption, fallbacks }, sources).then((found) => {
+      if (!cancelled && found) setCard(found);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [sniffable, url, mime, encryption, fallbacks, sources]);
+  if (card) return <CharacterCardEmbed card={card} image={image} />;
+  return <InlineImage image={image} onOpen={onOpen} />;
+}
 
 function InlineImage({ image, onOpen }: { image: ImageRef; onOpen: () => void }) {
   const [loaded, setLoaded] = useState(false);

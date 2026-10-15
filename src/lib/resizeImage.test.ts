@@ -6,6 +6,38 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+/** Minimal PNG framing (CRCs zeroed; nothing here reads them) with one tEXt chunk. */
+function pngWithTextChunk(keyword: string, payload: string) {
+  const encoder = new TextEncoder();
+  const keywordBytes = encoder.encode(keyword);
+  const payloadBytes = encoder.encode(payload);
+  const data = new Uint8Array(keywordBytes.length + 1 + payloadBytes.length);
+  data.set(keywordBytes, 0);
+  data.set(payloadBytes, keywordBytes.length + 1);
+  const bytes: number[] = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+  const push = (chunkType: string, chunkData: Uint8Array) => {
+    bytes.push(
+      (chunkData.length >>> 24) & 0xff, (chunkData.length >>> 16) & 0xff,
+      (chunkData.length >>> 8) & 0xff, chunkData.length & 0xff,
+    );
+    for (let i = 0; i < 4; i++) bytes.push(chunkType.charCodeAt(i));
+    for (const b of chunkData) bytes.push(b);
+    bytes.push(0, 0, 0, 0);
+  };
+  push("IHDR", new Uint8Array(13));
+  push("tEXt", data);
+  push("IEND", new Uint8Array(0));
+  return new Uint8Array(bytes);
+}
+
+function b64(value: unknown): string {
+  return btoa(String.fromCharCode(...new TextEncoder().encode(JSON.stringify(value))));
+}
+
+function stubBitmap(width: number, height: number) {
+  vi.stubGlobal("createImageBitmap", async () => ({ width, height, close: () => undefined }));
+}
+
 describe("resizeImage", () => {
   it("decodes without imageOrientation where the WebView rejects \"from-image\"", async () => {
     const calls: unknown[] = [];
@@ -31,6 +63,43 @@ describe("resizeImage", () => {
     const file = new File([new Uint8Array([1, 2, 3])], "bad.png", { type: "image/png" });
 
     await expect(resizeImage(file)).rejects.toThrow("could not be decoded");
+  });
+
+  it("uploads an oversized character-card PNG byte-for-byte — the payload is the file", async () => {
+    // 2752px high, so every normal photo would be re-encoded and its tEXt chunk lost.
+    stubBitmap(1835, 2752);
+    const png = pngWithTextChunk("chara", b64({
+      spec: "chara_card_v2",
+      data: { name: "Keqing", description: "The Yuheng of the Liyue Qixing." },
+    }));
+    const file = new File([png], "card.png", { type: "image/png" });
+
+    const out = await resizeImage(file);
+
+    expect(out.file).toBe(file);
+    expect(out.dimensions).toBe("1835x2752");
+  });
+
+  it("still re-encodes an oversized PNG that carries no card", async () => {
+    stubBitmap(4000, 3000);
+    vi.stubGlobal("document", {
+      createElement: () => {
+        const canvas = {
+          width: 0,
+          height: 0,
+          getContext: () => ({ drawImage: () => undefined }),
+          toBlob: (cb: (b: Blob) => void) => cb(new Blob([new Uint8Array(10)], { type: "image/jpeg" })),
+        };
+        return canvas;
+      },
+    });
+    const file = new File([pngWithTextChunk("Comment", "just a note")], "photo.png", { type: "image/png" });
+
+    const out = await resizeImage(file);
+
+    // The canvas path ran: same-shape scaled file, re-typed by the encoder.
+    expect(out.file).not.toBe(file);
+    expect(out.dimensions).toBe("1920x1440");
   });
 });
 
