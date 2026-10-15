@@ -20,6 +20,8 @@ import type { GitTimelineActivity } from "@/lib/gitActivity";
 import { hasEveryoneMention } from "@/concord/lib/everyoneMention";
 import { sentDuringMembership } from "@/concord/lib/membershipFloor";
 import { useCommunityEntry } from "@/concord/hooks/useCommunityList";
+import { isTitledPost } from "@/concord/lib/forum";
+import { showsAsFeed, useForumAsChatIds } from "@/concord/lib/forumPresentation";
 
 const NO_GIT: ReadonlyMap<string, readonly GitTimelineActivity[]> = new Map();
 
@@ -34,7 +36,8 @@ export interface ConcordUnread {
 /**
  * Per-channel unread state, derived purely from {@link useCommunityRumors} and
  * the shared read-state map (key `c2:<channelIdHex>`, synced via NIP-78). A
- * channel is unread when its newest non-self kind-9 is newer than that stamp.
+ * channel is unread when its newest non-self kind-9 is newer than that stamp —
+ * in a forum shown as its feed, its newest TITLED post, the only kind-9 shown there.
  * `byChannel[id]` present ⇒ unread.
  */
 export function useConcordUnread(
@@ -65,6 +68,9 @@ export function useConcordUnread(
 
   const channelSig = channels.map((c) => c.idHex).join(",");
   const channelIds = useMemo(() => channels.map((c) => c.idHex), [channelSig]); // eslint-disable-line react-hooks/exhaustive-deps
+  const forumAsChat = useForumAsChatIds();
+  const feedSig = channels.filter((c) => showsAsFeed(c, forumAsChat)).map((c) => c.idHex).join(",");
+  const feedChannels = useMemo(() => new Set(feedSig ? feedSig.split(",") : []), [feedSig]);
 
   const { byChannel: rumorsByChannel } = useCommunityRumors(communityIdHex, channelIds);
 
@@ -111,12 +117,13 @@ export function useConcordUnread(
     const next: Record<string, ConcordUnread> = {};
     for (const [idHex, rumors] of rumorsByChannel) {
       const git = gitByChannel.get(idHex);
+      const feedOnly = feedChannels.has(idHex);
       let scan = cache.get(idHex);
       if (
         !scan || scan.rumors !== rumors || scan.git !== git || scan.deps !== scanDeps
-        || now + FUTURE_HOLD_MS >= scan.heldUntilMs
+        || scan.feedOnly !== feedOnly || now + FUTURE_HOLD_MS >= scan.heldUntilMs
       ) {
-        scan = scanChannel(idHex, rumors, git, scanDeps);
+        scan = scanChannel(idHex, rumors, git, scanDeps, feedOnly);
         cache.set(idHex, scan);
       }
       const lastRead = readStateRef.current[concordReadKey(idHex)] ?? 0;
@@ -133,7 +140,7 @@ export function useConcordUnread(
     const result = same ? previous : next;
     previousRef.current = result;
     return result;
-  }, [rumorsByChannel, readSig, gitByChannel, scanDeps]);
+  }, [rumorsByChannel, readSig, gitByChannel, scanDeps, feedChannels]);
 
   const markRead = useCallback(
     (channelIdHex: string, timestamp: number) => {
@@ -167,6 +174,8 @@ interface ChannelScan {
   rumors: OpenedChat[];
   git: readonly GitTimelineActivity[] | undefined;
   deps: ScanDeps;
+  /** Scanned as the forum feed: only titled posts count. */
+  feedOnly: boolean;
   /** Newest countable message (or git activity), unix seconds. */
   latest: number;
   /** Newest countable message that mentions the viewer, unix seconds. */
@@ -180,6 +189,7 @@ function scanChannel(
   rumors: OpenedChat[],
   git: readonly GitTimelineActivity[] | undefined,
   deps: ScanDeps,
+  feedOnly: boolean,
 ): ChannelScan {
   const { pubkey, mutedPubkeys, banned, canMentionEveryone, joinedAtMs, communityIdHex } = deps;
   // A visual flood renders as ONE collapsed row, so its members don't badge.
@@ -207,6 +217,8 @@ function scanChannel(
   let heldUntilMs = Infinity;
   for (const r of rumors) {
     if (r.kind !== KIND_MESSAGE) continue;
+    // The feed lists titled posts only; untitled chatter there is never seen.
+    if (feedOnly && !isTitledPost(r)) continue;
     if (r.author === pubkey) continue; // never unread from self
     // ...nor a future-dated message the timeline holds (FUTURE_HOLD_MS).
     if (r.ms > holdCeilingMs) {
@@ -241,5 +253,5 @@ function scanChannel(
     if (author === pubkey || mutedPubkeys.has(author)) continue;
     if (activity.createdAt > latest) latest = activity.createdAt;
   }
-  return { rumors, git, deps, latest, latestMention, heldUntilMs };
+  return { rumors, git, deps, feedOnly, latest, latestMention, heldUntilMs };
 }

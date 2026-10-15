@@ -10,11 +10,12 @@
  * the room unread for every member but its author until someone else posted.)
  */
 
-import { renderHook } from "@testing-library/react";
+import { act, renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { KIND_DELETE, KIND_MESSAGE } from "@/concord/lib/kinds";
 import type { OpenedChat } from "@/concord/lib/chat";
+import { toggleForumAsChat } from "@/concord/lib/forumPresentation";
 
 const ME = "a".repeat(64);
 const X = "b".repeat(64);
@@ -86,7 +87,11 @@ function row(
 const render = () =>
   renderHook(() => useConcordUnread({ idHex: "cc".repeat(32) } as never, [{ idHex: CH } as never]));
 
+const renderForum = () =>
+  renderHook(() => useConcordUnread({ idHex: "cc".repeat(32) } as never, [{ idHex: CH, view: "forum" } as never]));
+
 beforeEach(() => {
+  localStorage.clear();
   h.rumors = [];
   h.readState = {};
   h.banned = new Set<string>();
@@ -184,5 +189,33 @@ describe("useConcordUnread — the Banlist folds into the badge", () => {
     h.readState[`c2:${CH}`] = 100;
     h.banned = new Set([Y]);
     expect(render().result.current.byChannel[CH]).toEqual({ latest: 200, mention: false });
+  });
+});
+
+describe("useConcordUnread — forum channels", () => {
+  it("does not badge an untitled message the feed never shows", () => {
+    h.rumors = [row("U", X, KIND_MESSAGE, 200, [], "plain chat")];
+    expect(renderForum().result.current.byChannel[CH]).toBeUndefined();
+  });
+
+  it("does not raise a mention for an untitled message the feed never shows", () => {
+    h.rumors = [row("U", X, KIND_MESSAGE, 200, [["p", ME]], "hi")];
+    expect(renderForum().result.current.byChannel[CH]).toBeUndefined();
+  });
+
+  it("badges a titled post", () => {
+    h.rumors = [
+      row("P", X, KIND_MESSAGE, 150, [["subject", "Release notes"]]),
+      row("U", X, KIND_MESSAGE, 200, [], "plain chat"),
+    ];
+    expect(renderForum().result.current.byChannel[CH]).toEqual({ latest: 150, mention: false });
+  });
+
+  it("badges untitled messages once this device shows the forum as chat", () => {
+    h.rumors = [row("U", X, KIND_MESSAGE, 200, [], "plain chat")];
+    const view = renderForum();
+    expect(view.result.current.byChannel[CH]).toBeUndefined();
+    act(() => toggleForumAsChat(CH));
+    expect(view.result.current.byChannel[CH]).toEqual({ latest: 200, mention: false });
   });
 });

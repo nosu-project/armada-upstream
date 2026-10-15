@@ -126,6 +126,7 @@ import { ForumFeed } from "@/concord/components/ForumFeed";
 import { ForumPostPage } from "@/concord/components/ForumPostPage";
 import { NewPostPane } from "@/concord/components/NewPostPane";
 import { forumPosts, isTitledPost, subjectOf, subjectTags, type ForumPost, type ForumSort } from "@/concord/lib/forum";
+import { showsAsFeed, toggleForumAsChat, useForumAsChatIds } from "@/concord/lib/forumPresentation";
 import { useLocalStorage } from "@/hooks/useLocalStorage";
 import { NewIssueDialog } from "@/components/projects/NewIssueDialog";
 import { ProjectsView } from "@/components/projects/ProjectsView";
@@ -2142,14 +2143,12 @@ export function ConcordPage() {
   // Forum presentation (CORD-03 §2 `view: "forum"`): a feed of titled posts, with
   // the plain timeline as a per-channel local alternate (untitled messages live
   // there). Same folded timeline, so flipping never refetches.
-  const [forumAsChat, setForumAsChat] = useLocalStorage<string[]>("armada:concord-forum-as-chat", []);
-  const forumOpensAsChat = Boolean(channel && forumAsChat.includes(channel.idHex));
-  const presentation: "feed" | "chat" = channel?.view === "forum" && !forumOpensAsChat ? "feed" : "chat";
+  const forumAsChat = useForumAsChatIds();
+  const forumOpensAsChat = Boolean(channel && forumAsChat.has(channel.idHex));
+  const presentation: "feed" | "chat" = channel && showsAsFeed(channel, forumAsChat) ? "feed" : "chat";
   const toggleForumPresentation = useCallback(() => {
-    if (!channel) return;
-    const id = channel.idHex;
-    setForumAsChat((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
-  }, [channel, setForumAsChat]);
+    if (channel) toggleForumAsChat(channel.idHex);
+  }, [channel]);
 
   const {
     timelineRef,
