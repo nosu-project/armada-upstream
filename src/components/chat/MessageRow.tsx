@@ -7,6 +7,7 @@ import { ProfilePreviewCard } from "@/components/chat/ProfilePreviewCard";
 import { BotPill } from "@/components/BotPill";
 import { DisplayName } from "@/components/DisplayName";
 import { ProxyPill } from "@/components/ProxyPill";
+import { StaffPill } from "@/components/StaffPill";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { useAuthor } from "@/hooks/useAuthor";
@@ -299,6 +300,7 @@ export const MessageRow = memo(function MessageRow({
                 </button>
               </ProfilePreviewCard>
             )}
+            {!identityOverride && <StaffPill pubkey={pubkey} />}
             <BotPill metadata={metadata} />
             <ProxyPill proxy={proxy} />
             {nameBadge}

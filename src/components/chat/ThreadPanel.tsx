@@ -21,6 +21,7 @@ import { ReportDialog } from "@/components/ReportDialog";
 import { ZapDialog } from "@/components/chat/ZapDialog";
 import { ZapPill } from "@/components/chat/ZapPill";
 import { DisplayName } from "@/components/DisplayName";
+import { StaffPill } from "@/components/StaffPill";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -376,11 +377,14 @@ export function ThreadMessage({
               </button>
             </ProfilePreviewCard>
             <div className="min-w-0 flex flex-col justify-center">
-              <ProfilePreviewCard pubkey={event.pubkey}>
-                <button type="button" className="text-chat font-semibold text-primary truncate text-left hover:underline focus:outline-none">
-                  <DisplayName pubkey={event.pubkey} name={displayName} />
-                </button>
-              </ProfilePreviewCard>
+              <div className="flex min-w-0 items-center gap-2">
+                <ProfilePreviewCard pubkey={event.pubkey}>
+                  <button type="button" className="text-chat font-semibold text-primary truncate text-left hover:underline focus:outline-none">
+                    <DisplayName pubkey={event.pubkey} name={displayName} />
+                  </button>
+                </ProfilePreviewCard>
+                <StaffPill pubkey={event.pubkey} />
+              </div>
               <span className="text-xs text-muted-foreground">{fullDateTime(event.created_at)}</span>
             </div>
           </div>
@@ -416,6 +420,7 @@ export function ThreadMessage({
                 <DisplayName pubkey={event.pubkey} name={displayName} />
               </button>
             </ProfilePreviewCard>
+            <StaffPill pubkey={event.pubkey} />
             {isComment ? (
               // No day dividers on a post page, so show the age with the date on hover.
               <span className="text-xs text-muted-foreground/80 shrink-0" title={fullDateTime(event.created_at)}>

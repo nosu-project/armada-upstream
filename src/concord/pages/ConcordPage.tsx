@@ -102,7 +102,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ChannelNavContext } from "@/contexts/ChannelNavContext";
 import { MemberActionsContext, type MemberActionItem, type MemberActionsValue, type MemberRolePicker } from "@/contexts/MemberActionsContext";
-import { MemberRolesContext, type MemberRolesValue } from "@/contexts/MemberRolesContext";
+import { MemberRolesContext, type MemberRolesValue, type StaffTier } from "@/contexts/MemberRolesContext";
 import type { AppScope } from "@/contexts/AppsContext";
 import { ComposerBoundsProvider } from "@/contexts/ComposerBoundsContext";
 import { ConcordMediaHold } from "@/concord/components/ConcordMediaHold";
@@ -1909,6 +1909,7 @@ export function ConcordPage() {
   const memberRolesValue = useMemo<MemberRolesValue>(() => {
     const byId = new Map((roster?.roles ?? []).map((r) => [r.roleId, r]));
     const cache = new Map<string, Array<{ id: string; name: string; color: number }>>();
+    const tiers = new Map<string, StaffTier | undefined>();
     return {
       rolesOf: (pubkey: string) => {
         const cached = cache.get(pubkey);
@@ -1922,8 +1923,14 @@ export function ConcordPage() {
         cache.set(pubkey, out);
         return out;
       },
+      staffTierOf: (pubkey: string) => {
+        if (pubkey === ownerHex) return "owner";
+        if (!roster) return undefined;
+        if (!tiers.has(pubkey)) tiers.set(pubkey, badgeOf(roster, pubkey));
+        return tiers.get(pubkey);
+      },
     };
-  }, [roster]);
+  }, [roster, ownerHex]);
 
   const canEditMemberRoles = useCallback(
     (pubkey: string) => {
