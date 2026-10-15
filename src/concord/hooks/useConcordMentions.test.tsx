@@ -1,8 +1,7 @@
 /**
  * The Mentions list reads its own `#p` index, not the channel timeline, so it
- * does not inherit the fold's Banlist drop (CORD-04 §4). Without its own, a
- * banned member's mention stayed in the Mentions tab, the Notification Center
- * and the @ dot on the server rail.
+ * does not inherit the fold's Banlist drop (CORD-04 §4); the hook repeats it
+ * for the Mentions tab, the Notification Center and the @ dot on the rail.
  */
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
