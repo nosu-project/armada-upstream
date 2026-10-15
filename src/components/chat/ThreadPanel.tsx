@@ -34,6 +34,7 @@ import {
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { MessageMenuItems } from "@/components/chat/MessageMenuItems";
+import { MenuReactionPicker, MenuReactionRow } from "@/components/chat/MenuReactions";
 import { LazyContextMenuContent, useLazyContextMenu } from "@/components/chat/LazyContextMenu";
 import { EventJsonDialog } from "@/components/EventJsonDialog";
 import { useAndroidBack } from "@/hooks/useAndroidBack";
@@ -163,6 +164,19 @@ export function ThreadMessage({
   const [linkActions, setLinkActions] = useState<MessageActionItem[] | null>(null);
   // Built on the first right-click, beside the row (see useLazyContextMenu).
   const contextMenu = useLazyContextMenu();
+  const [menuPickerOpen, setMenuPickerOpen] = useState(false);
+  // Opened once the menu has unmounted: its focus trap would pull focus back out
+  // of the picker, which dismisses it.
+  const menuPickerPending = useRef(false);
+  const openMenuPicker = useCallback(() => {
+    menuPickerPending.current = true;
+  }, []);
+  const closeMenuPicker = useCallback(() => setMenuPickerOpen(false), []);
+  const onMenuCloseAutoFocus = useCallback(() => {
+    if (!menuPickerPending.current) return;
+    menuPickerPending.current = false;
+    setMenuPickerOpen(true);
+  }, []);
   const chatScope = useChatScope();
   const reportTo = reportDestination(chatScope);
   const canReport = Boolean(reportTo && user && !isOwn);
@@ -430,7 +444,7 @@ export function ThreadMessage({
         )}
       </div>
       {/* Floats over the row's right edge, so the narrow panel doesn't bound it. */}
-      {!isTouch && !isEditing ? (
+      {!isTouch && !isEditing && config.messageHoverActions ? (
         // A comment row has its own padding, so the strip sits inside its top edge.
         <div className={cn(
           "absolute right-2.5 z-20 flex flex-wrap justify-end items-center max-w-[calc(100%-1.25rem)] gap-0.5 vessel [--vessel-cut:0.45rem] px-1 py-0.5 select-none opacity-0 group-hover/threadmsg:opacity-100 focus-within:opacity-100 transition-opacity",
@@ -446,10 +460,17 @@ export function ThreadMessage({
       <LazyContextMenuContent
         menu={contextMenu}
         className="w-52"
+        onCloseAutoFocus={onMenuCloseAutoFocus}
         collisionPadding={contextMenu.open ? getComposerCollisionPadding(composerBoundsRef) : undefined}
       >
+        {canReact && !isEditing && reactions && (
+          <MenuReactionRow reactions={reactions} onOpenPicker={openMenuPicker} />
+        )}
         <MessageMenuItems actions={withImageActions(linkActions, menuActions)} />
       </LazyContextMenuContent>
+    )}
+    {menuPickerOpen && contextMenu.point && reactions && (
+      <MenuReactionPicker point={contextMenu.point} reactions={reactions} onClose={closeMenuPicker} />
     )}
     {isTouch && (
       <MessageActionSheet
