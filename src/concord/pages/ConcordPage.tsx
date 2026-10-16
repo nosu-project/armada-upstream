@@ -1,4 +1,4 @@
-import { AtSign, Ban, CalendarClock, CheckCheck, ChevronDown, Bell, BellOff, Crown, Folder, FolderGit2, Hash, Headphones, KeyRound, Loader2, Lock, LogOut, Megaphone, MessageSquareText, MessagesSquare, Pause, Phone, Pin, Play, Plus, RefreshCw, Rss, Search, Settings, Shield, ShieldOff, Timer, Trash2, UserMinus, UserPlus, X, type LucideIcon } from "lucide-react";
+import { AtSign, Ban, CalendarClock, CheckCheck, ChevronDown, Bell, BellOff, Crown, Folder, FolderGit2, GripVertical, Hash, Headphones, KeyRound, Loader2, Lock, LogOut, Megaphone, MessageSquareText, MessagesSquare, Pause, Phone, Pin, Play, Plus, RefreshCw, Rss, Search, Settings, Shield, ShieldOff, Timer, Trash2, UserMinus, UserPlus, X, type LucideIcon } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, useLocation, useNavigationType, useSearchParams } from "react-router-dom";
 
@@ -440,6 +440,7 @@ export const ChannelRow = memo(function ChannelRow({
   categories,
   onSetCategory,
   onNewCategory,
+  onMove,
 }: {
   community: Community | undefined;
   channel: Channel;
@@ -459,6 +460,8 @@ export const ChannelRow = memo(function ChannelRow({
   onSetCategory?: (channelIdHex: string, category: string | undefined) => void;
   /** Opens the naming prompt — a context menu is a poor place for a text field. */
   onNewCategory?: (channel: Channel) => void;
+  /** Touch reordering: arms the row so the next drag on it moves it. */
+  onMove?: (channelIdHex: string) => void;
 }) {
   // Every Channel is callable (CORD-07); presence drives the nested roster. The
   // broker is NOT resolved per row (one query observer per channel on every page
@@ -567,6 +570,12 @@ export const ChannelRow = memo(function ChannelRow({
         </div>
       </ContextMenuTrigger>
       <ContextMenuContent className="w-52">
+        {onMove && (
+          <ContextMenuItem onSelect={() => onMove(channel.idHex)}>
+            <GripVertical className="mr-2 size-4" />
+            Move
+          </ContextMenuItem>
+        )}
         {community && (
           <NotifLevelMenu
             label="Channel notifications"
@@ -1276,6 +1285,15 @@ export function ConcordPage() {
       (c) => c.name,
     );
   }, [channels, channelIdHex, folded, autoSelectChannel, config.lastChannelByServer, lastChannelKey]);
+  // What closing the mobile channel list opens when no channel is selected yet.
+  const closeTarget = useMemo(
+    () =>
+      channel ??
+      (folded && !routePane
+        ? pickDefaultChannel(channels, config.lastChannelByServer[lastChannelKey], (c) => c.idHex, (c) => c.name)
+        : undefined),
+    [channel, folded, routePane, channels, config.lastChannelByServer, lastChannelKey],
+  );
 
   // Chat scope for in-message app affordances and the app stage (like NIP-29).
   const appScope = useMemo<AppScope | undefined>(
@@ -2622,6 +2640,7 @@ export function ConcordPage() {
     const index = renderedIndexOf.get(c.idHex) ?? 0;
     const inCall = Boolean(activeCall?.concord && activeCall.concord.channel.idHex === c.idHex);
     const dragged = channelDrag.sourceIdHex === c.idHex;
+    const armed = channelDrag.armedIdHex === c.idHex;
     return (
       <div
         key={c.idHex}
@@ -2630,8 +2649,8 @@ export function ConcordPage() {
         data-ch-category={c.category ?? ""}
         onPointerDown={channelDrag.onPointerDown(c.idHex)}
         // `touch-none` while draggable, or Chrome claims the drag as a pan
-        // (pointercancel); scrolling is panned by hand (usePressDrag.ts).
-        className={cn("relative", canManageChannels && "touch-none")}
+        // (pointercancel). On touch only an armed row drags; the rest scroll natively.
+        className={cn("relative", canManageChannels && (!isTouchDevice || armed) && "touch-none")}
       >
       {/* Keep the dragged row mounted (invisible): unmounting the touched node makes Chrome cancel the gesture. */}
       <span className={cn("contents", dragged && "invisible")}>
@@ -2648,10 +2667,21 @@ export function ConcordPage() {
         categories={categoryPicklist}
         onSetCategory={canManageChannels ? handleSetCategory : undefined}
         onNewCategory={handleNewCategory}
+        onMove={canManageChannels && isTouchDevice ? channelDrag.arm : undefined}
       />
       </span>
       {dragged && (
         <span className="pointer-events-none absolute inset-x-0 inset-y-px clip-hairline-lg [--edge:var(--primary)/0.5] [--fill:var(--primary)/0.05] [--fill-hover:var(--primary)/0.05]" />
+      )}
+      {/* Armed for a touch move: strong enough to read as a mode, not a hover. */}
+      {armed && !dragged && (
+        <span className="pointer-events-none absolute inset-x-0 inset-y-px clip-hairline-lg animate-pulse [--edge:var(--primary)] [--fill:var(--primary)/0.18] [--fill-hover:var(--primary)/0.18]" />
+      )}
+      {armed && !dragged && (
+        <GripVertical
+          aria-label="Drag to move"
+          className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 size-4 text-primary"
+        />
       )}
       </div>
     );
@@ -3015,8 +3045,12 @@ export function ConcordPage() {
         reveal={{
           open: channelsOpen,
           onReveal: () => setChannelsOpen(true),
-          onClose: () => setChannelsOpen(false),
-          canClose: !!channel,
+          onClose: () => {
+            if (!channel && closeTarget) selectChannel(closeTarget.idHex);
+            setChannelsOpen(false);
+          },
+          // A pane (All messages, Mentions, …) is content of its own.
+          canClose: !!closeTarget || !!routePane,
           underlay: (
             <>
               {/* No onNavigate: closing this list would flash this community's chat

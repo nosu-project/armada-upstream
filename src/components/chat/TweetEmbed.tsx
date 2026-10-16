@@ -1,5 +1,6 @@
 import { useEffect, useRef, type ReactNode } from "react";
 
+import { rememberEmbedHeight, seenEmbedHeight } from "@/components/chat/imageDims";
 import { useEmbedLiveness } from "@/hooks/useEmbedLiveness";
 
 import { getBackgroundThemeMode } from "@/lib/colorUtils";
@@ -45,13 +46,14 @@ export function TweetEmbed({ tweetId, className, fallback }: TweetEmbedProps) {
         const height = wrapper.params?.[0]?.height;
         if (typeof height === "number" && height > 0) {
           iframeRef.current.style.height = `${height}px`;
+          rememberEmbedHeight(`tweet:${tweetId}`, height);
         }
       }
     };
 
     window.addEventListener("message", handleMessage);
     return () => window.removeEventListener("message", handleMessage);
-  }, [markAlive]);
+  }, [markAlive, tweetId]);
 
   if (failed) return fallback;
 
@@ -65,7 +67,8 @@ export function TweetEmbed({ tweetId, className, fallback }: TweetEmbedProps) {
         src={`https://platform.twitter.com/embed/Tweet.html?${params}`}
         title="Tweet"
         className="w-full border-0"
-        style={{ minHeight: 250 }}
+        // A height seen earlier this session is reserved, so a remount doesn't grow into it.
+        style={{ minHeight: 250, height: seenEmbedHeight(`tweet:${tweetId}`) }}
         scrolling="no"
         allowFullScreen
         loading="lazy"

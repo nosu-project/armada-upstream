@@ -18,8 +18,8 @@ export interface ChannelDrop {
 
 /**
  * Channel-shaped half of the sidebar drag; the gesture is {@link usePressDrag}
- * (shared with the server rail). Rows must carry `touch-none` unconditionally
- * while enabled, not behind the `touch:` variant.
+ * (shared with the server rail). Rows carry `touch-none` while a mouse could drag
+ * them and while armed; an unarmed row scrolls natively on touch.
  */
 export function useChannelDrag({
   enabled,
@@ -91,6 +91,8 @@ export function useChannelDrag({
     onContainerScroll: () => {
       slots.current = measureRef.current();
     },
+    // Touch: a hold opens the row's menu, whose "Move" arms the row.
+    touchHold: "menu",
   });
 
   /** Re-measure once the "new category" zone mounts (it only exists mid-drag). */
@@ -120,6 +122,9 @@ export function useChannelDrag({
     pointer,
     attachColumn: drag.attachContainer,
     shouldSuppressClick: drag.shouldSuppressClick,
+    /** The row a touch may drag (armed by its menu's "Move"). */
+    armedIdHex: drag.armed,
+    arm: drag.arm,
     onPointerDown,
   };
 }

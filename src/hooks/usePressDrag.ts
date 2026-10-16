@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { cancelPressUnder, isCancellingPress } from "@/lib/cancelPress";
 import { impact } from "@/lib/haptics";
 
 /** How long a press rests before it becomes a drag, on every pointer type. */
@@ -29,7 +30,10 @@ const FLING_STOP_VELOCITY = 0.02;
 /** px/ms; a tap that stops a slower fling still clicks. */
 const FLING_CATCH_VELOCITY = 0.3;
 
-/** Touches hand-panned as a scroll, for `useEdgeSwipe` (MeshPage's rail is inside its pane). */
+/**
+ * Touches this hook has claimed, as a hand-panned scroll or a drag, for `useEdgeSwipe`
+ * (MeshPage's rail is inside its pane).
+ */
 const handScrolling = new Set<number>();
 
 export function isHandScrolling(pointerId: number): boolean {
@@ -56,6 +60,12 @@ export interface PressDragOptions<T> {
    * handle, which has nothing else to do with a moving finger.
    */
   pickupOnMove?: "mouse" | "all";
+  /**
+   * What a touch hold on an entry does. `"drag"` (default) picks it up; `"menu"` leaves the
+   * hold to the entry's long-press menu and the touch to native scrolling, and a touch drags
+   * only an entry {@link arm}ed first (its menu's "Move"). Armed entries need `touch-action: none`.
+   */
+  touchHold?: "drag" | "menu";
 }
 
 /**
@@ -77,8 +87,22 @@ export function usePressDrag<T>({
   onAbort,
   onContainerScroll,
   pickupOnMove = "mouse",
+  touchHold = "drag",
 }: PressDragOptions<T>) {
   const [source, setSource] = useState<T | null>(null);
+  /** The entry a touch may drag under `touchHold: "menu"`; ref for listeners. */
+  const [armed, setArmed] = useState<T | null>(null);
+  const armedRef = useRef<T | null>(null);
+  const arm = useCallback((from: T) => {
+    armedRef.current = from;
+    setArmed(from);
+  }, []);
+  const disarm = useCallback(() => {
+    armedRef.current = null;
+    setArmed(null);
+  }, []);
+  /** The pointerdown `press` last handled, so a press anywhere else disarms. */
+  const lastPress = useRef<PointerEvent | null>(null);
   /** Read inside listeners where state would be stale. */
   const active = useRef<T | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -205,11 +229,17 @@ export function usePressDrag<T>({
     (from: T | null, e: PointerEvent) => {
       // Only left mouse / touch / pen.
       if (e.button !== 0 && e.pointerType === "mouse") return;
+      lastPress.current = e;
+      const isMouse = e.pointerType === "mouse";
+      const armedHere = from !== null && armedRef.current !== null && armedRef.current === from;
+      if (from !== null && !armedHere) disarm();
+      // Hold opens the entry's menu and the touch scrolls natively.
+      if (touchHold === "menu" && !isMouse && from !== null && !armedHere) return;
       // Normally already caught by the container's own listener.
       stopFling();
       const pointerId = e.pointerId;
-      const isMouse = e.pointerType === "mouse";
-      const movePicks = from !== null && (isMouse || pickupOnMove === "all");
+      const pressTarget = e.target;
+      const movePicks = from !== null && (isMouse || pickupOnMove === "all" || armedHere);
       const startX = e.clientX;
       const startY = e.clientY;
       // Pick up at the cursor rather than the press point.
@@ -262,6 +292,7 @@ export function usePressDrag<T>({
         stopAutoScroll();
         handScrolling.delete(pointerId);
         panning.current = false;
+        if (armedHere) disarm();
         window.removeEventListener("pointermove", onMove, true);
         window.removeEventListener("pointerup", onUp);
         window.removeEventListener("pointercancel", onCancel);
@@ -303,6 +334,11 @@ export function usePressDrag<T>({
             return;
           }
           if (Math.hypot(ev.clientX - startX, ev.clientY - startY) > SCROLL_SLOP_PX) {
+            // A clearly sideways move is a drawer swipe (`useEdgeSwipe`), not a scroll: let go.
+            if (Math.abs(ev.clientX - startX) > Math.abs(ev.clientY - startY) * 2) {
+              clear();
+              return;
+            }
             // Early touch movement is a scroll; hand the rest to the manual panner.
             if (timer.current) clearTimeout(timer.current);
             timer.current = null;
@@ -356,7 +392,7 @@ export function usePressDrag<T>({
 
       // The browser reclaimed the pointer: abort without applying.
       const onCancel = (ev: PointerEvent) => {
-        if (ev.pointerId !== pointerId) return;
+        if (ev.pointerId !== pointerId || isCancellingPress()) return;
         active.current = null;
         clear();
         setSource(null);
@@ -375,16 +411,20 @@ export function usePressDrag<T>({
         timer.current = null;
         if (active.current !== null || from === null) return;
         active.current = from;
+        handScrolling.add(pointerId);
+        // The drag prevents the moves the entry's long-press menu clears on.
+        if (!isMouse) cancelPressUnder(pressTarget, null, pointerId, e.pointerType);
         handlers.current.onPickup(from, lastX, lastY);
         setSource(from);
         impact("medium");
         autoScrollTick();
       }
 
-      // A touch that became a scroll cleared the timer.
-      if (from !== null) timer.current = setTimeout(pickup, PICKUP_MS);
+      // A touch that became a scroll cleared the timer. An armed entry moves to pick up,
+      // leaving a still hold to its menu.
+      if (from !== null && !armedHere) timer.current = setTimeout(pickup, PICKUP_MS);
     },
-    [containerRef, fling, stopFling, pickupOnMove],
+    [containerRef, fling, stopFling, pickupOnMove, touchHold, disarm],
   );
 
   const begin = useCallback((from: T) => (e: PointerEvent) => press(from, e), [press]);
@@ -400,6 +440,16 @@ export function usePressDrag<T>({
     [press, stopFling],
   );
 
+  // A press that reached no entry (outside, or on the list's chrome) leaves move mode.
+  useEffect(() => {
+    if (armed === null) return;
+    const onDown = (e: PointerEvent) => {
+      if (lastPress.current !== e) disarm();
+    };
+    window.addEventListener("pointerdown", onDown);
+    return () => window.removeEventListener("pointerdown", onDown);
+  }, [armed, disarm]);
+
   /** A drag just finished, or the tap only caught a fling. */
   const shouldSuppressClick = useCallback(() => didDrag.current || caughtFling.current, []);
 
@@ -413,7 +463,7 @@ export function usePressDrag<T>({
     };
   }, [stopFling]);
 
-  return { attachContainer, attachPanSurface, begin, panFrom, source, dragging, shouldSuppressClick };
+  return { attachContainer, attachPanSurface, begin, panFrom, source, dragging, shouldSuppressClick, armed, arm, disarm };
 }
 
 /** Radix `asChild` Slots don't reliably forward React pointer props. */

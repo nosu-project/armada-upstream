@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { NSecSigner } from "@nostrify/nostrify";
 import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
@@ -347,7 +347,15 @@ describe("Nip46Signer", () => {
     // Gaps 100, 200, 400: copies at ~0, 100, 300 share the event; the one at ~700 is past the 400ms refresh.
     const signer = makeSigner(transport, { attemptTimeoutMs: 100, signTimeoutMs: 1_200 });
 
-    await expect(signer.signEvent({ kind: 20013, content: "", tags: [], created_at: 1 })).rejects.toThrow(/timed out/);
+    // Fake time: on a loaded machine real 100ms gaps stretch past the refresh.
+    vi.useFakeTimers();
+    try {
+      const settled = expect(signer.signEvent({ kind: 20013, content: "", tags: [], created_at: 1 })).rejects.toThrow(/timed out/);
+      await vi.advanceTimersByTimeAsync(1_500);
+      await settled;
+    } finally {
+      vi.useRealTimers();
+    }
     const ids = transport.published.map((e) => e.id);
     expect(ids.length).toBeGreaterThanOrEqual(4);
     expect(new Set(ids.slice(0, 3)).size).toBe(1);

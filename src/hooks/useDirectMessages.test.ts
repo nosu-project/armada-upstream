@@ -10,6 +10,9 @@ import {
   dmTopUpSince,
   hasMoreCursor,
   hasUnreadDmConversations,
+  initialThreadCursors,
+  nextThreadCursors,
+  threadPageFilters,
   keepPreviousDmPreviews,
   mergeDmEvents,
   mergeDmThread,
@@ -587,5 +590,31 @@ describe("buildDmFilters", () => {
     const filters = buildDmFilters(SELF, undefined, []);
     expect(filters).toHaveLength(1);
     expect(filters[0]).toMatchObject({ kinds: [4], authors: [SELF] });
+  });
+});
+
+describe("thread older-history cursors", () => {
+  const SELF = "a".repeat(64);
+  const PEER = "b".repeat(64);
+  const sent = (t: number) => ({ pubkey: SELF, created_at: t });
+  const got = (t: number) => ({ pubkey: PEER, created_at: t });
+
+  it("starts each direction from its own oldest loaded row", () => {
+    expect(initialThreadCursors([got(50), sent(900), sent(950)], SELF)).toEqual({ sent: 899, received: 49 });
+  });
+
+  it("moves each direction by its own events, so a busy side can't skip the quiet one", () => {
+    // A page of the newest 500 sent plus 3 old received must not drag `sent` back to the received floor.
+    const page = [...Array.from({ length: 500 }, (_, i) => sent(10_000 + i)), got(10), got(20), got(30)];
+    expect(nextThreadCursors({ sent: 20_000, received: 20_000 }, page, SELF)).toEqual({ sent: 9_999, received: 9 });
+  });
+
+  it("ends a direction only on an empty page, even when the other is short", () => {
+    const next = nextThreadCursors({ sent: 1_000, received: 1_000 }, [sent(900)], SELF);
+    expect(next).toEqual({ sent: 899, received: null });
+    expect(threadPageFilters(SELF, PEER, next)).toEqual([
+      { kinds: [4], authors: [SELF], "#p": [PEER], until: 899, limit: DM_PAGE_SIZE },
+    ]);
+    expect(nextThreadCursors(next, [], SELF)).toEqual({ sent: null, received: null });
   });
 });

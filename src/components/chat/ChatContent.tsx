@@ -8,6 +8,7 @@ import { BlurhashCanvas } from "@/components/BlurhashCanvas";
 import { AudioMessage } from "@/components/chat/AudioMessage";
 import { CashuToken } from "@/components/chat/CashuToken";
 import { CharacterCardEmbed } from "@/components/chat/CharacterCard";
+import { rememberImageDim, seenImageDim } from "@/components/chat/imageDims";
 import { emojify } from "@/components/chat/emojify";
 import { EmbeddedNaddr, EmbeddedNote } from "@/components/chat/EmbeddedNote";
 import { FileAttachment } from "@/components/chat/FileAttachment";
@@ -1641,7 +1642,13 @@ async function copyImage(src: string): Promise<void> {
  * this image's actions prepended (via {@link useChatImageMenu}). Save/share
  * need the resolved source.
  */
-function useImageMenu(image: ImageRef, getSrc: (() => Promise<string>) | null, onOpen: () => void) {
+function useImageMenu(
+  image: ImageRef,
+  getSrc: (() => Promise<string>) | null,
+  onOpen: () => void,
+  /** What a plain tap does, when it isn't "Open image". */
+  onActivate: () => void = onOpen,
+) {
   const menu = useChatImageMenu();
 
   const actions = useMemo<MessageActionItem[]>(() => {
@@ -1693,7 +1700,7 @@ function useImageMenu(image: ImageRef, getSrc: (() => Promise<string>) | null, o
       longPress.onClick(e);
       if (e.defaultPrevented) return;
       e.stopPropagation();
-      onOpen();
+      onActivate();
     },
     onContextMenu: (e: React.MouseEvent) => {
       longPress.onContextMenu(e);
@@ -1758,7 +1765,9 @@ const CARD_SNIFF_MARGIN = "600px";
 /**
  * An image that may secretly be a character card (the PNG `tEXt` payload).
  * The sniff reads the full file, so it waits until the image nears the
- * viewport; a found card is laid OVER the image, so nothing moves when it lands.
+ * viewport. A found card frames the art with a footer, and a tap anywhere
+ * opens the card; the lightbox stays reachable from the image menu and the
+ * card dialog's art.
  */
 function ImageOrCharacterCard({ image, onOpen }: { image: ImageRef; onOpen: () => void }) {
   // Buzz blobs need a signed GET the sniffer doesn't do; those stay plain images.
@@ -1794,20 +1803,50 @@ function ImageOrCharacterCard({ image, onOpen }: { image: ImageRef; onOpen: () =
       cancelled = true;
     };
   }, [url, mime, encryption, fallbacks, sources]);
+  const [cardOpen, setCardOpen] = useState(false);
+  const openCard = useCallback(() => setCardOpen(true), []);
+  // One tree either way, so the loaded image isn't remounted when the card lands.
   return (
-    <div ref={boxRef} className="relative w-fit max-w-full">
-      <InlineImage image={image} onOpen={onOpen} />
-      {/* The image button's own `my-1.5`: the bar sits on the image's bottom edge. */}
-      {card && <CharacterCardEmbed card={card} image={image} className="absolute inset-x-0 bottom-1.5" />}
+    <div
+      ref={boxRef}
+      className={cn(
+        "w-fit max-w-full",
+        card && "my-1.5 overflow-hidden clip-hairline-lg [--edge:var(--border)/0.5] [--fill:var(--secondary)/0.3] [--fill-hover:var(--secondary)/0.5]",
+      )}
+    >
+      <InlineImage
+        image={image}
+        onOpen={onOpen}
+        onActivate={card ? openCard : undefined}
+        className={card ? "my-0 rounded-none [&_*]:!rounded-none" : undefined}
+      />
+      {card && (
+        // Zero intrinsic width: the art sets the card's width, the footer truncates to it.
+        <div className="w-0 min-w-full">
+          <CharacterCardEmbed card={card} image={image} open={cardOpen} onOpenChange={setCardOpen} />
+        </div>
+      )}
     </div>
   );
 }
 
-function InlineImage({ image, onOpen }: { image: ImageRef; onOpen: () => void }) {
+function InlineImage({
+  image,
+  onOpen,
+  onActivate,
+  className,
+}: {
+  image: ImageRef;
+  onOpen: () => void;
+  onActivate?: () => void;
+  className?: string;
+}) {
   const [loaded, setLoaded] = useState(false);
   const [revealed, setRevealed] = useState(false);
+  // A remembered size is read once: switching layout mode on load would itself move rows.
+  const [knownDim] = useState(() => seenImageDim(image.url));
   const { resolved, onError, failed, fallbackProps, getSrc } = useShownImage(image);
-  const menu = useImageMenu(image, getSrc, onOpen);
+  const menu = useImageMenu(image, getSrc, onOpen, onActivate);
   const covered = image.spoiler && !revealed;
 
   // Block-level: the tokenizer stripped the surrounding newlines expecting a block.
@@ -1815,28 +1854,29 @@ function InlineImage({ image, onOpen }: { image: ImageRef; onOpen: () => void })
     return <MediaFallback {...fallbackProps} label="Image" />;
   }
 
-  // A known `dim` reserves the exact final box so the image never resizes on load.
-  const box = fitImageBox(image.dim);
+  // The box never changes on load, or rows move under the reader. A known `dim`
+  // reserves the exact final box; without one the image is fitted inside a fixed
+  // box. Widths are explicit: a button (and the card wrapper) shrink-to-fit, so a
+  // percentage width would collapse to the not-yet-loaded content, 0×0.
+  const box = fitImageBox(image.dim ?? knownDim) ?? UNSIZED_IMAGE_BOX;
+  const fitted = box === UNSIZED_IMAGE_BOX;
 
   return (
     <button
       type="button"
-      className="block my-1.5 rounded overflow-hidden max-w-sm cursor-pointer select-none [-webkit-user-select:none] [-webkit-touch-callout:none] focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+      className={cn(
+        "block max-w-full my-1.5 rounded overflow-hidden cursor-pointer select-none [-webkit-user-select:none] [-webkit-touch-callout:none] focus:outline-none focus-visible:ring-2 focus-visible:ring-primary",
+        className,
+      )}
+      style={{ width: box.maxWidth }}
       {...(covered ? COVERED_IMAGE_PROPS : menu)}
     >
       <div
         className={cn(
-          "relative rounded overflow-hidden",
-          box && "w-full",
+          "relative w-full rounded overflow-hidden",
           !loaded && !image.blurhash && "bg-muted",
         )}
-        style={
-          box
-            ? { aspectRatio: box.aspectRatio, maxWidth: box.maxWidth }
-            : !loaded
-              ? { minHeight: 120, minWidth: 160 }
-              : undefined
-        }
+        style={{ aspectRatio: box.aspectRatio }}
       >
         {!loaded && image.blurhash && (
           <BlurhashCanvas hash={image.blurhash} className="absolute inset-0" />
@@ -1852,13 +1892,15 @@ function InlineImage({ image, onOpen }: { image: ImageRef; onOpen: () => void })
             draggable={false}
             className={cn(
               "block rounded hover:opacity-90 transition-opacity [-webkit-user-drag:none]",
-              box ? "w-full h-full object-cover" : "max-w-full max-h-80 h-auto",
+              // Fitted, not cropped: an unsized image's real shape is unknown.
+              fitted ? "w-full h-full object-contain object-left" : "w-full h-full object-cover",
             )}
             loading="lazy"
             decoding="async"
-            onLoad={() => {
+            onLoad={(e) => {
               setLoaded(true);
               captureLoadedMedia(resolved.src);
+              rememberImageDim(image.url, e.currentTarget.naturalWidth, e.currentTarget.naturalHeight);
             }}
             onError={onError}
           />
@@ -1944,6 +1986,9 @@ function GridImage({
     </button>
   );
 }
+
+/** The fixed box for an image with no `dim` (and none remembered): 4:3 at max-w-xs. */
+const UNSIZED_IMAGE_BOX = { aspectRatio: "4 / 3", maxWidth: 320 };
 
 /**
  * Fit a NIP-94 `dim` into the inline caps (max-w-sm × max-h-80) without

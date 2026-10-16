@@ -10,6 +10,9 @@ import { isRecentDeepLinkNavigation } from "@/lib/deepLinkNav";
 import { cn } from "@/lib/utils";
 
 const SETTLE_MS = 200;
+/** Bounds of a gesture's settle animation, scaled by the distance left. */
+const SETTLE_MIN_MS = 90;
+const SETTLE_MAX_MS = 250;
 
 /** Parallax shift of the underlay at full cover (% of its own width). */
 const UNDERLAY_SHIFT_PCT = 18;
@@ -71,27 +74,31 @@ export function SwipeReveal({ underlay, children, open, onReveal, onClose, canCl
   const paneRef = useRef<HTMLDivElement>(null);
   const underlayRef = useRef<HTMLDivElement>(null);
 
-  const dragRaf = useRef<number | null>(null);
-  const pendingDragOffset = useRef(0);
+  // Written synchronously: Chrome already aligns pointermove to the frame, and a
+  // rAF hop here would put the pane a frame behind the finger.
+  const dragOffset = useRef(0);
   const applyDrag = useCallback((offset: number) => {
-    pendingDragOffset.current = offset;
-    if (dragRaf.current !== null) return;
-    dragRaf.current = requestAnimationFrame(() => {
-      dragRaf.current = null;
-      const width = window.innerWidth || 1;
-      const off = Math.max(0, Math.min(pendingDragOffset.current, width));
-      const progress = off / width;
-      if (paneRef.current) {
-        paneRef.current.style.transform = `translate3d(${off}px, 0, 0)`;
-      }
-      if (underlayRef.current) {
-        underlayRef.current.style.transform =
-          `translateX(${-(1 - progress) * UNDERLAY_SHIFT_PCT}%)`;
-      }
-    });
+    const width = window.innerWidth || 1;
+    const off = Math.max(0, Math.min(offset, width));
+    dragOffset.current = off;
+    if (paneRef.current) {
+      paneRef.current.style.transform = `translate3d(${off}px, 0, 0)`;
+    }
+    if (underlayRef.current) {
+      underlayRef.current.style.transform = `translateX(${-(1 - off / width) * UNDERLAY_SHIFT_PCT}%)`;
+    }
   }, []);
-  useEffect(() => () => {
-    if (dragRaf.current !== null) cancelAnimationFrame(dragRaf.current);
+
+  // A release settles over the distance left at the finger's speed, so a flick
+  // finishes as fast as it was thrown and a nearly-done drag doesn't coast.
+  const settleMs = useRef<number | null>(null);
+  const releaseAt = useCallback((target: number, velocity: number) => {
+    const width = window.innerWidth || 1;
+    const remaining = Math.abs(target - dragOffset.current);
+    const base = SETTLE_MIN_MS + (SETTLE_MAX_MS - SETTLE_MIN_MS) * (remaining / width);
+    settleMs.current = Math.round(
+      velocity > 0.2 ? Math.min(base, Math.max(SETTLE_MIN_MS, (2.5 * remaining) / velocity)) : base,
+    );
   }, []);
 
   const onRevealRef = useRef(onReveal);
@@ -151,6 +158,7 @@ export function SwipeReveal({ underlay, children, open, onReveal, onClose, canCl
   const backLeavesApp =
     useContext(AppContext)?.config.androidBackLeavesApp ?? defaultConfig.androidBackLeavesApp;
   useAndroidBack(() => {
+    settleMs.current = null;
     if (!effectiveOpen) {
       commitReveal();
       return true;
@@ -178,17 +186,46 @@ export function SwipeReveal({ underlay, children, open, onReveal, onClose, canCl
     enabled: swipeEnabled && !effectiveOpen,
     direction: "open",
     onCommit: commitReveal,
+    onRelease: useCallback(
+      (v: number, committed: boolean) => releaseAt(committed ? window.innerWidth || 1 : 0, committed ? v : -v),
+      [releaseAt],
+    ),
     onDragMove: applyDrag,
   });
   const closeSwipe = useEdgeSwipe({
-    enabled: swipeEnabled && effectiveOpen,
+    enabled: swipeEnabled && effectiveOpen && canClose,
     direction: "close",
     onCommit: commitClose,
+    onRelease: useCallback(
+      (v: number, committed: boolean) => releaseAt(committed ? 0 : window.innerWidth || 1, committed ? v : -v),
+      [releaseAt],
+    ),
     onDragMove: useCallback(
       (dragX: number) => applyDrag((window.innerWidth || 1) - dragX),
       [applyDrag],
     ),
   });
+
+  // Native, not React props: the server rail is portaled from MainLayout and DOM-moved
+  // into the underlay, so its presses bubble here only through the DOM.
+  const closeHandlersRef = useRef(closeSwipe.handlers);
+  closeHandlersRef.current = closeSwipe.handlers;
+  useEffect(() => {
+    const el = underlayRef.current;
+    if (!swipeEnabled || !el) return;
+    const on = (name: keyof typeof closeHandlersRef.current) => (e: PointerEvent) =>
+      closeHandlersRef.current[name](e as unknown as React.PointerEvent);
+    const listeners = {
+      pointerdown: on("onPointerDown"),
+      pointermove: on("onPointerMove"),
+      pointerup: on("onPointerUp"),
+      pointercancel: on("onPointerCancel"),
+    };
+    for (const [type, fn] of Object.entries(listeners)) el.addEventListener(type, fn as EventListener);
+    return () => {
+      for (const [type, fn] of Object.entries(listeners)) el.removeEventListener(type, fn as EventListener);
+    };
+  }, [swipeEnabled]);
 
   // Suppress the transition for one render on non-gesture `open` flips; layout effect so the snap lands pre-paint.
   const prevOpen = useRef(open);
@@ -269,16 +306,16 @@ export function SwipeReveal({ underlay, children, open, onReveal, onClose, canCl
   const dragging = openDragging || closeDragging;
 
   const progress = width > 0 ? offset / width : 0;
+  // Inline, not classes: a class change on these full-screen layers restyles the
+  // whole document (12-30ms on a phone), twice per swipe; an inline style is ~0.
+  const settleTransition =
+    dragging || snap ? undefined : `transform ${settleMs.current ?? SETTLE_MS}ms cubic-bezier(0, 0, 0.2, 1)`;
   const underlayShift = -(1 - progress) * UNDERLAY_SHIFT_PCT;
 
   // The drag writes transforms imperatively, so React's style prop may be stale;
   // rewrite the rest position before paint on every commit.
   useLayoutEffect(() => {
     if (!swipeEnabled || dragging) return;
-    if (dragRaf.current !== null) {
-      cancelAnimationFrame(dragRaf.current);
-      dragRaf.current = null;
-    }
     if (paneRef.current) {
       paneRef.current.style.transform = `translate3d(${offset}px, 0, 0)`;
     }
@@ -302,13 +339,10 @@ export function SwipeReveal({ underlay, children, open, onReveal, onClose, canCl
           detaching mid-gesture would remove the pointerup that ends the drag. */}
       <div
         ref={underlayRef}
-        {...closeSwipe.handlers}
-        className={cn(
-          "absolute inset-0 flex [contain:layout_paint]",
-          dragging || snap ? "" : "transition-transform duration-200 ease-out",
-        )}
+        className="absolute inset-0 flex [contain:layout_paint]"
         style={{
           transform: `translateX(${underlayShift}%)`,
+          transition: settleTransition,
           touchAction: effectiveOpen ? "pan-y" : undefined,
           willChange: moving ? "transform" : undefined,
         }}
@@ -326,13 +360,13 @@ export function SwipeReveal({ underlay, children, open, onReveal, onClose, canCl
         }}
         className={cn(
           "absolute inset-0 z-10 flex flex-col bg-background shadow-2xl [contain:layout_paint]",
-          dragging || snap ? "" : "transition-transform duration-200 ease-out",
           enterAnim && "animate-in slide-in-from-right duration-200 ease-out",
-          // Keyed on the optimistic state so the list is tappable on the release frame.
-          effectiveOpen && !dragging && "pointer-events-none",
         )}
         style={{
           transform: `translate3d(${offset}px, 0, 0)`,
+          transition: settleTransition,
+          // Keyed on the optimistic state so the list is tappable on the release frame.
+          pointerEvents: effectiveOpen && !dragging ? "none" : undefined,
           touchAction: "pan-y",
           willChange: moving ? "transform" : undefined,
         }}

@@ -57,6 +57,7 @@ import {
 import { recordSightings, sightingsRevision, subscribeSightings } from "@/concord/lib/mediaTrust";
 import { citationToTag, type AuthorityCitation } from "@/concord/lib/edition";
 import { citationSatisfied } from "@/concord/lib/control";
+import { whenAuthSettled } from "@/concord/lib/planeSync";
 import { useActivePause } from "@/concord/hooks/usePause";
 import { canActOnMember, isAuthorized, isAuthorizedIn, isStaff, Permissions } from "@/concord/lib/roles";
 import { chatExpiresAt, messageExpirationOf } from "@/concord/lib/disappearing";
@@ -434,22 +435,45 @@ export function useChannelTimeline(
         localFull = page.full;
       }
 
+      const mergeIntoView = (rows: OpenedChat[]) => {
+        if (rows.length === 0) return;
+        const prev = (queryClient.getQueryData<OpenedChat[]>(queryKey) ?? []).filter(
+          (m) => m.channelIdHex === channelIdHex,
+        );
+        queryClient.setQueryData<OpenedChat[]>(queryKey, filterEpochCutoff(upsert(prev, rows), channel!));
+      };
+
       let exhausted = false;
       if (!localFull) {
         const saved = await readStreamCursor(cursorKeyId);
         exhausted = !!saved?.exhausted;
         if (!exhausted) {
+          // Paint what the store had before waiting on relays.
+          mergeIntoView(added);
           const controller = new AbortController();
           olderAbortRef.current = controller;
           const older = await backfillStore(nostr, historyRelays(community!), channel!, controller.signal, {
             until: saved?.oldest,
             maxPages: LOAD_OLDER_MAX_PAGES,
+            emptyOk: true,
+            // A kind-1059 REQ racing NIP-42 is CLOSED and reads as empty.
+            beforeRelay: (url) => whenAuthSettled(url, () => channel!.streams.map((s) => s.group)),
+            // Each page joins the timeline as it lands, so a reader at the top isn't
+            // held until every page of the run has been read.
+            onPage: async (events) => {
+              if (controller.signal.aborted) return;
+              const opened = await openChatBatch(events, channel!);
+              if (opened.length === 0 || controller.signal.aborted) return;
+              writeRumors(community!.idHex, opened);
+              added = upsert(added, opened);
+              mergeIntoView(opened);
+            },
           });
           // The view that asked is gone; its query key is no longer read.
           if (controller.signal.aborted) return 0;
-          const opened = await openChatBatch(older.events, channel!);
-          writeRumors(community!.idHex, opened);
-          exhausted = older.exhausted;
+          // A clean empty answer below held history ends paging for this view only;
+          // it isn't persisted, since an all-empty run can't seal the cursor.
+          exhausted = older.exhausted || (!older.failed && older.count === 0 && !!saved?.oldest);
 
           // Never touches `newest` (the scheduler's job). The merge is monotonic and
           // serialized per scope in `updateStreamCursor`, so concurrent writers merge.
@@ -457,7 +481,6 @@ export function useChannelTimeline(
             oldest: older.oldest,
             exhausted: older.exhausted ? true : undefined,
           });
-          added = upsert(added, opened);
         }
       }
 

@@ -30,8 +30,12 @@ export type InlineNode<A = never> =
  */
 const FENCE_RE = /```([\w+-]*)\n?([\s\S]*?)```|(?<![^\n])~~~([\w+-]*)\n((?:[\s\S]*?\n)?)~~~(?![^\n])/g;
 
-/** A quote line: `> text` (or a bare `>`), Discord-style. */
-const QUOTE_LINE_RE = /^>\s?/;
+/**
+ * A quote line: `> text` (or a bare `>`), Discord-style. The space is required
+ * (after any `>>` nesting run) so emoticons like `>:D` stay literal.
+ */
+const QUOTE_LINE_RE = /^>(?=>*(?:[ \t]|$))/;
+const QUOTE_MARKER_RE = /^>[ \t]?/;
 /** Discord's `>>> `: everything from this line to the end of the message is quoted. */
 const REST_QUOTE_RE = /(?<![^\n])>>>(?:[ \t]|$|(?=\n))[ \t]*/g;
 /** Deeper `>` nesting stays literal, bounding the recursion. */
@@ -105,7 +109,7 @@ function splitQuoteBlocks(src: string, document: boolean, depth: number): MdBloc
   for (const line of lines) {
     if (QUOTE_LINE_RE.test(line)) {
       flushText();
-      (quoteLines ??= []).push(line.replace(QUOTE_LINE_RE, ""));
+      (quoteLines ??= []).push(line.replace(QUOTE_MARKER_RE, ""));
     } else {
       flushQuote();
       textLines.push(line);

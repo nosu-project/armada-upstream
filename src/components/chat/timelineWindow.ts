@@ -10,7 +10,8 @@ export const FIRST_PAINT_WINDOW = 12;
 /** Rows rendered once a freshly-opened conversation has settled. */
 export const INITIAL_WINDOW = 30;
 
-export const WINDOW_STEP = 40;
+/** Rows revealed per step: small, since each step's mount is one main-thread stall mid-fling. */
+export const WINDOW_STEP = 16;
 
 /**
  * Past this, a window back at the bottom is trimmed to {@link INITIAL_WINDOW},

@@ -19,6 +19,7 @@ import {
 } from "@/components/chat/scrollAnchor";
 import { Skeleton } from "@/components/ui/skeleton";
 import { markBootPainted } from "@/lib/bootGate";
+import { beginSyncTask } from "@/lib/syncActivity";
 import { useHiddenMessages } from "@/hooks/useHiddenMessages";
 import { useMutedPubkeys } from "@/hooks/useMuteList";
 import { useMutedWordFilter } from "@/hooks/useMutedWords";
@@ -35,10 +36,25 @@ const CONTINUATION_WINDOW_SECONDS = 5 * 60;
 /** Shortest flood run worth folding: interleaved chat can split floods into tiny fragments. */
 const FLOOD_ROW_MIN = 3;
 
-/** Distance from the top (px) that requests older history; a screenful-plus so the fetch overlaps reading. */
-const BACKFILL_TRIGGER_PX = 1200;
+/** Distance from the top (px) that requests older history; past the reveal band so the fetch overlaps reading. */
+const BACKFILL_TRIGGER_PX = 8000;
 
-const REVEAL_TRIGGER_PX = 900;
+/** A phone fling covers ~2400px before one reveal step commits, so start ahead of that. */
+const REVEAL_TRIGGER_PX = 3000;
+
+/**
+ * Reveal steps that may chain without a new upward scroll. Every row drawn ahead of
+ * the reader costs layout on every later frame, so a still reader stops being
+ * walked up the band — unless it is within {@link CHAIN_FLOOR_PX} of the top.
+ */
+const MAX_CHAINED_REVEALS = 2;
+const CHAIN_FLOOR_PX = 1500;
+
+/** Hidden loaded rows left above the window when the next older page is requested. */
+const PREFETCH_ROWS = 3 * WINDOW_STEP;
+
+/** Underfilled auto-loads that may add nothing before the timeline stops asking. */
+const UNDERFILL_DRY_LIMIT = 2;
 
 const AT_BOTTOM_PX = 60;
 
@@ -410,6 +426,8 @@ export function MessageTimeline({
   const extendLockRef = useRef(false);
   // Independent of the transport's possibly lagging `isLoadingOlder`.
   const loadingOlderRef = useRef(false);
+  // Consecutive underfill loads that added nothing, per oldest row.
+  const underfillDryRef = useRef<{ oldestId: string | undefined; count: number }>({ oldestId: undefined, count: 0 });
   // A scroll-triggered page landed above the first row: reveal a step
   // automatically, since a reader at scrollTop=0 has no further upward scroll.
   const backfillRevealRef = useRef<{ boundaryId: string; count: number } | null>(null);
@@ -424,6 +442,8 @@ export function MessageTimeline({
   // scroll, so re-check next frame (one rAF per burst). `maybeExtendRef` breaks
   // the declaration-order cycle.
   const continueRafRef = useRef<number | null>(null);
+  /** Reveal steps chained since the reader last scrolled up. */
+  const chainedRevealsRef = useRef(0);
   const maybeExtendRef = useRef<() => void>(() => {});
 
   const listVisible = !isLoading && !transientEmpty && timelineEntries.length > 0;
@@ -439,6 +459,10 @@ export function MessageTimeline({
   windowStartIdRef.current = windowStartId;
 
   const setWindowStart = useCallback((id: string | null) => {
+    windowStartIdRef.current = id;
+    setWindowStartId(id);
+  }, []);
+  const revealFrom = useCallback((id: string) => {
     windowStartIdRef.current = id;
     setWindowStartId(id);
   }, []);
@@ -649,7 +673,7 @@ export function MessageTimeline({
         const next = timelineEntries[nextIndex];
         backfillRevealRef.current = null;
         if (next) {
-          setWindowStart(next.id);
+          revealFrom(next.id);
           return;
         }
       } else if (!loadingOlderRef.current) {
@@ -669,6 +693,10 @@ export function MessageTimeline({
       if (continueRafRef.current == null) {
         continueRafRef.current = requestAnimationFrame(() => {
           continueRafRef.current = null;
+          const el = scrollRef.current;
+          if (!el) return;
+          if (chainedRevealsRef.current >= MAX_CHAINED_REVEALS && clampedScrollTop(el) >= CHAIN_FLOOR_PX) return;
+          chainedRevealsRef.current += 1;
           maybeExtendRef.current();
         });
       }
@@ -676,7 +704,7 @@ export function MessageTimeline({
     }
     stickToBottom();
     // `listVisible`: the scroller this effect moves may only just have mounted.
-  }, [items, listVisible, anchorLost, timelineEntries, backfillPulse, captureReadingAnchor, setWindowStart, jumpToRow, pinToBottomNow, restoreReadingAnchor, stickToBottom]);
+  }, [items, listVisible, anchorLost, timelineEntries, backfillPulse, captureReadingAnchor, setWindowStart, revealFrom, jumpToRow, pinToBottomNow, restoreReadingAnchor, stickToBottom]);
 
   // Content growth and container reflows (thread panel, composer swap) land here.
   useLayoutEffect(() => {
@@ -714,15 +742,22 @@ export function MessageTimeline({
     const start = startIndexRef.current;
     if (start > 0) {
       if (clampedScrollTop(el) >= REVEAL_TRIGGER_PX) return;
-      const next = entriesRef.current[
-        stepBackRows(entriesRef.current, start, WINDOW_STEP, (entry) =>
-          entry.type === "chat" ? !!quarantinedIdsRef.current?.has(entry.message.id) : false,
-        )
-      ];
+      const nextIndex = stepBackRows(entriesRef.current, start, WINDOW_STEP, (entry) =>
+        entry.type === "chat" ? !!quarantinedIdsRef.current?.has(entry.message.id) : false,
+      );
+      const next = entriesRef.current[nextIndex];
       if (!next) return;
       extendLockRef.current = true;
       captureReadingAnchor();
-      setWindowStart(next.id);
+      revealFrom(next.id);
+      // Fetch the next page while hidden rows remain, so a fling never waits on it at
+      // the top. The window is anchored by id, so rows landing above it move nothing.
+      if (nextIndex < PREFETCH_ROWS && loadOlder && hasMore && !isLoadingOlder && !loadingOlderRef.current) {
+        loadingOlderRef.current = true;
+        void loadOlder().finally(() => {
+          loadingOlderRef.current = false;
+        });
+      }
       return;
     }
     if (clampedScrollTop(el) >= BACKFILL_TRIGGER_PX) return;
@@ -737,7 +772,7 @@ export function MessageTimeline({
       loadingOlderRef.current = false;
       setBackfillPulse((pulse) => pulse + 1);
     });
-  }, [paused, loadOlder, hasMore, isLoadingOlder, captureReadingAnchor, setWindowStart]);
+  }, [paused, loadOlder, hasMore, isLoadingOlder, captureReadingAnchor, revealFrom]);
   // Called via ref from the earlier-declared layout effect. Cancel on unmount.
   maybeExtendRef.current = maybeExtend;
   useEffect(
@@ -765,19 +800,38 @@ export function MessageTimeline({
         ];
         if (next) {
           captureReadingAnchor();
-          setWindowStart(next.id);
+          revealFrom(next.id);
         }
         return;
       }
       if (!loadOlder || !hasMore || isLoadingOlder || loadingOlderRef.current) return;
+      // A transport that never reports the end must not page (and spin) forever.
+      const oldestId = entriesRef.current[0]?.id;
+      const dry = underfillDryRef.current;
+      if (dry.oldestId !== oldestId) underfillDryRef.current = { oldestId, count: 0 };
+      else if (dry.count >= UNDERFILL_DRY_LIMIT) return;
       loadingOlderRef.current = true;
       captureReadingAnchor();
-      void loadOlder().finally(() => {
-        loadingOlderRef.current = false;
-      });
+      void loadOlder()
+        .then((added) => {
+          const cur = underfillDryRef.current;
+          if (cur.oldestId !== oldestId) return;
+          underfillDryRef.current = { oldestId, count: added > 0 ? 0 : cur.count + 1 };
+        })
+        .catch(() => undefined)
+        .finally(() => {
+          loadingOlderRef.current = false;
+        });
     });
     return () => cancelAnimationFrame(frame);
-  }, [items, listVisible, paused, loadOlder, hasMore, isLoadingOlder, captureReadingAnchor, setWindowStart]);
+  }, [items, listVisible, paused, loadOlder, hasMore, isLoadingOlder, captureReadingAnchor, revealFrom]);
+
+  // Older-history paging surfaces through the header's sync indicator, not an overlay.
+  useEffect(() => {
+    if (!isLoadingOlder) return;
+    const task = beginSyncTask("older messages");
+    return () => task.end();
+  }, [isLoadingOlder]);
 
   const handleScroll = useCallback(() => {
     const el = scrollRef.current;
@@ -793,7 +847,10 @@ export function MessageTimeline({
     if (movingUp || distance <= distanceRef.current) distanceRef.current = distance;
     setShowJumpPill(distanceRef.current > JUMP_PILL_PX);
     if (el.scrollTop === top) captureReadingAnchor();
-    if (movingUp) maybeExtend();
+    if (movingUp) {
+      chainedRevealsRef.current = 0;
+      maybeExtend();
+    }
   }, [captureReadingAnchor, maybeExtend]);
 
   // Let rows that have been laid out once be skipped offscreen (`.timeline-row`).
@@ -931,14 +988,6 @@ export function MessageTimeline({
               <div className="h-4" aria-hidden />
             </div>
           </div>
-          {/* Floats over the edge: resizing content at the anchored edge would jolt the view. */}
-          {isLoadingOlder && (
-            <div className="absolute top-1 inset-x-0 z-10 flex justify-center pointer-events-none">
-              <span className="rounded-full bg-background/80 backdrop-blur p-1.5 shadow-sm">
-                <Loader2 className="size-4 animate-spin text-muted-foreground" />
-              </span>
-            </div>
-          )}
           {showJumpPill && (
             <div className="absolute bottom-3 inset-x-0 z-10 flex justify-center pointer-events-none">
               <button

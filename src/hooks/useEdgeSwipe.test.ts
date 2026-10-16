@@ -127,6 +127,67 @@ describe("useEdgeSwipe", () => {
     expect(onCommit).toHaveBeenCalledOnce();
   });
 
+  it("cancels the press under the finger on claim, without abandoning itself", () => {
+    const onCommit = vi.fn();
+    const { result } = renderHook(() => useEdgeSwipe({ onCommit }));
+    const el = makeEl(400);
+    const row = document.createElement("div");
+    el.appendChild(row);
+    const rowCancel = vi.fn();
+    row.addEventListener("pointercancel", rowCancel);
+    // The pane's own cancel handler sees the bubbled event, as it would in the DOM.
+    el.addEventListener("pointercancel", (e) => result.current.handlers.onPointerCancel(e as unknown as React.PointerEvent));
+
+    const h = result.current.handlers;
+    act(() => h.onPointerDown(mockPointerEvent({ x: 0, y: 0, target: row, currentTarget: el })));
+    act(() => h.onPointerMove(mockPointerEvent({ x: 150, y: 0, timeStamp: 100, target: row, currentTarget: el })));
+    expect(rowCancel).toHaveBeenCalledOnce();
+    act(() => h.onPointerUp(mockPointerEvent({ x: 150, y: 0, timeStamp: 100, currentTarget: el })));
+    expect(onCommit).toHaveBeenCalledOnce();
+  });
+
+  it("judges a flick over its trailing window, not a slowing last sample", () => {
+    const onCommit = vi.fn();
+    const onRelease = vi.fn();
+    const { result } = renderHook(() => useEdgeSwipe({ onCommit, onRelease }));
+    const el = makeEl(400);
+    const h = result.current.handlers;
+    // 80px (under 25%) at ~1px/ms, then a last 16ms sample of only 2px.
+    act(() => h.onPointerDown(mockPointerEvent({ x: 0, y: 0, timeStamp: 0, currentTarget: el })));
+    act(() => h.onPointerMove(mockPointerEvent({ x: 20, y: 0, timeStamp: 20, currentTarget: el })));
+    act(() => h.onPointerMove(mockPointerEvent({ x: 78, y: 0, timeStamp: 80, currentTarget: el })));
+    act(() => h.onPointerMove(mockPointerEvent({ x: 80, y: 0, timeStamp: 96, currentTarget: el })));
+    act(() => h.onPointerUp(mockPointerEvent({ x: 80, y: 0, timeStamp: 100, currentTarget: el })));
+    expect(onCommit).toHaveBeenCalledOnce();
+    expect(onRelease.mock.calls[0][0]).toBeGreaterThan(0.3);
+    expect(onRelease.mock.calls[0][1]).toBe(true);
+  });
+
+  it("does not commit a far drag flicked back toward rest", () => {
+    const onCommit = vi.fn();
+    const { result } = renderHook(() => useEdgeSwipe({ onCommit }));
+    const el = makeEl(400);
+    const h = result.current.handlers;
+    act(() => h.onPointerDown(mockPointerEvent({ x: 0, y: 0, timeStamp: 0, currentTarget: el })));
+    act(() => h.onPointerMove(mockPointerEvent({ x: 250, y: 0, timeStamp: 300, currentTarget: el })));
+    act(() => h.onPointerMove(mockPointerEvent({ x: 200, y: 0, timeStamp: 350, currentTarget: el })));
+    act(() => h.onPointerMove(mockPointerEvent({ x: 150, y: 0, timeStamp: 400, currentTarget: el })));
+    act(() => h.onPointerUp(mockPointerEvent({ x: 150, y: 0, timeStamp: 400, currentTarget: el })));
+    expect(onCommit).not.toHaveBeenCalled();
+  });
+
+  it("reads a finger that rested before lifting as a zero-velocity release", () => {
+    const onCommit = vi.fn();
+    const { result } = renderHook(() => useEdgeSwipe({ onCommit }));
+    const el = makeEl(400);
+    const h = result.current.handlers;
+    act(() => h.onPointerDown(mockPointerEvent({ x: 0, y: 0, timeStamp: 0, currentTarget: el })));
+    act(() => h.onPointerMove(mockPointerEvent({ x: 30, y: 0, timeStamp: 20, currentTarget: el })));
+    act(() => h.onPointerMove(mockPointerEvent({ x: 60, y: 0, timeStamp: 40, currentTarget: el })));
+    act(() => h.onPointerUp(mockPointerEvent({ x: 60, y: 0, timeStamp: 300, currentTarget: el })));
+    expect(onCommit).not.toHaveBeenCalled();
+  });
+
   it("never commits a pointercancel, however far or fast (system back gesture pilfer)", () => {
     const onCommit = vi.fn();
     // A right-edge back swipe over the revealed list is a leftward "close" drag.
