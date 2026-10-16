@@ -180,7 +180,7 @@ never a compiled-in server address:
 - The relay's HTTP endpoints (NIP-29 LiveKit token, push) are derived at runtime
   from the relay's WS URL via `relayToHttpUrl()` in `src/lib/platform.ts`.
 - Concord voice (CORD-07) fetches LiveKit tokens from a blind AV broker,
-  defaulting to `CONCORD_AV_SERVERS` (public `https://armada.buzz`).
+  defaulting to `CONCORD_AV_SERVERS` (public `https://av.armada.buzz`).
 
 There is **no build-time relay pin at all** — every build, hosted included, has
 no baked-in servers, and the user adds their own. Don't reintroduce one: a pin

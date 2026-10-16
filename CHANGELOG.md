@@ -4,6 +4,38 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.65.0] - 2026-10-16
+
+Settings is rebuilt as a native-style list of pages, signing up takes just a
+profile step, and you can mute words across timelines and threads. Community
+messages show Owner, Admin and Mod badges, character card images open into a
+card viewer, and iOS notifications now show the message itself.
+
+### Added
+- A synced muted-words filter for timelines, threads and forum comments
+- Owner, Admin and Mod badges beside staff names in community messages
+- Character card images show the character's name and open a viewer with the card's details
+- Highlights in embedded posts show their excerpt, comment and source
+- A setting to hide the message hover actions on desktop, and the reaction row in the thread right-click menu
+- The remote signer link can be copied from the login screen, and every sign-in method is offered on every platform
+- A support page and a Help & support section in Settings
+
+### Changed
+- Settings is a drill-down list of pages, with long explanations behind info buttons
+- Signing up no longer asks you to back up your key or pick relays; a reminder to back up your key appears later, and logging out asks first if it hasn't been backed up
+- The terms notice appears under every sign-in method
+- The downloads page is redesigned around a platform switcher, and downloads save under their real file names
+- iOS notifications are decrypted on the device and show the message, with banners while the app is open unless you're in that room
+- Android notifications cover DM relays more reliably, hold alerts while you're active on another device, and are throttled per conversation and community
+- A call keeps floating while a community's settings or moderation pane is open
+- Forum channels shown as a feed count only posts toward their unread badge
+
+### Fixed
+- Mentions from banned members no longer appear in Mentions, notifications or the server rail
+- Clicking outside a profile preview only closes it, without also clicking what's underneath
+- A channel key sent by staff no longer asks to be accepted manually while community permissions are still loading
+- Linux package install commands on the downloads page point at the current repository addresses
+
 ## [0.64.14] - 2026-10-13
 
 The downloads page and the desktop app's updater now read Armada's releases

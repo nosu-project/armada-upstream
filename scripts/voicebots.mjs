@@ -55,7 +55,7 @@ const KIND_WRAP_EPHEMERAL = 21059;
 const KIND_VOICE_PRESENCE = 23313;
 const KIND_HTTP_AUTH = 27235;
 const KIND_PROFILE = 0;
-const DEFAULT_BROKER = "https://armada.buzz";
+const DEFAULT_BROKER = "https://av.armada.buzz";
 const te = new TextEncoder();
 
 const BOT_NAMES = [
