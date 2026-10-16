@@ -1,5 +1,5 @@
 import { Capacitor } from "@capacitor/core";
-import { Download, IdCard, Loader2 } from "lucide-react";
+import { ChevronRight, Download, IdCard, Loader2 } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 
 import { Lightbox, type LightboxItem } from "@/components/chat/Lightbox";
@@ -244,20 +244,26 @@ function CharacterCardDialog({ card, image, onClose }: { card: CharaCard; image:
 }
 
 /**
- * The in-chat marker on a PNG that sniffed as a character card: a caption bar
- * laid over the card's own art (the parent positions it), naming the card and
- * opening the full explorer on tap.
+ * The footer row of an in-chat character card: names the card and opens the
+ * full explorer. The parent frames it under the card's art; pass `open` /
+ * `onOpenChange` when the art should open the same explorer.
  */
 export function CharacterCardEmbed({
   card,
   image,
+  open: openProp,
+  onOpenChange,
   className,
 }: {
   card: CharaCard;
   image: CharacterCardRef;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
   className?: string;
 }) {
-  const [open, setOpen] = useState(false);
+  const [openState, setOpenState] = useState(false);
+  const open = openProp ?? openState;
+  const setOpen = onOpenChange ?? setOpenState;
   const creator = card.creator?.trim();
 
   return (
@@ -270,22 +276,22 @@ export function CharacterCardEmbed({
         }}
         aria-label={`View character card: ${card.name}`}
         className={cn(
-          "group flex items-center gap-2 rounded-b bg-gradient-to-t from-black/85 via-black/60 to-transparent",
-          "px-2.5 pb-2 pt-6 text-left text-white",
+          "group flex w-full items-center gap-2.5 px-3 py-2 text-left",
           "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary",
           className,
         )}
       >
-        <IdCard className="size-4 shrink-0" aria-hidden />
+        <IdCard className="size-4 shrink-0 text-primary" aria-hidden />
         <span className="min-w-0 flex-1">
-          <span className="block truncate text-sm font-semibold">{card.name}</span>
-          <span className="block truncate text-2xs text-white/75">
+          <span className="block truncate text-sm font-semibold leading-tight">{card.name}</span>
+          <span className="mt-0.5 block truncate text-xs text-muted-foreground">
             Character card{creator ? ` · by ${creator}` : ""}
           </span>
         </span>
-        <span className="shrink-0 rounded bg-white/15 px-2 py-0.5 text-xs font-medium transition-colors group-hover:bg-white/25 touch:py-1.5">
-          View
-        </span>
+        <ChevronRight
+          className="size-4 shrink-0 text-muted-foreground transition-colors group-hover:text-primary"
+          aria-hidden
+        />
       </button>
       {open && <CharacterCardDialog card={card} image={image} onClose={() => setOpen(false)} />}
     </>
