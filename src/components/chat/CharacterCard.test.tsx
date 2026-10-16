@@ -79,8 +79,8 @@ describe("CharacterCardEmbed", () => {
     expect(body).toContain("Lore notes");
     expect(body).toContain("Some lore about the world.");
     expect(body).toContain("off(disabled)");
-    // {{char}} is filled in for display.
-    expect(body).toContain("*Testchar waves at you.*");
+    // {{char}} is filled in for display, and `*action*` renders as emphasis.
+    expect(document.querySelector("em")?.textContent).toBe("Testchar waves at you.");
   });
 
   it("opens the artwork lightbox ABOVE the dialog with live controls", () => {
@@ -102,6 +102,26 @@ describe("CharacterCardEmbed", () => {
     fireEvent.keyDown(document.body, { key: "Escape" });
     expect(dialogs()).toHaveLength(1);
     expect(document.body.textContent).toContain("Character book · 2 entries");
+  });
+
+  it("hides comments, renders fences and <START> separators, and copies the raw field", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.assign(navigator, { clipboard: { writeText } });
+    const raw = "<!--hidden world event-->Hello {{user}}.\n```\nMana: 100\n```";
+    const example = "<START>\n{{user}}: hi\n{{char}}: hey\n<START>\n{{user}}: again";
+    const card = { ...FIXTURE_CARD, first_mes: raw, mes_example: example };
+    render(wrap(<CharacterCardEmbed card={card} image={{ url: "https://example.com/c.png", mime: "image/png" }} />));
+    openDialog();
+    const body = document.body.textContent ?? "";
+    expect(body).not.toContain("hidden world event");
+    expect(body).not.toContain("<START>");
+    expect(body).not.toContain("```");
+    expect(body).not.toContain("{{");
+    expect(document.querySelector("pre")?.textContent).toContain("Mana: 100");
+    expect(body).toContain("Testchar: hey");
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy first message" }));
+    await vi.waitFor(() => expect(writeText).toHaveBeenCalledWith(raw));
   });
 
   it("closing the lightbox by its own close control also keeps the dialog", () => {

@@ -1,8 +1,10 @@
 import { Capacitor } from "@capacitor/core";
-import { ChevronRight, Download, IdCard, Loader2 } from "lucide-react";
-import { useCallback, useMemo, useState } from "react";
+import { Check, ChevronRight, Copy, Download, IdCard, Loader2 } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Lightbox, type LightboxItem } from "@/components/chat/Lightbox";
+import { CodeBlock } from "@/components/chat/Markdown";
+import { renderInlineMarkdown } from "@/components/chat/markdownRender";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ChromeDialogContent, ChromeDialogFooter, ChromeDialogHeader, Dialog } from "@/components/ui/dialog";
@@ -10,6 +12,7 @@ import { useBlossomCandidates } from "@/hooks/useBlossomCandidates";
 import { useMediaWithFallback } from "@/hooks/useMediaWithFallback";
 import { toast } from "@/hooks/useToast";
 import type { CharaCard, CharacterCardRef } from "@/lib/characterCard";
+import { writeClipboardText } from "@/lib/clipboard";
 import { downloadBinaryFile } from "@/lib/downloadFile";
 import {
   decryptBuffer,
@@ -18,7 +21,10 @@ import {
   verifyPlaintextHash,
 } from "@/lib/encryptedMedia";
 import { safeFilename } from "@/lib/fileBytes";
+import { splitMarkdownBlocks, type MdBlock } from "@/lib/markdown";
 import { cn } from "@/lib/utils";
+
+import type { ReactNode } from "react";
 
 /** The card PNG as a decorative image; the id-card glyph until it resolves (or if it fails). */
 function CharacterCardArt({
@@ -63,20 +69,114 @@ function CharacterCardArt({
   );
 }
 
-/** Cards write `{{char}}` placeholders into their prose; preview with the name filled in. */
-function substituteChar(text: string, name: string): string {
-  return text.replaceAll("{{char}}", name).replaceAll("{{Char}}", name);
+/** Frontends hide HTML comments from the reader (they're model-only), an unclosed one included. */
+const HTML_COMMENT_RE = /<!--[\s\S]*?(?:-->|$)/g;
+/** `mes_example`'s separator between example chats, on a line of its own. */
+const START_RE = /^[ \t]*<START>[ \t]*$/im;
+const MACRO_RE = /\{\{([^{}\n]{1,40})\}\}/g;
+
+/** The card's prose as a frontend shows it: no comments, `{{char}}` filled in. */
+function visibleText(text: string, name: string): string {
+  return text.replace(HTML_COMMENT_RE, "").replace(/\{\{char\}\}/gi, name).trim();
 }
 
+/** Remaining macros (`{{user}}`, `{{original}}`, …) are filled by the frontend; mark them as such. */
+function renderMacros(text: string): ReactNode {
+  const parts = text.split(MACRO_RE);
+  if (parts.length === 1) return text;
+  return parts.map((part, i) =>
+    i % 2 === 0 ? part : (
+      <span key={i} className="rounded-sm bg-primary/15 px-1 font-mono text-[0.85em] text-primary">
+        {part.trim()}
+      </span>
+    ),
+  );
+}
+
+function CardBlocks({ blocks, keyPrefix }: { blocks: MdBlock[]; keyPrefix: string }) {
+  return blocks.map((block, i) => {
+    const key = `${keyPrefix}${i}`;
+    switch (block.type) {
+      case "code":
+        return <CodeBlock key={key} code={block.code.replace(/\n$/, "")} lang={block.lang} />;
+      case "quote":
+        return (
+          <div key={key} className="border-l-2 border-border pl-2.5 text-muted-foreground">
+            <CardBlocks blocks={block.blocks} keyPrefix={`${key}-`} />
+          </div>
+        );
+      case "heading":
+        return <p key={key} className="font-semibold">{renderInlineMarkdown(block.text, renderMacros, key)}</p>;
+      case "subtext":
+        return <p key={key} className="text-xs text-muted-foreground">{renderInlineMarkdown(block.text, renderMacros, key)}</p>;
+      case "list": {
+        const items = block.items.map((item, j) => <li key={j}>{renderInlineMarkdown(item, renderMacros, `${key}-${j}`)}</li>);
+        return block.ordered
+          ? <ol key={key} start={block.start} className="list-decimal space-y-0.5 pl-5">{items}</ol>
+          : <ul key={key} className="list-disc space-y-0.5 pl-5">{items}</ul>;
+      }
+      case "rule":
+        return <hr key={key} className="my-2 border-border" />;
+      case "text": {
+        const text = block.text.replace(/^\n+|\n+$/g, "");
+        if (!text) return null;
+        return <p key={key} className="whitespace-pre-wrap">{renderInlineMarkdown(text, renderMacros, key)}</p>;
+      }
+    }
+  });
+}
+
+/** Card prose rendered as chat markdown; `<START>` example chats are split by a rule. */
+function CardProse({ text, name }: { text: string; name: string }) {
+  const chats = visibleText(text, name).split(START_RE).map((chat) => chat.trim()).filter(Boolean);
+  return chats.map((chat, i) => (
+    <div key={i} className={cn("space-y-1.5", i > 0 && "mt-2 border-t border-border/60 pt-2")}>
+      <CardBlocks blocks={splitMarkdownBlocks(chat)} keyPrefix={`${i}-`} />
+    </div>
+  ));
+}
+
+/** Copies a field's raw text, macros and comments intact, as a frontend would import it. */
+function CopyFieldButton({ text, label }: { text: string; label: string }) {
+  const [copied, setCopied] = useState(false);
+  const resetTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(resetTimer.current), []);
+  return (
+    <button
+      type="button"
+      aria-label={`Copy ${label}`}
+      title="Copy"
+      onClick={() => {
+        writeClipboardText(text).then(
+          () => {
+            setCopied(true);
+            clearTimeout(resetTimer.current);
+            resetTimer.current = setTimeout(() => setCopied(false), 1500);
+          },
+          () => toast({ title: "Couldn't copy", variant: "destructive" }),
+        );
+      }}
+      className="grid size-6 shrink-0 place-items-center clip-corner text-muted-foreground transition-colors hover:bg-secondary hover:text-primary touch:size-9"
+    >
+      {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+    </button>
+  );
+}
+
+const PROSE_BOX = "overflow-y-auto break-words clip-corner bg-secondary/30 px-3 py-2 text-sm leading-relaxed text-foreground/90";
+
 /** One titled card field; empty fields don't render. Long bodies scroll inside their box. */
-function CardSection({ title, text }: { title: string; text?: string }) {
-  if (!text?.trim()) return null;
+function CardSection({ title, text, name }: { title: string; text?: string; name: string }) {
+  if (!text || !visibleText(text, name)) return null;
   return (
     <section className="space-y-1">
-      <h3 className="text-2xs font-semibold uppercase tracking-wider text-muted-foreground">{title}</h3>
-      <p className="max-h-44 overflow-y-auto whitespace-pre-wrap break-words clip-corner bg-secondary/30 px-3 py-2 text-sm leading-relaxed text-foreground/90">
-        {text}
-      </p>
+      <div className="flex items-center justify-between gap-2">
+        <h3 className="text-2xs font-semibold uppercase tracking-wider text-muted-foreground">{title}</h3>
+        <CopyFieldButton text={text} label={title.toLowerCase()} />
+      </div>
+      <div className={cn("max-h-44", PROSE_BOX)}>
+        <CardProse text={text} name={name} />
+      </div>
     </section>
   );
 }
@@ -121,7 +221,6 @@ const NOOP_NAV = () => { /* single image: nothing to navigate to */ };
 
 function CharacterCardDialog({ card, image, onClose }: { card: CharaCard; image: CharacterCardRef; onClose: () => void }) {
   const { download, busy } = useCardDownload(card, image);
-  const text = (value: string | undefined) => (value ? substituteChar(value, card.name) : undefined);
   const creator = card.creator?.trim();
   const description = [
     SPEC_LABELS[card.spec],
@@ -178,10 +277,10 @@ function CharacterCardDialog({ card, image, onClose }: { card: CharaCard; image:
         )}
 
         <div className="mt-4 space-y-3 min-w-0">
-          <CardSection title="Description" text={text(card.description)} />
-          <CardSection title="Personality" text={text(card.personality)} />
-          <CardSection title="Scenario" text={text(card.scenario)} />
-          <CardSection title="First message" text={text(card.first_mes)} />
+          <CardSection title="Description" text={card.description} name={card.name} />
+          <CardSection title="Personality" text={card.personality} name={card.name} />
+          <CardSection title="Scenario" text={card.scenario} name={card.name} />
+          <CardSection title="First message" text={card.first_mes} name={card.name} />
 
           {card.alternate_greetings.length > 0 && (
             <section className="space-y-1">
@@ -190,22 +289,22 @@ function CharacterCardDialog({ card, image, onClose }: { card: CharaCard; image:
               </h3>
               <ol className="space-y-1.5">
                 {card.alternate_greetings.map((greeting, i) => (
-                  <li
-                    key={i}
-                    className="max-h-32 overflow-y-auto whitespace-pre-wrap break-words clip-corner bg-secondary/30 px-3 py-2 text-sm leading-relaxed text-foreground/90"
-                  >
-                    <span className="mr-1.5 text-xs text-muted-foreground tabular-nums">{i + 1}.</span>
-                    {substituteChar(greeting, card.name)}
+                  <li key={i} className={cn("relative max-h-44 pr-9 touch:pr-11", PROSE_BOX)}>
+                    <span className="text-2xs font-semibold text-muted-foreground tabular-nums">#{i + 1}</span>
+                    <CardProse text={greeting} name={card.name} />
+                    <div className="absolute right-1 top-1">
+                      <CopyFieldButton text={greeting} label={`greeting ${i + 1}`} />
+                    </div>
                   </li>
                 ))}
               </ol>
             </section>
           )}
 
-          <CardSection title="Example messages" text={text(card.mes_example)} />
-          <CardSection title="System prompt" text={text(card.system_prompt)} />
-          <CardSection title="Post-history instructions" text={text(card.post_history_instructions)} />
-          <CardSection title="Creator notes" text={card.creator_notes} />
+          <CardSection title="Example messages" text={card.mes_example} name={card.name} />
+          <CardSection title="System prompt" text={card.system_prompt} name={card.name} />
+          <CardSection title="Post-history instructions" text={card.post_history_instructions} name={card.name} />
+          <CardSection title="Creator notes" text={card.creator_notes} name={card.name} />
 
           {book && book.entries.length > 0 && (
             <section className="space-y-1">
@@ -220,7 +319,7 @@ function CharacterCardDialog({ card, image, onClose }: { card: CharaCard; image:
                       {!entry.enabled && <span className="ml-1.5 text-muted-foreground">(disabled)</span>}
                     </p>
                     <p className="mt-0.5 whitespace-pre-wrap break-words text-xs leading-relaxed text-muted-foreground line-clamp-3">
-                      {substituteChar(entry.content, card.name)}
+                      {renderMacros(visibleText(entry.content, card.name))}
                     </p>
                   </li>
                 ))}
