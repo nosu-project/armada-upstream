@@ -40,6 +40,13 @@ describe("splitMarkdownBlocks", () => {
     ]);
   });
 
+  it("needs a space after > so emoticons stay literal", () => {
+    expect(splitMarkdownBlocks(">:D")).toEqual([{ type: "text", text: ">:D" }]);
+    expect(splitMarkdownBlocks(">>:D")).toEqual([{ type: "text", text: ">>:D" }]);
+    expect(splitMarkdownBlocks("a\n>.<\nb")).toEqual([{ type: "text", text: "a\n>.<\nb" }]);
+    expect(splitMarkdownBlocks(">")).toEqual([{ type: "quote", blocks: [] }]);
+  });
+
   it("keeps quote markers inside code blocks literal", () => {
     const blocks = splitMarkdownBlocks("```\n> not a quote\n```");
     expect(blocks).toEqual([{ type: "code", lang: undefined, code: "> not a quote" }]);

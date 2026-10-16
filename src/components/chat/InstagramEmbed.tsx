@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
+import { rememberEmbedHeight, seenEmbedHeight } from "@/components/chat/imageDims";
 import { useEmbedLiveness } from "@/hooks/useEmbedLiveness";
 
 import { cn } from "@/lib/utils";
@@ -19,7 +20,8 @@ interface InstagramEmbedProps {
 export function InstagramEmbed({ shortcode, className, fallback }: InstagramEmbedProps) {
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const { failed, markAlive, onLoad } = useEmbedLiveness(iframeRef);
-  const [height, setHeight] = useState<number | null>(null);
+  // Seeded from this session's last measure, so a remount doesn't grow into it.
+  const [height, setHeight] = useState<number | null>(() => seenEmbedHeight(`instagram:${shortcode}`) ?? null);
 
   useEffect(() => {
     const handleMessage = (e: MessageEvent) => {
@@ -42,12 +44,13 @@ export function InstagramEmbed({ shortcode, className, fallback }: InstagramEmbe
       const measured = message.details?.height;
       if (typeof measured === "number" && measured > 0) {
         setHeight(measured);
+        rememberEmbedHeight(`instagram:${shortcode}`, measured);
       }
     };
 
     window.addEventListener("message", handleMessage);
     return () => window.removeEventListener("message", handleMessage);
-  }, [markAlive]);
+  }, [markAlive, shortcode]);
 
   if (failed) return fallback;
 

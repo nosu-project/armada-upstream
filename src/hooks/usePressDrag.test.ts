@@ -206,6 +206,81 @@ describe("usePressDrag", () => {
     expect(isHandScrolling(1)).toBe(false);
   });
 
+  it("lets go of a clearly sideways touch so a drawer swipe can claim it", () => {
+    const container = document.createElement("div");
+    container.scrollTop = 100;
+    const { result, calls } = setup(container);
+
+    act(() => {
+      result.current.begin("row-a")(pointer("pointerdown", { pointerType: "touch", clientX: 200, clientY: 200 }));
+      window.dispatchEvent(pointer("pointermove", { pointerType: "touch", clientX: 180, clientY: 196 }));
+    });
+    expect(isHandScrolling(1)).toBe(false);
+
+    act(() => void window.dispatchEvent(pointer("pointermove", { pointerType: "touch", clientX: 150, clientY: 170 })));
+    expect(container.scrollTop).toBe(100);
+    expect(calls.onPickup).not.toHaveBeenCalled();
+  });
+
+  describe('touchHold: "menu"', () => {
+    function menuSetup() {
+      const calls = { onPickup: vi.fn(), onAim: vi.fn(), onDrop: vi.fn(), onAbort: vi.fn() };
+      const containerRef = { current: null as HTMLElement | null };
+      const view = renderHook(() => usePressDrag<string>({ containerRef, touchHold: "menu", ...calls }));
+      return { ...view, calls };
+    }
+    const touch = (type: string, init: Partial<PointerEvent> = {}) => pointer(type, { pointerType: "touch", ...init });
+
+    it("leaves a touch hold to the menu and the move to native scrolling", () => {
+      const { result, calls } = menuSetup();
+      act(() => {
+        result.current.begin("row-a")(touch("pointerdown", { clientY: 50 }));
+        vi.advanceTimersByTime(1000);
+        window.dispatchEvent(touch("pointermove", { clientY: 120 }));
+      });
+      expect(calls.onPickup).not.toHaveBeenCalled();
+      expect(isHandScrolling(1)).toBe(false);
+    });
+
+    it("still drags with a mouse", () => {
+      const { result, calls } = menuSetup();
+      act(() => {
+        result.current.begin("row-a")(pointer("pointerdown", { clientY: 50 }));
+        window.dispatchEvent(pointer("pointermove", { clientY: 120 }));
+      });
+      expect(calls.onPickup).toHaveBeenCalled();
+    });
+
+    it("drags an armed entry on move, then disarms on drop", () => {
+      const { result, calls } = menuSetup();
+      act(() => result.current.arm("row-a"));
+      expect(result.current.armed).toBe("row-a");
+      act(() => {
+        result.current.begin("row-a")(touch("pointerdown", { clientY: 50 }));
+        window.dispatchEvent(touch("pointermove", { clientY: 60 }));
+      });
+      expect(calls.onPickup).toHaveBeenCalledWith("row-a", 0, 60);
+      // The edge swipe must stand down while an entry is carried.
+      expect(isHandScrolling(1)).toBe(true);
+      act(() => void window.dispatchEvent(touch("pointerup", { clientY: 60 })));
+      expect(calls.onDrop).toHaveBeenCalledWith("row-a");
+      expect(result.current.armed).toBe(null);
+    });
+
+    it("disarms on a press on another entry or outside any entry", () => {
+      const { result, calls } = menuSetup();
+      act(() => result.current.arm("row-a"));
+      act(() => result.current.begin("row-b")(touch("pointerdown")));
+      expect(result.current.armed).toBe(null);
+      expect(calls.onPickup).not.toHaveBeenCalled();
+      act(() => void window.dispatchEvent(touch("pointerup")));
+
+      act(() => result.current.arm("row-a"));
+      act(() => void window.dispatchEvent(touch("pointerdown")));
+      expect(result.current.armed).toBe(null);
+    });
+  });
+
   it("panFrom scrolls a touch and never picks it up", () => {
     const container = document.createElement("div");
     container.scrollTop = 100;

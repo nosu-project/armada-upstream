@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { shouldShowDmTimelineLoading } from "./useDmTransport";
+import { mergeDmPlanes, shouldShowDmTimelineLoading } from "./useDmTransport";
 
 describe("shouldShowDmTimelineLoading", () => {
   it("holds the skeleton only while nothing is painted and a plane is reading", () => {
@@ -39,5 +39,32 @@ describe("shouldShowDmTimelineLoading", () => {
     // though kind-4 rows already exist to show.
     expect(shouldShowDmTimelineLoading(7, false, false, false)).toBe(true);
     expect(shouldShowDmTimelineLoading(0, false, false, false)).toBe(true);
+  });
+});
+
+describe("mergeDmPlanes", () => {
+  const m = (id: string, created_at: number) => ({ id, created_at });
+  const kind4 = [m("k1", 100), m("k2", 500)];
+  const dm17 = [m("n1", 300), m("n2", 600)];
+
+  it("shows only the range both planes cover while both still page", () => {
+    // n1 is NIP-17's oldest: kind-4's k1 below it could later gain NIP-17 rows above it.
+    expect(mergeDmPlanes(kind4, dm17, true, true).map((x) => x.id)).toEqual(["n1", "k2", "n2"]);
+  });
+
+  it("drops the floor of a plane that has reached its end", () => {
+    expect(mergeDmPlanes(kind4, dm17, true, false).map((x) => x.id)).toEqual(["k1", "n1", "k2", "n2"]);
+  });
+
+  it("holds the floor of the plane that is still paging", () => {
+    expect(mergeDmPlanes([m("k1", 400), m("k2", 500)], dm17, true, false).map((x) => x.id)).toEqual(["k1", "k2", "n2"]);
+  });
+
+  it("always keeps the permalink target", () => {
+    expect(mergeDmPlanes(kind4, dm17, true, true, "k1").map((x) => x.id)).toEqual(["k1", "n1", "k2", "n2"]);
+  });
+
+  it("passes a lone plane through untouched", () => {
+    expect(mergeDmPlanes(kind4, [], true, true)).toBe(kind4);
   });
 });

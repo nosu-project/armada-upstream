@@ -6,6 +6,7 @@ import { useLocation, useNavigate, useParams, Navigate } from "react-router-dom"
 import { AppStageSlot } from "@/components/chat/AppStage";
 import { CallStageSlot } from "@/components/chat/CallStageSlot";
 import { DittoIcon } from "@/components/brand/DittoIcon";
+import { SyncStatusIndicator } from "@/components/SyncStatusIndicator";
 import { ChatComposer } from "@/components/chat/ChatComposer";
 import { ChatMessage } from "@/components/chat/ChatMessage";
 import { ChatSearchBar } from "@/components/chat/ChatSearchBar";
@@ -910,8 +911,10 @@ const Conversation = memo(function Conversation({
         >
           <ChevronLeft className="size-5" />
         </Button>
-        <div className="shrink-0">
+        <div className="relative shrink-0">
           <DmAvatar peers={peers} selfPubkey={user?.pubkey} sizePx={28} className="size-7" />
+          {/* Older-history paging reports here, as on a Concord channel header. */}
+          <SyncStatusIndicator className="absolute -bottom-1 -right-1 z-10" />
         </div>
         <div className="flex items-center gap-1.5 flex-1 min-w-0">
           <h1 className="font-semibold truncate min-w-0">

@@ -132,7 +132,9 @@ async function lastConfigure(ready: boolean) {
   return payload;
 }
 
-describe("muting a Concord community, as the Android service is told", () => {
+// Each case re-imports the hook's whole module graph after `resetModules`;
+// under a full parallel run that cold import alone can outlast the default 5s.
+describe("muting a Concord community, as the Android service is told", { timeout: 20_000 }, () => {
   beforeEach(() => {
     h.configure.mockClear();
     h.config = {

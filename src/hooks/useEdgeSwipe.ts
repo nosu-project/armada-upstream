@@ -1,13 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { isHandScrolling } from "@/hooks/usePressDrag";
+import { cancelPressUnder, isCancellingPress } from "@/lib/cancelPress";
 import { onAppStateChange } from "@/lib/appStateEvents";
 
 /** Min horizontal travel (px) before we claim the gesture from the scroller. */
 const CLAIM_THRESHOLD = 10;
 const COMMIT_FRACTION = 0.25;
-/** Flick velocity (px/ms) that commits regardless of distance. */
+/** Flick velocity (px/ms) that commits regardless of distance; flicking back this fast cancels. */
 const COMMIT_VELOCITY = 0.3;
+/** Release velocity is measured over this trailing window: a thumb slows in its last sample. */
+const VELOCITY_WINDOW_MS = 100;
+/** A finger that rested this long before lifting released at zero velocity. */
+const VELOCITY_REST_MS = 50;
 /**
  * No pointer traffic for this long abandons a drag, so a touch stream the WebView cut
  * without any terminating event self-heals.
@@ -20,6 +25,11 @@ export interface UseEdgeSwipeOptions {
   /** "open": rightward drag (reveal the list). "close": leftward drag from anywhere. */
   direction?: "open" | "close";
   onCommit: () => void;
+  /**
+   * Called on every claimed release, before `onCommit`, with the release velocity
+   * (px/ms, positive toward committing) and whether it committed.
+   */
+  onRelease?: (velocity: number, committed: boolean) => void;
   /**
    * Called synchronously per pointermove with progress in px (0..width), NOT state, so
    * tracking the finger never re-renders the page tree.
@@ -52,6 +62,7 @@ export function useEdgeSwipe({
   enabled = true,
   direction = "open",
   onCommit,
+  onRelease,
   onDragMove,
 }: UseEdgeSwipeOptions) {
   const [dragging, setDragging] = useState(false);
@@ -59,13 +70,15 @@ export function useEdgeSwipe({
   // Ref so an inline caller closure doesn't re-bind the pointer handlers.
   const onDragMoveRef = useRef(onDragMove);
   onDragMoveRef.current = onDragMove;
+  const onReleaseRef = useRef(onRelease);
+  onReleaseRef.current = onRelease;
 
   // Kept off React state to avoid re-renders mid-drag.
   const startX = useRef(0);
   const startY = useRef(0);
-  const lastX = useRef(0);
   const lastT = useRef(0);
-  const velocity = useRef(0); // signed px/ms in the *progress* direction
+  /** Recent progress-space positions, for the release velocity. */
+  const samples = useRef<{ t: number; x: number }[]>([]);
   const widthRef = useRef(1);
   const claimed = useRef(false);
   const rejected = useRef(false);
@@ -122,9 +135,8 @@ export function useEdgeSwipe({
       widthRef.current = el.getBoundingClientRect().width || 1;
       startX.current = x;
       startY.current = e.clientY;
-      lastX.current = x;
       lastT.current = e.timeStamp;
-      velocity.current = 0;
+      samples.current = [{ t: e.timeStamp, x: 0 }];
       claimed.current = false;
       rejected.current = false;
       pointerId.current = e.pointerId;
@@ -155,6 +167,8 @@ export function useEdgeSwipe({
         }
         if (dx > CLAIM_THRESHOLD) {
           claimed.current = true;
+          // Capture starves the press target of its move/up; stand its long-press down.
+          cancelPressUnder(e.target, e.currentTarget as HTMLElement, e.pointerId, e.pointerType);
           (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
         } else {
           return;
@@ -164,10 +178,10 @@ export function useEdgeSwipe({
       if (e.cancelable) e.preventDefault();
 
       const now = e.timeStamp;
-      const dt = now - lastT.current;
-      if (dt > 0) velocity.current = ((e.clientX - lastX.current) * sign) / dt;
-      lastX.current = e.clientX;
       lastT.current = now;
+      const recent = samples.current;
+      recent.push({ t: now, x: dx });
+      while (recent.length > 2 && now - recent[0].t > VELOCITY_WINDOW_MS) recent.shift();
 
       const clamped = Math.max(0, Math.min(dx, widthRef.current));
       dragXRef.current = clamped;
@@ -182,11 +196,18 @@ export function useEdgeSwipe({
       if (pointerId.current !== e.pointerId) return;
       const wasClaimed = claimed.current;
       const dragged = dragXRef.current;
-      const v = velocity.current;
+      const recent = samples.current;
+      const first = recent[0];
+      const last = recent[recent.length - 1];
+      const v =
+        first && last && last.t > first.t && e.timeStamp - last.t <= VELOCITY_REST_MS
+          ? (last.x - first.x) / (last.t - first.t)
+          : 0;
       reset();
       if (!wasClaimed) return;
       const committed =
-        dragged > widthRef.current * COMMIT_FRACTION || v > COMMIT_VELOCITY;
+        (dragged > widthRef.current * COMMIT_FRACTION && v > -COMMIT_VELOCITY) || v > COMMIT_VELOCITY;
+      onReleaseRef.current?.(v, committed);
       if (committed) onCommit();
     },
     [onCommit, reset],
@@ -196,6 +217,7 @@ export function useEdgeSwipe({
   // pilfers it from the WebView mid-swipe, then delivers back on its own. Never commit.
   const abandon = useCallback(
     (e: React.PointerEvent) => {
+      if (isCancellingPress()) return;
       if (pointerId.current === e.pointerId) reset();
     },
     [reset],
@@ -207,6 +229,7 @@ export function useEdgeSwipe({
   useEffect(() => {
     if (!dragging) return;
     const onEnd = (e: PointerEvent) => {
+      if (isCancellingPress()) return;
       if (pointerId.current === null || pointerId.current === e.pointerId) reset();
     };
     const onHide = () => {

@@ -36,6 +36,30 @@ export function shouldShowDmTimelineLoading(
  * Thrown by `send` when the peer isn't NIP-17-reachable and the caller hasn't opted into
  * the kind-4 downgrade; the DM page offers an explicit legacy-send affordance.
  */
+/**
+ * Sort-merge the kind-4 and NIP-17 planes, showing only the range both have
+ * loaded: a plane still paging may hold messages older than its oldest row, so
+ * the other plane's rows below that point would later have history appear
+ * between them. `keepId` (a permalink target) is always shown.
+ */
+export function mergeDmPlanes<M extends { id: string; created_at: number }>(
+  kind4: readonly M[],
+  dm17: readonly M[],
+  kind4Paging: boolean,
+  dm17Paging: boolean,
+  keepId?: string,
+): M[] {
+  if (dm17.length === 0) return kind4 as M[];
+  if (kind4.length === 0) return dm17 as M[];
+  const oldest = (rows: readonly M[]) => rows.reduce((min, m) => Math.min(min, m.created_at), Infinity);
+  let floor = -Infinity;
+  if (kind4Paging) floor = Math.max(floor, oldest(kind4));
+  if (dm17Paging) floor = Math.max(floor, oldest(dm17));
+  return [...kind4, ...dm17]
+    .filter((m) => m.created_at >= floor || m.id === keepId)
+    .sort((a, b) => a.created_at - b.created_at || (a.id < b.id ? -1 : 1));
+}
+
 export class LegacyFallbackRequired extends Error {
   constructor() {
     super("This person can't receive private (NIP-17) messages yet.");
@@ -175,14 +199,13 @@ export function useDmTransport(
     return out;
   }, [dm17.messages]);
 
-  // Ids never collide across planes, so this is a pure sort-merge.
-  const chatMessages = useMemo<ChatMsg[]>(() => {
-    if (dm17Messages.length === 0) return kind4Messages;
-    if (kind4Messages.length === 0) return dm17Messages;
-    return [...kind4Messages, ...dm17Messages].sort(
-      (a, b) => a.created_at - b.created_at || (a.id < b.id ? -1 : 1),
-    );
-  }, [kind4Messages, dm17Messages]);
+  // Ids never collide across planes. A plane that can't page (no NIP-04 signer)
+  // holds no floor, or the other plane's history would stay hidden for good.
+  const kind4Paging = Boolean(legacyPeer && hasMoreKind4 && user?.signer.nip04);
+  const chatMessages = useMemo<ChatMsg[]>(
+    () => mergeDmPlanes(kind4Messages, dm17Messages, kind4Paging, dm17.hasMore, focusedRumorId),
+    [kind4Messages, dm17Messages, kind4Paging, dm17.hasMore, focusedRumorId],
+  );
 
   const dm17TimerChanges = dm17.timerChanges;
   const entries = useMemo<ChannelTimelineEntry[]>(() => {
@@ -326,7 +349,7 @@ export function useDmTransport(
     const [a, b] = await Promise.all([loadOlderKind4(), dm17LoadOlder()]);
     return a + b;
   }, [loadOlderKind4, dm17LoadOlder]);
-  const hasMore = hasMoreKind4 || dm17.hasMore;
+  const hasMore = kind4Paging || dm17.hasMore;
   const isLoadingOlder = isLoadingOlderKind4 || dm17.isLoadingOlder;
 
   const dm17Send = dm17.send;

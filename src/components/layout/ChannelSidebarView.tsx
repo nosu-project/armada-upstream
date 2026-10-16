@@ -131,7 +131,8 @@ export function ChannelSidebarView({
       {/* The member list's rhythm: the first row 8px under the content line (so its
           center meets the first member's and the first community's), then sections
           that each open with a 40px heading band and no other gap. */}
-      <div ref={scrollRef} className="flex-1 overflow-y-auto px-3 pt-2 pb-2 flex flex-col">
+      {/* pan-y: a scroller re-allows every pan, letting the browser claim a drawer swipe. */}
+      <div ref={scrollRef} className="flex-1 overflow-y-auto touch-pan-y px-3 pt-2 pb-2 flex flex-col">
         {preChannels && <div className="space-y-0.5">{preChannels}</div>}
 
         <div className="space-y-0.5">

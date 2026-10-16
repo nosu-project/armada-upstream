@@ -1,3 +1,4 @@
+import { clearImageDims } from "@/components/chat/imageDims";
 import { clearRevealedMedia } from "@/components/chat/revealedMedia";
 import { clearRenderedPlaintext } from "@/hooks/dmRenderCache";
 import { clearAudioMetadata } from "@/hooks/useAudioMetadata";
@@ -146,6 +147,7 @@ function clearSessionMemos(): void {
   clearGroupListMemo();
   clearAttachmentCache();
   clearCharacterCardCache();
+  clearImageDims();
   clearMediaCacheMemory();
   clearBuzzMediaCache();
   clearProfileSyncMemory();

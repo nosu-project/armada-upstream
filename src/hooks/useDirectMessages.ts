@@ -122,6 +122,52 @@ export function seedDmCursors(relays: string[], stored: NostrRumor[]): RelayCurs
 }
 
 /** True if any relay/direction still has older pages to fetch. */
+/** A 1:1 thread's starting cursors: each direction from its own oldest loaded row. */
+export function initialThreadCursors(
+  rows: readonly { pubkey: string; created_at: number }[],
+  self: string,
+): { sent: number; received: number } {
+  const top = rows.length > 0 ? rows[0].created_at - 1 : Math.floor(Date.now() / 1000);
+  const oldestOf = (mine: boolean) => {
+    const own = rows.filter((r) => (r.pubkey === self) === mine);
+    return own.length > 0 ? Math.min(...own.map((r) => r.created_at)) - 1 : top;
+  };
+  return { sent: oldestOf(true), received: oldestOf(false) };
+}
+
+/** The thread page's filters, one per direction still paging. */
+export function threadPageFilters(
+  self: string,
+  peer: string,
+  cursor: { sent: DirectionCursor; received: DirectionCursor },
+) {
+  const filters: { kinds: number[]; authors: string[]; "#p": string[]; until?: number; limit: number }[] = [];
+  if (cursor.sent !== null) {
+    filters.push({ kinds: [KIND_DM], authors: [self], "#p": [peer], until: cursor.sent, limit: DM_PAGE_SIZE });
+  }
+  if (cursor.received !== null) {
+    filters.push({ kinds: [KIND_DM], authors: [peer], "#p": [self], until: cursor.received, limit: DM_PAGE_SIZE });
+  }
+  return filters;
+}
+
+/** Each direction moves by its own events only; an empty direction is exhausted. */
+export function nextThreadCursors(
+  cursor: { sent: DirectionCursor; received: DirectionCursor },
+  events: readonly { pubkey: string; created_at: number }[],
+  self: string,
+): { sent: DirectionCursor; received: DirectionCursor } {
+  const step = (prev: DirectionCursor, own: readonly { created_at: number }[]): DirectionCursor => {
+    if (prev === null) return null;
+    if (own.length === 0) return null;
+    return Math.min(...own.map((e) => e.created_at)) - 1;
+  };
+  return {
+    sent: step(cursor.sent, events.filter((e) => e.pubkey === self)),
+    received: step(cursor.received, events.filter((e) => e.pubkey !== self)),
+  };
+}
+
 export function hasMoreCursor(cursors: RelayCursors): boolean {
   return Object.values(cursors).some((c) => c.sent !== null || c.received !== null);
 }
@@ -930,15 +976,17 @@ export function useDirectMessages(peer: string | undefined) {
     }
   });
 
-  // Older history: page the self-DM stream by `until` and narrow to this peer;
-  // `hasMore` flips off on a short page.
+  // Older history: one cursor per direction, since `limit` binds each filter
+  // separately and a busy side would carry a shared cursor past the quiet side's
+  // unread range. A direction ends only on an EMPTY page: relays cap `limit` below
+  // ours, so a short page proves nothing.
   const [hasMore, setHasMore] = useState(true);
   const [isLoadingOlder, setIsLoadingOlder] = useState(false);
-  const oldestRef = useRef<number | undefined>(undefined);
+  const cursorRef = useRef<{ sent: DirectionCursor; received: DirectionCursor } | undefined>(undefined);
   const loadingRef = useRef(false);
 
   useEffect(() => {
-    oldestRef.current = undefined;
+    cursorRef.current = undefined;
     setHasMore(true);
   }, [self, peer, relayKey]);
 
@@ -948,31 +996,21 @@ export function useDirectMessages(peer: string | undefined) {
 
     const nip04 = user.signer.nip04;
     const current = queryClient.getQueryData<DecryptedDM[]>(queryKey) ?? [];
-    const until =
-      oldestRef.current ??
-      (current.length > 0 ? current[0].created_at - 1 : Math.floor(Date.now() / 1000));
+    const cursor = (cursorRef.current ??= initialThreadCursors(current, self));
 
     loadingRef.current = true;
     setIsLoadingOlder(true);
     try {
-      const events = await queryRelaysMerged(
-        nostr,
-        relays,
-        [
-          { kinds: [KIND_DM], authors: [self], "#p": [peer], until, limit: 500 },
-          { kinds: [KIND_DM], authors: [peer], "#p": [self], until, limit: 500 },
-        ],
-        AbortSignal.timeout(8000),
-      );
-
-      if (events.length === 0) {
+      const filters = threadPageFilters(self, peer, cursor);
+      if (filters.length === 0) {
         setHasMore(false);
         return 0;
       }
+      const events = await queryRelaysMerged(nostr, relays, filters, AbortSignal.timeout(8000));
 
-      const oldestEvent = Math.min(...events.map((e) => e.created_at));
-      oldestRef.current = oldestEvent - 1;
-      if (events.length < 500) setHasMore(false);
+      const next = nextThreadCursors(cursor, events, self);
+      cursorRef.current = next;
+      if (next.sent === null && next.received === null) setHasMore(false);
 
       const inThread = events.filter((e) => dmCounterparty(e, self) === peer);
       const existing = new Set(current.map((m) => m.id));

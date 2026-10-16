@@ -244,7 +244,8 @@ describe("ecVerifyBatch", () => {
 
     const base = triples(30);
     const batch: VerifyTriple[] = [];
-    while (batch.length < 300) batch.push(...base);
+    // Slicing is by time (5ms), so a few dozen verifies already span several slices.
+    while (batch.length < 90) batch.push(...base);
 
     let interleaved = false;
     setTimeout(() => {

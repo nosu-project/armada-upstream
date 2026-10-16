@@ -591,8 +591,10 @@ async function pageOlderDmWraps(
   // No successful relay: throw so callers keep `hasMore` open and retry the range.
   if (result.pages.length === 0) throw new Error("DM backfill failed on every relay");
   const wraps = mergeRelayPages(result.pages);
+  // Every relay that answered is out: a dead or AUTH-walled one must not keep
+  // the view paging forever (the latch resets per conversation).
   if (wraps.length === 0) {
-    return { exhausted: result.failed.length === 0, scanned: 0 };
+    return { exhausted: true, scanned: 0 };
   }
   const oldest = Math.min(...wraps.map((w) => w.created_at)) - 1;
   await loadSeenWraps(ctx.self);

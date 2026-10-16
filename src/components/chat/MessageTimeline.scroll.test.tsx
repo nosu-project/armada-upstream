@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 
 import { MessageTimeline } from "@/components/chat/MessageTimeline";
 
@@ -121,28 +121,55 @@ describe("MessageTimeline reading anchor", () => {
     scroll(scroller, 2_500);
     scroll(scroller, 500);
 
-    await waitFor(() => expect(screen.getByText("chat:m30")).toBeInTheDocument());
+    // Steps chain until the reader is a full reveal band from the top.
+    await waitFor(() => expect(screen.getByText("chat:m38")).toBeInTheDocument());
+    expect(screen.queryByText("chat:m37")).toBeNull();
     expect(rowViewportOffset(content, scroller, "m75")).toBe(0);
-    // Forty rows were revealed above m75; the viewport followed the row rather
-    // than jumping forty messages (often several calendar days).
-    expect(scroller.scrollTop).toBe(4_500);
+    // Thirty-two rows were revealed above m75; the viewport followed the row
+    // rather than jumping that many messages (often several calendar days).
+    expect(scroller.scrollTop).toBe(3_700);
+  });
+
+  it("requests the next older page while loaded rows are still hidden above the window", async () => {
+    const loadOlder = vi.fn<() => Promise<number>>(async () => 0);
+    const messages = Array.from({ length: 100 }, (_, index) => message(index));
+    const rendered = render(
+      <MessageTimeline
+        transport={{ ...transportOf(messages), hasMore: true, loadOlder }}
+        renderMessage={(msg) => <span data-event-id={msg.id}>chat:{msg.id}</span>}
+      />,
+    );
+    await screen.findByText("chat:m70");
+    const scroller = rendered.container.querySelector<HTMLElement>(".scrollbar-stable")!;
+    const content = scroller.firstElementChild as HTMLElement;
+    Object.defineProperties(scroller, {
+      clientHeight: { configurable: true, value: 500 },
+      scrollHeight: { configurable: true, get: () => content.querySelectorAll("[data-scroll-anchor]").length * 100 },
+    });
+
+    scroll(scroller, 2_500);
+    scroll(scroller, 500);
+
+    // Reveal steps walk the window up; the page is asked for before it reaches m0.
+    await waitFor(() => expect(loadOlder).toHaveBeenCalled());
+    expect(screen.queryByText("chat:m0")).toBeNull();
   });
 
   it("preserves the visible row when an image or embed above it grows", async () => {
-    const { scroller, content } = await mountedTimeline(40);
+    // Everything loaded is already rendered (and there's no transport paging), so
+    // nothing can extend the window: this isolates asynchronous height changes.
+    const { scroller, content } = await mountedTimeline(30);
     scroll(scroller, 2_500);
-    // Stay beyond the reveal threshold so this test isolates asynchronous
-    // height changes from window extension.
     scroll(scroller, 1_000);
 
-    expect(rowViewportOffset(content, scroller, "m20")).toBe(0);
+    expect(rowViewportOffset(content, scroller, "m10")).toBe(0);
 
     growthAfterRow = 5;
     growthPx = 240;
     act(() => resizeCallbacks.at(-1)?.([], {} as ResizeObserver));
 
     expect(scroller.scrollTop).toBe(1_240);
-    expect(rowViewportOffset(content, scroller, "m20")).toBe(0);
+    expect(rowViewportOffset(content, scroller, "m10")).toBe(0);
   });
 
   it("keeps the rows still when the pane shrinks under a reader just short of the bottom", async () => {
@@ -173,7 +200,11 @@ describe("MessageTimeline reading anchor", () => {
       const [messages, setMessages] = useState(() =>
         Array.from({ length: 30 }, (_, index) => message(index)),
       );
+      // One page of history; the prefetch that follows finds nothing older.
+      const served = useRef(false);
       const backfill = useCallback(async () => {
+        if (served.current) return 0;
+        served.current = true;
         const priorDay = Array.from({ length: 40 }, (_, index) => ({
           ...message(index - 40),
           id: `old${index}`,
@@ -211,8 +242,8 @@ describe("MessageTimeline reading anchor", () => {
     scroll(scroller, 2_500);
     scroll(scroller, 0);
 
-    await waitFor(() => expect(screen.getByText("chat:old0")).toBeInTheDocument());
-    expect(loadOlder).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(screen.getByText("chat:old24")).toBeInTheDocument());
+    expect(loadOlder).toHaveBeenCalled();
     expect(content.querySelector('[data-scroll-anchor^="date-"]')).not.toBeNull();
     expect(rowViewportOffset(content, scroller, "m0")).toBe(0);
   });
@@ -229,7 +260,11 @@ describe("MessageTimeline reading anchor", () => {
       const [messages, setMessages] = useState(() =>
         Array.from({ length: 30 }, (_, index) => message(index)),
       );
+      // One page of history; the prefetch that follows finds nothing older.
+      const served = useRef(false);
       const backfill = useCallback(async () => {
+        if (served.current) return 0;
+        served.current = true;
         const priorDay = Array.from({ length: 40 }, (_, index) => ({
           ...message(index - 40),
           id: `old${index}`,
@@ -267,8 +302,8 @@ describe("MessageTimeline reading anchor", () => {
     scroll(scroller, 2_500);
     scroll(scroller, 0);
 
-    await waitFor(() => expect(loadOlder).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(screen.getByText("chat:old0")).toBeInTheDocument());
+    await waitFor(() => expect(loadOlder).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getByText("chat:old24")).toBeInTheDocument());
     expect(content.querySelector('[data-scroll-anchor^="date-"]')).not.toBeNull();
     // The anchored row is gone, so the anchor falls through to its follower —
     // which keeps the pixel it held while `m0` was still above it. What matters
@@ -296,7 +331,11 @@ describe("MessageTimeline reading anchor", () => {
       const [messages, setMessages] = useState(() =>
         Array.from({ length: 40 }, (_, index) => message(index)),
       );
+      // One page of history; the prefetch that follows finds nothing older.
+      const served = useRef(false);
       const backfill = useCallback(async () => {
+        if (served.current) return 0;
+        served.current = true;
         const priorDay = Array.from({ length: 40 }, (_, index) => ({
           ...message(index - 40),
           id: `old${index}`,
@@ -336,7 +375,7 @@ describe("MessageTimeline reading anchor", () => {
     scroll(scroller, 2_500);
     scroll(scroller, 0);
 
-    await waitFor(() => expect(loadOlder).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(loadOlder).toHaveBeenCalled());
     await waitFor(() => expect(screen.getByText("chat:old39")).toBeInTheDocument());
   });
 });
