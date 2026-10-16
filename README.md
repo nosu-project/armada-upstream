@@ -107,7 +107,7 @@ in `index.html`, which link-preview crawlers read without running scripts.
   with no preference (whichever answers first). User-editable in Settings, and
   can be turned off entirely with the "Use app media servers" toggle.
 - `CONCORD_AV_SERVERS` — fallback Concord voice (CORD-07) token brokers
-  (default `https://armada.buzz`).
+  (default `https://av.armada.buzz`).
 - `BRIDGE_PORTAL_URL` — origin of a Discord bridge portal
   (`armada-discord-bridge`), e.g. `https://bridge.armada.buzz`. **Empty by
   default**, which hides every Discord affordance in the client; set it and the

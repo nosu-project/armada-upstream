@@ -198,7 +198,7 @@ export function isGitAnnouncementDiscoveryRelay(url: string): boolean {
  * start a call in an empty channel. Override with `CONCORD_AV_SERVERS`
  * (https origins) or set empty to disable Concord voice.
  */
-const DEFAULT_PUBLIC_AV_SERVER = "https://armada.buzz";
+const DEFAULT_PUBLIC_AV_SERVER = "https://av.armada.buzz";
 export const CONCORD_AV_SERVERS: string[] = (
   config("CONCORD_AV_SERVERS") ?? DEFAULT_PUBLIC_AV_SERVER
 )
