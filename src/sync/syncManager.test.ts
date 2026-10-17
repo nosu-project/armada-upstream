@@ -174,6 +174,31 @@ describe("syncManager", () => {
     expect(m.syncState("t:a").lastSyncedAt).toBeUndefined();
   });
 
+  it("halting aborts in-flight runs and starts no more", async () => {
+    const m = await freshModule();
+    let signal: AbortSignal | undefined;
+    const handler = vi.fn(
+      (ctx: SyncCtx) =>
+        new Promise<void>((resolve) => {
+          signal = ctx.signal;
+          ctx.signal.addEventListener("abort", () => resolve());
+        }),
+    );
+    m.registerSyncTopic("t:", { minIntervalMs: 0, staleAfterMs: 60_000, handler });
+
+    const release = m.want("t:a");
+    await vi.waitFor(() => expect(handler).toHaveBeenCalledTimes(1));
+    m.haltSyncManager();
+    expect(signal?.aborted).toBe(true);
+    expect(m.syncHalted()).toBe(true);
+
+    const releaseB = m.want("t:b", "visible", { force: true });
+    await sleep(100);
+    expect(handler).toHaveBeenCalledTimes(1);
+    release();
+    releaseB();
+  });
+
   it("marks a failed run error and backs off instead of spinning", async () => {
     const m = await freshModule();
     const handler = vi.fn(async () => {

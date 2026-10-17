@@ -68,8 +68,11 @@ export function codeRanges(text: string): Array<[number, number]> {
   return out;
 }
 
+const BIDI_CONTROLS = /[\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/g;
+
 export function mentionLabel(name: string | undefined, pubkey: string): string {
-  const clean = (name ?? "").replace(/\s+/g, " ").trim();
+  // Bidi controls would reorder the user's own text after the label.
+  const clean = (name ?? "").replace(BIDI_CONTROLS, "").replace(/\s+/g, " ").trim();
   if (!clean) {
     const npub = nip19.npubEncode(pubkey);
     return `@${npub.slice(0, 10)}…${npub.slice(-4)}`;
@@ -201,13 +204,16 @@ export interface CanonicalEdit {
  * itself carry `nostr:` references). A deletion touching a mention removes all
  * of it; an insertion inside one lands after it. A mention wholly inside the
  * replaced range survives where `inserted` still spells its label, which is
- * what keeps undo/redo from flattening mentions into plain text.
+ * what keeps undo/redo from flattening mentions into plain text. `keepLabels:
+ * false` turns that off for text from outside (a paste or drop), whose `@Name`
+ * names nobody: a label is a profile's own choice, so it could keep anyone.
  */
 export function spliceDisplay(
   model: DisplayModel,
   start: number,
   end: number,
   inserted: string,
+  opts?: { keepLabels?: boolean },
 ): CanonicalEdit {
   let a = start;
   let b = end;
@@ -223,7 +229,7 @@ export function spliceDisplay(
 
   let replacement = "";
   let cursor = 0;
-  for (const m of model.atoms) {
+  for (const m of opts?.keepLabels === false ? [] : model.atoms) {
     if (m.dStart < a || m.dEnd > b) continue;
     const label = model.display.slice(m.dStart, m.dEnd);
     const at = inserted.indexOf(label, cursor);
@@ -246,7 +252,12 @@ export function spliceDisplay(
 }
 
 /** Map a whole new display value (a user edit) back onto the canonical text. */
-export function applyDisplayEdit(model: DisplayModel, nextDisplay: string, caret?: number): CanonicalEdit {
+export function applyDisplayEdit(
+  model: DisplayModel,
+  nextDisplay: string,
+  caret?: number,
+  opts?: { keepLabels?: boolean },
+): CanonicalEdit {
   const { start, end, inserted } = diffRange(model.display, nextDisplay, caret);
-  return spliceDisplay(model, start, end, inserted);
+  return spliceDisplay(model, start, end, inserted, opts);
 }

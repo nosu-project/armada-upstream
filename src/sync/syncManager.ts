@@ -238,7 +238,29 @@ function ensureWired(): void {
   }
 }
 
+/** Set by {@link haltSyncManager}; only a reload clears it. */
+let halted = false;
+
+/**
+ * Abort every run and start no more: logout's purge calls this first, so no
+ * round decrypts or writes into the store it is emptying. One-way; the page
+ * reloads after.
+ */
+export function haltSyncManager(): void {
+  halted = true;
+  if (timer !== undefined) clearTimeout(timer);
+  timer = undefined;
+  timerAt = Infinity;
+  for (const rt of topics.values()) rt.run?.controller.abort();
+}
+
+/** Whether {@link haltSyncManager} ran: a handler's late write must not land. */
+export function syncHalted(): boolean {
+  return halted;
+}
+
 function paused(): boolean {
+  if (halted) return true;
   if (!isBootGateOpen()) return true;
   if (!stampsSettled) return true;
   if (typeof document !== "undefined" && document.visibilityState === "hidden") return true;
@@ -375,6 +397,7 @@ export function _resetSyncManagerForTests(): void {
   if (timer !== undefined) clearTimeout(timer);
   timer = undefined;
   timerAt = Infinity;
+  halted = false;
   for (const rt of topics.values()) rt.run?.controller.abort();
   topics.clear();
   policies.clear();

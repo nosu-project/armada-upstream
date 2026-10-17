@@ -2118,7 +2118,6 @@ export function ConcordPage() {
     },
     [closeSearch, jumpToMention],
   );
-  const allChannelIds = useMemo(() => channels.map((c) => c.idHex), [channels]);
   // Community-wide search over the local rumor store; only fed while the bar is open.
   const {
     results: searchResults,
@@ -2127,7 +2126,7 @@ export function ConcordPage() {
     historyIncomplete: searchHistoryIncomplete,
   } = useConcordSearch(
     community,
-    allChannelIds,
+    channels,
     searchOpen ? searchFilters : EMPTY_SEARCH_FILTERS,
   );
 

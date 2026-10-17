@@ -6,6 +6,7 @@ import {
   applyDisplayEdit,
   buildDisplayModel,
   codeRanges,
+  mentionLabel,
   mentionedPubkeys,
   spliceDisplay,
   toCanonical,
@@ -18,6 +19,12 @@ const aliceRef = `nostr:${nip19.npubEncode(ALICE)}`;
 const bobRef = `nostr:${nip19.nprofileEncode({ pubkey: BOB, relays: ["wss://r.example"] })}`;
 const labels = (pk: string) => (pk === ALICE ? "@Alice" : pk === BOB ? "@Bob" : "");
 const model = (canonical: string) => buildDisplayModel(canonical, labels);
+
+describe("mentionLabel", () => {
+  it("strips bidi controls, which would reorder the text after the label", () => {
+    expect(mentionLabel("\u202Eecila\u2066x\u2069", ALICE)).toBe("@ecilax");
+  });
+});
 
 describe("buildDisplayModel", () => {
   it("shows npub and nprofile references as their labels", () => {
@@ -74,6 +81,11 @@ describe("applyDisplayEdit", () => {
     const m = model(`x **${aliceRef}** y`);
     expect(m.display).toBe("x **@Alice** y");
     expect(applyDisplayEdit(m, "x @Alice y").canonical).toBe(`x ${aliceRef} y`);
+  });
+
+  it("does not keep a mention for pasted text that merely spells its label", () => {
+    const m = model(`x ${aliceRef} y`);
+    expect(applyDisplayEdit(m, "@Alice", undefined, { keepLabels: false }).canonical).toBe("@Alice");
   });
 
   it("splices canonical text in at display offsets", () => {

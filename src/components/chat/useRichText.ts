@@ -173,7 +173,9 @@ export function useRichText({ value, onValueChange, textareaRef, maxLength = Inf
     }
 
     const prev = modelRef.current;
-    let edit: CanonicalEdit = applyDisplayEdit(prev, typed, el.selectionEnd);
+    const inputType = (e.nativeEvent as InputEvent).inputType;
+    const external = inputType === "insertFromPaste" || inputType === "insertFromDrop";
+    let edit: CanonicalEdit = applyDisplayEdit(prev, typed, el.selectionEnd, { keepLabels: !external });
     const max = maxLengthRef.current;
     if (edit.canonical.length > max && edit.canonical.length > prev.canonical.length) {
       const over = edit.canonical.length - Math.max(max, prev.canonical.length);

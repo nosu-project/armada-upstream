@@ -357,6 +357,44 @@ describe("history coverage", () => {
     expect(await m.queryChannelRumors(CID, channel.idHex, { limit: 500 })).toHaveLength(200);
   });
 
+  it("never takes a cursor from a wrap that didn't open, however far ahead it is dated", { timeout: 30_000 }, async () => {
+    const m = await freshModules();
+    const channel = makeChannel(m);
+    const alice = signer();
+    const now = Math.floor(Date.now() / 1000);
+    const relay = new FakeRelay();
+    const real = await Promise.all([0, 1, 2].map((i) => wrapChatAt(m, channel, alice, `r${i}`, now - 100 + i)));
+    // Wrap signatures go unchecked, so a relay can serve anything "by" the stream key.
+    const junk = finalizeEvent(
+      { kind: 1059, content: "not a seal", tags: [], created_at: 2 ** 31 - 1 },
+      channel.current.group.sk,
+    );
+    relay.events = [...real, junk];
+    const community = { idHex: CID, relays: [RELAY] } as unknown as Community;
+    const ctx = { nostr: makePool({ [RELAY]: relay }), community, channel };
+
+    const outcome = await m.syncChannelRound(ctx, new AbortController().signal);
+    expect((await m.readStreamCursor(channel.idHex))?.newest).toBe(now - 98);
+    expect(outcome.mostlyUnopened).toBe(false);
+    expect(await m.queryChannelRumors(CID, channel.idHex, { limit: 10 })).toHaveLength(3);
+  });
+
+  it("a round that fetched only wraps that won't open is not requeued at once", { timeout: 30_000 }, async () => {
+    const m = await freshModules();
+    const channel = makeChannel(m);
+    const now = Math.floor(Date.now() / 1000);
+    const relay = new FakeRelay();
+    relay.events = Array.from({ length: 5 }, (_, i) =>
+      finalizeEvent({ kind: 1059, content: `junk-${i}`, tags: [], created_at: now - i }, channel.current.group.sk));
+    const community = { idHex: CID, relays: [RELAY] } as unknown as Community;
+    const outcome = await m.syncChannelRound(
+      { nostr: makePool({ [RELAY]: relay }), community, channel },
+      new AbortController().signal,
+    );
+    expect(outcome.mostlyUnopened).toBe(true);
+    expect((await m.readStreamCursor(channel.idHex))?.newest || undefined).toBeUndefined();
+  });
+
   it("the background walk reads a never-opened channel to the bottom and seals it", { timeout: 60_000 }, async () => {
     const m = await freshModules();
     const channel = makeChannel(m);

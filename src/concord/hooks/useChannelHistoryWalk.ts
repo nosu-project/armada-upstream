@@ -19,9 +19,13 @@ interface Walk {
   channel: Channel;
 }
 
-/** Changes when a channel's relays or held streams do, so its context is re-registered. */
+/**
+ * Changes when a channel's relays or held streams do, so its context is
+ * re-registered. Includes each stream's retirement: a stale one would store
+ * messages a retired key sealed after its rotation.
+ */
 function walkSig({ community, channel }: Walk): string {
-  return `${community.relays.join(",")}|${channel.streams.map((s) => s.group.pk).join(",")}`;
+  return `${community.relays.join(",")}|${channel.streams.map((s) => `${s.group.pk}:${s.retiredAt ?? ""}`).join(",")}`;
 }
 
 /**

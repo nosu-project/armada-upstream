@@ -21,6 +21,7 @@ import { clearRumorStoreMemory } from "@/concord/lib/rumorStore";
 import { clearCommunityListMemory } from "@/concord/hooks/useCommunityList";
 import { clearControlPlaneMemory } from "@/concord/hooks/useControlPlane";
 import { clearTimelineSnapshotMemory } from "@/concord/hooks/timelineSnapshot";
+import { clearChannelSyncContexts } from "@/concord/lib/channelSync";
 import { clearChatDecodeMemo } from "@/concord/lib/chat";
 import { clearControlMemos } from "@/concord/lib/control";
 import { clearGroupKeyMemory } from "@/concord/lib/groupKeyPersist";
@@ -37,6 +38,7 @@ import { closeAllNip46Transports } from "@/lib/nip46Transport";
 import { clearDm17ThreadSnapshotMemory } from "@/lib/nip17/threadSnapshot";
 import { clearSettingsRootMemory } from "@/lib/settingsRootStore";
 import { clearProfileSyncMemory } from "@/sync/profileSync";
+import { haltSyncManager } from "@/sync/syncManager";
 import { clearShareShortcuts } from "@/lib/shareTarget";
 import { writePushDisabledFlag } from "@/lib/swPushDisabled";
 import { WEB_PUSH_RETIREMENT_KEY } from "@/lib/webPushEndpoint";
@@ -136,6 +138,7 @@ function purgeLocalStorage(): void {
 /** Session memos holding decrypted data or the account's keys; run before and after the purge. */
 function clearSessionMemos(): void {
   clearStreamAuthRegistry();
+  clearChannelSyncContexts();
   clearChatDecodeMemo();
   clearControlMemos();
   clearControlPlaneMemory();
@@ -161,7 +164,9 @@ function clearSessionMemos(): void {
  * `armada:login` is left to the caller's `removeLogin`.
  */
 export async function purgeClientStorage(): Promise<void> {
-  // First: latches group-key persistence off so no pending save rewrites
+  // Before anything is cleared: no sync round may decrypt or write past this point.
+  haltSyncManager();
+  // Latches group-key persistence off so no pending save rewrites
   // derived stream secrets into the store this purge empties.
   clearGroupKeyMemory();
   closeAllNip46Transports();

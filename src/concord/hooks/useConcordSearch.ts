@@ -4,6 +4,7 @@ import { useMemo, useSyncExternalStore } from "react";
 import { useDebounce } from "@/hooks/useDebounce";
 import { useMutedPubkeys } from "@/hooks/useMuteList";
 import { useChatModeration } from "@/concord/hooks/useChannel";
+import { filterEpochCutoff, type OpenedChat } from "@/concord/lib/chat";
 import { openedToChatMsg } from "@/concord/hooks/useTransport";
 import {
   quarantineMemoryRevision,
@@ -13,25 +14,44 @@ import {
 import { readStreamCursor, searchRumors } from "@/concord/lib/rumorStore";
 import { useWireScopes } from "@/wire/useWireScopes";
 import { searchDateBounds, searchIsActive, searchText, type SearchFilters } from "@/concord/lib/search";
-import type { Community } from "@/concord/lib/types";
+import type { Channel, Community } from "@/concord/lib/types";
 
 import type { ChatMsg } from "@/components/chat/transport";
 
 const NO_RESULTS: ChatMsg[] = [];
+
+/** The timeline's retirement cutoff, per channel: search reads the same rows. */
+function applyEpochCutoffs(rumors: OpenedChat[], channels: Channel[]): OpenedChat[] {
+  const byId = new Map(channels.map((c) => [c.idHex, c]));
+  const groups = new Map<string, OpenedChat[]>();
+  for (const r of rumors) {
+    const group = groups.get(r.channelIdHex);
+    if (group) group.push(r);
+    else groups.set(r.channelIdHex, [r]);
+  }
+  const keep = new Set<OpenedChat>();
+  for (const [idHex, group] of groups) {
+    const channel = byId.get(idHex);
+    for (const r of channel ? filterEpochCutoff(group, channel) : group) keep.add(r);
+  }
+  return rumors.filter((r) => keep.has(r));
+}
 
 /**
  * Community-wide search over the local decrypted rumor store (Concord chat is
  * E2E encrypted, so there's no relay query). Text is debounced 300ms; results
  * are newest-first and carry their `channel` tag.
  *
- * @param allChannelIds default scope when the filter selects no channels.
+ * @param channels default scope when the filter selects no channels, and the
+ *   epoch cutoffs every result is checked against.
  */
 export function useConcordSearch(
   community: Community | undefined,
-  allChannelIds: string[],
+  channels: Channel[],
   filters: SearchFilters,
 ) {
   const communityIdHex = community?.idHex;
+  const allChannelIds = useMemo(() => channels.map((c) => c.idHex), [channels]);
   const debouncedQuery = useDebounce(searchText(filters.query), 300);
 
   const channelIds = filters.channelIds.length > 0 ? filters.channelIds : allChannelIds;
@@ -43,6 +63,10 @@ export function useConcordSearch(
 
   const channelsKey = [...channelIds].sort().join(",");
   const authorsKey = [...filters.authors].sort().join(",");
+  // Re-filter when a rotation lands: the cutoffs are part of the answer.
+  const cutoffsKey = channels
+    .flatMap((c) => c.streams.flatMap((s) => (s.retiredAt === undefined ? [] : [`${c.idHex}:${s.epoch}:${s.retiredAt}`])))
+    .join(",");
   const { since, until } = searchDateBounds(filters);
 
   const search = useQuery<ChatMsg[]>({
@@ -52,6 +76,7 @@ export function useConcordSearch(
       communityIdHex ?? null,
       channelsKey,
       authorsKey,
+      cutoffsKey,
       filters.media,
       since ?? null,
       until ?? null,
@@ -70,7 +95,7 @@ export function useConcordSearch(
         limit: 100,
         signal,
       });
-      return rumors.map(openedToChatMsg);
+      return applyEpochCutoffs(rumors, channels).map(openedToChatMsg);
     },
   });
 

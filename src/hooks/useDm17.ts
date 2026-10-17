@@ -84,7 +84,7 @@ import {
   peerSignalContent,
   type PeerSignalEvent,
 } from "@/lib/webxdcRealtime";
-import { invalidateSyncTopic, registerSyncTopic, want } from "@/sync/syncManager";
+import { invalidateSyncTopic, registerSyncTopic, syncHalted, want } from "@/sync/syncManager";
 import { useWireScopes } from "@/wire/useWireScopes";
 import { dmThreadScope, emitWireScopes } from "@/wire/bus";
 import { dm17NotifyCandidates, feedNotifyCandidates } from "@/wire/notify";
@@ -163,6 +163,7 @@ export function clearDm17SessionState(): void {
   walkedWrapIds.clear();
   for (const timer of historyPauses.values()) clearTimeout(timer);
   historyPauses.clear();
+  historyCtxs.clear();
   dmPeerSignalStore.clear();
 }
 
@@ -271,7 +272,14 @@ async function openAndStore(
   ctx: SyncCtx,
   wraps: NostrEvent[],
   interactive: boolean,
-  opts?: { remember?: boolean },
+  opts?: {
+    /** False keeps wraps out of the seen memo and their plaintext out of the signer's decrypt cache. */
+    remember?: boolean;
+    /** Once aborted nothing is written, and the call reports false. */
+    signal?: AbortSignal;
+    /** Receives how many wraps opened, peer signals and foreign kinds included. */
+    stats?: { opened: number };
+  },
 ): Promise<boolean> {
   const remember = opts?.remember ?? true;
   if (wraps.length === 0) return true;
@@ -296,9 +304,10 @@ async function openAndStore(
   for (let i = 0; i < wraps.length; i += DECRYPT_WAVE) {
     await Promise.all(
       wraps.slice(i, i + DECRYPT_WAVE).map(async (wrap) => {
-        const dm = await openDmWrap(wrap, ctx.signer as Dm17Signer, ctx.self);
+        const dm = await openDmWrap(wrap, ctx.signer as Dm17Signer, ctx.self, remember ? undefined : { cache: false });
         if (remember) seen.add(wrap.id);
         if (!dm) return;
+        if (opts?.stats) opts.stats.opened++;
         // Peer signals are live routing, not history: dispatched, not stored.
         if (dm.kind === KIND_DM_PEER_SIGNAL) {
           peerSignals.push(dm);
@@ -309,8 +318,11 @@ async function openAndStore(
       }),
     );
     if (i + DECRYPT_WAVE < wraps.length) await new Promise((r) => setTimeout(r, 0));
+    if (opts?.signal?.aborted) return false;
   }
 
+  // Logout's purge halts sync first: nothing decrypted may land after it.
+  if (opts?.signal?.aborted || syncHalted()) return false;
   await writeDm17Rumors(ctx.self, opened);
   feedNotifyCandidates(dm17NotifyCandidates(opened, ctx.self));
   if (remember) persistSeenWraps(ctx.self);
@@ -585,6 +597,7 @@ async function runInboxSync(
     const fresh = wraps.filter((w) => !seen.has(w.id));
 
     if (!(await openAndStore(ctx, fresh, opts?.interactive ?? false))) return false; // deferred: retry later
+    if (syncHalted()) return false;
     // Only successful, consumed pages advance their watermark; failed relays stay full-scan
     // candidates.
     const nowSecs = Math.floor(now / 1000);
@@ -687,6 +700,8 @@ export interface Dm17HistoryOutcome {
   progressed: boolean;
   /** A relay errored or the decrypt gate declined. */
   failed: boolean;
+  /** More fetched wraps failed to open than opened: not worth an immediate requeue. */
+  mostlyUnopened: boolean;
 }
 
 /**
@@ -696,7 +711,7 @@ export interface Dm17HistoryOutcome {
  * Relays go one after another so a wrap every relay holds is opened once.
  */
 export async function walkDm17History(ctx: SyncCtx, signal: AbortSignal): Promise<Dm17HistoryOutcome> {
-  const idle: Dm17HistoryOutcome = { more: false, progressed: false, failed: false };
+  const idle: Dm17HistoryOutcome = { more: false, progressed: false, failed: false, mostlyUnopened: false };
   if (!ctx.signer.nip44 || ctx.relays.length === 0) return idle;
   // Background work never prompts.
   if (signerNeedsApproval(ctx.method) && getDecryptConsent() !== "allowed") return idle;
@@ -710,6 +725,8 @@ export async function walkDm17History(ctx: SyncCtx, signal: AbortSignal): Promis
   let progressed = false;
   let failed = false;
   let declined = false;
+  let opened = 0;
+  let unopened = 0;
   // A remote signer answers each decrypt over a relay round trip: small pages.
   const limit = signerNeedsApproval(ctx.method) ? REMOTE_HISTORY_PAGE : INBOX_PAGE;
   const walkRelay = async (relay: string) => {
@@ -734,13 +751,19 @@ export async function walkDm17History(ctx: SyncCtx, signal: AbortSignal): Promis
       const fresh = page.filter((wrap) => !seen.has(wrap.id) && !walkedWrapIds.has(wrap.id));
       // Kept out of the persisted memo, whose eviction would otherwise push out the
       // recent wraps the forward scans rely on it for.
-      if (!(await openAndStore(ctx, fresh, false, { remember: false }))) {
+      const stats = { opened: 0 };
+      const stored = await openAndStore(ctx, fresh, false, { remember: false, signal, stats });
+      if (signal.aborted) return;
+      if (!stored) {
         declined = true;
         return;
       }
       if (walkedWrapIds.size + fresh.length > WALKED_WRAP_CAP) walkedWrapIds.clear();
       for (const wrap of fresh) walkedWrapIds.add(wrap.id);
       progressed = true;
+      // Wrap signatures are never checked, so a relay can mint pages of junk forever.
+      unopened += fresh.length - stats.opened;
+      opened += stats.opened;
       until = Math.min(...page.map((wrap) => wrap.created_at)) - 1;
       if (until <= 0) {
         relayExhaustedAt[relay] = Date.now();
@@ -753,7 +776,9 @@ export async function walkDm17History(ctx: SyncCtx, signal: AbortSignal): Promis
     await walkRelay(relay);
     if (declined || signal.aborted) break;
   }
-  if (progressed) {
+  // The cursor only covers pages already stored, so an ordinary abort keeps it; a
+  // halted scheduler means logout's purge has begun.
+  if (progressed && !syncHalted()) {
     await updateDm17Cursor(ctx.self, { relayOldest, relayExhaustedAt }, { pruneRelaysTo: ctx.relays });
   }
   const after = await readDm17Cursor(ctx.self);
@@ -761,6 +786,7 @@ export async function walkDm17History(ctx: SyncCtx, signal: AbortSignal): Promis
     more: ctx.relays.some((relay) => !after?.relayExhaustedAt?.[relay] && !isRelayUnreachable(relay)),
     progressed,
     failed: failed || declined,
+    mostlyUnopened: unopened > opened,
   };
 }
 
@@ -776,7 +802,8 @@ registerSyncTopic("dm17hist:", {
     if (signal.aborted) return;
     // A failure that got nowhere backs off through the scheduler rather than spinning.
     if (outcome.failed && !outcome.progressed) throw new Error("DM history walk made no progress");
-    if (!outcome.more || !outcome.progressed) return;
+    // A round that mostly fetched what wouldn't open waits for the stale pass.
+    if (!outcome.more || !outcome.progressed || outcome.mostlyUnopened) return;
     if (!signerNeedsApproval(ctx.method)) {
       invalidateSyncTopic(topic);
       return;

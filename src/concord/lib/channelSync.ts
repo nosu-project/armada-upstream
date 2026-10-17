@@ -48,6 +48,8 @@ export const LOAD_OLDER_MAX_PAGES = 6;
 const ROUND_OLDER_PAGES = 2;
 /** Overlap behind the saved `newest` for the newest pass (publisher clock skew; CORD-01: no backdating). */
 const NEWEST_OVERLAP_SECS = 10 * 60;
+/** How far ahead of the clock a wrap's `created_at` may still become a cursor. */
+const MAX_CURSOR_AHEAD_SECS = 10 * 60;
 /**
  * Relays older history is paged from. A community's wraps are published to all
  * its relays, so the rest return the same pages again.
@@ -353,9 +355,14 @@ export interface RoundOutcome {
   progressed: boolean;
   /** A relay or a store write failed somewhere in the round. */
   failed: boolean;
+  /**
+   * More of what was fetched failed to open than opened. Wrap signatures are
+   * unchecked, so a relay can mint these endlessly to keep a walk "progressing".
+   */
+  mostlyUnopened: boolean;
 }
 
-const ABORTED: RoundOutcome = { more: true, progressed: false, failed: false };
+const ABORTED: RoundOutcome = { more: true, progressed: false, failed: false, mostlyUnopened: false };
 
 /**
  * One catch-up round: the newest page first (painted immediately), then the
@@ -396,13 +403,34 @@ export async function syncChannelRound(
     // Decrypt + commit per page (each write rings the bus). A page that failed to
     // commit must never be covered by a saved cursor.
     let writeFailed = false;
-    const writePage = async (events: NostrEvent[], ring?: ThrottledRing) => {
-      if (signal.aborted) return;
+    // Wraps fetched that failed to open: a round of nothing else is no reason to requeue.
+    let unopened = 0;
+    /**
+     * Writes a page and returns the newest `created_at` among its wraps that are
+     * KNOWN good — opened now or earlier. Wrap signatures are never checked, so an
+     * unopened one's timestamp is relay-supplied and must not become a cursor.
+     */
+    const writePage = async (events: NostrEvent[], ring?: ThrottledRing): Promise<number | undefined> => {
+      if (signal.aborted) return undefined;
       // Skip wraps whose rumors are already stored (the wire's persisted memo).
       const fresh = await unseenPlaneWraps(events);
-      if (fresh.length === 0 || signal.aborted) return;
+      if (signal.aborted) return undefined;
+      const freshIds = new Set(fresh.map((w) => w.id));
+      let top: number | undefined;
+      const consider = (createdAt: number) => {
+        if (createdAt <= Math.floor(Date.now() / 1000) + MAX_CURSOR_AHEAD_SECS && (top === undefined || createdAt > top)) {
+          top = createdAt;
+        }
+      };
+      for (const ev of events) if (!freshIds.has(ev.id)) consider(ev.created_at);
+      if (fresh.length === 0) return top;
       const opened = await openChatBatch(fresh, channel, { signal, remember: !budget.background });
-      if (opened.length === 0) return;
+      // Logout's purge aborts the round: nothing decrypted may land after it.
+      if (signal.aborted) return undefined;
+      unopened += fresh.length - opened.length;
+      if (opened.length === 0) return top;
+      const openedIds = new Set(opened.flatMap((o) => o.wrapId ?? []));
+      for (const ev of fresh) if (openedIds.has(ev.id)) consider(ev.created_at);
       const stored = await writeRumors(community.idHex, opened, { ring: !ring });
       if (stored) {
         ring?.ring();
@@ -411,18 +439,23 @@ export async function syncChannelRound(
       } else writeFailed = true;
       synced += opened.length;
       tick();
+      return top;
     };
 
     // Pass 1: the newest page, committed first — it's what the viewer sees. Past a
     // complete round only what's newer is asked for; the bridge fills a burst.
     const newestSince = saved?.newest ? Math.max(0, saved.newest - NEWEST_OVERLAP_SECS) : undefined;
+    let top1: number | undefined;
     const newest = await backfillStore(nostr, community.relays, channel, signal, {
       maxPages: 1,
       since: newestSince,
       emptyOk: newestSince !== undefined,
       freezeRetired,
       beforeRelay: authGate,
-      onPage: (events) => writePage(events, pageRing),
+      onPage: async (events) => {
+        const top = await writePage(events, pageRing);
+        if (top !== undefined && (top1 === undefined || top > top1)) top1 = top;
+      },
     });
     if (signal.aborted) return ABORTED;
 
@@ -430,7 +463,6 @@ export async function syncChannelRound(
     // too big for the budget is recorded as `bridge` and resumed below its read
     // span next round, so every round makes progress into it.
     const since0 = saved?.newest || undefined;
-    const top1 = newest.newest;
     let bridgeCount = 0;
     let bridgeFailed = false;
     let complete = false;
@@ -450,7 +482,9 @@ export async function syncChannelRound(
             emptyOk: true,
             freezeRetired,
             beforeRelay: authGate,
-            onPage: (events) => writePage(events, pageRing),
+            onPage: async (events) => {
+              await writePage(events, pageRing);
+            },
           });
           pages -= r.pages;
           bridgeCount += r.count;
@@ -501,7 +535,9 @@ export async function syncChannelRound(
         emptyOk: sealOnEmpty,
         freezeRetired,
         beforeRelay: authGate,
-        onPage: (events) => writePage(events, olderRing),
+        onPage: async (events) => {
+          await writePage(events, olderRing);
+        },
         onProgress: async (coveredDownTo) => {
           if (!writeFailed) await updateStreamCursor(idHex, { oldest: coveredDownTo });
         },
@@ -544,6 +580,7 @@ export async function syncChannelRound(
       more: !after?.exhausted || after.bridge !== undefined,
       progressed: JSON.stringify(after ?? null) !== JSON.stringify(saved ?? null),
       failed: newest.failed || older.failed || bridgeFailed || writeFailed,
+      mostlyUnopened: unopened > synced,
     };
   } finally {
     pageRing?.flush();
@@ -569,6 +606,12 @@ registerSyncTopic("c2:", {
 const HISTORY_ROUND: RoundBudget = { bridgePages: 40, olderPages: 20, sealOnEmpty: true, background: true };
 
 const historyContexts = new Map<string, ChannelSyncContext>();
+
+/** Drop every registered context: each holds a channel's stream secrets. Logout's purge. */
+export function clearChannelSyncContexts(): void {
+  contexts.clear();
+  historyContexts.clear();
+}
 
 /**
  * Register the context for `c2hist:<channelIdHex>`, the background walk that
@@ -598,7 +641,8 @@ registerSyncTopic("c2hist:", {
       // either way the walk waits for the next stale pass rather than spinning.
       return;
     }
-    // Ask again right away while each round still gets somewhere.
-    if (!signal.aborted && outcome.more && outcome.progressed) invalidateSyncTopic(topic);
+    // Ask again right away while each round still gets somewhere; one that mostly
+    // fetched what wouldn't open waits for the stale pass instead.
+    if (!signal.aborted && outcome.more && outcome.progressed && !outcome.mostlyUnopened) invalidateSyncTopic(topic);
   },
 });
