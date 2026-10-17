@@ -11,7 +11,7 @@ import {
   subscribeQuarantineMemory,
 } from "@/concord/lib/quarantineMemory";
 import { searchRumors } from "@/concord/lib/rumorStore";
-import { searchIsActive, type SearchFilters } from "@/concord/lib/search";
+import { searchDateBounds, searchIsActive, searchText, type SearchFilters } from "@/concord/lib/search";
 import type { Community } from "@/concord/lib/types";
 
 import type { ChatMsg } from "@/components/chat/transport";
@@ -31,7 +31,7 @@ export function useConcordSearch(
   filters: SearchFilters,
 ) {
   const communityIdHex = community?.idHex;
-  const debouncedQuery = useDebounce(filters.query.trim(), 300);
+  const debouncedQuery = useDebounce(searchText(filters.query), 300);
 
   const channelIds = filters.channelIds.length > 0 ? filters.channelIds : allChannelIds;
 
@@ -42,6 +42,7 @@ export function useConcordSearch(
 
   const channelsKey = [...channelIds].sort().join(",");
   const authorsKey = [...filters.authors].sort().join(",");
+  const { since, until } = searchDateBounds(filters);
 
   const search = useQuery<ChatMsg[]>({
     queryKey: [
@@ -51,6 +52,8 @@ export function useConcordSearch(
       channelsKey,
       authorsKey,
       filters.media,
+      since ?? null,
+      until ?? null,
       debouncedQuery,
     ],
     enabled: !!communityIdHex && active && channelIds.length > 0,
@@ -61,6 +64,8 @@ export function useConcordSearch(
         query: debouncedQuery,
         authors: filters.authors,
         media: filters.media,
+        since,
+        until,
         limit: 100,
         signal,
       });

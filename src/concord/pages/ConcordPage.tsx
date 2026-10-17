@@ -178,8 +178,8 @@ import { useConcordUnread, type ConcordUnread } from "@/concord/hooks/useConcord
 import { useCommunityFeed } from "@/concord/hooks/useCommunityFeed";
 import { useConcordMentions } from "@/concord/hooks/useConcordMentions";
 import { useConcordSearch } from "@/concord/hooks/useConcordSearch";
-import { SearchFiltersPopover, SearchResultsView } from "@/concord/components/Search";
-import { EMPTY_SEARCH_FILTERS, type SearchFilters } from "@/concord/lib/search";
+import { SearchFiltersPopover, SearchResultsView, SearchTokenSuggest } from "@/concord/components/Search";
+import { EMPTY_SEARCH_FILTERS, resolveTypedTokens, searchText, type SearchFilters } from "@/concord/lib/search";
 import { useConcordThreads, type ConcordThread } from "@/concord/hooks/useConcordThreads";
 import { useTyping, useTypingPublisher } from "@/concord/hooks/useTyping";
 import { resolveVoiceBroker, useVoiceBroker, useVoicePresence } from "@/concord/hooks/useVoice";
@@ -3206,9 +3206,18 @@ export function ConcordPage() {
               <ChatSearchBar
                 open={searchOpen}
                 value={searchFilters.query}
-                onChange={(query) => setSearchFilters((f) => ({ ...f, query }))}
+                onChange={(query) => setSearchFilters((f) => resolveTypedTokens({ ...f, query }))}
                 onClose={closeSearch}
                 placeholder="Search all channels…"
+                suggestions={(input) => (
+                  <SearchTokenSuggest
+                    inputRef={input}
+                    filters={searchFilters}
+                    onChange={setSearchFilters}
+                    members={memberPubkeys}
+                    channels={channels}
+                  />
+                )}
                 filters={
                   <SearchFiltersPopover
                     channels={channels}
@@ -3348,8 +3357,10 @@ export function ConcordPage() {
                     channels={channels}
                     results={searchResults}
                     isLoading={searchLoading}
-                    query={searchFilters.query}
+                    query={searchText(searchFilters.query)}
                     onJump={jumpFromSearch}
+                    filters={searchFilters}
+                    onFiltersChange={setSearchFilters}
                   />
                 </div>
               ) : (

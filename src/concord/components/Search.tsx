@@ -1,5 +1,5 @@
 import { Check, FileText, Hash, Image as ImageIcon, Link as LinkIcon, Loader2, Lock, Search, SlidersHorizontal, Video, X } from "lucide-react";
-import { memo, useCallback, useMemo, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useState, type ReactNode, type RefObject } from "react";
 
 import { DisplayName } from "@/components/DisplayName";
 import { ChatMessage } from "@/components/chat/ChatMessage";
@@ -11,8 +11,22 @@ import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { useAuthor } from "@/hooks/useAuthor";
+import { usePortalDropdown } from "@/hooks/usePortalDropdown";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
-import { activeFacetCount, type SearchFilters, type SearchMedia } from "@/concord/lib/search";
+import { useMemberProfiles } from "@/hooks/useSearchProfiles";
+import {
+  activeFacetCount,
+  dateTokenPatch,
+  formatSearchDate,
+  HAS_VALUES,
+  parseSearchDate,
+  removeToken,
+  SEARCH_TOKEN_KEYS,
+  tokenAtCaret,
+  type SearchFilters,
+  type SearchMedia,
+  type SearchTokenKey,
+} from "@/concord/lib/search";
 import { cn } from "@/lib/utils";
 
 import type { ChatMsg } from "@/components/chat/transport";
@@ -191,6 +205,57 @@ function ChannelFacet({
   );
 }
 
+function DateFacet({
+  from,
+  to,
+  onChange,
+}: {
+  from: string;
+  to: string;
+  onChange: (patch: Pick<SearchFilters, "dateFrom" | "dateTo">) => void;
+}) {
+  const today = parseSearchDate("today") ?? undefined;
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center justify-between">
+        <Label>Date</Label>
+        {(from || to) && (
+          <button
+            type="button"
+            onClick={() => onChange({ dateFrom: "", dateTo: "" })}
+            className="text-xs text-muted-foreground hover:text-foreground"
+          >
+            Any time
+          </button>
+        )}
+      </div>
+      <div className="grid grid-cols-2 gap-2">
+        <label className="space-y-1">
+          <span className="text-2xs text-muted-foreground">From</span>
+          <Input
+            type="date"
+            value={from}
+            max={to || today}
+            onChange={(e) => onChange({ dateFrom: e.target.value, dateTo: to })}
+            className="h-8 px-2 text-sm"
+          />
+        </label>
+        <label className="space-y-1">
+          <span className="text-2xs text-muted-foreground">To</span>
+          <Input
+            type="date"
+            value={to}
+            min={from || undefined}
+            max={today}
+            onChange={(e) => onChange({ dateFrom: from, dateTo: e.target.value })}
+            className="h-8 px-2 text-sm"
+          />
+        </label>
+      </div>
+    </div>
+  );
+}
+
 /** Structured search filters (media, authors, channels), mirroring Ditto's popover. */
 export function SearchFiltersPopover({
   channels,
@@ -243,6 +308,7 @@ export function SearchFiltersPopover({
           <Label>From</Label>
           <AuthorFacet members={members} selected={filters.authors} onToggle={toggleAuthor} />
         </div>
+        <DateFacet from={filters.dateFrom} to={filters.dateTo} onChange={set} />
         <ChannelFacet
           channels={channels}
           selected={filters.channelIds}
@@ -251,6 +317,315 @@ export function SearchFiltersPopover({
         />
       </PopoverContent>
     </Popover>
+  );
+}
+
+const NO_MEMBERS: string[] = [];
+const TOKEN_LABEL: Record<SearchTokenKey, string> = {
+  from: "From user",
+  in: "In channel",
+  has: "Message contains",
+  before: "Before date",
+  after: "After date",
+  during: "On date",
+};
+
+interface Suggestion {
+  id: string;
+  node: ReactNode;
+  apply: () => void;
+}
+
+function SuggestProfile({ pubkey }: { pubkey: string }) {
+  const author = useAuthor(pubkey);
+  const name = useScopedDisplayName(pubkey, author.data?.metadata);
+  return (
+    <>
+      <Avatar className="size-6">
+        <AvatarImage src={author.data?.metadata?.picture} imeta={author.data?.imeta?.picture} />
+        <AvatarFallback className="text-monogram">{(name || pubkey).slice(0, 2)}</AvatarFallback>
+      </Avatar>
+      <span className="min-w-0 flex-1 truncate">
+        {name ? <DisplayName pubkey={pubkey} name={name} /> : pubkey.slice(0, 12)}
+      </span>
+    </>
+  );
+}
+
+/**
+ * Discord-style typed filters: `from:`/`in:`/`has:`/`before:`/`after:`/`during:`
+ * at the caret offer matches, and picking one turns the token into its facet.
+ */
+export function SearchTokenSuggest({
+  inputRef,
+  filters,
+  onChange,
+  members,
+  channels,
+}: {
+  inputRef: RefObject<HTMLInputElement | null>;
+  filters: SearchFilters;
+  onChange: (filters: SearchFilters) => void;
+  members: string[];
+  channels: Channel[];
+}) {
+  /** null while the input is unfocused. */
+  const [caret, setCaret] = useState<number | null>(null);
+  const [rect, setRect] = useState<DOMRect | null>(null);
+  const [selected, setSelected] = useState(0);
+  const [dismissed, setDismissed] = useState(false);
+
+  useEffect(() => {
+    const input = inputRef.current;
+    if (!input) return;
+    const sync = () => {
+      setCaret(input.selectionStart ?? input.value.length);
+      setRect(input.getBoundingClientRect());
+    };
+    const onInput = () => {
+      setDismissed(false);
+      setSelected(0);
+      sync();
+    };
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)) sync();
+    };
+    const onBlur = () => setCaret(null);
+    if (document.activeElement === input) sync();
+    input.addEventListener("input", onInput);
+    input.addEventListener("focus", sync);
+    input.addEventListener("click", sync);
+    input.addEventListener("keyup", onKeyUp);
+    input.addEventListener("blur", onBlur);
+    return () => {
+      input.removeEventListener("input", onInput);
+      input.removeEventListener("focus", sync);
+      input.removeEventListener("click", sync);
+      input.removeEventListener("keyup", onKeyUp);
+      input.removeEventListener("blur", onBlur);
+    };
+  }, [inputRef]);
+
+  const query = filters.query;
+  const tok = caret === null ? null : tokenAtCaret(query, Math.min(caret, query.length));
+  const profiles = useMemberProfiles(
+    tok?.key === "from" ? members : NO_MEMBERS,
+    tok?.key === "from" ? tok.value : "",
+  );
+
+  const placeCaret = (pos: number) => {
+    // After React has written the new value, which resets the selection.
+    requestAnimationFrame(() => {
+      inputRef.current?.setSelectionRange(pos, pos);
+      setCaret(pos);
+    });
+  };
+  const commit = (patch: Partial<SearchFilters>) => {
+    if (!tok) return;
+    let next = removeToken(query, tok.start, tok.end);
+    const atEnd = tok.end >= query.length;
+    if (atEnd && next) next += " ";
+    onChange({ ...filters, ...patch, query: next });
+    setSelected(0);
+    placeCaret(atEnd ? next.length : Math.min(tok.start, next.length));
+  };
+
+  const items: Suggestion[] = [];
+  let heading = "Search options";
+  let hint: string | undefined;
+  if (tok?.key) {
+    heading = TOKEN_LABEL[tok.key];
+    const v = tok.value.toLowerCase();
+    if (tok.key === "from") {
+      for (const p of profiles) {
+        if (filters.authors.includes(p.pubkey)) continue;
+        items.push({
+          id: p.pubkey,
+          node: <SuggestProfile pubkey={p.pubkey} />,
+          apply: () => commit({ authors: [...filters.authors, p.pubkey] }),
+        });
+      }
+    } else if (tok.key === "in") {
+      for (const c of channels) {
+        if (filters.channelIds.includes(c.idHex) || !c.name.toLowerCase().includes(v)) continue;
+        items.push({
+          id: c.idHex,
+          node: (
+            <>
+              {c.isPrivate ? (
+                <Lock className="size-3.5 shrink-0 text-muted-foreground" />
+              ) : (
+                <Hash className="size-3.5 shrink-0 text-muted-foreground" />
+              )}
+              <span className="min-w-0 flex-1 truncate">{c.name}</span>
+            </>
+          ),
+          apply: () => commit({ channelIds: [...filters.channelIds, c.idHex] }),
+        });
+        if (items.length >= 10) break;
+      }
+    } else if (tok.key === "has") {
+      for (const h of HAS_VALUES) {
+        if (!h.value.startsWith(v)) continue;
+        items.push({ id: h.value, node: <span>{h.value}</span>, apply: () => commit({ media: h.media }) });
+      }
+    } else {
+      const key = tok.key;
+      hint = "YYYY-MM-DD, today or yesterday";
+      const exact = parseSearchDate(tok.value);
+      const words = exact ? [tok.value] : ["today", "yesterday"].filter((w) => w.startsWith(v));
+      for (const word of words) {
+        const ymd = parseSearchDate(word)!;
+        items.push({
+          id: word,
+          node: (
+            <span className="min-w-0 flex-1 truncate">
+              {formatSearchDate(ymd)}
+              {!exact && <span className="text-muted-foreground"> · {word}</span>}
+            </span>
+          ),
+          apply: () => commit(dateTokenPatch(key, ymd)),
+        });
+      }
+    }
+  } else if (tok && (tok.value || !query.trim())) {
+    const v = tok.value.toLowerCase();
+    for (const k of SEARCH_TOKEN_KEYS) {
+      if (!k.key.startsWith(v)) continue;
+      items.push({
+        id: k.key,
+        node: (
+          <span className="min-w-0 flex-1 truncate">
+            <span className="font-medium">{k.key}:</span>{" "}
+            <span className="text-muted-foreground">{k.hint}</span>
+          </span>
+        ),
+        apply: () => {
+          const text = `${k.key}:`;
+          onChange({ ...filters, query: query.slice(0, tok.start) + text + query.slice(tok.end) });
+          setSelected(0);
+          placeCaret(tok.start + text.length);
+        },
+      });
+    }
+  }
+
+  const open = caret !== null && !dismissed && !!rect && (items.length > 0 || !!hint);
+  const active = Math.min(selected, Math.max(items.length - 1, 0));
+  const tabCompletes = !!tok && (!!tok.key || !!tok.value);
+
+  useEffect(() => {
+    const input = inputRef.current;
+    if (!open || !input) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      const n = items.length;
+      if (e.key === "ArrowDown" && n > 0) setSelected((active + 1) % n);
+      else if (e.key === "ArrowUp" && n > 0) setSelected((active - 1 + n) % n);
+      else if ((e.key === "Enter" || (e.key === "Tab" && tabCompletes)) && n > 0) items[active].apply();
+      else if (e.key === "Escape") setDismissed(true);
+      else return;
+      // Native and first, so the bar's own Escape (close search) never sees it.
+      e.preventDefault();
+      e.stopPropagation();
+    };
+    input.addEventListener("keydown", onKeyDown);
+    return () => input.removeEventListener("keydown", onKeyDown);
+  });
+
+  const close = useCallback(() => setDismissed(true), []);
+  const { renderPortal } = usePortalDropdown({ textareaRef: inputRef, isOpen: open, onClose: close, dropdownHeight: 280 });
+  if (!open || !rect) return null;
+
+  const width = Math.min(320, window.innerWidth - 16);
+  return renderPortal(
+    <div
+      data-autocomplete-dropdown
+      className="fixed z-[300] vessel-lift pointer-events-auto"
+      style={{ top: rect.bottom + 6, left: Math.max(8, Math.min(rect.left, window.innerWidth - width - 8)), width }}
+    >
+      <div className="vessel overflow-hidden animate-in fade-in-0 zoom-in-95 slide-in-from-top-2 duration-150">
+        <p className="px-3 pt-2 pb-1 text-2xs uppercase tracking-wide text-muted-foreground/80">{heading}</p>
+        <div className="max-h-[240px] overflow-y-auto scroll-py-1 px-1 pb-1">
+          {items.map((item, i) => (
+            <button
+              key={item.id}
+              type="button"
+              data-highlighted={i === active || undefined}
+              className={cn(
+                "flex w-full items-center gap-2 clip-corner px-2 py-1.5 touch:py-2.5 text-left text-sm transition-colors",
+                i === active ? "bg-foreground/[0.08]" : "hover:bg-foreground/[0.05]",
+              )}
+              onMouseEnter={() => setSelected(i)}
+              // Pointer-down keeps the input focused; touch fires it reliably.
+              onPointerDown={(e) => {
+                e.preventDefault();
+                item.apply();
+              }}
+            >
+              {item.node}
+            </button>
+          ))}
+          {hint && <p className="px-2 py-1.5 text-xs text-muted-foreground">{hint}</p>}
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+function FilterChip({ children, onRemove, label }: { children: ReactNode; onRemove: () => void; label: string }) {
+  return (
+    <span className="inline-flex items-center gap-1 rounded-full bg-primary/15 py-0.5 pl-2 pr-1.5 text-xs text-foreground">
+      <span className="max-w-40 truncate">{children}</span>
+      <button type="button" aria-label={`Remove ${label}`} onClick={onRemove} className="text-muted-foreground hover:text-foreground">
+        <X className="size-3" />
+      </button>
+    </span>
+  );
+}
+
+function dateRangeLabel(from: string, to: string): string {
+  if (from && to) return from === to ? `On ${formatSearchDate(from)}` : `${formatSearchDate(from)} – ${formatSearchDate(to)}`;
+  return from ? `From ${formatSearchDate(from)}` : `Until ${formatSearchDate(to)}`;
+}
+
+/** The active facets as removable chips above the results. */
+function SearchFilterChips({
+  filters,
+  onChange,
+  channels,
+}: {
+  filters: SearchFilters;
+  onChange: (filters: SearchFilters) => void;
+  channels: Channel[];
+}) {
+  const set = (patch: Partial<SearchFilters>) => onChange({ ...filters, ...patch });
+  const media = MEDIA_OPTIONS.find((o) => o.value === filters.media);
+  if (activeFacetCount(filters) === 0) return null;
+  return (
+    <div className="flex flex-wrap gap-1 px-3 pb-1">
+      {filters.authors.map((pk) => (
+        <AuthorChip key={pk} pubkey={pk} onRemove={() => set({ authors: filters.authors.filter((a) => a !== pk) })} />
+      ))}
+      {filters.channelIds.map((id) => {
+        const c = channels.find((ch) => ch.idHex === id);
+        return (
+          <FilterChip key={id} label={c?.name ?? "channel"} onRemove={() => set({ channelIds: filters.channelIds.filter((x) => x !== id) })}>
+            #{c?.name ?? "unknown"}
+          </FilterChip>
+        );
+      })}
+      {filters.media !== "all" && media && (
+        <FilterChip label={media.label} onRemove={() => set({ media: "all" })}>
+          {filters.media === "none" ? "Text only" : `Has ${media.label.toLowerCase()}`}
+        </FilterChip>
+      )}
+      {(filters.dateFrom || filters.dateTo) && (
+        <FilterChip label="date" onRemove={() => set({ dateFrom: "", dateTo: "" })}>
+          {dateRangeLabel(filters.dateFrom, filters.dateTo)}
+        </FilterChip>
+      )}
+    </div>
   );
 }
 
@@ -325,12 +700,16 @@ export function SearchResultsView({
   isLoading,
   query,
   onJump,
+  filters,
+  onFiltersChange,
 }: {
   channels: Channel[];
   results: ChatMsg[];
   isLoading: boolean;
   query: string;
   onJump: (channelIdHex: string, message: ChatMsg) => void;
+  filters: SearchFilters;
+  onFiltersChange: (filters: SearchFilters) => void;
 }) {
   const nameByChannel = useMemo(() => {
     const m = new Map<string, Channel>();
@@ -338,24 +717,32 @@ export function SearchResultsView({
     return m;
   }, [channels]);
 
+  const chips = <SearchFilterChips filters={filters} onChange={onFiltersChange} channels={channels} />;
   if (isLoading) {
     return (
-      <div className="flex justify-center py-10">
-        <Loader2 className="size-5 animate-spin text-muted-foreground" />
+      <div className="flex flex-col px-2 py-2">
+        {chips}
+        <div className="flex justify-center py-10">
+          <Loader2 className="size-5 animate-spin text-muted-foreground" />
+        </div>
       </div>
     );
   }
   if (results.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center py-16 text-center">
-        <Search className="mb-3 size-9 text-muted-foreground/40" />
-        <p className="text-sm text-muted-foreground">No messages found</p>
+      <div className="flex flex-col px-2 py-2">
+        {chips}
+        <div className="flex flex-col items-center justify-center py-16 text-center">
+          <Search className="mb-3 size-9 text-muted-foreground/40" />
+          <p className="text-sm text-muted-foreground">No messages found</p>
+        </div>
       </div>
     );
   }
 
   return (
     <div className="flex flex-col px-2 py-2">
+      {chips}
       <p className="px-3 pb-1 text-2xs uppercase tracking-wide text-muted-foreground/80">
         {results.length} result{results.length === 1 ? "" : "s"}
       </p>
