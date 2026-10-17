@@ -554,6 +554,18 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
             }
           }
 
+          // Discord's `<url>`: a plain link with its embed suppressed, brackets hidden.
+          const bracketed = !forceImage && index > lastIndex && segment[index - 1] === "<" &&
+            segment[index + fullMatch.length] === ">";
+          if (bracketed) {
+            const prev = out[out.length - 1];
+            if (prev?.type === "text") {
+              prev.value = prev.value.slice(0, -1);
+              if (!prev.value) out.pop();
+            }
+            fullMatch += ">";
+          }
+
           // Scheme-less links get `https://`; `fullMatch` stays the source span.
           if (!/^(?:https?|wss?):\/\//i.test(url)) url = `https://${url}`;
 
@@ -563,8 +575,19 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
 
           if (/^wss?:\/\//i.test(url)) {
             const group = parseGroupAddress(url);
-            const isEndOfLine = !/^[^\n]*\S/.test(segment.substring(index + fullMatch.length));
+            const isEndOfLine = !bracketed && !/^[^\n]*\S/.test(segment.substring(index + fullMatch.length));
             out.push(group ? groupRouteToken(url, group, isEndOfLine) : { type: "relay-link", url });
+            lastIndex = index + fullMatch.length;
+            continue;
+          }
+
+          if (bracketed) {
+            const selfTarget = isInviteUrl(url) ? null : parseSelfLink(url);
+            out.push(
+              selfTarget?.kind === "profile" ? { type: "mention", pubkey: selfTarget.pubkey }
+                : selfTarget?.kind === "chat" ? { type: "self-link", url, path: selfTarget.path }
+                : { type: "inline-link", url },
+            );
             lastIndex = index + fullMatch.length;
             continue;
           }

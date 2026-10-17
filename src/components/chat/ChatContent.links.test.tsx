@@ -112,6 +112,24 @@ describe("ChatContent link canonicalization", () => {
     expect(hrefs(container)).toEqual(["https://youtu.be/abc12345678"]);
   });
 
+  it("ends a Discord-style <url> at the bracket and hides the brackets", () => {
+    const { container } = renderContent("see <https://example.com/post?id=7> here");
+    expect(hrefs(container)).toEqual(["https://example.com/post?id=7"]);
+    expect(container.textContent).toBe("see https://example.com/post?id=7 here");
+  });
+
+  it("renders a bracketed link alone on its line inline, without a preview card", () => {
+    const { container } = renderContent("<https://example.com/post>");
+    expect(hrefs(container)).toEqual(["https://example.com/post"]);
+    expect(container.textContent).toBe("https://example.com/post");
+  });
+
+  it("keeps an unmatched bracket as text", () => {
+    const { container } = renderContent("see <https://example.com/post here");
+    expect(hrefs(container)).toEqual(["https://example.com/post"]);
+    expect(container.textContent).toContain("see <");
+  });
+
   it("defaults to stripping when mounted without an AppProvider", () => {
     const { container } = renderContent("watch https://youtu.be/dQw4w9WgXcQ?si=aBcDeFgH now");
     expect(hrefs(container)).toEqual(["https://youtu.be/dQw4w9WgXcQ"]);
