@@ -1,4 +1,4 @@
-import type { MentionSpan } from "@/lib/composerText";
+import type { AtomSpan } from "@/lib/composerText";
 
 /**
  * Styles the composer's text as it is typed. Every run carries the exact source
@@ -21,6 +21,7 @@ export const HL = {
   SUBTEXT: 1 << 11,
   CODE_BLOCK: 1 << 12,
   LIST: 1 << 13,
+  EMOJI: 1 << 14,
 } as const;
 
 export interface HighlightRun {
@@ -28,7 +29,7 @@ export interface HighlightRun {
   flags: number;
 }
 
-/** Stands in for an atom (code, link, mention, escaped char): neither word nor space. */
+/** Stands in for an atom (code, link, mention, emoji, escaped char): neither word nor space. */
 const ATOM = "\uE000";
 const FENCE_LINE_RE = /^\s*(```|~~~)/;
 const INLINE_CODE_RE = /(?<=(?:^|[^\\])(?:\\\\)*)`([^`\n]+)`/g;
@@ -55,7 +56,7 @@ function highlightLine(line: string, flags: number[], base: number, lineFlags: n
     work = work.slice(0, from) + ATOM.repeat(to - from) + work.slice(to);
   };
   for (let i = 0; i < line.length; i++) {
-    if (flags[base + i] & HL.MENTION) work = work.slice(0, i) + ATOM + work.slice(i + 1);
+    if (flags[base + i] & (HL.MENTION | HL.EMOJI)) work = work.slice(0, i) + ATOM + work.slice(i + 1);
   }
   for (const m of work.matchAll(ESCAPE_RE)) {
     mark(flags, base + m.index, base + m.index + 1, HL.MARKER);
@@ -90,9 +91,9 @@ function highlightLine(line: string, flags: number[], base: number, lineFlags: n
   if (lineFlags) mark(flags, base, base + line.length, lineFlags);
 }
 
-export function highlightRuns(text: string, mentions: readonly MentionSpan[] = []): HighlightRun[] {
+export function highlightRuns(text: string, atoms: readonly AtomSpan[] = []): HighlightRun[] {
   const flags = new Array<number>(text.length).fill(0);
-  for (const m of mentions) mark(flags, m.dStart, m.dEnd, HL.MENTION);
+  for (const a of atoms) mark(flags, a.dStart, a.dEnd, a.pubkey ? HL.MENTION : HL.EMOJI);
 
   let offset = 0;
   let inFence = false;

@@ -1,9 +1,10 @@
 import { memo, useCallback, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type Ref } from "react";
 
+import { CustomEmojiImg } from "@/components/chat/CustomEmoji";
 import { FormatToolbar } from "@/components/chat/FormatToolbar";
 import type { RichText } from "@/components/chat/useRichText";
 import { HL, highlightRuns, type HighlightRun } from "@/lib/composerHighlight";
-import type { MentionSpan } from "@/lib/composerText";
+import type { AtomSpan } from "@/lib/composerText";
 import { cn } from "@/lib/utils";
 
 const LAYOUT_PROPS = [
@@ -21,7 +22,7 @@ const slanted = (flags: number) => content(flags, HL.ITALIC);
 function runClass(flags: number): string | undefined {
   if (!flags) return undefined;
   return cn(
-    flags & HL.MENTION ? "rounded-sm bg-primary/15 text-primary" : flags & HL.LINK && "text-primary",
+    flags & HL.MENTION ? "rt-mention" : flags & HL.LINK && "text-primary",
     flags & HL.MARKER && (flags & HL.QUOTE ? "text-primary/70" : "text-muted-foreground/70"),
     content(flags, HL.BOLD | HL.HEADING) && "rt-bold",
     slanted(flags) && "rt-italic",
@@ -41,8 +42,10 @@ function runClass(flags: number): string | undefined {
  * whitespace-free chunk holding one is kept whole: the overlay then wraps only
  * where the textarea does, at whitespace.
  */
-function renderRuns(runs: HighlightRun[]): ReactNode[] {
+function renderRuns(runs: HighlightRun[], atoms: readonly AtomSpan[]): ReactNode[] {
+  const emojiAt = new Map(atoms.filter((a) => a.emoji).map((a) => [a.dStart, a.emoji!]));
   const out: ReactNode[] = [];
+  let pos = 0;
   let chunk: ReactNode[] = [];
   let chunkSlanted = false;
   let key = 0;
@@ -55,6 +58,21 @@ function renderRuns(runs: HighlightRun[]): ReactNode[] {
   };
   for (const run of runs) {
     const className = runClass(run.flags);
+    if (run.flags & HL.EMOJI) {
+      // One placeholder per emoji, holding its width; the image is drawn over it.
+      for (let i = 0; i < run.text.length; i++) {
+        const emoji = emojiAt.get(pos + i);
+        chunk.push(
+          <span key={key++} className="rt-emoji">
+            <span className="opacity-0">{run.text[i]}</span>
+            {emoji && <CustomEmojiImg name={emoji.shortcode} url={emoji.url} className="rt-emoji-img" />}
+          </span>,
+        );
+      }
+      pos += run.text.length;
+      continue;
+    }
+    pos += run.text.length;
     for (const part of run.text.split(/(\s+)/)) {
       if (!part) continue;
       const node = <span key={key++} className={className}>{part}</span>;
@@ -71,8 +89,8 @@ function renderRuns(runs: HighlightRun[]): ReactNode[] {
   return out;
 }
 
-const HighlightedText = memo(function HighlightedText({ text, mentions }: { text: string; mentions: readonly MentionSpan[] }) {
-  const nodes = useMemo(() => renderRuns(highlightRuns(text, mentions)), [text, mentions]);
+const HighlightedText = memo(function HighlightedText({ text, atoms }: { text: string; atoms: readonly AtomSpan[] }) {
+  const nodes = useMemo(() => renderRuns(highlightRuns(text, atoms), atoms), [text, atoms]);
   return (
     <>
       {nodes}
@@ -92,7 +110,8 @@ interface RichTextareaProps
 
 /**
  * The live textarea with its text drawn by an overlay laid out identically
- * underneath it: mentions as pills, markdown styled in place. Only
+ * underneath it: mentions as pills, custom emoji as images, markdown styled
+ * in place. Only
  * width-preserving styles are used, so the caret stays on the drawn glyphs.
  * Its parent must be the positioned box the overlay is placed in.
  */
@@ -159,7 +178,7 @@ export function RichTextarea({ rich, ref, className, onKeyDown, onCopy, onCut, f
           dir={props.dir}
           className="box-border whitespace-pre-wrap break-words border-solid border-transparent"
         >
-          <HighlightedText text={rich.display} mentions={rich.model.mentions} />
+          <HighlightedText text={rich.display} atoms={rich.model.atoms} />
         </div>
       </div>
       <textarea

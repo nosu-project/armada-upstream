@@ -647,8 +647,12 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
         : null,
     [customShortcodes],
   );
-  // `content` stays canonical (`nostr:npub1…`); the field shows mentions as `@Name`.
-  const rich = useRichText({ value: content, onValueChange: setContent, textareaRef, maxLength: maxChars, completeEdit: completeShortcode });
+  // `content` stays canonical (`nostr:npub1…`, `:shortcode:`); the field shows `@Name` and emoji images.
+  const emojiUrl = useMemo(() => {
+    const urls = new Map(customEmojis.map((e) => [e.shortcode, e.url]));
+    return (shortcode: string) => urls.get(shortcode);
+  }, [customEmojis]);
+  const rich = useRichText({ value: content, onValueChange: setContent, textareaRef, maxLength: maxChars, emojiUrl, completeEdit: completeShortcode });
   const { replaceRange, insertAtSelection: insertEmoji } = rich.handle;
   const insertAtCursor = useCallback(
     ({ start, end, replacement }: { start: number; end: number; replacement: string }) => replaceRange(start, end, replacement),

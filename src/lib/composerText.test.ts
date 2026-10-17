@@ -2,6 +2,7 @@ import { nip19 } from "nostr-tools";
 import { describe, expect, it } from "vitest";
 
 import {
+  EMOJI_PLACEHOLDER,
   applyDisplayEdit,
   buildDisplayModel,
   codeRanges,
@@ -22,7 +23,7 @@ describe("buildDisplayModel", () => {
   it("shows npub and nprofile references as their labels", () => {
     const m = model(`hi ${aliceRef} and ${bobRef}!`);
     expect(m.display).toBe("hi @Alice and @Bob!");
-    expect(m.mentions.map((s) => s.pubkey)).toEqual([ALICE, BOB]);
+    expect(m.atoms.map((s) => s.pubkey)).toEqual([ALICE, BOB]);
     expect(mentionedPubkeys(m.canonical)).toEqual([ALICE, BOB]);
   });
 
@@ -33,7 +34,7 @@ describe("buildDisplayModel", () => {
   });
 
   it("does not render a reference whose bech32 runs on into a word", () => {
-    expect(model(`${aliceRef}word`).mentions).toHaveLength(0);
+    expect(model(`${aliceRef}word`).atoms).toHaveLength(0);
   });
 
   it("maps positions both ways, snapping inside a mention", () => {
@@ -80,5 +81,26 @@ describe("applyDisplayEdit", () => {
     const edit = spliceDisplay(m, 7, 10, `${bobRef} `);
     expect(edit.canonical).toBe(`${aliceRef} ${bobRef} `);
     expect(edit.caret).toBe(edit.canonical.length);
+  });
+});
+
+describe("custom emoji", () => {
+  const urls = (code: string) => (code === "blob" ? "https://e.example/blob.png" : undefined);
+  const emojiModel = (canonical: string) => buildDisplayModel(canonical, labels, urls);
+
+  it("shows a known shortcode as one placeholder, and nothing else", () => {
+    const m = emojiModel("a :blob: :nope: `:blob:`");
+    expect(m.display).toBe(`a ${EMOJI_PLACEHOLDER} :nope: \`:blob:\``);
+    expect(m.atoms).toEqual([{ emoji: { shortcode: "blob", url: "https://e.example/blob.png" }, pubkey: undefined, cStart: 2, cEnd: 8, dStart: 2, dEnd: 3 }]);
+  });
+
+  it("deletes the whole shortcode on one backspace", () => {
+    const m = emojiModel("a :blob: b");
+    expect(applyDisplayEdit(m, "a  b", 2).canonical).toBe("a  b");
+  });
+
+  it("orders emoji and mentions together", () => {
+    const m = emojiModel(`:blob:${aliceRef} :blob:`);
+    expect(m.display).toBe(`${EMOJI_PLACEHOLDER}@Alice ${EMOJI_PLACEHOLDER}`);
   });
 });

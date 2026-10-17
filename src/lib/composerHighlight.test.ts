@@ -39,4 +39,9 @@ describe("highlightRuns", () => {
     const runs = highlightRuns("hi @Al_ice_ x", [{ pubkey: "p", cStart: 3, cEnd: 9, dStart: 3, dEnd: 11 }]);
     expect(runs.find((r) => r.text === "@Al_ice_")?.flags).toBe(HL.MENTION);
   });
+
+  it("marks emoji as atoms", () => {
+    const runs = highlightRuns("*a\u2B1Cb*", [{ emoji: { shortcode: "x", url: "u" }, cStart: 2, cEnd: 5, dStart: 2, dEnd: 3 }]);
+    expect(runs.find((r) => r.text === "\u2B1C")?.flags).toBe(HL.EMOJI | HL.ITALIC);
+  });
 });

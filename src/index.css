@@ -927,6 +927,28 @@ html.theme-bg #root .theme-scope .bg-background {
   display: inline-block;
   transform: skewX(-12deg);
 }
+/* The pill's padding is a shadow: real padding would widen the mention. */
+.rt-overlay .rt-mention {
+  border-radius: 0.25rem;
+  color: hsl(var(--primary));
+  background-color: hsl(var(--primary) / 0.15);
+  box-shadow: 0 0 0 2px hsl(var(--primary) / 0.15);
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+.rt-overlay .rt-emoji {
+  position: relative;
+}
+.rt-overlay .rt-emoji-img {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 1.3em;
+  height: 1.3em;
+  max-width: none;
+  object-fit: contain;
+  transform: translate(-50%, -50%);
+}
 .rt-overlay .rt-u {
   text-decoration-line: underline;
 }

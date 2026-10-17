@@ -1,24 +1,33 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { RichTextarea } from "@/components/chat/RichTextarea";
 import { useRichText } from "@/components/chat/useRichText";
 import { useAutosizeTextarea } from "@/hooks/useAutosizeTextarea";
+import { useCustomEmojis } from "@/hooks/useCustomEmojis";
 
 interface MessageEditBoxProps {
   /** The message's canonical content. */
   content: string;
+  /** The message's tags: its own NIP-30 emoji draw as images too. */
+  tags: string[][];
   sendOnEnter: boolean;
   onSubmit: (text: string) => void;
   onCancel: () => void;
 }
 
 /** In-place edit of a sent message: the composer's mention and markdown rendering, nothing else. */
-export function MessageEditBox({ content, sendOnEnter, onSubmit, onCancel }: MessageEditBoxProps) {
+export function MessageEditBox({ content, tags, sendOnEnter, onSubmit, onCancel }: MessageEditBoxProps) {
   const [text, setText] = useState(content);
   useEffect(() => setText(content), [content]);
 
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
-  const rich = useRichText({ value: text, onValueChange: setText, textareaRef });
+  const { emojis } = useCustomEmojis();
+  const emojiUrl = useMemo(() => {
+    const urls = new Map(emojis.map((e) => [e.shortcode, e.url]));
+    for (const [name, code, url] of tags) if (name === "emoji" && code && url) urls.set(code, url);
+    return (shortcode: string) => urls.get(shortcode);
+  }, [emojis, tags]);
+  const rich = useRichText({ value: text, onValueChange: setText, textareaRef, emojiUrl });
   const autosizeRef = useAutosizeTextarea(rich.display);
   // Place the caret at the end when an edit opens (autoFocus puts it at the start).
   const caretPlacedRef = useRef(false);

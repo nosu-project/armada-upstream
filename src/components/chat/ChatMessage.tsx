@@ -730,6 +730,7 @@ const ChatMessageInner = memo(function ChatMessageInner({
       {isEditing ? (
         <MessageEditBox
           content={event.content}
+          tags={event.tags}
           sendOnEnter={sendOnEnter}
           onSubmit={(text) => onEditSubmit?.(event, text)}
           onCancel={() => onEditCancel?.()}

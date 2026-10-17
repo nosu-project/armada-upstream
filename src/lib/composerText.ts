@@ -2,13 +2,18 @@ import { nip19 } from "nostr-tools";
 
 /**
  * The composer edits a DISPLAY string in which each NIP-27 profile reference
- * (`nostr:npub1…`, `nostr:nprofile1…`) reads as `@Name`, while the draft, the
- * send path and every tag builder keep the CANONICAL text. This module maps
- * edits and positions between the two; a mention is atomic in the display.
+ * (`nostr:npub1…`, `nostr:nprofile1…`) reads as `@Name` and each known NIP-30
+ * `:shortcode:` as one placeholder the overlay draws the image over, while the
+ * draft, the send path and every tag builder keep the CANONICAL text. This
+ * module maps edits and positions between the two; an atom is indivisible in
+ * the display.
  */
 
-export interface MentionSpan {
-  pubkey: string;
+export interface AtomSpan {
+  /** A mention's profile. */
+  pubkey?: string;
+  /** A custom emoji. */
+  emoji?: { shortcode: string; url: string };
   /** `[cStart, cEnd)` in the canonical text. */
   cStart: number;
   cEnd: number;
@@ -21,7 +26,7 @@ export interface DisplayModel {
   canonical: string;
   display: string;
   /** In document order, non-overlapping. */
-  mentions: MentionSpan[];
+  atoms: AtomSpan[];
 }
 
 const BECH32_CHAR = /[023456789acdefghjklmnpqrstuvwxyz]/i;
@@ -31,6 +36,12 @@ const MENTION_RE = /nostr:(npub1|nprofile1)([023456789acdefghjklmnpqrstuvwxyz]+)
 const FENCE_LINE_RE = /^\s*(```|~~~)/;
 const INLINE_CODE_RE = /(?<=(?:^|[^\\])(?:\\\\)*)`([^`\n]+)`/g;
 const MAX_LABEL = 40;
+const SHORTCODE_RE = /:([A-Za-z0-9_+-]+):/g;
+/**
+ * Stands in for a custom emoji in the textarea: one UTF-16 unit with emoji
+ * presentation, so it takes an emoji's width and the image drawn over it fits.
+ */
+export const EMOJI_PLACEHOLDER = "\u2B1C";
 
 /** `[start, end)` ranges of fenced blocks and inline code, where a reference stays literal. */
 export function codeRanges(text: string): Array<[number, number]> {
@@ -79,42 +90,63 @@ function decodeMention(prefix: string, data: string): string | undefined {
 
 /** The pubkeys referenced as mentions in `canonical`. */
 export function mentionedPubkeys(canonical: string): string[] {
-  return [...new Set(buildDisplayModel(canonical, () => "").mentions.map((m) => m.pubkey))];
+  const pubkeys = buildDisplayModel(canonical, () => "").atoms.map((m) => m.pubkey);
+  return [...new Set(pubkeys.filter((pk): pk is string => !!pk))];
 }
+
+type Found = { start: number; end: number; label: string } & Pick<AtomSpan, "pubkey" | "emoji">;
 
 export function buildDisplayModel(
   canonical: string,
   labelFor: (pubkey: string) => string,
+  emojiUrl?: (shortcode: string) => string | undefined,
 ): DisplayModel {
-  if (!canonical.includes("nostr:")) return { canonical, display: canonical, mentions: [] };
+  const mayMention = canonical.includes("nostr:");
+  const mayEmoji = !!emojiUrl && canonical.includes(":");
+  if (!mayMention && !mayEmoji) return { canonical, display: canonical, atoms: [] };
   const code = codeRanges(canonical);
-  const mentions: MentionSpan[] = [];
+  const inCode = (pos: number) => code.some(([s, e]) => pos >= s && pos < e);
+  const found: Found[] = [];
+  if (mayMention) {
+    for (const m of canonical.matchAll(MENTION_RE)) {
+      if (inCode(m.index)) continue;
+      const pubkey = decodeMention(m[1], m[2]);
+      if (!pubkey) continue;
+      const label = labelFor(pubkey) || mentionLabel(undefined, pubkey);
+      found.push({ start: m.index, end: m.index + m[0].length, label, pubkey });
+    }
+  }
+  if (mayEmoji) {
+    for (const m of canonical.matchAll(SHORTCODE_RE)) {
+      const url = emojiUrl(m[1]);
+      if (!url || inCode(m.index)) continue;
+      found.push({ start: m.index, end: m.index + m[0].length, label: EMOJI_PLACEHOLDER, emoji: { shortcode: m[1], url } });
+    }
+  }
+  found.sort((a, b) => a.start - b.start);
+
+  const atoms: AtomSpan[] = [];
   let display = "";
   let last = 0;
-  MENTION_RE.lastIndex = 0;
-  for (const m of canonical.matchAll(MENTION_RE)) {
-    const cStart = m.index;
-    if (code.some(([s, e]) => cStart >= s && cStart < e)) continue;
-    const pubkey = decodeMention(m[1], m[2]);
-    if (!pubkey) continue;
-    display += canonical.slice(last, cStart);
-    const label = labelFor(pubkey) || mentionLabel(undefined, pubkey);
+  for (const f of found) {
+    if (f.start < last) continue;
+    display += canonical.slice(last, f.start);
     const dStart = display.length;
-    display += label;
-    mentions.push({ pubkey, cStart, cEnd: cStart + m[0].length, dStart, dEnd: display.length });
-    last = cStart + m[0].length;
+    display += f.label;
+    atoms.push({ pubkey: f.pubkey, emoji: f.emoji, cStart: f.start, cEnd: f.end, dStart, dEnd: display.length });
+    last = f.end;
   }
   display += canonical.slice(last);
-  return { canonical, display, mentions };
+  return { canonical, display, atoms };
 }
 
 /**
- * Display offset → canonical offset. A position strictly inside a mention snaps
+ * Display offset → canonical offset. A position strictly inside an atom snaps
  * to its start or end per `bias`.
  */
 export function toCanonical(model: DisplayModel, pos: number, bias: "start" | "end" = "end"): number {
   let shift = 0;
-  for (const m of model.mentions) {
+  for (const m of model.atoms) {
     if (pos <= m.dStart) break;
     if (pos < m.dEnd) return bias === "start" ? m.cStart : m.cEnd;
     shift = m.cEnd - m.dEnd;
@@ -125,7 +157,7 @@ export function toCanonical(model: DisplayModel, pos: number, bias: "start" | "e
 /** Canonical offset → display offset, with the same snapping as {@link toCanonical}. */
 export function toDisplay(model: DisplayModel, pos: number, bias: "start" | "end" = "end"): number {
   let shift = 0;
-  for (const m of model.mentions) {
+  for (const m of model.atoms) {
     if (pos <= m.cStart) break;
     if (pos < m.cEnd) return bias === "start" ? m.dStart : m.dEnd;
     shift = m.dEnd - m.cEnd;
@@ -133,9 +165,9 @@ export function toDisplay(model: DisplayModel, pos: number, bias: "start" | "end
   return pos + shift;
 }
 
-/** The mention whose display range contains `pos` strictly inside, if any. */
-function mentionInside(model: DisplayModel, pos: number): MentionSpan | undefined {
-  return model.mentions.find((m) => pos > m.dStart && pos < m.dEnd);
+/** The atom whose display range contains `pos` strictly inside, if any. */
+function mentionInside(model: DisplayModel, pos: number): AtomSpan | undefined {
+  return model.atoms.find((m) => pos > m.dStart && pos < m.dEnd);
 }
 
 /**
@@ -191,7 +223,7 @@ export function spliceDisplay(
 
   let replacement = "";
   let cursor = 0;
-  for (const m of model.mentions) {
+  for (const m of model.atoms) {
     if (m.dStart < a || m.dEnd > b) continue;
     const label = model.display.slice(m.dStart, m.dEnd);
     const at = inserted.indexOf(label, cursor);
@@ -204,7 +236,7 @@ export function spliceDisplay(
   const cA = toCanonical(model, a, "start");
   const cB = toCanonical(model, b, "end");
   // Text typed flush against a mention would extend its bech32 and unmake it.
-  if (replacement && BECH32_CHAR.test(replacement[0]) && model.mentions.some((m) => m.cEnd === cA)) {
+  if (replacement && BECH32_CHAR.test(replacement[0]) && model.atoms.some((m) => m.pubkey && m.cEnd === cA)) {
     replacement = ` ${replacement}`;
   }
   return {
