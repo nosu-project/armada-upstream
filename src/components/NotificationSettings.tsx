@@ -136,19 +136,19 @@ function NativeNotificationHealthPanel({
                     ? "Android's Armada message channel is turned off."
                     : messagesQuiet
                       ? "Android's Armada message channel is below high priority, so alerts may be silent or have no banner."
-                    : stopped
-                      ? "The background notification service is not running with a complete configuration."
-                      : staleConfig
-                        ? "The background service has not loaded the latest notification configuration."
-                      : disconnected
-                        ? "The service is running, but none of its relay connections are open."
-                        : serviceBlocked
-                          ? "The background-service notification channel is turned off. Android may stop the connection."
-                          : signerUnavailable
-                            ? "The background signer is unavailable, so encrypted DMs and relay authentication can fail while Armada is closed."
-                            : callsBlocked
-                              ? "Android's incoming-call notification channel is turned off."
-                              : "Android's incoming-call channel is below high priority, so calls may not ring."}
+                    : serviceBlocked
+                      ? "The background-service notification channel is turned off. Android cannot run the background connection without it."
+                      : stopped
+                        ? "The background notification service is not running with a complete configuration."
+                        : staleConfig
+                          ? "The background service has not loaded the latest notification configuration."
+                          : disconnected
+                            ? "The service is running, but none of its relay connections are open."
+                            : signerUnavailable
+                              ? "The background signer is unavailable, so encrypted DMs and relay authentication can fail while Armada is closed."
+                              : callsBlocked
+                                ? "Android's incoming-call notification channel is turned off."
+                                : "Android's incoming-call channel is below high priority, so calls may not ring."}
               </p>
               <div className="flex flex-wrap gap-2">
                 {(appBlocked || messagesBlocked || messagesQuiet) && (
