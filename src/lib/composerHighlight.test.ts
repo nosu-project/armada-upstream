@@ -40,6 +40,14 @@ describe("highlightRuns", () => {
     expect(runs.find((r) => r.text === "@Al_ice_")?.flags).toBe(HL.MENTION);
   });
 
+  it("ends a link at a spoiler's closing bars and before trailing punctuation", () => {
+    const text = "||https://e.com/a|| x https://e.com/b!";
+    expect(flagsAt(text, "https://e.com/a")).toBe(HL.LINK | HL.SPOILER);
+    expect(flagsAt(text, "|| x")).toBe(HL.SPOILER | HL.MARKER);
+    expect(flagsAt(text, "b!")).toBe(HL.LINK);
+    expect(flagsAt(text, "!")).toBe(0);
+  });
+
   it("marks emoji as atoms", () => {
     const runs = highlightRuns("*a\u2B1Cb*", [{ emoji: { shortcode: "x", url: "u" }, cStart: 2, cEnd: 5, dStart: 2, dEnd: 3 }]);
     expect(runs.find((r) => r.text === "\u2B1C")?.flags).toBe(HL.EMOJI | HL.ITALIC);

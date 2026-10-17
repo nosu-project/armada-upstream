@@ -936,6 +936,13 @@ html.theme-bg #root .theme-scope .bg-background {
   -webkit-box-decoration-break: clone;
   box-decoration-break: clone;
 }
+.rt-overlay .rt-spoiler {
+  border-radius: 0.25rem;
+  background-color: hsl(var(--foreground) / 0.12);
+  box-shadow: 0 0 0 2px hsl(var(--foreground) / 0.12);
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
 .rt-overlay .rt-emoji {
   position: relative;
 }

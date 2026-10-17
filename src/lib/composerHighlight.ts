@@ -33,7 +33,8 @@ export interface HighlightRun {
 const ATOM = "\uE000";
 const FENCE_LINE_RE = /^\s*(```|~~~)/;
 const INLINE_CODE_RE = /(?<=(?:^|[^\\])(?:\\\\)*)`([^`\n]+)`/g;
-const URL_RE = /\b(?:https?|wss?):\/\/[^\s<>]+/g;
+// Stops where ChatContent's link does: at `|` and before trailing punctuation.
+const URL_RE = /\b(?:https?|wss?):\/\/[^\s<>|]*[^\s<>|.,;:!?)\]*_~]/g;
 const ESCAPE_RE = /\\[\\`*_~|#>\-+=.!()[\]]/g;
 
 // Mirrors `INLINE_PATTERNS` in markdown.ts, minus the cross-atom bookkeeping.
