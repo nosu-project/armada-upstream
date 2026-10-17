@@ -904,3 +904,30 @@ html.theme-bg #root .theme-scope,
 html.theme-bg #root .theme-scope .bg-background {
   background: hsl(var(--background));
 }
+
+/* RichTextarea: the textarea keeps the caret and selection, its overlay draws
+ * the text. Overlay styles must not change advance widths, or the caret drifts
+ * off the glyphs: bold is a stroke, not a heavier face. */
+.rt-input {
+  color: transparent;
+  caret-color: hsl(var(--foreground));
+}
+.rt-input::selection {
+  color: transparent;
+  background-color: hsl(var(--primary) / 0.3);
+}
+.rt-overlay .rt-bold {
+  -webkit-text-stroke: 0.03em currentColor;
+}
+.rt-overlay[data-italic="1"] .rt-italic {
+  font-style: italic;
+}
+.rt-overlay .rt-u {
+  text-decoration-line: underline;
+}
+.rt-overlay .rt-s {
+  text-decoration-line: line-through;
+}
+.rt-overlay .rt-u.rt-s {
+  text-decoration-line: underline line-through;
+}

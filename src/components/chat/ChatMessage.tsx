@@ -1,10 +1,11 @@
 import { AlertCircle, Braces, Copy, CornerDownRight, EyeOff, Flag, Forward, Link, Link2, MessagesSquare, Pencil, Pin, PinOff, Reply, Trash2, User, Zap } from "lucide-react";
 import { nip19 } from "nostr-tools";
-import { memo, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useContext, useMemo, useRef, useState } from "react";
 
 import { ChatContent } from "@/components/chat/ChatContent";
 import { emojify } from "@/components/chat/emojify";
 import { MessageActionSheet } from "@/components/chat/MessageActionSheet";
+import { MessageEditBox } from "@/components/chat/MessageEditBox";
 import { MessageActionToolbar } from "@/components/chat/MessageActionToolbar";
 import { MessageRow, type MessageIdentity } from "@/components/chat/MessageRow";
 import { CalendarEventMessageCard } from "@/components/chat/CalendarEventCard";
@@ -32,7 +33,6 @@ import { MenuReactionPicker, MenuReactionRow } from "@/components/chat/MenuReact
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { LazyContextMenuContent, useLazyContextMenu } from "@/components/chat/LazyContextMenu";
 import { EventJsonDialog } from "@/components/EventJsonDialog";
-import { useAutosizeTextarea } from "@/hooks/useAutosizeTextarea";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useChatScope } from "@/hooks/useChatScope";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
@@ -445,26 +445,6 @@ const ChatMessageInner = memo(function ChatMessageInner({
   const canDelete = Boolean(onDelete) && ((isOwn && !isPending && !isFailed) || canModerate);
   const canPin = Boolean(onTogglePin) && canModerate && !isPending && !isFailed;
   const wasEdited = event.tags.some(([name]) => name === "edited");
-  const [editText, setEditText] = useState(event.content);
-  const editRef = useAutosizeTextarea(editText);
-  // Place the caret at the end when an edit opens (autoFocus puts it at the
-  // start). Resets on unmount.
-  const caretPlacedRef = useRef(false);
-  const setEditRef = useCallback(
-    (el: HTMLTextAreaElement | null) => {
-      editRef(el);
-      if (!el) {
-        caretPlacedRef.current = false;
-        return;
-      }
-      if (caretPlacedRef.current) return;
-      caretPlacedRef.current = true;
-      el.focus();
-      const end = el.value.length;
-      el.setSelectionRange(end, end);
-    },
-    [editRef],
-  );
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [sheetOpen, setSheetOpen] = useState(false);
   // Built on first long-press, not per row (it is the heaviest per-row mount).
@@ -526,9 +506,6 @@ const ChatMessageInner = memo(function ChatMessageInner({
     isRumor && reportTo?.kind === "network"
       ? { pubkey: event.pubkey }
       : { pubkey: event.pubkey, eventId: event.id };
-  useEffect(() => {
-    if (isEditing) setEditText(event.content);
-  }, [isEditing, event.content]);
 
   // The spurious dismiss from the opening gesture is refused in MessageActionSheet.
   const openSheet = useCallback(() => {
@@ -751,40 +728,12 @@ const ChatMessageInner = memo(function ChatMessageInner({
     <>
       {heading}
       {isEditing ? (
-        <div className="mt-0.5">
-          <textarea
-            ref={setEditRef}
-            value={editText}
-            onChange={(e) => setEditText(e.target.value)}
-            onKeyDown={(e) => {
-              const saveKey = sendOnEnter
-                ? e.key === "Enter" && !e.shiftKey
-                : e.key === "Enter" && (e.ctrlKey || e.metaKey);
-              if (saveKey) {
-                e.preventDefault();
-                onEditSubmit?.(event, editText);
-              } else if (e.key === "Escape") {
-                e.preventDefault();
-                onEditCancel?.();
-              }
-            }}
-            rows={1}
-            className="block w-full resize-none rounded-md bg-background border border-input px-2 py-1.5 text-chat max-h-40 overflow-y-auto focus:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-          />
-          <div className="flex items-center gap-2 touch:gap-4 mt-1 text-2xs text-muted-foreground">
-            <button
-              type="button"
-              className="font-semibold text-primary hover:underline touch:py-2"
-              onClick={() => onEditSubmit?.(event, editText)}
-            >
-              Save
-            </button>
-            <button type="button" className="hover:text-foreground touch:py-2" onClick={() => onEditCancel?.()}>
-              Cancel
-            </button>
-            <span className="opacity-70">escape to cancel · enter to save</span>
-          </div>
-        </div>
+        <MessageEditBox
+          content={event.content}
+          sendOnEnter={sendOnEnter}
+          onSubmit={(text) => onEditSubmit?.(event, text)}
+          onCancel={() => onEditCancel?.()}
+        />
       ) : event.kind === KIND_POLL ? (
         <>
           <ChatContent event={event} className="text-chat" highlight={highlight} everyoneMention={everyoneMention} />
