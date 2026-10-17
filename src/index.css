@@ -907,7 +907,7 @@ html.theme-bg #root .theme-scope .bg-background {
 
 /* RichTextarea: the textarea keeps the caret and selection, its overlay draws
  * the text. Overlay styles must not change advance widths, or the caret drifts
- * off the glyphs: bold is a stroke, not a heavier face. */
+ * off the glyphs: bold is a stroke, italic a skew, never a different face. */
 .rt-input {
   color: transparent;
   caret-color: hsl(var(--foreground));
@@ -919,8 +919,13 @@ html.theme-bg #root .theme-scope .bg-background {
 .rt-overlay .rt-bold {
   -webkit-text-stroke: 0.03em currentColor;
 }
-.rt-overlay[data-italic="1"] .rt-italic {
-  font-style: italic;
+.rt-overlay .rt-word {
+  display: inline-block;
+  white-space: pre;
+}
+.rt-overlay .rt-italic {
+  display: inline-block;
+  transform: skewX(-12deg);
 }
 .rt-overlay .rt-u {
   text-decoration-line: underline;

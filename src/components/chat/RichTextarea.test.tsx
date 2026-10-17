@@ -59,6 +59,15 @@ describe("RichTextarea", () => {
     const { container } = render(<Field initial="a **b**" onValue={() => {}} />);
     const overlay = container.querySelector(".rt-overlay")!;
     expect(overlay.textContent).toBe("a **b**\u200b");
-    expect([...overlay.querySelectorAll(".rt-bold")].map((n) => n.textContent)).toEqual(["**", "b", "**"]);
+    expect([...overlay.querySelectorAll(".rt-bold")].map((n) => n.textContent)).toEqual(["b"]);
+  });
+});
+
+describe("RichTextarea italics", () => {
+  it("skews italic text inside a word kept whole, markers upright", () => {
+    const { container } = render(<Field initial="a *it* b" onValue={() => {}} />);
+    const word = container.querySelector(".rt-overlay .rt-word")!;
+    expect(word.textContent).toBe("*it*");
+    expect([...word.querySelectorAll(".rt-italic")].map((n) => n.textContent)).toEqual(["it"]);
   });
 });

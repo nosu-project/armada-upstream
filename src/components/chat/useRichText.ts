@@ -79,7 +79,7 @@ export function useRichText({ value, onValueChange, textareaRef, maxLength = Inf
 
   /** The newest model, ahead of the render that will catch up with it. */
   const modelRef = useRef(model);
-  /** A selection to restore once React has written the new display value. */
+  /** A CANONICAL selection to restore once React has written the new display value. */
   const pendingSel = useRef<{ start: number; end: number; focus: boolean } | null>(null);
   /** The value a native `insertText` is about to produce, and what it means. */
   const pendingHint = useRef<{ display: string; canonical: string } | null>(null);
@@ -94,38 +94,43 @@ export function useRichText({ value, onValueChange, textareaRef, maxLength = Inf
     if (el && prev.canonical === model.canonical && prev.display !== model.display && !pendingSel.current
       && document.activeElement === el && el.value === prev.display) {
       pendingSel.current = {
-        start: toDisplay(model, toCanonical(prev, el.selectionStart, "start"), "start"),
-        end: toDisplay(model, toCanonical(prev, el.selectionEnd)),
+        start: toCanonical(prev, el.selectionStart, "start"),
+        end: toCanonical(prev, el.selectionEnd),
         focus: false,
       };
     }
   }
+
+  const applySelection = useCallback((el: HTMLTextAreaElement, m: DisplayModel, sel: { start: number; end: number; focus: boolean }) => {
+    if (sel.focus) el.focus();
+    el.setSelectionRange(toDisplay(m, sel.start, "start"), toDisplay(m, sel.end));
+  }, []);
 
   useLayoutEffect(() => {
     const el = textareaRef.current;
     const sel = pendingSel.current;
     if (!el || !sel) return;
     pendingSel.current = null;
-    if (sel.focus) el.focus();
-    el.setSelectionRange(sel.start, sel.end);
-  }, [model.display, textareaRef]);
+    applySelection(el, model, sel);
+  }, [model, textareaRef, applySelection]);
 
+  /** Make `canonical` the value, with a CANONICAL selection. */
   const commit = useCallback((canonical: string, start: number, end: number) => {
     const el = textareaRef.current;
-    const prev = modelRef.current;
-    const next = buildDisplayModel(canonical, labelForRef.current);
-    const sel = { start: toDisplay(next, start, "start"), end: toDisplay(next, end), focus: true };
+    const sel = { start, end, focus: true };
+    // Labels are read when used: a render inside execCommand may have resolved one.
+    const current = () => buildDisplayModel(canonical, labelForRef.current);
 
-    if (el && canonical === prev.canonical && el.value === next.display) {
-      el.focus();
-      el.setSelectionRange(sel.start, sel.end);
+    if (el && canonical === modelRef.current.canonical && el.value === modelRef.current.display) {
+      applySelection(el, modelRef.current, sel);
       return;
     }
     // Through the editing command when there is one, so Ctrl+Z can undo it.
     if (el && typeof document.execCommand === "function") {
       if (document.activeElement !== el) el.focus();
-      const d = diffRange(el.value, next.display);
-      pendingHint.current = { display: next.display, canonical };
+      const target = current().display;
+      const d = diffRange(el.value, target);
+      pendingHint.current = { display: target, canonical };
       el.setSelectionRange(d.start, d.end);
       let ok = false;
       try {
@@ -134,15 +139,23 @@ export function useRichText({ value, onValueChange, textareaRef, maxLength = Inf
         // Unsupported: fall through to a plain state update.
       }
       pendingHint.current = null;
-      if (ok && el.value === next.display) {
-        el.setSelectionRange(sel.start, sel.end);
+      const now = renderedRef.current.canonical === canonical ? renderedRef.current : current();
+      if (ok && el.value === now.display) {
+        modelRef.current = now;
+        applySelection(el, now, sel);
         return;
       }
     }
-    modelRef.current = next;
+    if (renderedRef.current.canonical === canonical) {
+      // Already rendered (synchronously, inside the command): no effect will run for it.
+      modelRef.current = renderedRef.current;
+      if (el) applySelection(el, renderedRef.current, sel);
+      return;
+    }
+    modelRef.current = current();
     pendingSel.current = sel;
     onValueChangeRef.current(canonical);
-  }, [textareaRef]);
+  }, [textareaRef, applySelection]);
 
   const onChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const el = e.target;
@@ -171,10 +184,7 @@ export function useRichText({ value, onValueChange, textareaRef, maxLength = Inf
       next = buildDisplayModel(edit.canonical, labelForRef.current);
     }
     modelRef.current = next;
-    if (next.display !== typed) {
-      const caret = toDisplay(next, edit.caret);
-      pendingSel.current = { start: caret, end: caret, focus: false };
-    }
+    if (next.display !== typed) pendingSel.current = { start: edit.caret, end: edit.caret, focus: false };
     onValueChangeRef.current(edit.canonical);
   }, []);
 

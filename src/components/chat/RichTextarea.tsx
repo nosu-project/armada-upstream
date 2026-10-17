@@ -1,8 +1,8 @@
-import { memo, useCallback, useLayoutEffect, useMemo, useRef, useState, type Ref } from "react";
+import { memo, useCallback, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type Ref } from "react";
 
 import { FormatToolbar } from "@/components/chat/FormatToolbar";
 import type { RichText } from "@/components/chat/useRichText";
-import { HL, highlightRuns } from "@/lib/composerHighlight";
+import { HL, highlightRuns, type HighlightRun } from "@/lib/composerHighlight";
 import type { MentionSpan } from "@/lib/composerText";
 import { cn } from "@/lib/utils";
 
@@ -14,41 +14,19 @@ const LAYOUT_PROPS = [
   "direction", "wordBreak", "overflowWrap",
 ] as const;
 
-const italicCache = new Map<string, boolean>();
-const ITALIC_SAMPLE = "The quick brown fox jumps over 13 lazy dogs, WAVY mmm iii";
-
-/**
- * Whether italics keep every advance width in this font (true for a synthesized
- * oblique, rarely for a real italic face). Only then can the overlay slant text
- * without drifting from the caret.
- */
-function italicKeepsWidth(style: CSSStyleDeclaration): boolean {
-  const font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
-  const known = italicCache.get(font);
-  if (known !== undefined) return known;
-  let ok = false;
-  if (!navigator.userAgent.includes("jsdom")) {
-    const ctx = document.createElement("canvas").getContext("2d");
-    if (ctx) {
-      ctx.font = font;
-      const upright = ctx.measureText(ITALIC_SAMPLE).width;
-      ctx.font = `italic ${font}`;
-      ok = Math.abs(ctx.measureText(ITALIC_SAMPLE).width - upright) < 0.5;
-    }
-  }
-  italicCache.set(font, ok);
-  return ok;
-}
+/** A format's own markers stay plain: dimmed, never slanted, struck or underlined. */
+const content = (flags: number, format: number) => (flags & format) !== 0 && (flags & HL.MARKER) === 0;
+const slanted = (flags: number) => content(flags, HL.ITALIC);
 
 function runClass(flags: number): string | undefined {
   if (!flags) return undefined;
   return cn(
     flags & HL.MENTION ? "rounded-sm bg-primary/15 text-primary" : flags & HL.LINK && "text-primary",
     flags & HL.MARKER && (flags & HL.QUOTE ? "text-primary/70" : "text-muted-foreground/70"),
-    flags & (HL.BOLD | HL.HEADING) && "rt-bold",
-    flags & HL.ITALIC && "rt-italic",
-    flags & HL.UNDERLINE && "rt-u",
-    flags & HL.STRIKE && "rt-s",
+    content(flags, HL.BOLD | HL.HEADING) && "rt-bold",
+    slanted(flags) && "rt-italic",
+    content(flags, HL.UNDERLINE) && "rt-u",
+    content(flags, HL.STRIKE) && "rt-s",
     flags & HL.SPOILER && "rounded-sm bg-foreground/20",
     flags & HL.CODE && "rounded-sm bg-foreground/10",
     flags & HL.CODE_BLOCK && "bg-foreground/[0.06]",
@@ -57,13 +35,47 @@ function runClass(flags: number): string | undefined {
   ) || undefined;
 }
 
+/**
+ * Italics are skewed inline-blocks rather than an italic face, whose advance
+ * widths differ. An inline-block is a break opportunity of its own, so every
+ * whitespace-free chunk holding one is kept whole: the overlay then wraps only
+ * where the textarea does, at whitespace.
+ */
+function renderRuns(runs: HighlightRun[]): ReactNode[] {
+  const out: ReactNode[] = [];
+  let chunk: ReactNode[] = [];
+  let chunkSlanted = false;
+  let key = 0;
+  const flush = () => {
+    if (chunk.length === 0) return;
+    if (chunkSlanted) out.push(<span key={key++} className="rt-word">{chunk}</span>);
+    else out.push(...chunk);
+    chunk = [];
+    chunkSlanted = false;
+  };
+  for (const run of runs) {
+    const className = runClass(run.flags);
+    for (const part of run.text.split(/(\s+)/)) {
+      if (!part) continue;
+      const node = <span key={key++} className={className}>{part}</span>;
+      if (/^\s/.test(part)) {
+        flush();
+        out.push(node);
+      } else {
+        chunk.push(node);
+        chunkSlanted ||= slanted(run.flags);
+      }
+    }
+  }
+  flush();
+  return out;
+}
+
 const HighlightedText = memo(function HighlightedText({ text, mentions }: { text: string; mentions: readonly MentionSpan[] }) {
-  const runs = useMemo(() => highlightRuns(text, mentions), [text, mentions]);
+  const nodes = useMemo(() => renderRuns(highlightRuns(text, mentions)), [text, mentions]);
   return (
     <>
-      {runs.map((run, i) => (
-        <span key={i} className={runClass(run.flags)}>{run.text}</span>
-      ))}
+      {nodes}
       {/* A trailing newline only takes up a line when something follows it. */}
       {"\u200b"}
     </>
@@ -116,7 +128,6 @@ export function RichTextarea({ rich, ref, className, onKeyDown, onCopy, onCut, f
       for (const prop of LAYOUT_PROPS) inner.style[prop] = style[prop];
       // The textarea's width less its scrollbar, which the text wraps inside.
       inner.style.width = `${el.clientWidth + parseFloat(style.borderLeftWidth) + parseFloat(style.borderRightWidth)}px`;
-      overlay.dataset.italic = italicKeepsWidth(style) ? "1" : "0";
       syncScroll();
     };
     sync();
