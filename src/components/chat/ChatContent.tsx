@@ -1,4 +1,3 @@
-import { Capacitor } from "@capacitor/core";
 import { Copy, Download, Expand, Share2 } from "lucide-react";
 import { nip19 } from "nostr-tools";
 import { Fragment, memo, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
@@ -57,7 +56,7 @@ import { parseSelfLink } from "@/lib/selfLink";
 import { stripTrackingParams } from "@/lib/trackingParams";
 import { WEBXDC_MIME, isWebxdcMime } from "@/lib/webxdcMime";
 import { cn } from "@/lib/utils";
-import { downloadUrl } from "@/lib/downloadFile";
+import { downloadUrl, savedDescription } from "@/lib/downloadFile";
 import { canShareFiles, shareFile } from "@/lib/share";
 import { bolt11AmountSats, formatSats } from "@/lib/zaps";
 import { useLongPress } from "@/hooks/useLongPress";
@@ -444,7 +443,8 @@ const SEGMENT_RE = new RegExp(
   // can't split it into a mention); normalized to `https://` at use.
   // Repetitions are BOUNDED (DNS limits) to keep the scan linear: unbounded
   // is O(n²) on attacker-controlled content.
-  "|((?:(?:https?|wss?):\\/\\/|(?:[\\w-]{1,63}\\.){1,10}[a-z]{2,24}\\/)[^\\s]+)" +
+  // `<`/`>` are never literal in a URL (RFC 3986), so `<https://…>` ends at the `>`.
+  "|((?:(?:https?|wss?):\\/\\/|(?:[\\w-]{1,63}\\.){1,10}[a-z]{2,24}\\/)[^\\s<>]+)" +
   "|nostr:(npub1|note1|nprofile1|nevent1|naddr1)([023456789acdefghjklmnpqrstuvwxyz]+)" +
   "|@?(npub1|note1|nprofile1|nevent1|naddr1)([023456789acdefghjklmnpqrstuvwxyz]+)" +
   `|(${HASHTAG_PATTERN})` +
@@ -554,6 +554,18 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
             }
           }
 
+          // Discord's `<url>`: a plain link with its embed suppressed, brackets hidden.
+          const bracketed = !forceImage && index > lastIndex && segment[index - 1] === "<" &&
+            segment[index + fullMatch.length] === ">";
+          if (bracketed) {
+            const prev = out[out.length - 1];
+            if (prev?.type === "text") {
+              prev.value = prev.value.slice(0, -1);
+              if (!prev.value) out.pop();
+            }
+            fullMatch += ">";
+          }
+
           // Scheme-less links get `https://`; `fullMatch` stays the source span.
           if (!/^(?:https?|wss?):\/\//i.test(url)) url = `https://${url}`;
 
@@ -563,8 +575,19 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
 
           if (/^wss?:\/\//i.test(url)) {
             const group = parseGroupAddress(url);
-            const isEndOfLine = !/^[^\n]*\S/.test(segment.substring(index + fullMatch.length));
+            const isEndOfLine = !bracketed && !/^[^\n]*\S/.test(segment.substring(index + fullMatch.length));
             out.push(group ? groupRouteToken(url, group, isEndOfLine) : { type: "relay-link", url });
+            lastIndex = index + fullMatch.length;
+            continue;
+          }
+
+          if (bracketed) {
+            const selfTarget = isInviteUrl(url) ? null : parseSelfLink(url);
+            out.push(
+              selfTarget?.kind === "profile" ? { type: "mention", pubkey: selfTarget.pubkey }
+                : selfTarget?.kind === "chat" ? { type: "self-link", url, path: selfTarget.path }
+                : { type: "inline-link", url },
+            );
             lastIndex = index + fullMatch.length;
             continue;
           }
@@ -1590,10 +1613,8 @@ async function saveImage(src: string, image: ImageRef): Promise<void> {
   try {
     const result = await downloadUrl(src, { nameHint: image.url, mime: image.mime });
     toast(
-      result === "downloaded"
-        ? Capacitor.isNativePlatform()
-          ? { title: "Saved", description: "You'll find it in the Armada folder in Files." }
-          : { title: "Saved", description: "Check your downloads folder." }
+      result.status === "downloaded"
+        ? { title: "Saved", description: savedDescription(result.location) }
         : {
             title: "Opened in a new tab",
             description: "This image couldn't be saved directly, so it opened instead.",

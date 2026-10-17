@@ -1,4 +1,3 @@
-import { Capacitor } from "@capacitor/core";
 import { Check, ChevronRight, Copy, Download, IdCard, Loader2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -13,7 +12,7 @@ import { useMediaWithFallback } from "@/hooks/useMediaWithFallback";
 import { toast } from "@/hooks/useToast";
 import type { CharaCard, CharacterCardRef } from "@/lib/characterCard";
 import { writeClipboardText } from "@/lib/clipboard";
-import { downloadBinaryFile } from "@/lib/downloadFile";
+import { downloadBinaryFile, savedDescription } from "@/lib/downloadFile";
 import {
   decryptBuffer,
   fetchCapped,
@@ -197,10 +196,8 @@ function useCardDownload(card: CharaCard, image: CharacterCardRef) {
         ? new Uint8Array(await decryptBuffer(raw, encryption.key, encryption.nonce))
         : new Uint8Array(raw);
       if (encryption) await verifyPlaintextHash(bytes, encryption.ox);
-      await downloadBinaryFile(`${safeFilename(card.name)}.png`, bytes);
-      if (Capacitor.isNativePlatform()) {
-        toast({ title: "Saved", description: "You'll find it in the Armada folder in Files." });
-      }
+      const location = await downloadBinaryFile(`${safeFilename(card.name)}.png`, bytes);
+      if (location) toast({ title: "Saved", description: savedDescription(location) });
     } catch {
       toast({ title: "Download failed", description: card.name, variant: "destructive" });
     } finally {

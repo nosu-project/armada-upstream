@@ -8,7 +8,6 @@ const base = {
   allReady: false,
   nothingToWatch: false,
   persistedConfigEnabled: undefined,
-  policyReady: true,
 };
 
 describe("nativeNotificationConfigAction", () => {
@@ -37,15 +36,13 @@ describe("nativeNotificationConfigAction", () => {
     })).toBe("preserve");
   });
 
-  it("waits for account policy before a fresh bootstrap", () => {
+  it("starts a partial bootstrap on a fresh account even before policy is confirmed", () => {
     expect(nativeNotificationConfigAction({
       ...base,
-      policyReady: false,
       persistedConfigEnabled: false,
-    })).toBe("preserve");
+    })).toBe("configure");
     expect(nativeNotificationConfigAction({
       ...base,
-      policyReady: false,
       persistedConfigEnabled: true,
     })).toBe("configure");
   });

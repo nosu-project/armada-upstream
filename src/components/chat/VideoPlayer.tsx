@@ -1,4 +1,3 @@
-import { Capacitor } from "@capacitor/core";
 import { Download, Expand, Loader2, Pause, Play, Share2, Shrink, Volume1, Volume2, VolumeX } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -15,7 +14,7 @@ import { useVideoThumbnail } from "@/hooks/useVideoThumbnail";
 import { toast } from "@/hooks/useToast";
 import { isValidBlurhash } from "@/lib/blurhash";
 import { BLANK_POSTER } from "@/lib/blankPoster";
-import { downloadUrl } from "@/lib/downloadFile";
+import { downloadUrl, savedDescription } from "@/lib/downloadFile";
 import { formatTime } from "@/lib/formatTime";
 import { companionEncryption } from "@/lib/imeta";
 import { canShareFiles, shareFile } from "@/lib/share";
@@ -604,10 +603,8 @@ async function saveVideo(src: string, ref: { url: string; mime?: string }): Prom
   try {
     const result = await downloadUrl(src, { nameHint: ref.url, mime: ref.mime });
     toast(
-      result === "downloaded"
-        ? Capacitor.isNativePlatform()
-          ? { title: "Saved", description: "You'll find it in the Armada folder in Files." }
-          : { title: "Saved", description: "Check your downloads folder." }
+      result.status === "downloaded"
+        ? { title: "Saved", description: savedDescription(result.location) }
         : {
             title: "Opened in a new tab",
             description: "This video couldn't be saved directly, so it opened instead.",

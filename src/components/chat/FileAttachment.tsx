@@ -1,11 +1,10 @@
-import { Capacitor } from "@capacitor/core";
 import { Box, Download, File, FileArchive, FileAudio, FileImage, FileText, FileVideo, Loader2, Rotate3d } from "lucide-react";
 import { lazy, Suspense, useCallback, useState } from "react";
 
 import { useBlossomCandidates } from "@/hooks/useBlossomCandidates";
 import { useMediaWithFallback } from "@/hooks/useMediaWithFallback";
 import { toast } from "@/hooks/useToast";
-import { downloadBinaryFile } from "@/lib/downloadFile";
+import { downloadBinaryFile, savedDescription } from "@/lib/downloadFile";
 import {
   decryptBuffer,
   fetchCapped,
@@ -97,10 +96,8 @@ export function FileAttachment({ url, mime, name, size, encryption, fallbacks, t
       if (encryption) await verifyPlaintextHash(bytes, encryption.ox);
 
       // Force a save, never a render; the sender's MIME is discarded.
-      await downloadBinaryFile(displayName, bytes);
-      if (Capacitor.isNativePlatform()) {
-        toast({ title: "Saved", description: "You'll find it in the Armada folder in Files." });
-      }
+      const location = await downloadBinaryFile(displayName, bytes);
+      if (location) toast({ title: "Saved", description: savedDescription(location) });
       setStatus("idle");
     } catch {
       setStatus("error");

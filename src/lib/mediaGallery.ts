@@ -26,6 +26,7 @@ interface MediaGalleryPlugin {
   openSettings(): Promise<void>;
   list(opts: { limit: number; offset: number }): Promise<{ items: GalleryItem[]; more: boolean }>;
   thumbnail(opts: { id: number; video: boolean; modified: number }): Promise<{ path: string }>;
+  saveToDevice(opts: { filename: string; mime?: string; data: string }): Promise<{ location: string }>;
 }
 
 const MediaGallery = registerPlugin<MediaGalleryPlugin>("MediaGallery");
@@ -73,6 +74,15 @@ export function galleryThumbnailSrc(item: GalleryItem): Promise<string> {
   thumbs.set(key, pending);
   if (thumbs.size > THUMBS_MAX) thumbs.delete(thumbs.keys().next().value as string);
   return pending;
+}
+
+/**
+ * Save bytes into the shared collections: image/video/audio `mime` picks
+ * Pictures/Movies/Music, anything else (or none) Download — each under
+ * `Armada/`. Resolves the folder it landed in.
+ */
+export async function saveToDevice(filename: string, data: string, mime?: string): Promise<string> {
+  return (await MediaGallery.saveToDevice({ filename, data, mime })).location;
 }
 
 /** A loadable URL for the item itself, for the full-size preview. */

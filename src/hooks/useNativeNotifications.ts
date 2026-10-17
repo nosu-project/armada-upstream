@@ -475,7 +475,6 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
       allReady,
       nothingToWatch,
       persistedConfigEnabled: health?.configEnabled,
-      policyReady: notificationSettingsReady,
     });
 
     let payload: Parameters<typeof ArmadaNotification.configure>[0];
