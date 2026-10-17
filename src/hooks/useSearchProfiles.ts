@@ -32,7 +32,42 @@ export function profileMatches(p: SearchProfile, query: string): boolean {
   return tokens.every((t) => haystack.includes(t));
 }
 
-/** Scan cached ['author', pubkey] entries; follows first, then alphabetical. */
+/** How a query word hit a profile, best (0) to none (5). */
+function tokenRank(token: string, names: string[], nip05Local: string, haystack: string): number {
+  if (names.some((n) => n.startsWith(token))) return 0;
+  if (names.some((n) => n.split(/[^\p{L}\p{N}]+/u).some((w) => w.startsWith(token)))) return 1;
+  if (nip05Local.startsWith(token)) return 2;
+  if (names.some((n) => n.includes(token))) return 3;
+  return haystack.includes(token) ? 4 : 5;
+}
+
+/**
+ * Relevance of `p` to `query`, lower is better: a name that starts with the query outranks one
+ * that merely contains it, and both outrank a hit on the NIP-05 domain alone.
+ */
+export function profileMatchRank(p: SearchProfile, query: string): number {
+  const tokens = query.toLowerCase().split(/\s+/).filter(Boolean);
+  const names = [p.metadata.name, p.metadata.display_name]
+    .filter((n): n is string => !!n)
+    .map((n) => n.toLowerCase());
+  const nip05 = (p.metadata.nip05 ?? "").toLowerCase();
+  const nip05Local = nip05.includes("@") && !nip05.startsWith("_@") ? nip05.split("@")[0] : "";
+  const haystack = [...names, nip05].join(" ");
+  return tokens.reduce((sum, t) => sum + tokenRank(t, names, nip05Local, haystack), 0);
+}
+
+function sortName(p: SearchProfile): string {
+  return (p.metadata.name || p.metadata.display_name || p.pubkey).toLowerCase();
+}
+
+/** Sorts in place by relevance to `query`, then alphabetically. */
+function sortByRelevance(profiles: SearchProfile[], query: string): SearchProfile[] {
+  const rank = new Map(profiles.map((p) => [p.pubkey, profileMatchRank(p, query)]));
+  return profiles.sort((a, b) =>
+    (rank.get(a.pubkey)! - rank.get(b.pubkey)!) || sortName(a).localeCompare(sortName(b)));
+}
+
+/** Scan cached ['author', pubkey] entries; by relevance, then follows, then alphabetical. */
 function searchCachedProfiles(
   queryClient: ReturnType<typeof useQueryClient>,
   query: string,
@@ -52,13 +87,14 @@ function searchCachedProfiles(
     if (profileMatches(profile, lowerQuery)) results.push(profile);
   }
 
+  const rank = new Map(results.map((p) => [p.pubkey, profileMatchRank(p, lowerQuery)]));
   results.sort((a, b) => {
+    const byRank = rank.get(a.pubkey)! - rank.get(b.pubkey)!;
+    if (byRank !== 0) return byRank;
     const aFollowed = followedPubkeys.has(a.pubkey) ? 0 : 1;
     const bFollowed = followedPubkeys.has(b.pubkey) ? 0 : 1;
     if (aFollowed !== bFollowed) return aFollowed - bFollowed;
-    const aName = (a.metadata.name || a.metadata.display_name || "").toLowerCase();
-    const bName = (b.metadata.name || b.metadata.display_name || "").toLowerCase();
-    return aName.localeCompare(bName);
+    return sortName(a).localeCompare(sortName(b));
   });
 
   return results.slice(0, limit);
@@ -184,13 +220,7 @@ export function useSearchProfiles(query: string) {
     const q = debouncedQuery.trim().toLowerCase();
     if (q.length < 1) return relayResults.data;
 
-    const followMatches = (followProfiles ?? [])
-      .filter((p) => profileMatches(p, q))
-      .sort((a, b) => {
-        const aName = (a.metadata.name || a.metadata.display_name || "").toLowerCase();
-        const bName = (b.metadata.name || b.metadata.display_name || "").toLowerCase();
-        return aName.localeCompare(bName);
-      });
+    const followMatches = sortByRelevance((followProfiles ?? []).filter((p) => profileMatches(p, q)), q);
 
     const relayData = relayResults.data ?? [];
 
@@ -206,7 +236,9 @@ export function useSearchProfiles(query: string) {
         have.add(p.pubkey);
       }
     }
-    return merged;
+    // Stable: within a relevance tier, follows stay ahead and relays keep their order.
+    const rank = new Map(merged.map((p) => [p.pubkey, profileMatchRank(p, q)]));
+    return merged.sort((a, b) => rank.get(a.pubkey)! - rank.get(b.pubkey)!);
   }, [relayResults.data, followProfiles, followedPubkeys, debouncedQuery, queryClient]);
 
   // Muting applied to the MERGED result so no source path can reintroduce a muted person.
@@ -223,7 +255,7 @@ export function useSearchProfiles(query: string) {
 }
 
 /**
- * Followed people matching `query`, alphabetical. Local only (no NIP-50 round-trip), so it can
+ * Followed people matching `query`, by relevance then alphabetical. Local only (no NIP-50 round-trip), so it can
  * filter on every keystroke; `enabled` defers fetching the follows' profiles until needed.
  */
 export function useFollowSearch(query: string, enabled = true, limit = 20): SearchProfile[] {
@@ -234,14 +266,10 @@ export function useFollowSearch(query: string, enabled = true, limit = 20): Sear
   return useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!enabled || !q || !followProfiles) return EMPTY_PROFILES;
-    return followProfiles
-      .filter((p) => !mutedPubkeys.has(p.pubkey) && profileMatches(p, q))
-      .sort((a, b) => {
-        const aName = (a.metadata.name || a.metadata.display_name || "").toLowerCase();
-        const bName = (b.metadata.name || b.metadata.display_name || "").toLowerCase();
-        return aName.localeCompare(bName);
-      })
-      .slice(0, limit);
+    return sortByRelevance(
+      followProfiles.filter((p) => !mutedPubkeys.has(p.pubkey) && profileMatches(p, q)),
+      q,
+    ).slice(0, limit);
   }, [query, enabled, followProfiles, mutedPubkeys, limit]);
 }
 
@@ -278,12 +306,6 @@ export function useMemberProfiles(pubkeys: string[], query: string) {
         )
       : profiles;
 
-    matched.sort((a, b) => {
-      const aName = (a.metadata.name || a.metadata.display_name || a.pubkey).toLowerCase();
-      const bName = (b.metadata.name || b.metadata.display_name || b.pubkey).toLowerCase();
-      return aName.localeCompare(bName);
-    });
-
-    return matched.slice(0, 10);
+    return sortByRelevance(matched, lowerQuery).slice(0, 10);
   }, [pubkeys, query, queryClient, mutedPubkeys]);
 }
