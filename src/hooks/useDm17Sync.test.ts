@@ -4,7 +4,15 @@ import { describe, expect, it, vi } from "vitest";
 const coverage = vi.hoisted(() => ({ map: new Map<string, number>() }));
 vi.mock("@/lib/nativeNotifications", () => ({ nativeDmCoverage: async () => coverage.map }));
 
-import { dm17InboxFilter, queryWrapsPerRelay, relayScanWatermarks, serviceCovered, syncDm17Inbox } from "@/hooks/useDm17";
+import {
+  dm17InboxFilter,
+  pageForwardRest,
+  queryWrapsPerRelay,
+  relayScanWatermarks,
+  serviceCovered,
+  syncDm17Inbox,
+  walkDm17History,
+} from "@/hooks/useDm17";
 import { readDm17Cursor, updateDm17Cursor } from "@/lib/nip17/dm17Store";
 import { MAX_WRAP_BACKDATE_SECS } from "@/lib/nip17/protocol";
 
@@ -343,5 +351,73 @@ describe("serviceCovered()", () => {
     expect(serviceCovered(cov, "wss://a.example", 500)).toBe(false);
     expect(serviceCovered(cov, "wss://b.example", 2_000)).toBe(false);
     expect(serviceCovered(cov, "wss://a.example", 0), "never read in full").toBe(false);
+  });
+});
+
+// ── Paging to the bottom ─────────────────────────────────────────────────────
+
+/** A relay honoring since/until/limit newest-first, capping `limit` at `cap`. */
+function pagingRelay(events: NostrEvent[], cap = Infinity) {
+  const asked: NostrFilter[] = [];
+  const query = async (filters: NostrFilter[]) => {
+    const f = filters[0];
+    asked.push(f);
+    const out = events
+      .filter((e) => (f.since === undefined || e.created_at >= f.since) && (f.until === undefined || e.created_at <= f.until))
+      .sort((a, b) => b.created_at - a.created_at);
+    return out.slice(0, Math.min(f.limit ?? Infinity, cap));
+  };
+  return { asked, query };
+}
+
+const series = (prefix: string, n: number, from: number) =>
+  Array.from({ length: n }, (_, i) => event(`${prefix}${i.toString(16).padStart(4, "0")}`, from + i));
+
+describe("pageForwardRest", () => {
+  it("follows a capped burst down to its since instead of stopping at the first page", async () => {
+    const relay = pagingRelay(series("a", 250, 10_000), 100);
+    const filter: NostrFilter = { kinds: [1059], "#p": ["2".repeat(64)], since: 10_000, limit: 500 };
+    const first = await relay.query([filter]);
+    const rest = await pageForwardRest({ relay: () => relay } as never, "wss://a.example", filter, first);
+    expect(rest.complete).toBe(true);
+    expect(new Set(rest.events.map((e) => e.id)).size).toBe(250);
+  });
+});
+
+describe("walkDm17History", () => {
+  it("pages each relay down to an empty page, resuming from its own floor, then stops asking", async () => {
+    const self = getPublicKey(generateSecretKey());
+    // The deep relay holds more than one round reads; the shallow one runs out early.
+    const deep = pagingRelay(series("d", 1_200, 1_000), 500);
+    const shallow = pagingRelay(series("s", 30, 5_000), 500);
+    const pool = { relay: (url: string) => (url.includes("deep") ? deep : shallow) };
+    const ctx = syncCtx(pool, self, ["wss://deep.example", "wss://shallow.example"]);
+    const signal = new AbortController().signal;
+
+    const first = await walkDm17History(ctx, signal);
+    expect(first).toMatchObject({ more: true, progressed: true, failed: false });
+    let cursor = await readDm17Cursor(self);
+    // Two pages of the deep relay: its floor sits just below the 1000th newest wrap.
+    expect(cursor?.relayOldest?.["wss://deep.example"]).toBe(1_000 + 200 - 1);
+    expect(cursor?.relayExhaustedAt?.["wss://shallow.example"]).toBeGreaterThan(0);
+
+    const second = await walkDm17History(ctx, signal);
+    expect(second.more).toBe(false);
+    cursor = await readDm17Cursor(self);
+    expect(cursor?.relayExhaustedAt?.["wss://deep.example"]).toBeGreaterThan(0);
+    // The resumed page started below the first round's floor, not from the top.
+    expect(deep.asked[2].until).toBe(1_199);
+
+    const asks = deep.asked.length + shallow.asked.length;
+    await expect(walkDm17History(ctx, signal)).resolves.toMatchObject({ more: false, progressed: false });
+    expect(deep.asked.length + shallow.asked.length).toBe(asks);
+  });
+
+  it("does nothing in the background for an approval-gated signer the user has not allowed", async () => {
+    const self = getPublicKey(generateSecretKey());
+    const relay = pagingRelay(series("x", 10, 1_000));
+    const ctx = syncCtx({ relay: () => relay }, self, ["wss://inbox.example"], "bunker");
+    await expect(walkDm17History(ctx, new AbortController().signal)).resolves.toMatchObject({ progressed: false });
+    expect(relay.asked).toHaveLength(0);
   });
 });

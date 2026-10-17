@@ -16,11 +16,12 @@ import {
   readStreamCursor,
   updateStreamCursor,
   writeRumors,
+  type StreamBridge,
 } from "@/concord/lib/rumorStore";
 import type { Channel, Community } from "@/concord/lib/types";
 import { isRelayUnreachable } from "@/lib/relayHealth";
 import { beginSyncTask } from "@/lib/syncActivity";
-import { registerSyncTopic } from "@/sync/syncManager";
+import { invalidateSyncTopic, registerSyncTopic } from "@/sync/syncManager";
 import { emitWireScopes } from "@/wire/bus";
 
 import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
@@ -123,7 +124,7 @@ export async function backfillStore(
     /** An all-empty answer is conclusive (a `since`-bounded read of a quiet channel). */
     emptyOk?: boolean;
   } = {},
-): Promise<{ oldest?: number; newest?: number; events: NostrEvent[]; count: number; exhausted: boolean; failed: boolean }> {
+): Promise<BackfillResult> {
   const maxPages = opts.maxPages ?? BACKFILL_MAX_PAGES;
   let oldest: number | undefined;
   let newest: number | undefined;
@@ -131,9 +132,11 @@ export async function backfillStore(
   const collected: NostrEvent[] = [];
   let count = 0;
   let failed = false;
+  let pages = 0;
 
   for (let page = 0; page < maxPages && active.length > 0; page++) {
     if (signal.aborted) break;
+    pages++;
     const pageController = new AbortController();
     const pageSignal = AbortSignal.any([signal, pageController.signal]);
     let graceTimer: ReturnType<typeof setTimeout> | undefined;
@@ -212,7 +215,45 @@ export async function backfillStore(
   // the channel, so it's treated as a failure.
   const reachedBottom = active.length === 0 && !failed;
   const exhausted = reachedBottom && count > 0;
-  return { oldest, newest, events: collected, count, exhausted, failed: failed || (reachedBottom && count === 0 && !opts.emptyOk) };
+  // The shallowest relay still paging bounds what EVERY relay has been read down to;
+  // `oldest` is the deepest any one relay reached, which is no frontier at all.
+  let coveredDownTo: number | undefined;
+  if (!failed) {
+    if (reachedBottom) coveredDownTo = oldest;
+    else if (active.every((relay) => relay.cursor !== undefined)) {
+      coveredDownTo = Math.max(...active.map((relay) => relay.cursor! + 1));
+    }
+  }
+  return {
+    oldest,
+    newest,
+    coveredDownTo,
+    events: collected,
+    count,
+    pages,
+    reachedBottom,
+    exhausted,
+    failed: failed || (reachedBottom && count === 0 && !opts.emptyOk),
+  };
+}
+
+export interface BackfillResult {
+  /** Deepest `created_at` any relay returned. */
+  oldest?: number;
+  newest?: number;
+  /** Pages asked for, the budget a caller shares between passes. */
+  pages: number;
+  /** Every relay ran out of history (down to `since`, when given) and none failed. */
+  reachedBottom: boolean;
+  /**
+   * Down to which `created_at` every relay has been read — the only value that
+   * may become a cursor. Absent once any relay failed.
+   */
+  coveredDownTo?: number;
+  events: NostrEvent[];
+  count: number;
+  exhausted: boolean;
+  failed: boolean;
 }
 
 /** Floor between two bus rings from one round's older-history pages. */
@@ -281,16 +322,47 @@ export function setChannelSyncContext(channelIdHex: string, ctx: ChannelSyncCont
   };
 }
 
+/** How many pages a round may spend on each pass below the newest page. */
+export interface RoundBudget {
+  bridgePages: number;
+  olderPages: number;
+  /**
+   * An empty older answer below held history seals the channel. Without it a
+   * walk whose last page ended exactly at the bottom could never finish, since
+   * an all-empty run is otherwise inconclusive.
+   */
+  sealOnEmpty?: boolean;
+}
+
+/** The open channel's round: a burst is bridged now, deep history is left to scrolling and the walker. */
+const LIVE_ROUND: RoundBudget = { bridgePages: BACKFILL_MAX_PAGES, olderPages: ROUND_OLDER_PAGES };
+
+export interface RoundOutcome {
+  /** History remains unread below `oldest` or inside an unfinished bridge. */
+  more: boolean;
+  /** The round moved the channel's cursor. */
+  progressed: boolean;
+  /** A relay or a store write failed somewhere in the round. */
+  failed: boolean;
+}
+
+const ABORTED: RoundOutcome = { more: true, progressed: false, failed: false };
+
 /**
  * One catch-up round: the newest page first (painted immediately), then the
  * BRIDGE between the saved cursor's `newest` and that page (else an offline burst
  * leaves a permanent hole), then bounded older paging from the saved `oldest`.
  */
-async function syncChannelRound(ctx: ChannelSyncContext, signal: AbortSignal): Promise<void> {
+export async function syncChannelRound(
+  ctx: ChannelSyncContext,
+  signal: AbortSignal,
+  budget: RoundBudget = LIVE_ROUND,
+  // The open channel's round is scoped `c2:<id>`, so the chat view can tell its own catch-up from other sync.
+  taskScope = `c2:${ctx.channel.idHex}`,
+): Promise<RoundOutcome> {
   const { nostr, community, channel } = ctx;
   const idHex = channel.idHex;
-  // Scoped `c2:<id>` so the chat view can tell its own catch-up from other sync.
-  const task = beginSyncTask(`#${channel.name}`, { scope: `c2:${idHex}` });
+  const task = beginSyncTask(`#${channel.name}`, { scope: taskScope });
   try {
     // Heal a POISONED cursor: `exhausted` with `oldest === 0` was sealed by an
     // all-empty run and never paged; clear it so history gets pulled.
@@ -343,38 +415,81 @@ async function syncChannelRound(ctx: ChannelSyncContext, signal: AbortSignal): P
       beforeRelay: authGate,
       onPage: writePage,
     });
-    if (signal.aborted) return;
+    if (signal.aborted) return ABORTED;
 
-    // Pass 2 (the bridge): the region between the saved `newest` and pass 1's oldest.
-    let bridge: Awaited<ReturnType<typeof backfillStore>> = {
-      events: [],
-      count: 0,
-      exhausted: true,
-      failed: false,
-    };
-    if (saved?.newest && newest.oldest !== undefined && newest.oldest > saved.newest) {
-      bridge = await backfillStore(nostr, community.relays, channel, signal, {
-        until: newest.oldest - 1,
-        since: saved.newest,
-        freezeRetired,
-        beforeRelay: authGate,
-        onPage: writePage,
-      });
-      if (signal.aborted) return;
+    // Pass 2 (the bridge): the region between the saved `newest` and pass 1. A gap
+    // too big for the budget is recorded as `bridge` and resumed below its read
+    // span next round, so every round makes progress into it.
+    const since0 = saved?.newest || undefined;
+    const top1 = newest.newest;
+    let bridgeCount = 0;
+    let bridgeFailed = false;
+    let complete = false;
+    let bridgeRecord: StreamBridge | undefined;
+    if (!newest.failed) {
+      if (since0 === undefined || newest.reachedBottom || newest.coveredDownTo === undefined || top1 === undefined) {
+        // First round (pass 1 is the top), or pass 1 itself reached below `newest`.
+        complete = since0 === undefined || newest.reachedBottom;
+      } else {
+        const gap = saved?.bridge && saved.bridge.until > since0 ? saved.bridge : undefined;
+        let pages = budget.bridgePages;
+        const segment = async (until: number, since: number) => {
+          const r = await backfillStore(nostr, community.relays, channel, signal, {
+            until,
+            since,
+            maxPages: pages,
+            emptyOk: true,
+            freezeRetired,
+            beforeRelay: authGate,
+            onPage: writePage,
+          });
+          pages -= r.pages;
+          bridgeCount += r.count;
+          if (r.failed) bridgeFailed = true;
+          return r;
+        };
+        // Segment A: below pass 1, down to the recorded gap's read span (or `newest`).
+        const aFloor = gap ? gap.top : since0;
+        let aDone = newest.coveredDownTo <= aFloor;
+        if (!aDone && pages > 0) {
+          const a = await segment(newest.coveredDownTo - 1, aFloor);
+          if (a.reachedBottom) aDone = true;
+          else if (!a.failed && a.coveredDownTo !== undefined) bridgeRecord = { top: top1, until: a.coveredDownTo };
+        }
+        if (aDone) {
+          if (!gap) complete = true;
+          else {
+            // Segment B: the gap's unread remainder, down to `newest`.
+            bridgeRecord = { top: top1, until: gap.until };
+            if (pages > 0) {
+              const b = await segment(gap.until - 1, since0);
+              if (b.reachedBottom) {
+                complete = true;
+                bridgeRecord = undefined;
+              } else if (!b.failed && b.coveredDownTo !== undefined) {
+                bridgeRecord = { top: top1, until: b.coveredDownTo };
+              }
+            }
+          }
+        }
+      }
     }
+    if (signal.aborted) return ABORTED;
 
     // Pass 3: older history, from the saved cursor or just below pass 1. `oldest` is
     // saved page by page (`onProgress`), since leaving the channel aborts the round.
     // Rings are throttled to OLDER_RING_MS: these pages are off-screen and every
     // ring re-runs community-wide readers.
-    const resumeFrom = saved?.oldest ?? (newest.oldest !== undefined ? newest.oldest - 1 : undefined);
+    const resumeFrom = saved?.oldest || (newest.coveredDownTo !== undefined ? newest.coveredDownTo - 1 : undefined);
     const olderRing = throttledRing(`c2:${idHex}`, OLDER_RING_MS);
-    let older: Awaited<ReturnType<typeof backfillStore>> = { events: [], count: 0, exhausted: true, failed: false };
+    const sealOnEmpty = Boolean(budget.sealOnEmpty && saved?.oldest);
+    let older: BackfillResult = { events: [], count: 0, pages: 0, reachedBottom: true, exhausted: true, failed: false };
     try {
-      // Nothing older once the bottom was reached; otherwise a couple of pages.
-      if (!saved?.exhausted) older = await backfillStore(nostr, historyRelays(community), channel, signal, {
+      // Nothing older once the bottom was reached; otherwise the budget's pages.
+      if (!saved?.exhausted && budget.olderPages > 0) older = await backfillStore(nostr, historyRelays(community), channel, signal, {
         until: resumeFrom,
-        maxPages: ROUND_OLDER_PAGES,
+        maxPages: budget.olderPages,
+        emptyOk: sealOnEmpty,
         freezeRetired,
         beforeRelay: authGate,
         onPage: (events) => writePage(events, olderRing),
@@ -385,21 +500,22 @@ async function syncChannelRound(ctx: ChannelSyncContext, signal: AbortSignal): P
     } finally {
       olderRing.flush();
     }
-    if (signal.aborted) return;
+    if (signal.aborted) return ABORTED;
 
     // The cursor merge is monotonic. `newest` advances ONLY when the newest region
-    // is verifiably complete (no pass-1 failures, bridge exhausted).
-    const complete = !newest.failed && bridge.exhausted;
-    const top = Math.max(newest.newest ?? 0, bridge.newest ?? 0);
-    await updateStreamCursor(idHex, {
-      newest: complete && top > 0 ? top : undefined,
-      oldest: older.oldest,
-      exhausted: older.exhausted ? true : undefined,
-    });
+    // is verifiably complete, and nothing advances past a page that failed to commit.
+    if (!writeFailed) {
+      await updateStreamCursor(idHex, {
+        newest: complete && top1 !== undefined && top1 > 0 ? top1 : undefined,
+        bridge: complete ? null : bridgeRecord,
+        oldest: older.coveredDownTo,
+        exhausted: older.exhausted || (sealOnEmpty && older.reachedBottom) ? true : undefined,
+      });
+    }
 
     // A round that pulled wraps and opened none marks a decode dead end; any opened
     // rumor clears it.
-    const fetched = newest.count + bridge.count + older.count;
+    const fetched = newest.count + bridgeCount + older.count;
     if (synced > 0) decodeDeadEnds.delete(idHex);
     else if (fetched > 0) decodeDeadEnds.add(idHex);
 
@@ -413,6 +529,13 @@ async function syncChannelRound(ctx: ChannelSyncContext, signal: AbortSignal): P
     if (synced === 0 && newest.failed && older.failed) {
       throw new Error("channel backfill reached no relay");
     }
+
+    const after = await readStreamCursor(idHex);
+    return {
+      more: !after?.exhausted || after.bridge !== undefined,
+      progressed: JSON.stringify(after ?? null) !== JSON.stringify(saved ?? null),
+      failed: newest.failed || older.failed || bridgeFailed || writeFailed,
+    };
   } finally {
     task.end();
   }
@@ -426,5 +549,46 @@ registerSyncTopic("c2:", {
     // A missing context is an ordering bug (it's registered before the want).
     if (!ctx) throw new Error(`no channel sync context for ${topic}`);
     await syncChannelRound(ctx, signal);
+  },
+});
+
+/**
+ * A background history round's budget. Bounded so one deep channel can't hold
+ * the scheduler's single background lane; the topic re-queues itself instead.
+ */
+const HISTORY_ROUND: RoundBudget = { bridgePages: 40, olderPages: 20, sealOnEmpty: true };
+
+const historyContexts = new Map<string, ChannelSyncContext>();
+
+/**
+ * Register the context for `c2hist:<channelIdHex>`, the background walk that
+ * reads every channel's history down to the bottom whether or not it is ever
+ * opened, so local search covers it. Same release rule as the live context.
+ */
+export function setChannelHistoryContext(channelIdHex: string, ctx: ChannelSyncContext): () => void {
+  historyContexts.set(channelIdHex, ctx);
+  return () => {
+    if (historyContexts.get(channelIdHex) === ctx) historyContexts.delete(channelIdHex);
+  };
+}
+
+registerSyncTopic("c2hist:", {
+  minIntervalMs: 5_000,
+  // A walked channel is revisited now and then for gaps the wire's lookback skipped.
+  staleAfterMs: 3 * 60 * 60_000,
+  handler: async ({ topic, signal }) => {
+    const idHex = topic.slice("c2hist:".length);
+    const ctx = contexts.get(idHex) ?? historyContexts.get(idHex);
+    if (!ctx) throw new Error(`no channel history context for ${topic}`);
+    let outcome: RoundOutcome;
+    try {
+      outcome = await syncChannelRound(ctx, signal, HISTORY_ROUND, topic);
+    } catch {
+      // Unreachable, or an empty channel (an all-empty answer is inconclusive):
+      // either way the walk waits for the next stale pass rather than spinning.
+      return;
+    }
+    // Ask again right away while each round still gets somewhere.
+    if (!signal.aborted && outcome.more && outcome.progressed) invalidateSyncTopic(topic);
   },
 });

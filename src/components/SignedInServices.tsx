@@ -10,6 +10,7 @@ import { ScreenSharePicker } from "@/components/ScreenSharePicker";
 import { SyncGate } from "@/components/SyncGate";
 import { KeyBackupReminder } from "@/components/auth/KeyBackupReminder";
 import { LoginSetup } from "@/components/onboarding/LoginSetup";
+import { useChannelHistoryWalk } from "@/concord/hooks/useChannelHistoryWalk";
 import { useResumePendingJoins } from "@/concord/hooks/useCommunityActions";
 import { useResumeOutgoing } from "@/concord/hooks/useResumeOutgoing";
 import { useResumeGuestbookJoins } from "@/concord/hooks/usePendingGuestbookJoin";
@@ -28,6 +29,7 @@ export function SignedInServices() {
     <>
       <WireSync />
       <DmSyncLifecycle />
+      <ChannelHistoryWalk />
       <NostrSync />
       <PublishOutbox />
       <SyncGate />
@@ -40,6 +42,12 @@ export function SignedInServices() {
       <NotificationSettingsAbsenceProof />
     </>
   );
+}
+
+/** Its own leaf: it reads the live community list, which changes often. */
+function ChannelHistoryWalk() {
+  useChannelHistoryWalk();
+  return null;
 }
 
 function NotificationSettingsAbsenceProof() {

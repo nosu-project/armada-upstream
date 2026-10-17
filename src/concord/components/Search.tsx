@@ -702,6 +702,7 @@ export function SearchResultsView({
   onJump,
   filters,
   onFiltersChange,
+  historyIncomplete = false,
 }: {
   channels: Channel[];
   results: ChatMsg[];
@@ -710,6 +711,8 @@ export function SearchResultsView({
   onJump: (channelIdHex: string, message: ChatMsg) => void;
   filters: SearchFilters;
   onFiltersChange: (filters: SearchFilters) => void;
+  /** Some searched channel's older history isn't on this device yet. */
+  historyIncomplete?: boolean;
 }) {
   const nameByChannel = useMemo(() => {
     const m = new Map<string, Channel>();
@@ -718,6 +721,12 @@ export function SearchResultsView({
   }, [channels]);
 
   const chips = <SearchFilterChips filters={filters} onChange={onFiltersChange} channels={channels} />;
+  const coverage = historyIncomplete ? (
+    <p className="flex items-center gap-1.5 px-3 pb-1 text-xs text-muted-foreground">
+      <Loader2 className="size-3 shrink-0 animate-spin" aria-hidden />
+      Older messages are still downloading, so some may not show up yet.
+    </p>
+  ) : null;
   if (isLoading) {
     return (
       <div className="flex flex-col px-2 py-2">
@@ -732,6 +741,7 @@ export function SearchResultsView({
     return (
       <div className="flex flex-col px-2 py-2">
         {chips}
+        {coverage}
         <div className="flex flex-col items-center justify-center py-16 text-center">
           <Search className="mb-3 size-9 text-muted-foreground/40" />
           <p className="text-sm text-muted-foreground">No messages found</p>
@@ -743,6 +753,7 @@ export function SearchResultsView({
   return (
     <div className="flex flex-col px-2 py-2">
       {chips}
+      {coverage}
       <p className="px-3 pb-1 text-2xs uppercase tracking-wide text-muted-foreground/80">
         {results.length} result{results.length === 1 ? "" : "s"}
       </p>

@@ -10,7 +10,8 @@ import {
   recallQuarantined,
   subscribeQuarantineMemory,
 } from "@/concord/lib/quarantineMemory";
-import { searchRumors } from "@/concord/lib/rumorStore";
+import { readStreamCursor, searchRumors } from "@/concord/lib/rumorStore";
+import { useWireScopes } from "@/wire/useWireScopes";
 import { searchDateBounds, searchIsActive, searchText, type SearchFilters } from "@/concord/lib/search";
 import type { Community } from "@/concord/lib/types";
 
@@ -73,6 +74,28 @@ export function useConcordSearch(
     },
   });
 
+  // Search reads only this device, so say when some searched channel's history
+  // hasn't been walked to its start yet (the background walk is still on it).
+  const coverage = useQuery<boolean>({
+    queryKey: ["concord", "search-coverage", channelsKey],
+    enabled: active && channelIds.length > 0,
+    staleTime: 15_000,
+    queryFn: async () => {
+      const cursors = await Promise.all(channelIds.map((id) => readStreamCursor(id)));
+      return cursors.some((c) => !c?.exhausted || c.bridge !== undefined);
+    },
+  });
+  const refetchCoverage = coverage.refetch;
+  useWireScopes((scopes) => {
+    if (!active) return;
+    for (const s of scopes) {
+      if (s.startsWith("c2cur:") && channelIds.includes(s.slice("c2cur:".length))) {
+        void refetchCoverage();
+        return;
+      }
+    }
+  });
+
   // Search bypasses the timeline, so every drop the fold performs must be repeated
   // here — notably the Banlist: a mod delete never removes the row (NIP-09), and
   // CORD-04 §4 requires dropping every event from a banned npub.
@@ -105,5 +128,6 @@ export function useConcordSearch(
     results,
     isLoading: (search.isFetching || (active && !moderation.ready)) && results.length === 0,
     active,
+    historyIncomplete: coverage.data ?? false,
   };
 }

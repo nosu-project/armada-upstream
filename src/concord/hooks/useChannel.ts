@@ -452,6 +452,8 @@ export function useChannelTimeline(
           mergeIntoView(added);
           const controller = new AbortController();
           olderAbortRef.current = controller;
+          let writeFailed = false;
+          const pendingWrites: Promise<boolean>[] = [];
           const older = await backfillStore(nostr, historyRelays(community!), channel!, controller.signal, {
             until: saved?.oldest,
             maxPages: LOAD_OLDER_MAX_PAGES,
@@ -464,7 +466,12 @@ export function useChannelTimeline(
               if (controller.signal.aborted) return;
               const opened = await openChatBatch(events, channel!);
               if (opened.length === 0 || controller.signal.aborted) return;
-              writeRumors(community!.idHex, opened);
+              // Painted before the write lands; only the cursor waits on it.
+              const stored = writeRumors(community!.idHex, opened);
+              void stored.then((ok) => {
+                if (!ok) writeFailed = true;
+              });
+              pendingWrites.push(stored);
               added = upsert(added, opened);
               mergeIntoView(opened);
             },
@@ -477,9 +484,13 @@ export function useChannelTimeline(
 
           // Never touches `newest` (the scheduler's job). The merge is monotonic and
           // serialized per scope in `updateStreamCursor`, so concurrent writers merge.
-          void updateStreamCursor(cursorKeyId, {
-            oldest: older.oldest,
-            exhausted: older.exhausted ? true : undefined,
+          // A page that failed to commit must never be covered by the cursor.
+          void Promise.all(pendingWrites).then(() => {
+            if (writeFailed) return;
+            return updateStreamCursor(cursorKeyId, {
+              oldest: older.coveredDownTo,
+              exhausted: older.exhausted ? true : undefined,
+            });
           });
         }
       }

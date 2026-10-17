@@ -83,7 +83,7 @@ import {
   useHasUnreadDMs,
 } from "@/hooks/useDirectMessages";
 import { useBotManifests } from "@/hooks/useBotManifests";
-import { useDm17Backfill, useDm17Conversations, useDm17Support, type Dm17Conversation } from "@/hooks/useDm17";
+import { useDm17Backfill, useDm17Conversations, useDm17HistoryIncomplete, useDm17Support, type Dm17Conversation } from "@/hooks/useDm17";
 import { useDmConversationName } from "@/hooks/useDmConversationName";
 import {
   recordDmConversationIndex,
@@ -1989,6 +1989,7 @@ export function ConversationList({
 
   // Local search over decrypted history (both planes); never prompts the signer.
   const messageMatches = useDmMessageSearch(search, events, user?.pubkey);
+  const historyIncomplete = useDm17HistoryIncomplete(search.trim().length > 0);
 
   useEffect(() => {
     if (searchOpen) searchInputRef.current?.focus({ preventScroll: true });
@@ -2273,6 +2274,12 @@ export function ConversationList({
           <ConversationRowSkeletons />
         ) : (
           <>
+            {historyIncomplete && (
+              <p className="flex items-center gap-1.5 px-2 pb-2 text-xs text-muted-foreground">
+                <Loader2 className="size-3 shrink-0 animate-spin" aria-hidden />
+                Older messages are still downloading, so some may not show up yet.
+              </p>
+            )}
             {/* The request entry covers the whole list; hidden while searching. */}
             {showRequestsEntry && (
               <RequestsEntryRow

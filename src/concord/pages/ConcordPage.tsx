@@ -2124,6 +2124,7 @@ export function ConcordPage() {
     results: searchResults,
     isLoading: searchLoading,
     active: searching,
+    historyIncomplete: searchHistoryIncomplete,
   } = useConcordSearch(
     community,
     allChannelIds,
@@ -3361,6 +3362,7 @@ export function ConcordPage() {
                     onJump={jumpFromSearch}
                     filters={searchFilters}
                     onFiltersChange={setSearchFilters}
+                    historyIncomplete={searchHistoryIncomplete}
                   />
                 </div>
               ) : (
