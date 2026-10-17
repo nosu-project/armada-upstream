@@ -1,4 +1,3 @@
-import { Capacitor } from "@capacitor/core";
 import { ChevronLeft, ChevronRight, Copy, Download, EyeOff, Loader2, Share2, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -18,7 +17,7 @@ import { useMediaWithFallback } from "@/hooks/useMediaWithFallback";
 import { useResolvedMediaSrc } from "@/hooks/useResolvedMediaSrc";
 import { toast } from "@/hooks/useToast";
 import { canCopyImages, writeClipboardImage } from "@/lib/clipboard";
-import { downloadUrl } from "@/lib/downloadFile";
+import { downloadUrl, savedDescription } from "@/lib/downloadFile";
 import { canShareFiles, shareFile } from "@/lib/share";
 import { cn } from "@/lib/utils";
 
@@ -448,12 +447,8 @@ function LightboxDownloadButton({ item }: { item: LightboxItem }) {
       setDownloading(true);
       try {
         const result = await downloadUrl(resolved.src, { nameHint: item.url, mime: item.mime });
-        if (result === "downloaded") {
-          toast(
-            Capacitor.isNativePlatform()
-              ? { title: "Saved", description: "You'll find it in the Armada folder in Files." }
-              : { title: "Saved", description: "Check your downloads folder." },
-          );
+        if (result.status === "downloaded") {
+          toast({ title: "Saved", description: savedDescription(result.location) });
         } else {
           toast({
             title: "Opened in a new tab",
@@ -581,10 +576,8 @@ async function saveLightboxImage(src: string, image: EncryptedRef): Promise<void
   try {
     const result = await downloadUrl(src, { nameHint: image.url, mime: image.mime });
     toast(
-      result === "downloaded"
-        ? Capacitor.isNativePlatform()
-          ? { title: "Saved", description: "You'll find it in the Armada folder in Files." }
-          : { title: "Saved", description: "Check your downloads folder." }
+      result.status === "downloaded"
+        ? { title: "Saved", description: savedDescription(result.location) }
         : {
             title: "Opened in a new tab",
             description: "This image couldn't be saved directly, so it opened instead.",

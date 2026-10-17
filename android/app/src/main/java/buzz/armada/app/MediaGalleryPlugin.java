@@ -3,16 +3,22 @@ package buzz.armada.app;
 import android.Manifest;
 import android.content.ContentResolver;
 import android.content.ContentUris;
+import android.content.ContentValues;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.database.Cursor;
 import android.graphics.Bitmap;
+import android.media.MediaScannerConnection;
 import android.net.Uri;
 import android.os.Build;
+import android.os.Environment;
 import android.provider.MediaStore;
 import android.provider.Settings;
+import android.util.Base64;
 import android.util.Size;
+import android.webkit.MimeTypeMap;
 
+import androidx.annotation.RequiresApi;
 import androidx.core.content.ContextCompat;
 
 import com.getcapacitor.JSArray;
@@ -30,6 +36,7 @@ import java.io.FileOutputStream;
 import java.io.OutputStream;
 import java.util.Arrays;
 import java.util.Comparator;
+import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -50,6 +57,9 @@ import java.util.concurrent.Executors;
  * the items they selected ({@code READ_MEDIA_VISUAL_USER_SELECTED}), in which
  * case MediaStore simply returns those. Re-requesting in the limited state is
  * how the user changes the selection.
+ *
+ * <p>It also writes the other way: {@link #saveToDevice} puts a saved photo or
+ * video into the gallery's own collections, which needs no grant at all.
  */
 @CapacitorPlugin(
     name = "MediaGallery",
@@ -168,6 +178,125 @@ public class MediaGalleryPlugin extends Plugin {
                 answer(() -> call.reject("Could not load thumbnail", e));
             }
         });
+    }
+
+    /**
+     * Save bytes where the user looks for them: an image into Pictures/Armada,
+     * a video into Movies/Armada, audio into Music/Armada (the gallery and
+     * music apps' own collections), anything else into Download/Armada.
+     * `{ filename, mime?, data }` (data base64) → `{ location }`, a folder
+     * name for the confirmation message.
+     *
+     * <p>API 29+ goes through MediaStore, which needs no storage permission
+     * and renames on collision. Older devices write to the app's external
+     * files dir (also permission-free) and ask the scanner to index it.
+     */
+    @PluginMethod
+    public void saveToDevice(PluginCall call) {
+        String filename = call.getString("filename");
+        String data = call.getString("data");
+        if (filename == null || filename.isEmpty() || data == null) {
+            call.reject("filename and data are required");
+            return;
+        }
+        // The caller sanitizes too; MediaStore would reject a separator anyway.
+        String name = filename.replaceAll("[/\\\\]", "_");
+        String declared = call.getString("mime");
+        io.execute(() -> {
+            try {
+                byte[] bytes = Base64.decode(data, Base64.DEFAULT);
+                String location = Build.VERSION.SDK_INT >= 29
+                    ? saveMediaStore(name, mediaMime(declared), bytes)
+                    : saveLegacy(name, mediaMime(declared), bytes);
+                JSObject result = new JSObject();
+                result.put("location", location);
+                answer(() -> call.resolve(result));
+            } catch (Exception e) {
+                answer(() -> call.reject("Could not save the file", e));
+            }
+        });
+    }
+
+    /** Only image/video/audio pick a media collection; anything else is a plain download. */
+    private static String mediaMime(String mime) {
+        if (mime == null) return null;
+        String m = mime.split(";")[0].trim().toLowerCase(Locale.ROOT);
+        return m.startsWith("image/") || m.startsWith("video/") || m.startsWith("audio/") ? m : null;
+    }
+
+    private static String folderFor(String mime) {
+        if (mime == null) return Environment.DIRECTORY_DOWNLOADS;
+        if (mime.startsWith("image/")) return Environment.DIRECTORY_PICTURES;
+        if (mime.startsWith("video/")) return Environment.DIRECTORY_MOVIES;
+        return Environment.DIRECTORY_MUSIC;
+    }
+
+    /** A download's type comes from its extension, never the sender's claim. */
+    private static String downloadMime(String name) {
+        int dot = name.lastIndexOf('.');
+        String ext = dot >= 0 ? name.substring(dot + 1).toLowerCase(Locale.ROOT) : "";
+        String mime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext);
+        return mime != null ? mime : "application/octet-stream";
+    }
+
+    @RequiresApi(29)
+    private String saveMediaStore(String name, String mime, byte[] bytes) throws Exception {
+        try {
+            if (mime != null) return insert(name, mime, bytes);
+        } catch (Exception e) {
+            // MediaStore refuses a type its collection doesn't take (e.g. an
+            // image/* it can't index); the file still belongs in Downloads.
+        }
+        return insert(name, null, bytes);
+    }
+
+    @RequiresApi(29)
+    private String insert(String name, String mime, byte[] bytes) throws Exception {
+        String folder = folderFor(mime);
+        Uri collection;
+        if (mime == null) collection = MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY);
+        else if (mime.startsWith("image/")) collection = MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY);
+        else if (mime.startsWith("video/")) collection = MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY);
+        else collection = MediaStore.Audio.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY);
+
+        ContentResolver resolver = getContext().getContentResolver();
+        ContentValues values = new ContentValues();
+        values.put(MediaStore.MediaColumns.DISPLAY_NAME, name);
+        values.put(MediaStore.MediaColumns.MIME_TYPE, mime != null ? mime : downloadMime(name));
+        values.put(MediaStore.MediaColumns.RELATIVE_PATH, folder + "/Armada");
+        // Hidden from other apps until the bytes are all there.
+        values.put(MediaStore.MediaColumns.IS_PENDING, 1);
+        Uri item = resolver.insert(collection, values);
+        if (item == null) throw new IllegalStateException("MediaStore refused the file");
+        try {
+            try (OutputStream os = resolver.openOutputStream(item)) {
+                if (os == null) throw new IllegalStateException("No output stream");
+                os.write(bytes);
+            }
+            ContentValues done = new ContentValues();
+            done.put(MediaStore.MediaColumns.IS_PENDING, 0);
+            resolver.update(item, done, null, null);
+        } catch (Exception e) {
+            resolver.delete(item, null, null);
+            throw e;
+        }
+        return folder + "/Armada";
+    }
+
+    private String saveLegacy(String name, String mime, byte[] bytes) throws Exception {
+        File dir = new File(getContext().getExternalFilesDir(folderFor(mime)), "Armada");
+        if (!dir.exists() && !dir.mkdirs()) throw new IllegalStateException("Could not create " + dir);
+        File file = new File(dir, name);
+        int dot = name.lastIndexOf('.');
+        String stem = dot > 0 ? name.substring(0, dot) : name;
+        String ext = dot > 0 ? name.substring(dot) : "";
+        for (int n = 1; file.exists(); n++) file = new File(dir, stem + " (" + n + ")" + ext);
+        try (OutputStream os = new FileOutputStream(file)) {
+            os.write(bytes);
+        }
+        MediaScannerConnection.scanFile(
+            getContext(), new String[] { file.getAbsolutePath() }, null, null);
+        return dir.getAbsolutePath();
     }
 
     /**

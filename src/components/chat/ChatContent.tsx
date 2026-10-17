@@ -1,4 +1,3 @@
-import { Capacitor } from "@capacitor/core";
 import { Copy, Download, Expand, Share2 } from "lucide-react";
 import { nip19 } from "nostr-tools";
 import { Fragment, memo, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
@@ -57,7 +56,7 @@ import { parseSelfLink } from "@/lib/selfLink";
 import { stripTrackingParams } from "@/lib/trackingParams";
 import { WEBXDC_MIME, isWebxdcMime } from "@/lib/webxdcMime";
 import { cn } from "@/lib/utils";
-import { downloadUrl } from "@/lib/downloadFile";
+import { downloadUrl, savedDescription } from "@/lib/downloadFile";
 import { canShareFiles, shareFile } from "@/lib/share";
 import { bolt11AmountSats, formatSats } from "@/lib/zaps";
 import { useLongPress } from "@/hooks/useLongPress";
@@ -1590,10 +1589,8 @@ async function saveImage(src: string, image: ImageRef): Promise<void> {
   try {
     const result = await downloadUrl(src, { nameHint: image.url, mime: image.mime });
     toast(
-      result === "downloaded"
-        ? Capacitor.isNativePlatform()
-          ? { title: "Saved", description: "You'll find it in the Armada folder in Files." }
-          : { title: "Saved", description: "Check your downloads folder." }
+      result.status === "downloaded"
+        ? { title: "Saved", description: savedDescription(result.location) }
         : {
             title: "Opened in a new tab",
             description: "This image couldn't be saved directly, so it opened instead.",
