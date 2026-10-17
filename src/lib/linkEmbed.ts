@@ -125,6 +125,63 @@ export function extractStreamableId(url: string): string | null {
   }
 }
 
+/** Odysee embed URL for a claim page (`odysee.com/[@channel:c/]name:x`), or null. */
+export function odyseeEmbedUrl(url: string): string | null {
+  try {
+    const u = new URL(url);
+    if (u.hostname.replace(/^www\./, "") !== "odysee.com") return null;
+    // Not a bare channel page or a `/$/…` app route (other than an embed).
+    const m = u.pathname.match(/^\/(?:\$\/embed\/)?((?:@[^/]+\/)?[^/@$][^/]*?)\/?$/);
+    return m ? `https://odysee.com/$/embed/${m[1]}` : null;
+  } catch {
+    return null;
+  }
+}
+
+/** A short UUID (base58, PeerTube 3.3+) or a full UUID. */
+const PEERTUBE_ID = "[1-9A-HJ-NP-Za-km-z]{20,22}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
+const PEERTUBE_PATH = new RegExp(`^/(?:w|videos/watch|videos/embed)/(${PEERTUBE_ID})/?$`);
+
+/**
+ * PeerTube API URL for a video on any instance (`/w/<id>`, `/videos/watch/<id>`,
+ * `/videos/embed/<id>`). PeerTube is federated, so the host is the link's own.
+ */
+export function peerTubeApiUrl(url: string): string | null {
+  try {
+    const u = new URL(url);
+    if (u.protocol !== "https:") return null;
+    const m = u.pathname.match(PEERTUBE_PATH);
+    return m ? `${u.origin}/api/v1/videos/${m[1]}` : null;
+  } catch {
+    return null;
+  }
+}
+
+export interface PeerTubeFile {
+  fileUrl: string;
+  resolution: { id: number };
+  hasAudio?: boolean;
+  hasVideo?: boolean;
+  width?: number;
+  height?: number;
+}
+
+/**
+ * A progressive MP4 to play in our own `<video>`, from `/api/v1/videos/<id>`: a Web
+ * Video or an HLS rendition's fragmented MP4 that carries both audio and video, the
+ * largest up to 720p. Null when nothing would play (HLS-only, split streams, a live).
+ */
+export function pickPeerTubeFile(video: {
+  files?: PeerTubeFile[];
+  streamingPlaylists?: { files?: PeerTubeFile[] }[];
+}): PeerTubeFile | null {
+  const files = [...(video.files ?? []), ...(video.streamingPlaylists ?? []).flatMap((p) => p.files ?? [])]
+    .filter((f) => f.resolution.id > 0 && f.hasAudio !== false && f.hasVideo !== false)
+    .filter((f) => /^https:\/\/[^?#]+\.mp4(?:[?#]|$)/.test(f.fileUrl))
+    .sort((a, b) => b.resolution.id - a.resolution.id);
+  return files.find((f) => f.resolution.id <= 720) ?? files.at(-1) ?? null;
+}
+
 /** A Tenor GIF page (`tenor.com/view/…`, optionally `/<lang>/view/…`), shared from Discord by URL. */
 export function isTenorPageUrl(url: string): boolean {
   try {
