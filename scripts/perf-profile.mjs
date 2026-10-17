@@ -12,6 +12,9 @@
  *   node scripts/perf-profile.mjs --react-timings   # per-component self ms (inflates CPU)
  *
  * Scenarios (each a fresh page on the same seeded origin):
+ *   dm-walk      a fresh account whose 3000 DMs are on its DM relay and none
+ *                on disk: the DM list open, untouched, while the inbox scan and
+ *                the background history walk read them (--walk-sec <s>, 90)
  *   landing      logged-out root, idle
  *   boot         cold load straight into the big DM thread
  *   idle-thread  the big thread open, nobody touching anything
@@ -24,6 +27,10 @@
  *   concord-switch  hopping between the community's channels, heap per round
  *   concord-type    composing in #general: per-keystroke cost to the next frame
  *   concord-type-touch  the same, phone-sized with touch emulation
+ *   concord-walk    a community with only each channel's newest page on disk and
+ *                   its whole history (7200 wraps) on the relay: #general open,
+ *                   untouched, while the background history walk reads the rest
+ *                   (--walk-sec <s>, 90). Reports how far it got and what it cost
  *   discover     /discover idle — the one scenario with real relay traffic
  *   live-switch  switching in and out of a REAL community, joined from an
  *                invite given as `--invite <url>` (or ARMADA_PERF_INVITE);
@@ -63,7 +70,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { chromium } from "playwright";
-import { generateSecretKey, getEventHash, getPublicKey, nip19 } from "nostr-tools";
+import { finalizeEvent, generateSecretKey, getEventHash, getPublicKey, nip19, nip44 } from "nostr-tools";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const args = process.argv.slice(2);
@@ -230,6 +237,32 @@ const harnessStart = Date.now();
  * with no history paging in behind it.
  */
 let answerLocally = false;
+/**
+ * What the `.invalid` relay holds: empty except in `concord-walk`, which hands
+ * it a community's whole chat history. Matched on ids/kinds/authors/since/
+ * until/limit and single-letter tags, newest first.
+ */
+let fakeRelayEvents = [];
+const fakeRelayReqs = { reqs: 0, events: 0 };
+function fakeRelayAnswer(filters) {
+  const out = new Map();
+  for (const f of filters) {
+    const tagFilters = Object.entries(f).filter(([k]) => k.startsWith("#"));
+    let evs = fakeRelayEvents.filter(
+      (e) =>
+        tagFilters.every(([k, vals]) => e.tags.some((t) => t[0] === k.slice(1) && vals.includes(t[1]))) &&
+        (!f.ids || f.ids.includes(e.id)) &&
+        (!f.kinds || f.kinds.includes(e.kind)) &&
+        (!f.authors || f.authors.includes(e.pubkey)) &&
+        (f.since === undefined || e.created_at >= f.since) &&
+        (f.until === undefined || e.created_at <= f.until),
+    );
+    evs.sort((a, b) => b.created_at - a.created_at);
+    if (f.limit !== undefined) evs = evs.slice(0, f.limit);
+    for (const e of evs) out.set(e.id, e);
+  }
+  return [...out.values()];
+}
 await page.routeWebSocket(/^wss?:\/\//, (ws) => {
   // The seeded community names `wss://relay.invalid`: answer it here as an
   // empty relay (EOSE for every REQ) rather than dialing nothing and leaving
@@ -239,7 +272,12 @@ await page.routeWebSocket(/^wss?:\/\//, (ws) => {
   ws.onMessage((msg) => {
     if ((fake || answerLocally) && typeof msg === "string" && msg.startsWith('["REQ"')) {
       try {
-        ws.send(JSON.stringify(["EOSE", JSON.parse(msg)[1]]));
+        const [, sub, ...filters] = JSON.parse(msg);
+        const events = fake && !answerLocally ? fakeRelayAnswer(filters) : [];
+        fakeRelayReqs.reqs++;
+        fakeRelayReqs.events += events.length;
+        for (const e of events) ws.send(JSON.stringify(["EVENT", sub, e]));
+        ws.send(JSON.stringify(["EOSE", sub]));
       } catch {
         // malformed REQ: nothing to answer
       }
@@ -751,6 +789,169 @@ try {
         await page.setViewportSize({ width: 1280, height: 800 });
       }
     }
+  }
+
+
+  if (wants("concord-walk")) {
+    // A community as a fresh device holds it: the newest page of each channel
+    // on disk, the whole history on its relay. #general is open and nothing is
+    // touched while the background walk reads the rest.
+    const WALK_SIZES = [3000, 600, 600, 600, 600, 600, 600, 600];
+    const WALK_SEC = Number(opt("walk-sec", "90"));
+    await page.goto("/e2e/concordSeed.html");
+    await page.waitForFunction(() => Boolean(window.__armadaSeedConcord), null, { timeout: 60_000 });
+    const seedAt = Date.now();
+    const walk = await page.evaluate(
+      (p) => window.__armadaSeedConcord(p),
+      {
+        sk: Buffer.from(world.me.sk).toString("hex"),
+        others: [],
+        channelSizes: WALK_SIZES,
+        lines: LINES,
+        relayHistory: { localNewest: 50 },
+      },
+    );
+    fakeRelayEvents = walk.wraps;
+    console.log(`\nseeded walk community: ${walk.wraps.length} wraps on the relay, 50/channel on disk, in ${Date.now() - seedAt}ms`);
+
+    console.log(`▶ concord-walk (${WALK_SEC}s with #general open)`);
+    const mark = errors.length;
+    const lastWalk = `${LINES[(WALK_SIZES[0] - 1) % LINES.length]} (#${WALK_SIZES[0] - 1})`;
+    await page.goto(`/c/${walk.communityId}/${walk.channelIds[0]}`);
+    await until(page, () => page.getByText(lastWalk, { exact: false }).last().isVisible(), 90_000);
+    await perfReady(page);
+    fakeRelayReqs.reqs = 0;
+    fakeRelayReqs.events = 0;
+    // Per-second main-thread busy share, to see the walk's shape, not just its mean.
+    await page.evaluate(() => {
+      window.__busy = [];
+      new PerformanceObserver((list) => {
+        for (const e of list.getEntries()) window.__busy.push([Math.round(e.startTime), Math.round(e.duration)]);
+      }).observe({ type: "longtask", buffered: false });
+    });
+    await resetCounters(page);
+    const a = await metrics(cdp);
+    const t = Date.now();
+    const { hot } = await cpuProfile("concord-walk", () => page.waitForTimeout(WALK_SEC * 1000));
+    const b = await metrics(cdp);
+    const longTasks = await page.evaluate(() => window.__busy);
+    const rep = await report(page);
+    const relay = { ...fakeRelayReqs };
+    // The same page once the walk has had its window: what it costs to sit there afterwards.
+    const after = await measureIdle(page, cdp, Number(opt("walk-after-sec", "60")));
+    const heapFloorAfterMB = await heapFloorMB(cdp);
+    if (flag("heap-snapshot")) {
+      // What the walk left retained, for DevTools → Memory → load.
+      const chunks = [];
+      const onChunk = ({ chunk }) => chunks.push(chunk);
+      cdp.on("HeapProfiler.addHeapSnapshotChunk", onChunk);
+      await cdp.send("HeapProfiler.takeHeapSnapshot", { reportProgress: false });
+      cdp.off("HeapProfiler.addHeapSnapshotChunk", onChunk);
+      writeFileSync(resolve(OUT, "concord-walk.heapsnapshot"), chunks.join(""));
+    }
+    // Read the coverage from the seed page, which bundles the store's readers.
+    await page.goto("/e2e/concordSeed.html");
+    await page.waitForFunction(() => Boolean(window.__armadaConcordCoverage), null, { timeout: 60_000 });
+    const coverage = await page.evaluate(([c, ids]) => window.__armadaConcordCoverage(c, ids), [walk.communityId, walk.channelIds]);
+    const stored = coverage.reduce((n, c) => n + c.stored, 0);
+    save("concord-walk", {
+      hot,
+      cost: cost(a, b, (Date.now() - t) / 1000),
+      after,
+      heapFloorAfterMB,
+      longTasks: {
+        count: longTasks.length,
+        totalMs: longTasks.reduce((n, [, d]) => n + d, 0),
+        maxMs: longTasks.reduce((n, [, d]) => Math.max(n, d), 0),
+        over100ms: longTasks.filter(([, d]) => d > 100).length,
+      },
+      relay,
+      walked: { stored, of: walk.wraps.length, channelsExhausted: coverage.filter((c) => c.exhausted).length, perChannel: coverage },
+      errors: errorsSince(mark),
+      report: rep,
+    });
+    fakeRelayEvents = [];
+  }
+
+
+  if (wants("dm-walk")) {
+    // NIP-17 the way a fresh login meets it: every message a real gift wrap on
+    // the account's DM relay, nothing on disk.
+    const dmMe = person("dm-walk-me");
+    const senders = Array.from({ length: 20 }, (_, i) => person(`dm-peer${i}`));
+    const DM_WALK = 3000;
+    const WALK_SEC = Number(opt("walk-sec", "90"));
+    const span = 86400 * 90;
+    const wraps = [];
+    const builtAt = Date.now();
+    for (let i = 0; i < DM_WALK; i++) {
+      const from = senders[i % senders.length];
+      const createdAt = nowSec - span + Math.floor((span * i) / DM_WALK);
+      const rumor = { kind: 14, content: `${LINES[i % LINES.length]} (#${i})`, tags: [["p", dmMe.pubkey]], created_at: createdAt, pubkey: from.pubkey };
+      rumor.id = getEventHash(rumor);
+      const seal = finalizeEvent(
+        { kind: 13, content: nip44.encrypt(JSON.stringify(rumor), nip44.getConversationKey(from.sk, dmMe.pubkey)), tags: [], created_at: createdAt },
+        from.sk,
+      );
+      const wrapSk = generateSecretKey();
+      wraps.push(finalizeEvent(
+        { kind: 1059, content: nip44.encrypt(JSON.stringify(seal), nip44.getConversationKey(wrapSk, dmMe.pubkey)), tags: [["p", dmMe.pubkey]], created_at: createdAt },
+        wrapSk,
+      ));
+    }
+    console.log(`\nbuilt ${DM_WALK} gift wraps in ${Date.now() - builtAt}ms`);
+
+    await page.goto("/e2e/screenshotSeed.html");
+    await login(dmMe);
+    await page.evaluate((pk) => {
+      localStorage.setItem(`armada:app-config:${pk}`, JSON.stringify({ dmRelays: ["wss://dm.invalid"], useAppRelays: false }));
+    }, dmMe.pubkey);
+    fakeRelayEvents = wraps;
+
+    console.log(`▶ dm-walk (${WALK_SEC}s with the DM list open)`);
+    const mark = errors.length;
+    fakeRelayReqs.reqs = 0;
+    fakeRelayReqs.events = 0;
+    await page.goto("/dm");
+    await perfReady(page);
+    await page.evaluate(() => {
+      window.__busy = [];
+      new PerformanceObserver((list) => {
+        for (const e of list.getEntries()) window.__busy.push([Math.round(e.startTime), Math.round(e.duration)]);
+      }).observe({ type: "longtask", buffered: false });
+    });
+    await resetCounters(page);
+    const a = await metrics(cdp);
+    const t = Date.now();
+    const { hot } = await cpuProfile("dm-walk", () => page.waitForTimeout(WALK_SEC * 1000));
+    const b = await metrics(cdp);
+    const longTasks = await page.evaluate(() => window.__busy);
+    const rep = await report(page);
+    const relay = { ...fakeRelayReqs };
+    const after = await measureIdle(page, cdp, Number(opt("walk-after-sec", "60")));
+    const heapFloorAfterMB = await heapFloorMB(cdp);
+    await page.goto("/e2e/screenshotSeed.html");
+    await page.waitForFunction(() => Boolean(window.__armadaDmCoverage), null, { timeout: 60_000 });
+    const coverage = await page.evaluate((pk) => window.__armadaDmCoverage(pk), dmMe.pubkey);
+    save("dm-walk", {
+      hot,
+      cost: cost(a, b, (Date.now() - t) / 1000),
+      after,
+      heapFloorAfterMB,
+      longTasks: {
+        count: longTasks.length,
+        totalMs: longTasks.reduce((n, [, d]) => n + d, 0),
+        maxMs: longTasks.reduce((n, [, d]) => Math.max(n, d), 0),
+        over100ms: longTasks.filter(([, d]) => d > 100).length,
+      },
+      relay,
+      walked: { stored: coverage.stored, of: DM_WALK, relaysExhausted: coverage.exhausted.length },
+      errors: errorsSince(mark),
+      report: rep,
+    });
+    fakeRelayEvents = [];
+    // Back to the world's account for whatever runs next.
+    await login(world.me);
   }
 
   if (LIVE.some(wants)) {

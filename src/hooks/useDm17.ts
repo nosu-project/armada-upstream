@@ -29,7 +29,6 @@ import { mayBulkDecrypt, signerNeedsApproval } from "@/lib/bulkDecryptGate";
 import { getDecryptConsent } from "@/lib/decryptConsent";
 import { isDmSynced, markDmSynced } from "@/lib/dmSynced";
 import { STORE_READ } from "@/lib/storeQuery";
-import { beginSyncTask } from "@/lib/syncActivity";
 import { logSync } from "@/lib/syncLog";
 import { markOwnWebPushEvent } from "@/lib/webPushState";
 import {
@@ -162,6 +161,8 @@ export function clearDm17SessionState(): void {
   seenWrapIds.clear();
   seenWrapsLoaded.clear();
   walkedWrapIds.clear();
+  for (const timer of historyPauses.values()) clearTimeout(timer);
+  historyPauses.clear();
   dmPeerSignalStore.clear();
 }
 
@@ -673,6 +674,11 @@ const HISTORY_PAGES_PER_RELAY = 2;
 /** Wraps the history walk opened, so another relay's copy isn't opened again. */
 const walkedWrapIds = new Set<string>();
 const WALKED_WRAP_CAP = 20_000;
+/** A remote signer's page: each wrap is two decrypt requests to the bunker or extension. */
+const REMOTE_HISTORY_PAGE = 50;
+/** Pause between a remote signer's rounds, so the walk never monopolizes the signer. */
+const REMOTE_HISTORY_PAUSE_MS = 30_000;
+const historyPauses = new Map<string, ReturnType<typeof setTimeout>>();
 
 export interface Dm17HistoryOutcome {
   /** Some relay still has history below its `relayOldest`. */
@@ -704,12 +710,12 @@ export async function walkDm17History(ctx: SyncCtx, signal: AbortSignal): Promis
   let progressed = false;
   let failed = false;
   let declined = false;
-  let read = 0;
-  const task = beginSyncTask("message history", { scope: `dm17hist:${ctx.self}` });
+  // A remote signer answers each decrypt over a relay round trip: small pages.
+  const limit = signerNeedsApproval(ctx.method) ? REMOTE_HISTORY_PAGE : INBOX_PAGE;
   const walkRelay = async (relay: string) => {
     let until = cursor?.relayOldest?.[relay];
     for (let n = 0; n < HISTORY_PAGES_PER_RELAY && !signal.aborted; n++) {
-      const filter: NostrFilter = { kinds: [KIND_DM_WRAP], "#p": [ctx.self], limit: INBOX_PAGE };
+      const filter: NostrFilter = { kinds: [KIND_DM_WRAP], "#p": [ctx.self], limit };
       if (until !== undefined) filter.until = until;
       let page: NostrEvent[];
       try {
@@ -735,8 +741,6 @@ export async function walkDm17History(ctx: SyncCtx, signal: AbortSignal): Promis
       if (walkedWrapIds.size + fresh.length > WALKED_WRAP_CAP) walkedWrapIds.clear();
       for (const wrap of fresh) walkedWrapIds.add(wrap.id);
       progressed = true;
-      read += page.length;
-      task.update({ detail: `${read} direct messages checked` });
       until = Math.min(...page.map((wrap) => wrap.created_at)) - 1;
       if (until <= 0) {
         relayExhaustedAt[relay] = Date.now();
@@ -745,13 +749,9 @@ export async function walkDm17History(ctx: SyncCtx, signal: AbortSignal): Promis
       relayOldest[relay] = until;
     }
   };
-  try {
-    for (const relay of pending) {
-      await walkRelay(relay);
-      if (declined || signal.aborted) break;
-    }
-  } finally {
-    task.end();
+  for (const relay of pending) {
+    await walkRelay(relay);
+    if (declined || signal.aborted) break;
   }
   if (progressed) {
     await updateDm17Cursor(ctx.self, { relayOldest, relayExhaustedAt }, { pruneRelaysTo: ctx.relays });
@@ -776,7 +776,16 @@ registerSyncTopic("dm17hist:", {
     if (signal.aborted) return;
     // A failure that got nowhere backs off through the scheduler rather than spinning.
     if (outcome.failed && !outcome.progressed) throw new Error("DM history walk made no progress");
-    if (outcome.more && outcome.progressed) invalidateSyncTopic(topic);
+    if (!outcome.more || !outcome.progressed) return;
+    if (!signerNeedsApproval(ctx.method)) {
+      invalidateSyncTopic(topic);
+      return;
+    }
+    clearTimeout(historyPauses.get(topic));
+    historyPauses.set(topic, setTimeout(() => {
+      historyPauses.delete(topic);
+      invalidateSyncTopic(topic);
+    }, REMOTE_HISTORY_PAUSE_MS));
   },
 });
 

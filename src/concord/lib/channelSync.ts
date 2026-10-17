@@ -258,6 +258,8 @@ export interface BackfillResult {
 
 /** Floor between two bus rings from one round's older-history pages. */
 const OLDER_RING_MS = 1_500;
+/** The same floor for every page of a background round, none of which is on screen. */
+const BACKGROUND_RING_MS = 5_000;
 
 interface ThrottledRing {
   /** Rings now if the floor has passed, else once it does. */
@@ -332,6 +334,13 @@ export interface RoundBudget {
    * an all-empty run is otherwise inconclusive.
    */
   sealOnEmpty?: boolean;
+  /**
+   * Background: no sync task (the in-chat indicator means "this conversation is
+   * catching up", and every task change re-renders its readers) and every write
+   * announced through one throttled ring, since each `c2:` ring re-runs the
+   * community-wide readers.
+   */
+  background?: boolean;
 }
 
 /** The open channel's round: a burst is bridged now, deep history is left to scrolling and the walker. */
@@ -357,12 +366,12 @@ export async function syncChannelRound(
   ctx: ChannelSyncContext,
   signal: AbortSignal,
   budget: RoundBudget = LIVE_ROUND,
-  // The open channel's round is scoped `c2:<id>`, so the chat view can tell its own catch-up from other sync.
-  taskScope = `c2:${ctx.channel.idHex}`,
 ): Promise<RoundOutcome> {
   const { nostr, community, channel } = ctx;
   const idHex = channel.idHex;
-  const task = beginSyncTask(`#${channel.name}`, { scope: taskScope });
+  // Scoped `c2:<id>` so the chat view can tell its own catch-up from other sync.
+  const task = budget.background ? undefined : beginSyncTask(`#${channel.name}`, { scope: `c2:${idHex}` });
+  const pageRing = budget.background ? throttledRing(`c2:${idHex}`, BACKGROUND_RING_MS) : undefined;
   try {
     // Heal a POISONED cursor: `exhausted` with `oldest === 0` was sealed by an
     // all-empty run and never paged; clear it so history gets pulled.
@@ -382,7 +391,7 @@ export async function syncChannelRound(
     const authGate = (url: string) => whenAuthSettled(url, () => channel.streams.map((s) => s.group));
     let synced = 0;
     const tick = () => {
-      if (synced > 0) task.update({ detail: `${synced} ${synced === 1 ? "message" : "messages"}` });
+      if (synced > 0) task?.update({ detail: `${synced} ${synced === 1 ? "message" : "messages"}` });
     };
     // Decrypt + commit per page (each write rings the bus). A page that failed to
     // commit must never be covered by a saved cursor.
@@ -392,7 +401,7 @@ export async function syncChannelRound(
       // Skip wraps whose rumors are already stored (the wire's persisted memo).
       const fresh = await unseenPlaneWraps(events);
       if (fresh.length === 0 || signal.aborted) return;
-      const opened = await openChatBatch(fresh, channel, { signal });
+      const opened = await openChatBatch(fresh, channel, { signal, remember: !budget.background });
       if (opened.length === 0) return;
       const stored = await writeRumors(community.idHex, opened, { ring: !ring });
       if (stored) {
@@ -413,7 +422,7 @@ export async function syncChannelRound(
       emptyOk: newestSince !== undefined,
       freezeRetired,
       beforeRelay: authGate,
-      onPage: writePage,
+      onPage: (events) => writePage(events, pageRing),
     });
     if (signal.aborted) return ABORTED;
 
@@ -441,7 +450,7 @@ export async function syncChannelRound(
             emptyOk: true,
             freezeRetired,
             beforeRelay: authGate,
-            onPage: writePage,
+            onPage: (events) => writePage(events, pageRing),
           });
           pages -= r.pages;
           bridgeCount += r.count;
@@ -481,7 +490,7 @@ export async function syncChannelRound(
     // Rings are throttled to OLDER_RING_MS: these pages are off-screen and every
     // ring re-runs community-wide readers.
     const resumeFrom = saved?.oldest || (newest.coveredDownTo !== undefined ? newest.coveredDownTo - 1 : undefined);
-    const olderRing = throttledRing(`c2:${idHex}`, OLDER_RING_MS);
+    const olderRing = pageRing ?? throttledRing(`c2:${idHex}`, OLDER_RING_MS);
     const sealOnEmpty = Boolean(budget.sealOnEmpty && saved?.oldest);
     let older: BackfillResult = { events: [], count: 0, pages: 0, reachedBottom: true, exhausted: true, failed: false };
     try {
@@ -537,7 +546,8 @@ export async function syncChannelRound(
       failed: newest.failed || older.failed || bridgeFailed || writeFailed,
     };
   } finally {
-    task.end();
+    pageRing?.flush();
+    task?.end();
   }
 }
 
@@ -556,7 +566,7 @@ registerSyncTopic("c2:", {
  * A background history round's budget. Bounded so one deep channel can't hold
  * the scheduler's single background lane; the topic re-queues itself instead.
  */
-const HISTORY_ROUND: RoundBudget = { bridgePages: 40, olderPages: 20, sealOnEmpty: true };
+const HISTORY_ROUND: RoundBudget = { bridgePages: 40, olderPages: 20, sealOnEmpty: true, background: true };
 
 const historyContexts = new Map<string, ChannelSyncContext>();
 
@@ -582,7 +592,7 @@ registerSyncTopic("c2hist:", {
     if (!ctx) throw new Error(`no channel history context for ${topic}`);
     let outcome: RoundOutcome;
     try {
-      outcome = await syncChannelRound(ctx, signal, HISTORY_ROUND, topic);
+      outcome = await syncChannelRound(ctx, signal, HISTORY_ROUND);
     } catch {
       // Unreachable, or an empty channel (an all-empty answer is inconclusive):
       // either way the walk waits for the next stale pass rather than spinning.

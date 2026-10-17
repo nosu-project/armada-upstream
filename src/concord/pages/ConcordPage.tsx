@@ -134,7 +134,7 @@ import type { ProjectWorkItem } from "@/components/projects/projectData";
 import { useCommunityGitActivity } from "@/hooks/useCommunityGitActivity";
 import { useNewMessagesDivider } from "@/hooks/useNewMessagesDivider";
 import { useDelayedFlag } from "@/hooks/useDelayedFlag";
-import { useSyncTasks } from "@/hooks/useSyncActivity";
+import { useSyncTaskInScope } from "@/hooks/useSyncActivity";
 import { useSyncTopicState } from "@/sync/useSyncTopic";
 import { concordChannelMuteKey, useMutes } from "@/hooks/useMutes";
 import { useNotifLevels, concordChannelScopeKey } from "@/hooks/useNotifLevels";
@@ -2204,13 +2204,10 @@ export function ConcordPage() {
 
   // `channelSyncing`: the on-screen channel's sync topic is pending or a task is
   // scoped to it, so an empty read never shows "No messages yet" mid-catch-up.
-  const syncTasks = useSyncTasks();
   const channelScope = channel ? `c2:${channel.idHex}` : undefined;
   const channelTopic = useSyncTopicState(channelScope);
-  const channelSyncing = Boolean(
-    channelScope &&
-      (channelTopic.status === "pending" || syncTasks.some((t) => t.scope === channelScope)),
-  );
+  const channelTaskRunning = useSyncTaskInScope(channelScope);
+  const channelSyncing = Boolean(channelScope && (channelTopic.status === "pending" || channelTaskRunning));
   // The serial gate (list → control sweep → fold) as "syncing" on a cold load, so
   // the pane isn't blank before a Channel exists. Scoped so a missing community
   // still reaches not-found.

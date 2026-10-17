@@ -12,7 +12,7 @@
 // origin, where the routed app reads the same IndexedDB back. Login state is
 // separate: the spec sets `armada:login` in an init script before boot.
 import { appEventStore } from "@/lib/db/mainEventStore";
-import { writeDm17Rumors } from "@/lib/nip17/dm17Store";
+import { dm17Store, readDm17Cursor, writeDm17Rumors } from "@/lib/nip17/dm17Store";
 
 import type { NostrRumor } from "@/lib/nostrRumor";
 import type { OpenedDm } from "@/lib/nip17/protocol";
@@ -53,6 +53,7 @@ export interface SeedPayload {
 declare global {
   interface Window {
     __armadaSeed?: (payload: SeedPayload) => Promise<void>;
+    __armadaDmCoverage?: typeof dmCoverage;
   }
 }
 
@@ -98,4 +99,12 @@ async function seed(payload: SeedPayload): Promise<void> {
   await writeDm17Rumors(payload.self, opened);
 }
 
+/** NIP-17 messages on this device, and which relays the history walk finished. */
+async function dmCoverage(self: string) {
+  const stored = await dm17Store(self).query([{ kinds: [14, 15], limit: 100_000 }]);
+  const cursor = await readDm17Cursor(self);
+  return { stored: stored.length, exhausted: Object.keys(cursor?.relayExhaustedAt ?? {}) };
+}
+
 window.__armadaSeed = seed;
+window.__armadaDmCoverage = dmCoverage;
