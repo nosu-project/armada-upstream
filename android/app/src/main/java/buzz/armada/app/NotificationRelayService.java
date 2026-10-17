@@ -126,7 +126,11 @@ import okhttp3.WebSocketListener;
 public class NotificationRelayService extends Service {
 
     private static final String TAG = "ArmadaNotifSvc";
-    static final String SVC_CHANNEL_ID = "armada_background_service";
+    // Bumped to _v2: IMPORTANCE_MIN (no status bar icon) is less intrusive than
+    // LOW, so users are less likely to disable it and break the background service;
+    // the channel bump resets any existing disable to the new enabled default.
+    static final String SVC_CHANNEL_ID = "armada_background_service_v2";
+    private static final String SVC_CHANNEL_ID_LEGACY = "armada_background_service";
     // Channel settings are immutable once created, so new vibration/importance
     // settings need a new id; the old channel is deleted in createChannels().
     static final String MSG_CHANNEL_ID = "armada_notifications_v2";
@@ -7875,19 +7879,23 @@ public class NotificationRelayService extends Service {
         NotificationManager m = getSystemService(NotificationManager.class);
         if (m == null) return;
 
+        // IMPORTANCE_MIN: no status bar icon, silent — just present enough for
+        // Android to honour the foreground service guarantee.  Users who want
+        // no visible entry can still disable this channel, but the lower
+        // intrusion means fewer do so accidentally.
         NotificationChannel svc = new NotificationChannel(
-                SVC_CHANNEL_ID, "Background connection", NotificationManager.IMPORTANCE_LOW);
+                SVC_CHANNEL_ID, "Background connection", NotificationManager.IMPORTANCE_MIN);
         svc.setDescription("Keeps Armada connected for instant notifications");
         svc.setShowBadge(false);
         m.createNotificationChannel(svc);
 
-        // Retire the old message channel so the stronger vibration + HIGH
-        // importance below apply on upgrades (channel settings can't be edited
-        // in place — only a fresh channel id picks up the new config).
-        try {
-            m.deleteNotificationChannel(MSG_CHANNEL_ID_LEGACY);
-        } catch (Exception ignored) {
-            // Channel may not exist (fresh install) — nothing to retire.
+        // Retire old channels whose settings are now superseded by a new id.
+        for (String legacy : new String[]{ SVC_CHANNEL_ID_LEGACY, MSG_CHANNEL_ID_LEGACY }) {
+            try {
+                m.deleteNotificationChannel(legacy);
+            } catch (Exception ignored) {
+                // Channel may not exist (fresh install) — nothing to retire.
+            }
         }
 
         NotificationChannel msg = new NotificationChannel(
