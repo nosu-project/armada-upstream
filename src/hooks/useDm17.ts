@@ -23,6 +23,7 @@ import { customEmojiReactionTags } from "@/hooks/useReactions";
 import { useResumeEpoch } from "@/hooks/useResumeEpoch";
 import { effectiveDmRelays } from "@/contexts/AppContext";
 import { normalizeRelayUrl } from "@/lib/platform";
+import { isRelayUnreachable } from "@/lib/relayHealth";
 import { nativeDmCoverage } from "@/lib/nativeNotifications";
 import { mayBulkDecrypt, signerNeedsApproval } from "@/lib/bulkDecryptGate";
 import { getDecryptConsent } from "@/lib/decryptConsent";
@@ -83,6 +84,7 @@ import {
   peerSignalContent,
   type PeerSignalEvent,
 } from "@/lib/webxdcRealtime";
+import { invalidateSyncTopic, registerSyncTopic, syncHalted, want } from "@/sync/syncManager";
 import { useWireScopes } from "@/wire/useWireScopes";
 import { dmThreadScope, emitWireScopes } from "@/wire/bus";
 import { dm17NotifyCandidates, feedNotifyCandidates } from "@/wire/notify";
@@ -158,6 +160,10 @@ export function clearDm17SessionState(): void {
   lastSyncDeclined.clear();
   seenWrapIds.clear();
   seenWrapsLoaded.clear();
+  walkedWrapIds.clear();
+  for (const timer of historyPauses.values()) clearTimeout(timer);
+  historyPauses.clear();
+  historyCtxs.clear();
   dmPeerSignalStore.clear();
 }
 
@@ -262,7 +268,20 @@ function dispatchDmPeerSignal(dm: OpenedDm): void {
  * Open wraps (consent-gated) and persist the DM rumors; false when the gate deferred.
  * Background (non-interactive) syncs defer rather than pop the consent prompt.
  */
-async function openAndStore(ctx: SyncCtx, wraps: NostrEvent[], interactive: boolean): Promise<boolean> {
+async function openAndStore(
+  ctx: SyncCtx,
+  wraps: NostrEvent[],
+  interactive: boolean,
+  opts?: {
+    /** False keeps wraps out of the seen memo and their plaintext out of the signer's decrypt cache. */
+    remember?: boolean;
+    /** Once aborted nothing is written, and the call reports false. */
+    signal?: AbortSignal;
+    /** Receives how many wraps opened, peer signals and foreign kinds included. */
+    stats?: { opened: number };
+  },
+): Promise<boolean> {
+  const remember = opts?.remember ?? true;
   if (wraps.length === 0) return true;
   const needsApproval = signerNeedsApproval(ctx.method);
   if (!interactive && needsApproval && getDecryptConsent() !== "allowed") {
@@ -285,9 +304,10 @@ async function openAndStore(ctx: SyncCtx, wraps: NostrEvent[], interactive: bool
   for (let i = 0; i < wraps.length; i += DECRYPT_WAVE) {
     await Promise.all(
       wraps.slice(i, i + DECRYPT_WAVE).map(async (wrap) => {
-        const dm = await openDmWrap(wrap, ctx.signer as Dm17Signer, ctx.self);
-        seen.add(wrap.id);
+        const dm = await openDmWrap(wrap, ctx.signer as Dm17Signer, ctx.self, remember ? undefined : { cache: false });
+        if (remember) seen.add(wrap.id);
         if (!dm) return;
+        if (opts?.stats) opts.stats.opened++;
         // Peer signals are live routing, not history: dispatched, not stored.
         if (dm.kind === KIND_DM_PEER_SIGNAL) {
           peerSignals.push(dm);
@@ -298,11 +318,14 @@ async function openAndStore(ctx: SyncCtx, wraps: NostrEvent[], interactive: bool
       }),
     );
     if (i + DECRYPT_WAVE < wraps.length) await new Promise((r) => setTimeout(r, 0));
+    if (opts?.signal?.aborted) return false;
   }
 
+  // Logout's purge halts sync first: nothing decrypted may land after it.
+  if (opts?.signal?.aborted || syncHalted()) return false;
   await writeDm17Rumors(ctx.self, opened);
   feedNotifyCandidates(dm17NotifyCandidates(opened, ctx.self));
-  persistSeenWraps(ctx.self);
+  if (remember) persistSeenWraps(ctx.self);
   for (const signal of peerSignals) dispatchDmPeerSignal(signal);
 
   return true;
@@ -447,6 +470,42 @@ function mergeRelayPages(pages: Dm17RelayPage[]): NostrEvent[] {
 }
 
 /**
+ * A page at least this long may have been cut short by the relay. Below
+ * `INBOX_PAGE` because relays cap `limit` on their own (100 is common), and a
+ * capped page reads like a short one.
+ */
+const CAPPED_PAGE_FLOOR = 100;
+/** Pages a scan follows one relay's burst down before leaving it to the next scan. */
+const FORWARD_MAX_PAGES = 10;
+
+/**
+ * Page a since-bounded relay answer down to its `since` while pages keep coming
+ * back full, so a burst wider than one page isn't skipped by the watermark.
+ * `complete` is false if the floor wasn't reached.
+ */
+export async function pageForwardRest(
+  nostr: Pick<NostrPool, "relay">,
+  relay: string,
+  filter: NostrFilter,
+  first: NostrEvent[],
+): Promise<{ events: NostrEvent[]; complete: boolean }> {
+  const events = [...first];
+  let page = first;
+  for (let n = 1; page.length >= CAPPED_PAGE_FLOOR; n++) {
+    if (n >= FORWARD_MAX_PAGES) return { events, complete: false };
+    const until = Math.min(...page.map((event) => event.created_at)) - 1;
+    if (filter.since !== undefined && until < filter.since) break;
+    try {
+      page = await nostr.relay(relay).query([{ ...filter, until }], { signal: AbortSignal.timeout(8000) });
+    } catch {
+      return { events, complete: false };
+    }
+    events.push(...page);
+  }
+  return { events, complete: true };
+}
+
+/**
  * Per-relay watermark: a scan completed at S proves later wraps have
  * `created_at ≥ S − MAX_WRAP_BACKDATE_SECS`, raised to the newest wrap returned.
  * Only kind 1059 may raise it — a non-backdated event would push it past in-flight
@@ -511,12 +570,20 @@ async function runInboxSync(
         cursor?.relayNewest?.[relay] === undefined || opts?.full || covered.has(normalizeRelayUrl(relay) ?? relay)
           || now - lastFullOf(relay) >= FULL_SCAN_INTERVAL_MS),
     );
-    const result = await queryWrapsPerRelay(
-      ctx.nostr,
-      scan,
-      (relay) => dm17InboxFilter(ctx.self, cursor, relay, fullRelays.has(relay)),
-      AbortSignal.timeout(8000),
-    );
+    const filterFor = (relay: string) => dm17InboxFilter(ctx.self, cursor, relay, fullRelays.has(relay));
+    const first = await queryWrapsPerRelay(ctx.nostr, scan, filterFor, AbortSignal.timeout(8000));
+    // A since-bounded page that came back full is the top of a burst, not all of it.
+    const unfinished = new Set<string>();
+    const result: Dm17RelayQueryResult = {
+      failed: first.failed,
+      pages: await Promise.all(first.pages.map(async (page) => {
+        const filter = filterFor(page.url);
+        if (filter.since === undefined) return page;
+        const rest = await pageForwardRest(ctx.nostr, page.url, filter, page.events);
+        if (!rest.complete) unfinished.add(page.url);
+        return { url: page.url, events: rest.events };
+      })),
+    };
     if (result.pages.length === 0) {
       logSync("dm", `inbox scan failed on all ${scan.length} relay(s)`);
       return false;
@@ -530,12 +597,15 @@ async function runInboxSync(
     const fresh = wraps.filter((w) => !seen.has(w.id));
 
     if (!(await openAndStore(ctx, fresh, opts?.interactive ?? false))) return false; // deferred: retry later
+    if (syncHalted()) return false;
     // Only successful, consumed pages advance their watermark; failed relays stay full-scan
     // candidates.
     const nowSecs = Math.floor(now / 1000);
-    const relayNewest = relayScanWatermarks(result.pages, nowSecs);
+    // A relay whose burst wasn't read to its floor keeps its watermark, so the next scan retries it.
+    const finished = result.pages.filter((page) => !unfinished.has(page.url));
+    const relayNewest = relayScanWatermarks(finished, nowSecs);
     const relayFullScanAt: Record<string, number> = {};
-    for (const page of result.pages) {
+    for (const page of finished) {
       if (fullRelays.has(page.url)) {
         lastFullScanAt.set(`${ctx.self}\u0000${page.url}`, now);
         relayFullScanAt[page.url] = now;
@@ -610,6 +680,181 @@ async function pageOlderDmWraps(
     exhausted: result.failed.length === 0 && result.pages.every((page) => page.events.length < INBOX_PAGE),
     scanned: wraps.length,
   };
+}
+
+/** Pages one history round reads per relay; the topic re-queues itself until every relay is walked. */
+const HISTORY_PAGES_PER_RELAY = 2;
+/** Wraps the history walk opened, so another relay's copy isn't opened again. */
+const walkedWrapIds = new Set<string>();
+const WALKED_WRAP_CAP = 20_000;
+/** A remote signer's page: each wrap is two decrypt requests to the bunker or extension. */
+const REMOTE_HISTORY_PAGE = 50;
+/** Pause between a remote signer's rounds, so the walk never monopolizes the signer. */
+const REMOTE_HISTORY_PAUSE_MS = 30_000;
+const historyPauses = new Map<string, ReturnType<typeof setTimeout>>();
+
+export interface Dm17HistoryOutcome {
+  /** Some relay still has history below its `relayOldest`. */
+  more: boolean;
+  /** The round read at least one page into the store. */
+  progressed: boolean;
+  /** A relay errored or the decrypt gate declined. */
+  failed: boolean;
+  /** More fetched wraps failed to open than opened: not worth an immediate requeue. */
+  mostlyUnopened: boolean;
+}
+
+/**
+ * One round of the background history walk: each relay's `#p` stream is paged
+ * down from its own `relayOldest` until a page comes back EMPTY. Not until a
+ * short one: relays cap `limit` on their own, so a short page proves nothing.
+ * Relays go one after another so a wrap every relay holds is opened once.
+ */
+export async function walkDm17History(ctx: SyncCtx, signal: AbortSignal): Promise<Dm17HistoryOutcome> {
+  const idle: Dm17HistoryOutcome = { more: false, progressed: false, failed: false, mostlyUnopened: false };
+  if (!ctx.signer.nip44 || ctx.relays.length === 0) return idle;
+  // Background work never prompts.
+  if (signerNeedsApproval(ctx.method) && getDecryptConsent() !== "allowed") return idle;
+  await loadSeenWraps(ctx.self);
+  const cursor = await readDm17Cursor(ctx.self);
+  const pending = ctx.relays.filter((relay) => !cursor?.relayExhaustedAt?.[relay] && !isRelayUnreachable(relay));
+  if (pending.length === 0) return idle;
+
+  const relayOldest: Record<string, number> = {};
+  const relayExhaustedAt: Record<string, number> = {};
+  let progressed = false;
+  let failed = false;
+  let declined = false;
+  let opened = 0;
+  let unopened = 0;
+  // A remote signer answers each decrypt over a relay round trip: small pages.
+  const limit = signerNeedsApproval(ctx.method) ? REMOTE_HISTORY_PAGE : INBOX_PAGE;
+  const walkRelay = async (relay: string) => {
+    let until = cursor?.relayOldest?.[relay];
+    for (let n = 0; n < HISTORY_PAGES_PER_RELAY && !signal.aborted; n++) {
+      const filter: NostrFilter = { kinds: [KIND_DM_WRAP], "#p": [ctx.self], limit };
+      if (until !== undefined) filter.until = until;
+      let page: NostrEvent[];
+      try {
+        page = await ctx.nostr.relay(relay).query([filter], { signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]) });
+      } catch {
+        failed = true;
+        return;
+      }
+      if (signal.aborted) return;
+      if (page.length === 0) {
+        relayExhaustedAt[relay] = Date.now();
+        progressed = true;
+        return;
+      }
+      const seen = seenSetFor(ctx.self);
+      const fresh = page.filter((wrap) => !seen.has(wrap.id) && !walkedWrapIds.has(wrap.id));
+      // Kept out of the persisted memo, whose eviction would otherwise push out the
+      // recent wraps the forward scans rely on it for.
+      const stats = { opened: 0 };
+      const stored = await openAndStore(ctx, fresh, false, { remember: false, signal, stats });
+      if (signal.aborted) return;
+      if (!stored) {
+        declined = true;
+        return;
+      }
+      if (walkedWrapIds.size + fresh.length > WALKED_WRAP_CAP) walkedWrapIds.clear();
+      for (const wrap of fresh) walkedWrapIds.add(wrap.id);
+      progressed = true;
+      // Wrap signatures are never checked, so a relay can mint pages of junk forever.
+      unopened += fresh.length - stats.opened;
+      opened += stats.opened;
+      until = Math.min(...page.map((wrap) => wrap.created_at)) - 1;
+      if (until <= 0) {
+        relayExhaustedAt[relay] = Date.now();
+        return;
+      }
+      relayOldest[relay] = until;
+    }
+  };
+  for (const relay of pending) {
+    await walkRelay(relay);
+    if (declined || signal.aborted) break;
+  }
+  // The cursor only covers pages already stored, so an ordinary abort keeps it; a
+  // halted scheduler means logout's purge has begun.
+  if (progressed && !syncHalted()) {
+    await updateDm17Cursor(ctx.self, { relayOldest, relayExhaustedAt }, { pruneRelaysTo: ctx.relays });
+  }
+  const after = await readDm17Cursor(ctx.self);
+  return {
+    more: ctx.relays.some((relay) => !after?.relayExhaustedAt?.[relay] && !isRelayUnreachable(relay)),
+    progressed,
+    failed: failed || declined,
+    mostlyUnopened: unopened > opened,
+  };
+}
+
+const historyCtxs = new Map<string, SyncCtx>();
+
+registerSyncTopic("dm17hist:", {
+  minIntervalMs: 5_000,
+  staleAfterMs: 60 * 60_000,
+  handler: async ({ topic, signal }) => {
+    const ctx = historyCtxs.get(topic.slice("dm17hist:".length));
+    if (!ctx) throw new Error(`no DM history context for ${topic}`);
+    const outcome = await walkDm17History(ctx, signal);
+    if (signal.aborted) return;
+    // A failure that got nowhere backs off through the scheduler rather than spinning.
+    if (outcome.failed && !outcome.progressed) throw new Error("DM history walk made no progress");
+    // A round that mostly fetched what wouldn't open waits for the stale pass.
+    if (!outcome.more || !outcome.progressed || outcome.mostlyUnopened) return;
+    if (!signerNeedsApproval(ctx.method)) {
+      invalidateSyncTopic(topic);
+      return;
+    }
+    clearTimeout(historyPauses.get(topic));
+    historyPauses.set(topic, setTimeout(() => {
+      historyPauses.delete(topic);
+      invalidateSyncTopic(topic);
+    }, REMOTE_HISTORY_PAUSE_MS));
+  },
+});
+
+/**
+ * Walk the whole NIP-17 inbox in the background, so local search covers history
+ * older than the forward scans ever reached. Only where decrypting is silent:
+ * a local key, or bulk-decrypt consent already given. Mounted once by DmSyncLifecycle.
+ */
+export function useDm17HistoryWalk(): void {
+  const ctx = useDm17SyncCtx();
+  const { consent } = useDecryptConsent();
+  useEffect(() => {
+    if (!ctx || ctx.relays.length === 0) return;
+    if (signerNeedsApproval(ctx.method) && consent !== "allowed") return;
+    historyCtxs.set(ctx.self, ctx);
+    const release = want(`dm17hist:${ctx.self}`, "prefetch");
+    return () => {
+      release();
+      if (historyCtxs.get(ctx.self) === ctx) historyCtxs.delete(ctx.self);
+    };
+  }, [ctx, consent]);
+}
+
+/**
+ * Whether the history walk still has relays to read, so search can say its
+ * answer may be partial. False where the walk doesn't run (decrypting would prompt).
+ */
+export function useDm17HistoryIncomplete(enabled = true): boolean {
+  const ctx = useDm17SyncCtx();
+  const { consent } = useDecryptConsent();
+  const walks = !!ctx && ctx.relays.length > 0 && (!signerNeedsApproval(ctx.method) || consent === "allowed");
+  const query = useQuery<boolean>({
+    queryKey: ["dm17", "history-incomplete", ctx?.self, ctx?.relays.join(",")],
+    enabled: enabled && walks,
+    staleTime: 15_000,
+    refetchInterval: 30_000,
+    queryFn: async () => {
+      const cursor = await readDm17Cursor(ctx!.self);
+      return ctx!.relays.some((relay) => !cursor?.relayExhaustedAt?.[relay] && !isRelayUnreachable(relay));
+    },
+  });
+  return enabled && walks && (query.data ?? false);
 }
 
 function useDm17SyncCtx(): SyncCtx | undefined {

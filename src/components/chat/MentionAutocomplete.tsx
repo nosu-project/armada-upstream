@@ -20,6 +20,8 @@ interface MentionAutocompleteProps {
   restrictToPubkeys?: string[];
   /** Offer Concord's @everyone; the caller has checked MENTION_EVERYONE. */
   allowEveryone?: boolean;
+  /** Where an already-inserted `@Name` mention begins: not a query. */
+  isMentionStart?: (pos: number) => boolean;
 }
 
 /** `@query` profile autocomplete at the caret; inserts `nostr:npub1...` (NIP-27). */
@@ -29,6 +31,7 @@ export function MentionAutocomplete({
   onInsertMention,
   restrictToPubkeys,
   allowEveryone = false,
+  isMentionStart,
 }: MentionAutocompleteProps) {
   const [mentionQuery, setMentionQuery] = useState("");
   const [mentionStart, setMentionStart] = useState(-1);
@@ -72,7 +75,7 @@ export function MentionAutocomplete({
       }
     }
 
-    if (atPos === -1) {
+    if (atPos === -1 || isMentionStart?.(atPos)) {
       setIsOpen(false);
       setMentionQuery("");
       setMentionStart(-1);
@@ -100,7 +103,7 @@ export function MentionAutocomplete({
       bottom: window.innerHeight - rect.top + 6,
       left: Math.max(8, Math.min(rect.left + caret.left, window.innerWidth - 280 - 8)),
     });
-  }, [textareaRef]);
+  }, [textareaRef, isMentionStart]);
 
   useEffect(() => {
     const textarea = textareaRef.current;

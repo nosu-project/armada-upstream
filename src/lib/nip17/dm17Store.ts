@@ -516,6 +516,13 @@ export interface Dm17Cursor {
    * cold start doesn't re-read two days of wraps from every relay.
    */
   relayFullScanAt?: Record<string, number>;
+  /**
+   * Per relay, the `until` the background history walk resumes from: everything
+   * newer has been read from that relay. Only recedes.
+   */
+  relayOldest?: Record<string, number>;
+  /** Per relay, when (ms) the history walk reached an empty page below `relayOldest`. */
+  relayExhaustedAt?: Record<string, number>;
 }
 
 /** Monotonic per-relay merge; `keep` (when given) drops relays outside it. */
@@ -537,6 +544,25 @@ function mergeRelayStamps(
   return out;
 }
 
+/** Per-relay merge that only recedes; `keep` (when given) drops relays outside it. */
+function mergeRelayFloors(
+  prev: Record<string, number> | undefined,
+  patch: Record<string, number> | undefined,
+  keep: Set<string> | undefined,
+): Record<string, number> {
+  const out = { ...(prev ?? {}) };
+  for (const [relay, value] of Object.entries(patch ?? {})) {
+    if (!Number.isFinite(value) || value <= 0) continue;
+    out[relay] = Math.min(out[relay] ?? Infinity, value);
+  }
+  if (keep) {
+    for (const relay of Object.keys(out)) {
+      if (!keep.has(relay)) delete out[relay];
+    }
+  }
+  return out;
+}
+
 const cursorKey = (self: string) => `dm17-cursor:${self}`;
 
 /** Read the viewer's inbox cursor, or undefined if none has been saved. */
@@ -545,11 +571,28 @@ export function readDm17Cursor(self: string): Promise<Dm17Cursor | undefined> {
 }
 
 /**
- * Merge sync progress (best-effort, no lock): every field merges monotonically,
- * so a race can only cost a re-scan, never a skip. `pruneRelaysTo` drops
- * watermarks for relays no longer in the set.
+ * Merge sync progress (best-effort): every field merges monotonically, so a
+ * race can only cost a re-scan, never a skip. `pruneRelaysTo` drops watermarks
+ * for relays no longer in the set.
  */
-export async function updateDm17Cursor(
+export function updateDm17Cursor(
+  self: string,
+  patch: Partial<Dm17Cursor>,
+  opts?: { pruneRelaysTo?: readonly string[] },
+): Promise<void> {
+  // Serialized per viewer: the inbox scan and the history walk patch different fields.
+  const run = (cursorWrites.get(self) ?? Promise.resolve()).then(() => writeDm17Cursor(self, patch, opts));
+  const tail = run.catch(() => undefined);
+  cursorWrites.set(self, tail);
+  void tail.then(() => {
+    if (cursorWrites.get(self) === tail) cursorWrites.delete(self);
+  });
+  return run;
+}
+
+const cursorWrites = new Map<string, Promise<void>>();
+
+async function writeDm17Cursor(
   self: string,
   patch: Partial<Dm17Cursor>,
   opts?: { pruneRelaysTo?: readonly string[] },
@@ -558,6 +601,8 @@ export async function updateDm17Cursor(
   const keep = opts?.pruneRelaysTo ? new Set(opts.pruneRelaysTo) : undefined;
   const relayNewest = mergeRelayStamps(prev?.relayNewest, patch.relayNewest, keep);
   const relayFullScanAt = mergeRelayStamps(prev?.relayFullScanAt, patch.relayFullScanAt, keep);
+  const relayOldest = mergeRelayFloors(prev?.relayOldest, patch.relayOldest, keep);
+  const relayExhaustedAt = mergeRelayStamps(prev?.relayExhaustedAt, patch.relayExhaustedAt, keep);
   const next: Dm17Cursor = {
     newest: Math.max(prev?.newest ?? 0, patch.newest ?? 0),
     oldest:
@@ -569,6 +614,8 @@ export async function updateDm17Cursor(
     exhausted: patch.exhausted ?? prev?.exhausted ?? false,
     ...(Object.keys(relayNewest).length > 0 ? { relayNewest } : {}),
     ...(Object.keys(relayFullScanAt).length > 0 ? { relayFullScanAt } : {}),
+    ...(Object.keys(relayOldest).length > 0 ? { relayOldest } : {}),
+    ...(Object.keys(relayExhaustedAt).length > 0 ? { relayExhaustedAt } : {}),
   };
   await writeFolded(cursorKey(self), next);
 }

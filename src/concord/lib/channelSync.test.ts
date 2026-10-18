@@ -314,6 +314,108 @@ describe("channelSync — the c2: topic handler", () => {
   });
 });
 
+describe("history coverage", () => {
+  beforeEach(() => {
+    (globalThis as unknown as { indexedDB: IDBFactory }).indexedDB = new IDBFactory();
+    localStorage.clear();
+  });
+
+  it("reports the shallowest relay's frontier as covered, not the deepest page any relay returned", { timeout: 30_000 }, async () => {
+    const m = await freshModules();
+    const channel = makeChannel(m);
+    const alice = signer();
+    // Dense on one relay, sparse on the other: one page reaches t=51 on A but only t=510 on B.
+    const dense = new FakeRelay();
+    dense.events = await Promise.all(Array.from({ length: 100 }, (_, i) => wrapChatAt(m, channel, alice, `a${i}`, i + 1)));
+    const sparse = new FakeRelay();
+    sparse.events = await Promise.all(Array.from({ length: 100 }, (_, i) => wrapChatAt(m, channel, alice, `b${i}`, (i + 1) * 10)));
+    const r = await m.backfillStore(makePool({ a: dense, b: sparse }), ["a", "b"], channel, new AbortController().signal, { maxPages: 1 });
+    expect(r.oldest).toBe(51);
+    expect(r.coveredDownTo).toBe(510);
+  });
+
+  it("fills an offline gap bigger than one round's budget across rounds, then advances newest", { timeout: 60_000 }, async () => {
+    const m = await freshModules();
+    const channel = makeChannel(m);
+    const alice = signer();
+    const now = Math.floor(Date.now() / 1000);
+    const t0 = now - 10_000;
+    const relay = new FakeRelay();
+    relay.events = await Promise.all(Array.from({ length: 200 }, (_, i) => wrapChatAt(m, channel, alice, `g${i}`, t0 + 1 + i)));
+    await m.updateStreamCursor(channel.idHex, { newest: t0, oldest: t0 - 1_000, exhausted: true });
+    const community = { idHex: CID, relays: [RELAY] } as unknown as Community;
+    const ctx = { nostr: makePool({ [RELAY]: relay }), community, channel };
+    const tiny = { bridgePages: 1, olderPages: 0 };
+
+    for (let round = 0; round < 6; round++) {
+      await m.syncChannelRound(ctx, new AbortController().signal, tiny);
+      if ((await m.readStreamCursor(channel.idHex))?.newest !== t0) break;
+    }
+    const cursor = await m.readStreamCursor(channel.idHex);
+    expect(cursor?.newest).toBe(t0 + 200);
+    expect(cursor?.bridge).toBeUndefined();
+    expect(await m.queryChannelRumors(CID, channel.idHex, { limit: 500 })).toHaveLength(200);
+  });
+
+  it("never takes a cursor from a wrap that didn't open, however far ahead it is dated", { timeout: 30_000 }, async () => {
+    const m = await freshModules();
+    const channel = makeChannel(m);
+    const alice = signer();
+    const now = Math.floor(Date.now() / 1000);
+    const relay = new FakeRelay();
+    const real = await Promise.all([0, 1, 2].map((i) => wrapChatAt(m, channel, alice, `r${i}`, now - 100 + i)));
+    // Wrap signatures go unchecked, so a relay can serve anything "by" the stream key.
+    const junk = finalizeEvent(
+      { kind: 1059, content: "not a seal", tags: [], created_at: 2 ** 31 - 1 },
+      channel.current.group.sk,
+    );
+    relay.events = [...real, junk];
+    const community = { idHex: CID, relays: [RELAY] } as unknown as Community;
+    const ctx = { nostr: makePool({ [RELAY]: relay }), community, channel };
+
+    const outcome = await m.syncChannelRound(ctx, new AbortController().signal);
+    expect((await m.readStreamCursor(channel.idHex))?.newest).toBe(now - 98);
+    expect(outcome.mostlyUnopened).toBe(false);
+    expect(await m.queryChannelRumors(CID, channel.idHex, { limit: 10 })).toHaveLength(3);
+  });
+
+  it("a round that fetched only wraps that won't open is not requeued at once", { timeout: 30_000 }, async () => {
+    const m = await freshModules();
+    const channel = makeChannel(m);
+    const now = Math.floor(Date.now() / 1000);
+    const relay = new FakeRelay();
+    relay.events = Array.from({ length: 5 }, (_, i) =>
+      finalizeEvent({ kind: 1059, content: `junk-${i}`, tags: [], created_at: now - i }, channel.current.group.sk));
+    const community = { idHex: CID, relays: [RELAY] } as unknown as Community;
+    const outcome = await m.syncChannelRound(
+      { nostr: makePool({ [RELAY]: relay }), community, channel },
+      new AbortController().signal,
+    );
+    expect(outcome.mostlyUnopened).toBe(true);
+    expect((await m.readStreamCursor(channel.idHex))?.newest || undefined).toBeUndefined();
+  });
+
+  it("the background walk reads a never-opened channel to the bottom and seals it", { timeout: 60_000 }, async () => {
+    const m = await freshModules();
+    const channel = makeChannel(m);
+    const alice = signer();
+    const now = Math.floor(Date.now() / 1000);
+    const relay = new FakeRelay();
+    relay.events = await Promise.all(Array.from({ length: 150 }, (_, i) => wrapChatAt(m, channel, alice, `w${i}`, now - 5_000 + i)));
+    const community = { idHex: CID, relays: [RELAY] } as unknown as Community;
+    m.setChannelHistoryContext(channel.idHex, { nostr: makePool({ [RELAY]: relay }), community, channel });
+
+    const topic = `c2hist:${channel.idHex}`;
+    const release = m.want(topic, "prefetch");
+    try {
+      await vi.waitFor(async () => expect((await m.readStreamCursor(channel.idHex))?.exhausted).toBe(true), { timeout: 30_000 });
+      expect(await m.queryChannelRumors(CID, channel.idHex, { limit: 500 })).toHaveLength(150);
+    } finally {
+      release();
+    }
+  });
+});
+
 describe("channelFilters (retired-epoch fetch policy)", () => {
   it("asks every held epoch until frozen, then drops retired addresses", async () => {
     const m = await freshModules();

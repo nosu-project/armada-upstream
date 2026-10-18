@@ -121,7 +121,7 @@ function openChatToSeal(
 }
 
 /** Phase 3: recover and bind the rumor of a verified seal (channel/epoch binding, retirement cutoff) and memoize. */
-function finishChat(pending: PendingChat, channel: Channel): OpenedChat | null {
+function finishChat(pending: PendingChat, channel: Channel, remember: boolean): OpenedChat | null {
   let opened: OpenedChat | null = null;
   try {
     const ev = pending.finish();
@@ -135,7 +135,8 @@ function finishChat(pending: PendingChat, channel: Channel): OpenedChat | null {
   } catch {
     opened = null;
   }
-  rememberDecode(pending.memoKey, opened);
+  // A failure is always remembered: it is small, and retrying it is the expensive part.
+  if (remember || opened === null) rememberDecode(pending.memoKey, opened);
   return opened;
 }
 
@@ -177,8 +178,13 @@ const DECODE_SLICE_MS = 5;
 export async function openChatBatch(
   wraps: NostrRumor[],
   channel: Channel,
-  opts?: { signal?: AbortSignal },
+  /**
+   * `remember: false` keeps successes out of the decode memo: a history walk's
+   * wraps are never asked for again, and would evict the working set.
+   */
+  opts?: { signal?: AbortSignal; remember?: boolean },
 ): Promise<OpenedChat[]> {
+  const remember = opts?.remember ?? true;
   let cryptoMs = 0;
   let sliceStart = performance.now();
 
@@ -219,7 +225,7 @@ export async function openChatBatch(
       const { slot, chat } = pending[j];
       const finishStart = performance.now();
       if (oks[j]) {
-        resolved[slot] = finishChat(chat, channel);
+        resolved[slot] = finishChat(chat, channel, remember);
       } else {
         rememberDecode(chat.memoKey, null);
       }

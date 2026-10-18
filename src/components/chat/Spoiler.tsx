@@ -4,7 +4,7 @@ import { cn } from "@/lib/utils";
 
 import type { ReactNode } from "react";
 
-/** Discord-style `||spoiler||`: blacked out until clicked. */
+/** Discord-style `||spoiler||`: covered until clicked. */
 export function Spoiler({ children }: { children: ReactNode }) {
   const [revealed, setRevealed] = useState(false);
   return (
@@ -12,8 +12,11 @@ export function Spoiler({ children }: { children: ReactNode }) {
       role={revealed ? undefined : "button"}
       tabIndex={revealed ? undefined : 0}
       aria-label={revealed ? undefined : "Reveal spoiler"}
-      onClick={(e) => {
+      // Capture, and its content takes no pointer events while covered: the first
+      // click reveals, rather than following a link or opening a profile inside.
+      onClickCapture={(e) => {
         if (revealed) return;
+        e.preventDefault();
         e.stopPropagation();
         setRevealed(true);
       }}
@@ -25,10 +28,10 @@ export function Spoiler({ children }: { children: ReactNode }) {
         }
       }}
       className={cn(
-        "rounded-[3px] px-0.5 transition-colors",
+        "rounded px-0.5 transition-colors [box-decoration-break:clone] [-webkit-box-decoration-break:clone]",
         revealed
-          ? "bg-muted/60"
-          : "bg-foreground/90 text-transparent cursor-pointer select-none [&_img]:invisible [&_a]:text-transparent",
+          ? "bg-foreground/10"
+          : "bg-foreground/20 hover:bg-foreground/30 text-transparent cursor-pointer select-none [&_*]:pointer-events-none [&_*]:!text-transparent [&_*]:!bg-transparent [&_*]:!border-transparent [&_img]:invisible",
       )}
     >
       {children}

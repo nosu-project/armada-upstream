@@ -904,3 +904,64 @@ html.theme-bg #root .theme-scope,
 html.theme-bg #root .theme-scope .bg-background {
   background: hsl(var(--background));
 }
+
+/* RichTextarea: the textarea keeps the caret and selection, its overlay draws
+ * the text. Overlay styles must not change advance widths, or the caret drifts
+ * off the glyphs: bold is a stroke, italic a skew, never a different face. */
+.rt-input {
+  color: transparent;
+  caret-color: hsl(var(--foreground));
+}
+.rt-input::selection {
+  color: transparent;
+  background-color: hsl(var(--primary) / 0.3);
+}
+.rt-overlay .rt-bold {
+  -webkit-text-stroke: 0.03em currentColor;
+}
+.rt-overlay .rt-word {
+  display: inline-block;
+  white-space: pre;
+}
+.rt-overlay .rt-italic {
+  display: inline-block;
+  transform: skewX(-12deg);
+}
+/* The pill's padding is a shadow: real padding would widen the mention. */
+.rt-overlay .rt-mention {
+  border-radius: 0.25rem;
+  color: hsl(var(--primary));
+  background-color: hsl(var(--primary) / 0.15);
+  box-shadow: 0 0 0 2px hsl(var(--primary) / 0.15);
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+.rt-overlay .rt-spoiler {
+  border-radius: 0.25rem;
+  background-color: hsl(var(--foreground) / 0.12);
+  box-shadow: 0 0 0 2px hsl(var(--foreground) / 0.12);
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+.rt-overlay .rt-emoji {
+  position: relative;
+}
+.rt-overlay .rt-emoji-img {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 1.3em;
+  height: 1.3em;
+  max-width: none;
+  object-fit: contain;
+  transform: translate(-50%, -50%);
+}
+.rt-overlay .rt-u {
+  text-decoration-line: underline;
+}
+.rt-overlay .rt-s {
+  text-decoration-line: line-through;
+}
+.rt-overlay .rt-u.rt-s {
+  text-decoration-line: underline line-through;
+}

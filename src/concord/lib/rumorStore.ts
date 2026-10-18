@@ -600,9 +600,9 @@ const SEARCH_SCAN_LIMIT = 5000;
 
 /**
  * Search cached message rumors, newest-first up to `limit`. Purely local (E2EE,
- * so the store is the only corpus). `#channel`, `authors` and the typed words go
- * to the store (see `searchDm17Rumors` for how words match); `media` is applied
- * in memory.
+ * so the store is the only corpus). `#channel`, `authors`, the date bounds and
+ * the typed words go to the store (see `searchDm17Rumors` for how words match);
+ * `media` is applied in memory.
  */
 export async function searchRumors(
   communityIdHex: string,
@@ -611,6 +611,8 @@ export async function searchRumors(
     query: string;
     authors?: string[];
     media?: SearchMedia;
+    since?: number;
+    until?: number;
     limit: number;
     signal?: AbortSignal;
   },
@@ -623,10 +625,14 @@ export async function searchRumors(
     "#channel": string[];
     authors?: string[];
     search?: string;
+    since?: number;
+    until?: number;
     limit: number;
   } = { kinds: SEARCHABLE_KINDS, "#channel": channelIdsHex, limit: SEARCH_SCAN_LIMIT };
   if (opts.authors && opts.authors.length > 0) filter.authors = opts.authors;
   if (search) filter.search = search;
+  if (opts.since !== undefined) filter.since = opts.since;
+  if (opts.until !== undefined) filter.until = opts.until;
 
   const events = notExpired(await rumorStore(communityIdHex).query([filter], { signal: opts.signal }));
   const media = opts.media ?? "all";
@@ -1065,6 +1071,17 @@ export interface StreamCursor {
   oldest: number;
   /** No relay had deeper history past `oldest` — stop issuing older-backfills. */
   exhausted: boolean;
+  /**
+   * A bridge left unfinished: `[until, top]` is read, `(newest, until)` is still
+   * owed. Lets a gap too big for one round be filled across rounds instead of
+   * re-reading its top every time.
+   */
+  bridge?: StreamBridge;
+}
+
+export interface StreamBridge {
+  top: number;
+  until: number;
 }
 
 const cursorKey = (scope: string) => `concord2-cursor:${scope}`;
@@ -1098,8 +1115,13 @@ function withCursorLock(scope: string, fn: () => Promise<void>): Promise<void> {
 /**
  * Merge new sync progress into a scope's cursor (best-effort). `newest` only
  * advances forward, `oldest` only recedes, `exhausted` is sticky until cleared.
+ * A `bridge` replaces the held one (`null` clears it), and is dropped once
+ * `newest` reaches its `until` (nothing is owed below it any more).
  */
-export function updateStreamCursor(scope: string, patch: Partial<StreamCursor>): Promise<void> {
+export function updateStreamCursor(
+  scope: string,
+  patch: Partial<Omit<StreamCursor, "bridge">> & { bridge?: StreamBridge | null },
+): Promise<void> {
   return withCursorLock(scope, async () => {
     const prev = await readStreamCursor(scope);
     const next: StreamCursor = {
@@ -1112,6 +1134,8 @@ export function updateStreamCursor(scope: string, patch: Partial<StreamCursor>):
           : (prev?.oldest ?? 0),
       exhausted: patch.exhausted ?? prev?.exhausted ?? false,
     };
+    const bridge = patch.bridge === null ? undefined : (patch.bridge ?? prev?.bridge);
+    if (bridge && next.newest > 0 && bridge.until > next.newest) next.bridge = bridge;
     await writeFolded(cursorKey(scope), next);
   });
 }

@@ -1,5 +1,5 @@
 import { Search, X } from "lucide-react";
-import { useContext, useEffect, useRef, type ReactNode } from "react";
+import { useContext, useEffect, useRef, type ReactNode, type RefObject } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -19,6 +19,7 @@ export function ChatSearchBar({
   placeholder,
   label = "Search messages",
   filters,
+  suggestions,
 }: {
   open: boolean;
   value: string;
@@ -28,6 +29,8 @@ export function ChatSearchBar({
   label?: string;
   /** Rendered between the input and the close button (Concord's filters popover). */
   filters?: ReactNode;
+  /** A caret-driven dropdown bound to the input (Concord's typed filter tokens). */
+  suggestions?: (input: RefObject<HTMLInputElement | null>) => ReactNode;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
@@ -66,6 +69,7 @@ export function ChatSearchBar({
         aria-label={label}
         className="h-8 touch:h-11 flex-1 border-0 bg-transparent px-1 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
       />
+      {open && suggestions?.(inputRef)}
       {filters}
       <Button
         variant="ghost"

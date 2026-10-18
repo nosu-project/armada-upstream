@@ -79,6 +79,7 @@ vi.mock("@/hooks/useRailDms", () => ({
 vi.mock("@/hooks/useDm17", () => ({
   useDm17Backfill: () => ({ hasMore: false, isLoading: false, loadOlder: async () => [] }),
   useDm17Conversations: () => ({ rows: [], isLoading: false }),
+  useDm17HistoryIncomplete: () => false,
   useDm17Support: () => true,
 }));
 vi.mock("@/components/auth/LoginArea", () => ({ LoginArea: () => null }));

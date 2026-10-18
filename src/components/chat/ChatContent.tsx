@@ -443,8 +443,9 @@ const SEGMENT_RE = new RegExp(
   // can't split it into a mention); normalized to `https://` at use.
   // Repetitions are BOUNDED (DNS limits) to keep the scan linear: unbounded
   // is O(n²) on attacker-controlled content.
-  // `<`/`>` are never literal in a URL (RFC 3986), so `<https://…>` ends at the `>`.
-  "|((?:(?:https?|wss?):\\/\\/|(?:[\\w-]{1,63}\\.){1,10}[a-z]{2,24}\\/)[^\\s<>]+)" +
+  // `<`, `>` and `|` are never literal in a URL (RFC 3986), so `<https://…>`
+  // ends at the `>` and `||https://…||` at the spoiler's closing bars.
+  "|((?:(?:https?|wss?):\\/\\/|(?:[\\w-]{1,63}\\.){1,10}[a-z]{2,24}\\/)[^\\s<>|]+)" +
   "|nostr:(npub1|note1|nprofile1|nevent1|naddr1)([023456789acdefghjklmnpqrstuvwxyz]+)" +
   "|@?(npub1|note1|nprofile1|nevent1|naddr1)([023456789acdefghjklmnpqrstuvwxyz]+)" +
   `|(${HASHTAG_PATTERN})` +

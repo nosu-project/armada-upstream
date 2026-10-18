@@ -70,3 +70,35 @@ describe("ChatContent spoilered image", () => {
     expect(container.querySelector("img")!.getAttribute("alt")).toBe("the ending");
   });
 });
+
+describe("ChatContent text spoiler", () => {
+  function renderText(content: string) {
+    return render(
+      <QueryClientProvider client={new QueryClient()}>
+        <MemoryRouter>
+          <ChatContent event={message(content, [])} />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+  }
+
+  it("ends a spoilered link at the closing bars", () => {
+    renderText("see ||https://example.com/page|| and ||more||");
+    const spoilers = screen.getAllByRole("button", { name: "Reveal spoiler" });
+    expect(spoilers.map((s) => s.textContent)).toEqual(["https://example.com/page", "more"]);
+    expect(spoilers[0].querySelector("a")?.getAttribute("href")).toBe("https://example.com/page");
+  });
+
+  it("reveals on the first click instead of following a link inside", () => {
+    renderText("||https://example.com/page||");
+    const link = screen.getByRole("link");
+    const click = new MouseEvent("click", { bubbles: true, cancelable: true });
+    fireEvent(link, click);
+    expect(click.defaultPrevented).toBe(true);
+    expect(screen.queryByRole("button", { name: "Reveal spoiler" })).toBeNull();
+
+    const again = new MouseEvent("click", { bubbles: true, cancelable: true });
+    fireEvent(link, again);
+    expect(again.defaultPrevented).toBe(false);
+  });
+});

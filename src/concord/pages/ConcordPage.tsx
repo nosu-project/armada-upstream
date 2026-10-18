@@ -134,7 +134,7 @@ import type { ProjectWorkItem } from "@/components/projects/projectData";
 import { useCommunityGitActivity } from "@/hooks/useCommunityGitActivity";
 import { useNewMessagesDivider } from "@/hooks/useNewMessagesDivider";
 import { useDelayedFlag } from "@/hooks/useDelayedFlag";
-import { useSyncTasks } from "@/hooks/useSyncActivity";
+import { useSyncTaskInScope } from "@/hooks/useSyncActivity";
 import { useSyncTopicState } from "@/sync/useSyncTopic";
 import { concordChannelMuteKey, useMutes } from "@/hooks/useMutes";
 import { useNotifLevels, concordChannelScopeKey } from "@/hooks/useNotifLevels";
@@ -178,8 +178,8 @@ import { useConcordUnread, type ConcordUnread } from "@/concord/hooks/useConcord
 import { useCommunityFeed } from "@/concord/hooks/useCommunityFeed";
 import { useConcordMentions } from "@/concord/hooks/useConcordMentions";
 import { useConcordSearch } from "@/concord/hooks/useConcordSearch";
-import { SearchFiltersPopover, SearchResultsView } from "@/concord/components/Search";
-import { EMPTY_SEARCH_FILTERS, type SearchFilters } from "@/concord/lib/search";
+import { SearchFiltersPopover, SearchResultsView, SearchTokenSuggest } from "@/concord/components/Search";
+import { EMPTY_SEARCH_FILTERS, resolveTypedTokens, searchText, type SearchFilters } from "@/concord/lib/search";
 import { useConcordThreads, type ConcordThread } from "@/concord/hooks/useConcordThreads";
 import { useTyping, useTypingPublisher } from "@/concord/hooks/useTyping";
 import { resolveVoiceBroker, useVoiceBroker, useVoicePresence } from "@/concord/hooks/useVoice";
@@ -2118,15 +2118,15 @@ export function ConcordPage() {
     },
     [closeSearch, jumpToMention],
   );
-  const allChannelIds = useMemo(() => channels.map((c) => c.idHex), [channels]);
   // Community-wide search over the local rumor store; only fed while the bar is open.
   const {
     results: searchResults,
     isLoading: searchLoading,
     active: searching,
+    historyIncomplete: searchHistoryIncomplete,
   } = useConcordSearch(
     community,
-    allChannelIds,
+    channels,
     searchOpen ? searchFilters : EMPTY_SEARCH_FILTERS,
   );
 
@@ -2203,13 +2203,10 @@ export function ConcordPage() {
 
   // `channelSyncing`: the on-screen channel's sync topic is pending or a task is
   // scoped to it, so an empty read never shows "No messages yet" mid-catch-up.
-  const syncTasks = useSyncTasks();
   const channelScope = channel ? `c2:${channel.idHex}` : undefined;
   const channelTopic = useSyncTopicState(channelScope);
-  const channelSyncing = Boolean(
-    channelScope &&
-      (channelTopic.status === "pending" || syncTasks.some((t) => t.scope === channelScope)),
-  );
+  const channelTaskRunning = useSyncTaskInScope(channelScope);
+  const channelSyncing = Boolean(channelScope && (channelTopic.status === "pending" || channelTaskRunning));
   // The serial gate (list → control sweep → fold) as "syncing" on a cold load, so
   // the pane isn't blank before a Channel exists. Scoped so a missing community
   // still reaches not-found.
@@ -3206,9 +3203,18 @@ export function ConcordPage() {
               <ChatSearchBar
                 open={searchOpen}
                 value={searchFilters.query}
-                onChange={(query) => setSearchFilters((f) => ({ ...f, query }))}
+                onChange={(query) => setSearchFilters((f) => resolveTypedTokens({ ...f, query }))}
                 onClose={closeSearch}
                 placeholder="Search all channels…"
+                suggestions={(input) => (
+                  <SearchTokenSuggest
+                    inputRef={input}
+                    filters={searchFilters}
+                    onChange={setSearchFilters}
+                    members={memberPubkeys}
+                    channels={channels}
+                  />
+                )}
                 filters={
                   <SearchFiltersPopover
                     channels={channels}
@@ -3348,8 +3354,11 @@ export function ConcordPage() {
                     channels={channels}
                     results={searchResults}
                     isLoading={searchLoading}
-                    query={searchFilters.query}
+                    query={searchText(searchFilters.query)}
                     onJump={jumpFromSearch}
+                    filters={searchFilters}
+                    onFiltersChange={setSearchFilters}
+                    historyIncomplete={searchHistoryIncomplete}
                   />
                 </div>
               ) : (

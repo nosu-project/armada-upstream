@@ -4,34 +4,55 @@ import { useMemo, useSyncExternalStore } from "react";
 import { useDebounce } from "@/hooks/useDebounce";
 import { useMutedPubkeys } from "@/hooks/useMuteList";
 import { useChatModeration } from "@/concord/hooks/useChannel";
+import { filterEpochCutoff, type OpenedChat } from "@/concord/lib/chat";
 import { openedToChatMsg } from "@/concord/hooks/useTransport";
 import {
   quarantineMemoryRevision,
   recallQuarantined,
   subscribeQuarantineMemory,
 } from "@/concord/lib/quarantineMemory";
-import { searchRumors } from "@/concord/lib/rumorStore";
-import { searchIsActive, type SearchFilters } from "@/concord/lib/search";
-import type { Community } from "@/concord/lib/types";
+import { readStreamCursor, searchRumors } from "@/concord/lib/rumorStore";
+import { useWireScopes } from "@/wire/useWireScopes";
+import { searchDateBounds, searchIsActive, searchText, type SearchFilters } from "@/concord/lib/search";
+import type { Channel, Community } from "@/concord/lib/types";
 
 import type { ChatMsg } from "@/components/chat/transport";
 
 const NO_RESULTS: ChatMsg[] = [];
+
+/** The timeline's retirement cutoff, per channel: search reads the same rows. */
+function applyEpochCutoffs(rumors: OpenedChat[], channels: Channel[]): OpenedChat[] {
+  const byId = new Map(channels.map((c) => [c.idHex, c]));
+  const groups = new Map<string, OpenedChat[]>();
+  for (const r of rumors) {
+    const group = groups.get(r.channelIdHex);
+    if (group) group.push(r);
+    else groups.set(r.channelIdHex, [r]);
+  }
+  const keep = new Set<OpenedChat>();
+  for (const [idHex, group] of groups) {
+    const channel = byId.get(idHex);
+    for (const r of channel ? filterEpochCutoff(group, channel) : group) keep.add(r);
+  }
+  return rumors.filter((r) => keep.has(r));
+}
 
 /**
  * Community-wide search over the local decrypted rumor store (Concord chat is
  * E2E encrypted, so there's no relay query). Text is debounced 300ms; results
  * are newest-first and carry their `channel` tag.
  *
- * @param allChannelIds default scope when the filter selects no channels.
+ * @param channels default scope when the filter selects no channels, and the
+ *   epoch cutoffs every result is checked against.
  */
 export function useConcordSearch(
   community: Community | undefined,
-  allChannelIds: string[],
+  channels: Channel[],
   filters: SearchFilters,
 ) {
   const communityIdHex = community?.idHex;
-  const debouncedQuery = useDebounce(filters.query.trim(), 300);
+  const allChannelIds = useMemo(() => channels.map((c) => c.idHex), [channels]);
+  const debouncedQuery = useDebounce(searchText(filters.query), 300);
 
   const channelIds = filters.channelIds.length > 0 ? filters.channelIds : allChannelIds;
 
@@ -42,6 +63,11 @@ export function useConcordSearch(
 
   const channelsKey = [...channelIds].sort().join(",");
   const authorsKey = [...filters.authors].sort().join(",");
+  // Re-filter when a rotation lands: the cutoffs are part of the answer.
+  const cutoffsKey = channels
+    .flatMap((c) => c.streams.flatMap((s) => (s.retiredAt === undefined ? [] : [`${c.idHex}:${s.epoch}:${s.retiredAt}`])))
+    .join(",");
+  const { since, until } = searchDateBounds(filters);
 
   const search = useQuery<ChatMsg[]>({
     queryKey: [
@@ -50,7 +76,10 @@ export function useConcordSearch(
       communityIdHex ?? null,
       channelsKey,
       authorsKey,
+      cutoffsKey,
       filters.media,
+      since ?? null,
+      until ?? null,
       debouncedQuery,
     ],
     enabled: !!communityIdHex && active && channelIds.length > 0,
@@ -61,11 +90,35 @@ export function useConcordSearch(
         query: debouncedQuery,
         authors: filters.authors,
         media: filters.media,
+        since,
+        until,
         limit: 100,
         signal,
       });
-      return rumors.map(openedToChatMsg);
+      return applyEpochCutoffs(rumors, channels).map(openedToChatMsg);
     },
+  });
+
+  // Search reads only this device, so say when some searched channel's history
+  // hasn't been walked to its start yet (the background walk is still on it).
+  const coverage = useQuery<boolean>({
+    queryKey: ["concord", "search-coverage", channelsKey],
+    enabled: active && channelIds.length > 0,
+    staleTime: 15_000,
+    queryFn: async () => {
+      const cursors = await Promise.all(channelIds.map((id) => readStreamCursor(id)));
+      return cursors.some((c) => !c?.exhausted || c.bridge !== undefined);
+    },
+  });
+  const refetchCoverage = coverage.refetch;
+  useWireScopes((scopes) => {
+    if (!active) return;
+    for (const s of scopes) {
+      if (s.startsWith("c2cur:") && channelIds.includes(s.slice("c2cur:".length))) {
+        void refetchCoverage();
+        return;
+      }
+    }
   });
 
   // Search bypasses the timeline, so every drop the fold performs must be repeated
@@ -100,5 +153,6 @@ export function useConcordSearch(
     results,
     isLoading: (search.isFetching || (active && !moderation.ready)) && results.length === 0,
     active,
+    historyIncomplete: coverage.data ?? false,
   };
 }

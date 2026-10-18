@@ -34,11 +34,15 @@ import { KIND_COMMENT, KIND_COMMUNITY_LIST_FRAG, KIND_REACTION } from "@/concord
 import { fragment, serializeFragList } from "@/concord/lib/listFrag";
 import { hexToColor } from "@/concord/lib/roles";
 import { writeOpened, writeRumors } from "@/concord/lib/rumorStore";
-import { buildRumor, channelBindingTags, openWrap } from "@/concord/lib/stream";
+import { buildRumor, channelBindingTags, openWrap, sealRumor, wrapSeal } from "@/concord/lib/stream";
+import { channelGroupKey } from "@/concord/lib/derive";
+import { KIND_SEAL_ENCRYPTED } from "@/concord/lib/kinds";
+import { queryChannelRumors, readStreamCursor } from "@/concord/lib/rumorStore";
 import { writeFolded } from "@/lib/foldedCache";
 import { appEventStore } from "@/lib/db/mainEventStore";
 
 import type { OpenedChat } from "@/concord/lib/chat";
+import type { NostrEvent } from "nostr-tools";
 import type { Community, ImagePointer } from "@/concord/lib/types";
 import type { NostrRumor } from "@/lib/nostrRumor";
 
@@ -51,17 +55,27 @@ export interface ConcordSeedPayload {
   channelSizes: number[];
   /** Line pool; varied so the flood heuristic sees conversation, not spam. */
   lines: string[];
+  /**
+   * Seed the community as a fresh device holds it: every message becomes a real
+   * wrap (returned, for the harness relay to serve), and only each channel's
+   * newest `localNewest` are stored. Every message is the viewer's, since only
+   * the viewer can sign a seal here.
+   */
+  relayHistory?: { localNewest: number };
 }
 
 export interface ConcordSeedResult {
   communityId: string;
   channelIds: string[];
+  /** With `relayHistory`: every chat wrap, for the harness relay. */
+  wraps?: NostrEvent[];
 }
 
 declare global {
   interface Window {
     __armadaSeedConcord?: (payload: ConcordSeedPayload) => Promise<ConcordSeedResult>;
     __armadaSeedConcordScript?: (payload: ScriptedSeedPayload) => Promise<ScriptedSeedResult>;
+    __armadaConcordCoverage?: typeof concordCoverage;
   }
 }
 
@@ -98,11 +112,12 @@ async function seed(p: ConcordSeedPayload): Promise<ConcordSeedResult> {
   // Chat: spread over ~90 days, mostly the viewer (exempt from flood folding).
   const nowMs = Date.now() - 60_000;
   const span = 90 * 24 * 3600 * 1000;
+  const wraps: NostrEvent[] = [];
   for (const [ci, size] of p.channelSizes.entries()) {
     const channelIdHex = bytesToHex(channelIds[ci]);
     const batch: OpenedChat[] = [];
     for (let i = 0; i < size; i++) {
-      const author = i % 3 === 0 || p.others.length === 0 ? self : p.others[i % p.others.length];
+      const author = p.relayHistory || i % 3 === 0 || p.others.length === 0 ? self : p.others[i % p.others.length];
       const ms = Math.floor(nowMs - span + (span * i) / size);
       const content = `${p.lines[(i + ci) % p.lines.length]} (#${i})`;
       const rumor = buildRumor({ kind: 9, content, tags: channelBindingTags(channelIdHex, 0n), pubkey: author, ms });
@@ -117,12 +132,27 @@ async function seed(p: ConcordSeedPayload): Promise<ConcordSeedResult> {
         channelIdHex,
         epoch: 0n,
       });
+      if (p.relayHistory) {
+        // The production wrap, re-signed at the message's own time (CORD-01: never backdated).
+        const group = channelGroupKey(community.root, channelIds[ci], 0);
+        const w = wrapSeal(await sealRumor(rumor, KIND_SEAL_ENCRYPTED, group, signer), group);
+        wraps.push(finalizeEvent({ kind: w.kind, content: w.content, tags: w.tags, created_at: rumor.created_at }, group.sk));
+      }
     }
-    for (let i = 0; i < batch.length; i += 500) await writeRumors(community.idHex, batch.slice(i, i + 500));
+    const local = p.relayHistory ? batch.slice(-p.relayHistory.localNewest) : batch;
+    for (let i = 0; i < local.length; i += 500) await writeRumors(community.idHex, local.slice(i, i + 500));
   }
 
   await writeMembership(community, sk, self);
-  return { communityId: community.idHex, channelIds: channelIds.map(bytesToHex) };
+  return { communityId: community.idHex, channelIds: channelIds.map(bytesToHex), ...(p.relayHistory ? { wraps } : {}) };
+}
+
+/** Per channel: rumors on this device, and whether its history walk reached the bottom. */
+async function concordCoverage(communityId: string, channelIds: string[]) {
+  return Promise.all(channelIds.map(async (id) => ({
+    stored: (await queryChannelRumors(communityId, id, { limit: 100_000 })).length,
+    exhausted: Boolean((await readStreamCursor(id))?.exhausted),
+  })));
 }
 
 /**
@@ -305,3 +335,4 @@ async function seedScripted(p: ScriptedSeedPayload): Promise<ScriptedSeedResult>
 
 window.__armadaSeedConcord = seed;
 window.__armadaSeedConcordScript = seedScripted;
+window.__armadaConcordCoverage = concordCoverage;

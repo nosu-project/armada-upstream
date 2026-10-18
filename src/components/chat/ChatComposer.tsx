@@ -33,6 +33,8 @@ import { EmojiShortcodeAutocomplete } from "@/components/chat/EmojiShortcodeAuto
 import { GifPicker } from "@/components/chat/GifPicker";
 import { Lightbox } from "@/components/chat/Lightbox";
 import { MentionAutocomplete } from "@/components/chat/MentionAutocomplete";
+import { RichTextarea } from "@/components/chat/RichTextarea";
+import { useRichText } from "@/components/chat/useRichText";
 import { SlashCommandAutocomplete } from "@/components/chat/SlashCommandAutocomplete";
 import { StickerPicker } from "@/components/chat/StickerPicker";
 import { WebxdcGamePicker } from "@/components/chat/WebxdcGamePicker";
@@ -56,7 +58,6 @@ import { useCommandRequests } from "@/hooks/useCommandBus";
 import { useCustomEmojis } from "@/hooks/useCustomEmojis";
 import { useGroup } from "@/hooks/useGroup";
 import { useGlobalImagePaste } from "@/hooks/useGlobalImagePaste";
-import { useInsertText } from "@/hooks/useInsertText";
 import { useMentionInsertions } from "@/hooks/useMentionBus";
 import { useIsMobile, useIsTouch } from "@/hooks/useIsMobile";
 import { useMountedTransition } from "@/hooks/useMountedTransition";
@@ -636,9 +637,29 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const pickerRef = useRef<HTMLDivElement>(null);
   const pickerToggleGroupRef = useRef<HTMLDivElement>(null);
-  const { insertAtCursor, insertEmoji } = useInsertText(textareaRef, content, setContent);
   // `:name:` of a custom emoji is that emoji, so auto-conversion leaves it be.
   const customShortcodes = useMemo(() => new Set(customEmojis.map((e) => e.shortcode)), [customEmojis]);
+  // Only a single `:` typed at the caret closes a shortcode.
+  const completeShortcode = useCallback(
+    (display: string, caret: number, prev: string) =>
+      display.length === prev.length + 1 && display[caret - 1] === ":"
+        ? completedShortcodeAt(display, caret, customShortcodes)
+        : null,
+    [customShortcodes],
+  );
+  // `content` stays canonical (`nostr:npub1…`, `:shortcode:`); the field shows `@Name` and emoji images.
+  const emojiUrl = useMemo(() => {
+    const urls = new Map(customEmojis.map((e) => [e.shortcode, e.url]));
+    return (shortcode: string) => urls.get(shortcode);
+  }, [customEmojis]);
+  const rich = useRichText({ value: content, onValueChange: setContent, textareaRef, maxLength: maxChars, emojiUrl, completeEdit: completeShortcode });
+  const { replaceRange, insertAtSelection: insertEmoji } = rich.handle;
+  const insertAtCursor = useCallback(
+    ({ start, end, replacement }: { start: number; end: number; replacement: string }) => replaceRange(start, end, replacement),
+    [replaceRange],
+  );
+  const contentRef = useRef(content);
+  contentRef.current = content;
 
   const togglePickerTab = useCallback((tab: "emoji" | "gif") => {
     if (pickerOpen && pickerTab === tab) {
@@ -698,13 +719,14 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
   // `height: auto` probe re-lays-out the whole pane, so skip it for an empty
   // field (cached per layout) and for append-only edits (compare `scrollHeight`).
   const measuredContentRef = useRef<string | null>(null);
+  const shown = rich.display;
   // Called when the field's width settles after the compact controls animate.
   const remeasureRef = useRef<() => void>(() => {});
   useEffect(() => {
     const el = textareaRef.current;
     if (!el) return;
     const previous = measuredContentRef.current;
-    measuredContentRef.current = content;
+    measuredContentRef.current = shown;
     const bounds = () => ({
       max: layout === "document" ? Math.max(240, Math.round(window.innerHeight * 0.5)) : 160,
       min: layout === "document" ? 120 : 0,
@@ -726,11 +748,11 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     // floor of `max`, so it can't change the result — and would grow the map.
     const emptyKey = `${layout}:${window.innerWidth >= MD_BREAKPOINT_PX}`;
     const set = parseFloat(el.style.height);
-    if (content === "") {
+    if (shown === "") {
       const known = emptyHeights.get(emptyKey);
       if (known !== undefined) el.style.height = `${known}px`;
       else emptyHeights.set(emptyKey, measure());
-    } else if (previous !== null && content.startsWith(previous) && Number.isFinite(set)) {
+    } else if (previous !== null && shown.startsWith(previous) && Number.isFinite(set)) {
       const { max, min } = bounds();
       const needed = Math.min(Math.max(el.scrollHeight, min), max);
       if (needed > set) el.style.height = `${needed}px`;
@@ -742,7 +764,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     };
     window.addEventListener("resize", measure);
     return () => window.removeEventListener("resize", measure);
-  }, [content, layout]);
+  }, [shown, layout]);
 
   // Deferred a frame: a context menu still trapping focus would pull it back.
   useEffect(() => {
@@ -1687,7 +1709,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
   const executeSlashRef = useRef(executeSlash);
   executeSlashRef.current = executeSlash;
   const runSlashFromMenu = useCallback((command: SlashCommand) => {
-    const parsed = parseSlashCommand(textareaRef.current?.value ?? "");
+    const parsed = parseSlashCommand(contentRef.current);
     void executeSlashRef.current(command, parsed?.command === command ? parsed.arg : "");
   }, []);
 
@@ -2255,28 +2277,16 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                     {placeholderText}
                   </div>
                 )}
-                <textarea
-                  ref={textareaRef}
+                <RichTextarea
+                  rich={rich}
                   dir="auto"
-                  value={content}
-                  onChange={(e) => {
-                    const { value, selectionStart, selectionEnd } = e.target;
-                    // Only a single `:` typed at a collapsed caret closes a shortcode.
-                    const closedShortcode =
-                      selectionStart === selectionEnd &&
-                      value.length === content.length + 1 &&
-                      value[selectionStart - 1] === ":"
-                        ? completedShortcodeAt(value, selectionStart, customShortcodes)
-                        : null;
-                    if (closedShortcode) insertAtCursor(closedShortcode);
-                    else setContent(value);
-                    if (value) onTyping?.();
+                  onInput={(e) => {
+                    if (e.currentTarget.value) onTyping?.();
                   }}
                   onKeyDown={handleKeyDown}
                   onPaste={handlePaste}
                   aria-label={placeholderText}
                   rows={isDocument ? 5 : 1}
-                  maxLength={isDocument ? undefined : MAX_CHARS}
                   className={cn(
                     "block w-full resize-none bg-transparent border-0 outline-none px-1.5 touch:pl-0.5 touch:pr-2 pt-[7px] pb-[9px] touch:pt-[13px] touch:pb-[11px] disabled:opacity-50 overflow-y-auto align-middle",
                     isDocument
@@ -2287,7 +2297,8 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                 {mentionsEnabled && (
                   <MentionAutocomplete
                     textareaRef={textareaRef}
-                    content={content}
+                    content={rich.display}
+                    isMentionStart={rich.handle.isMentionStart}
                     onInsertMention={insertAtCursor}
                     restrictToPubkeys={memberPubkeys}
                     allowEveryone={canMentionEveryone}
@@ -2295,7 +2306,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                 )}
                 <SlashCommandAutocomplete
                   textareaRef={textareaRef}
-                  content={content}
+                  content={rich.display}
                   canModerate={canModerate}
                   capabilities={slashCapabilities}
                   onInsertCommand={insertAtCursor}
@@ -2308,7 +2319,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                 />
                 <EmojiShortcodeAutocomplete
                   textareaRef={textareaRef}
-                  content={content}
+                  content={rich.display}
                   onInsertEmoji={insertAtCursor}
                 />
               </div>
