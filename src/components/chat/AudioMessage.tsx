@@ -200,7 +200,7 @@ export function AudioMessage({
   };
 
   if (failed) {
-    return <MediaFallback {...fallbackProps} label={intl.formatMessage({ id: "audioMessage.audio", defaultMessage: "Audio" })} />;
+    return <MediaFallback {...fallbackProps} kind="audio" />;
   }
 
   // Keyed by source: changing a mounted <source>'s src does nothing without load().

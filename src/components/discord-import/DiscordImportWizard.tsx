@@ -907,7 +907,7 @@ function DoneStep({
         )
       : null,
     historyCount > 0
-      ? intl.formatMessage({ id: "discordImportWizard.done.history", defaultMessage: "{count} history messages" }, { count: String(historyCount) })
+      ? intl.formatMessage({ id: "discordImportWizard.done.history", defaultMessage: "{count, plural, one {# history message} other {# history messages}}" }, { count: historyCount })
       : null,
     plan && plan.emojis.length > 0
       ? intl.formatMessage({ id: "discordImportWizard.done.emoji", defaultMessage: "{count} custom emoji" }, { count: plan.emojis.length })
@@ -922,7 +922,7 @@ function DoneStep({
           ? intl.formatMessage({ id: "discordImportWizard.done.title", defaultMessage: "{name} is live" }, { name: plan.communityName })
           : intl.formatMessage({ id: "discordImportWizard.done.titleFallback", defaultMessage: "your community is live" })
       }
-      description={intl.formatMessage({ id: "discordImportWizard.done.description", defaultMessage: "{summary}, owned by your key." }, { summary: bits.join(", ") })}
+      description={intl.formatMessage({ id: "discordImportWizard.done.description", defaultMessage: "{summary}, owned by your key." }, { summary: intl.formatList(bits as string[], { type: "unit", style: "short" }) })}
     >
       <div className="w-full space-y-3">
         <Button

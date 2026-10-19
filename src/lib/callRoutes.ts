@@ -36,5 +36,5 @@ export function routeLabel(route: CallRoute): string {
   if (name && (route.type === "bluetooth" || route.type === "usb")) return name;
   const label = TYPE_LABELS[route.type] as (typeof TYPE_LABELS)[CallRouteType] | undefined;
   if (label) return t(label);
-  return name ?? t({ id: "callRoutes.audioDevice", defaultMessage: "Audio device" });
+  return name || t({ id: "callRoutes.audioDevice", defaultMessage: "Audio device" });
 }

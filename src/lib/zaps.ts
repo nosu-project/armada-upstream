@@ -57,8 +57,15 @@ export function formatSats(sats: number): string {
   return String(sats);
 }
 
+// Every zap pill formats through this; building an Intl.NumberFormat per call is the cost.
+let trimmedFormat: { locale: string; format: Intl.NumberFormat } | undefined;
+
 function trimmed(n: number): string {
-  return new Intl.NumberFormat(getLocale(), { maximumFractionDigits: 1, useGrouping: false }).format(Math.round(n * 10) / 10);
+  const locale = getLocale();
+  if (trimmedFormat?.locale !== locale) {
+    trimmedFormat = { locale, format: new Intl.NumberFormat(locale, { maximumFractionDigits: 1, useGrouping: false }) };
+  }
+  return trimmedFormat.format.format(Math.round(n * 10) / 10);
 }
 
 interface Bolt11Info {

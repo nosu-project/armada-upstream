@@ -479,7 +479,7 @@ function ProfileView({ pubkey, onClose }: { pubkey: string; onClose: () => void 
                     <a href={dittoHref} target="_blank" rel="noopener noreferrer" className="hover:underline">
                       <FormattedMessage
                         id="profileDialog.followerCount"
-                        defaultMessage="<count>{formatted}</count> <label>{n, plural, one {Followers} other {Followers}}</label>"
+                        defaultMessage="<count>{formatted}</count> <label>{n, plural, one {Follower} other {Followers}}</label>"
                         values={{ formatted: compactFormat.format(followerCount), n: followerCount, count: countTag, label: labelTag }}
                       />
                     </a>

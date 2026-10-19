@@ -936,7 +936,7 @@ function LightboxImage({
     >
       {failed && (
         <div className="absolute inset-0 flex items-center justify-center p-4">
-          <MediaFallback url={image.url} onRetry={reset} label={intl.formatMessage({ id: "lightbox.image", defaultMessage: "Image" })} className="bg-muted" />
+          <MediaFallback url={image.url} onRetry={reset} kind="image" className="bg-muted" />
         </div>
       )}
 

@@ -33,6 +33,17 @@ export function shortTimeAgo(timestamp: number): string {
   return t({ id: "formatTime.short.years", defaultMessage: "{count}y" }, { count: Math.floor(diff / YEAR) });
 }
 
+/**
+ * {@link shortTimeAgo} as a phrase that can stand inside a sentence ("seen
+ * {ago}"): "5m ago", "just now". The bare form has no "ago" to inflect around.
+ */
+export function shortTimeAgoPhrase(timestamp: number): string {
+  if (Math.floor(Date.now() / 1000) - timestamp < MINUTE) {
+    return t({ id: "formatTime.justNow", defaultMessage: "just now" });
+  }
+  return t({ id: "formatTime.shortAgo", defaultMessage: "{time} ago" }, { time: shortTimeAgo(timestamp) });
+}
+
 /** Format a unix-seconds timestamp as a long relative string ("2 days ago"). */
 export function relativeTime(timestamp: number): string {
   const seconds = Math.floor(Date.now() / 1000) - timestamp;

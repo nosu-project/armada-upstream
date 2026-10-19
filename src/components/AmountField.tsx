@@ -108,7 +108,7 @@ export function AmountField({
           <button
             type="button"
             onClick={() => setEditing(true)}
-            aria-label={intl.formatMessage({ id: "amountField.editLabel", defaultMessage: "Edit {label}" }, { label: label.toLowerCase() })}
+            aria-label={intl.formatMessage({ id: "amountField.editLabel", defaultMessage: "Edit {label}" }, { label })}
             className="flex items-baseline justify-center rounded-md px-2 -mx-2 hover:bg-muted/50 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring transition-colors"
           >
             {!isSats && <span className={`text-4xl font-semibold ${accentClass}`}>$</span>}

@@ -96,7 +96,7 @@ export function SettingsGroup({ id, title, footer, info, bare, children, classNa
       {title && (
         <h3 className="flex items-center gap-1 px-4 text-2xs font-semibold uppercase tracking-wider text-muted-foreground">
           {title}
-          {info && <InfoTip label={typeof title === "string" ? intl.formatMessage({ id: "settingsSection.aboutGroup", defaultMessage: "About {title}" }, { title: title.toLowerCase() }) : undefined}>{info}</InfoTip>}
+          {info && <InfoTip label={typeof title === "string" ? intl.formatMessage({ id: "settingsSection.aboutGroup", defaultMessage: "About {title}" }, { title }) : undefined}>{info}</InfoTip>}
         </h3>
       )}
       <div

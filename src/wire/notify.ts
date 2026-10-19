@@ -1,5 +1,5 @@
 import { t } from "@/i18n/intl";
-import { firstImetaMime, isThreadReply } from "@/lib/notificationPreview";
+import { firstImetaMime, isThreadReply, notificationMessages } from "@/lib/notificationPreview";
 import { KIND_DM_CHAT, KIND_DM_FILE, type OpenedDm } from "@/lib/nip17/protocol";
 import { dmConvKey } from "@/lib/nip17/conversation";
 import { chatRoute } from "@/lib/routes";
@@ -75,7 +75,7 @@ export function dm17NotifyCandidates(opened: OpenedDm[], self: string): NotifyCa
       createdAt: dm.createdAt,
       mention: true,
       kind: dm.kind,
-      body: dm.kind === KIND_DM_FILE ? t({ id: "wireNotify.sentFile", defaultMessage: "Sent a file" }) : dm.content,
+      body: dm.kind === KIND_DM_FILE ? t(notificationMessages.sentFile) : dm.content,
       content: dm.content,
       imetaMime: firstImetaMime(dm.tags),
       threadReply: isThreadReply(dm.kind, dm.tags),

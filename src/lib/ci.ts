@@ -280,18 +280,12 @@ export function ciGroupsOutcome(groups: readonly CIWorkflowGroup[]): CIConclusio
   return outcomes[0] ?? "neutral";
 }
 
-/** "2 passing, 1 failing" — the current state of a multi-workflow stretch. */
-export function ciGroupsSummary(groups: readonly CIWorkflowGroup[]): string {
+/** How many workflows' latest runs are failing, running and passing — the current state of a multi-workflow stretch. */
+export function ciGroupsCounts(groups: readonly CIWorkflowGroup[]): { failing: number; running: number; passing: number } {
   const outcomes = groups.map((group) => ciRunOutcome(group.latest));
-  const counts = {
+  return {
     failing: outcomes.filter(isCIFailure).length,
     running: outcomes.filter((outcome) => outcome === "in_progress" || outcome === "queued").length,
     passing: outcomes.filter((outcome) => outcome === "success").length,
   };
-  const parts = [
-    counts.failing > 0 ? `${counts.failing} failing` : undefined,
-    counts.running > 0 ? `${counts.running} running` : undefined,
-    counts.passing > 0 ? `${counts.passing} passing` : undefined,
-  ].filter((part): part is string => part !== undefined);
-  return parts.length > 0 ? parts.join(", ") : `${groups.length} workflows`;
 }

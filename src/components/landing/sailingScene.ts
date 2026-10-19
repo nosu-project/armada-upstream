@@ -1,6 +1,5 @@
 import * as THREE from "three";
 
-import { t } from "@/i18n";
 
 import { createSailingWake } from "./sailingWake";
 import { coastRadius, islandsInSector, randomSource, sail, SECTOR_SIZE, type Island, type Vessel } from "./sailingWorld";
@@ -158,7 +157,7 @@ function disposeObjects(object: THREE.Object3D) {
 }
 
 /** Mounts the scene into `host` and returns its teardown, or null when WebGL can't start. */
-export function mountSailingScene(host: HTMLDivElement): (() => void) | null {
+export function mountSailingScene(host: HTMLDivElement, label: string): (() => void) | null {
   let renderer: THREE.WebGLRenderer;
   try {
     renderer = new THREE.WebGLRenderer({ antialias: false, alpha: true, powerPreference: "low-power" });
@@ -171,7 +170,7 @@ export function mountSailingScene(host: HTMLDivElement): (() => void) | null {
   const canvas = renderer.domElement;
   canvas.tabIndex = 0;
   canvas.setAttribute("role", "application");
-  canvas.setAttribute("aria-label", t({ id: "sailingScene.label", defaultMessage: "Sail the Armada ship" }));
+  canvas.setAttribute("aria-label", label);
   canvas.style.cssText = "display:block;width:100%;height:100%;touch-action:pan-y;outline:none;mask-image:linear-gradient(to bottom,transparent,transparent 6%,black 30%,black 94%,transparent);";
   host.appendChild(canvas);
 

@@ -4,7 +4,8 @@ import Foundation
 ///
 /// The iOS copy of the `notification.*` messages (`notificationMessages` in
 /// `src/lib/notificationPreview.ts`), which Android's `strings.xml` also
-/// carries; the three must stay in step. An in-code table rather than
+/// carries; the three must stay in step, and `npm run i18n:check` fails when
+/// this table and the catalogs disagree. An in-code table rather than
 /// `Localizable.strings`: the language is the APP's choice, handed over in the
 /// config, not the device's, and a bundle lookup would leave the Linux suite
 /// testing nothing the extension reads.
@@ -162,8 +163,8 @@ struct Strings {
         ],
         "de": [
             .reacted: "Hat mit {emoji} auf deine Nachricht reagiert",
-            .repliedInThreadWith: "Hat im Thread geantwortet: {text}",
-            .repliedInThread: "Hat im Thread geantwortet",
+            .repliedInThreadWith: "Im Thread geantwortet: {text}",
+            .repliedInThread: "Im Thread geantwortet",
             .sentGif: "Hat ein GIF gesendet",
             .sentImage: "Hat ein Bild gesendet",
             .sentVideo: "Hat ein Video gesendet",
@@ -191,8 +192,8 @@ struct Strings {
         ],
         "es": [
             .reacted: "Reaccionó con {emoji} a tu mensaje",
-            .repliedInThreadWith: "Respondió en el hilo: {text}",
-            .repliedInThread: "Respondió en el hilo",
+            .repliedInThreadWith: "Respondió en un hilo: {text}",
+            .repliedInThread: "Respondió en un hilo",
             .sentGif: "Envió un GIF",
             .sentImage: "Envió una imagen",
             .sentVideo: "Envió un vídeo",
@@ -211,7 +212,7 @@ struct Strings {
             .newDirectMessage: "Nuevo mensaje directo",
             .newCommunityMessage: "Nuevo mensaje en una comunidad",
             .newChannelMessage: "Nuevo mensaje en un canal",
-            .someoneMentionedYou: "Alguien te mencionó",
+            .someoneMentionedYou: "Alguien te ha mencionado",
             .messageRequests: "Solicitudes de mensaje",
             .newMessageRequestOne: "Tienes una nueva solicitud de mensaje",
             .newMessageRequestOther: "Tienes nuevas solicitudes de mensaje",
@@ -220,8 +221,8 @@ struct Strings {
         ],
         "fr": [
             .reacted: "A réagi {emoji} à votre message",
-            .repliedInThreadWith: "A répondu dans le fil\u{00A0}: {text}",
-            .repliedInThread: "A répondu dans le fil",
+            .repliedInThreadWith: "A répondu dans un fil : {text}",
+            .repliedInThread: "A répondu dans un fil",
             .sentGif: "A envoyé un GIF",
             .sentImage: "A envoyé une image",
             .sentVideo: "A envoyé une vidéo",
@@ -231,7 +232,7 @@ struct Strings {
             .sentDirectMessage: "Vous a envoyé un message privé",
             .sentMessage: "A envoyé un message",
             .mentionedYou: "@vous {text}",
-            .attributed: "{name}\u{00A0}: {text}",
+            .attributed: "{name} : {text}",
             .chat: "Discussion",
             .anonymous: "Anonyme",
             .appName: "Armada",
@@ -249,8 +250,8 @@ struct Strings {
         ],
         "it": [
             .reacted: "Ha reagito con {emoji} al tuo messaggio",
-            .repliedInThreadWith: "Ha risposto nel thread: {text}",
-            .repliedInThread: "Ha risposto nel thread",
+            .repliedInThreadWith: "Ha risposto in un thread: {text}",
+            .repliedInThread: "Ha risposto in un thread",
             .sentGif: "Ha inviato una GIF",
             .sentImage: "Ha inviato un’immagine",
             .sentVideo: "Ha inviato un video",
@@ -278,13 +279,13 @@ struct Strings {
         ],
         "nl": [
             .reacted: "Reageerde met {emoji} op je bericht",
-            .repliedInThreadWith: "Antwoordde in de thread: {text}",
-            .repliedInThread: "Antwoordde in de thread",
-            .sentGif: "Stuurde een GIF",
+            .repliedInThreadWith: "Antwoordde in een thread: {text}",
+            .repliedInThread: "Antwoordde in een thread",
+            .sentGif: "Stuurde een gif",
             .sentImage: "Stuurde een afbeelding",
             .sentVideo: "Stuurde een video",
             .sentVoice: "Stuurde een spraakbericht",
-            .sentGame: "Stuurde een spel",
+            .sentGame: "Stuurde een game",
             .sentFile: "Stuurde een bestand",
             .sentDirectMessage: "Stuurde je een privébericht",
             .sentMessage: "Stuurde een bericht",
@@ -306,10 +307,10 @@ struct Strings {
             .channelTitle: "#{channel}",
         ],
         "ja": [
-            .reacted: "あなたのメッセージに{emoji}でリアクションしました",
+            .reacted: "あなたのメッセージに {emoji} でリアクションしました",
             .repliedInThreadWith: "スレッドで返信しました: {text}",
             .repliedInThread: "スレッドで返信しました",
-            .sentGif: "GIFを送信しました",
+            .sentGif: "GIF を送信しました",
             .sentImage: "画像を送信しました",
             .sentVideo: "動画を送信しました",
             .sentVoice: "ボイスメッセージを送信しました",
@@ -323,10 +324,10 @@ struct Strings {
             .anonymous: "匿名",
             .appName: "Armada",
             .messagesSynced: "メッセージを同期しました",
-            .newMessage: "新着メッセージ",
+            .newMessage: "新しいメッセージ",
             .newDirectMessage: "新しいダイレクトメッセージ",
-            .newCommunityMessage: "コミュニティに新着メッセージがあります",
-            .newChannelMessage: "チャンネルに新着メッセージがあります",
+            .newCommunityMessage: "コミュニティに新しいメッセージ",
+            .newChannelMessage: "チャンネルに新しいメッセージ",
             .someoneMentionedYou: "誰かがあなたをメンションしました",
             .messageRequests: "メッセージリクエスト",
             .newMessageRequestOne: "新しいメッセージリクエストがあります",

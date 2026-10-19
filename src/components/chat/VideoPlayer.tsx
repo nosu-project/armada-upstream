@@ -376,7 +376,7 @@ export function VideoPlayer({
             onError={onError}
           />
         ) : failed ? (
-          <MediaFallback {...fallbackProps} label="GIF" />
+          <MediaFallback {...fallbackProps} kind="gif" />
         ) : (
           <div className="relative w-full h-full flex items-center justify-center">
             {isValidBlurhash(blurhash) && (
@@ -390,7 +390,7 @@ export function VideoPlayer({
   }
 
   if (failed) {
-    return <MediaFallback {...fallbackProps} label={intl.formatMessage({ id: "videoPlayer.video", defaultMessage: "Video" })} />;
+    return <MediaFallback {...fallbackProps} kind="video" />;
   }
 
   return (

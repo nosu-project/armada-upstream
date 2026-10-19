@@ -3346,7 +3346,7 @@ export function ConcordPage() {
                           <DropdownMenuSubContent>
                             {PAUSE_DURATIONS.map((d) => (
                               <DropdownMenuItem
-                                key={d.label}
+                                key={d.secs ?? "open"}
                                
                                 onClick={() =>
                                   setPaused.mutate(

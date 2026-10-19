@@ -1877,12 +1877,11 @@ function InlineImage({
   const [knownDim] = useState(() => seenImageDim(image.url));
   const { resolved, onError, failed, fallbackProps, getSrc } = useShownImage(image);
   const menu = useImageMenu(image, getSrc, onOpen, onActivate);
-  const intl = useIntl();
   const covered = image.spoiler && !revealed;
 
   // Block-level: the tokenizer stripped the surrounding newlines expecting a block.
   if (failed) {
-    return <MediaFallback {...fallbackProps} label={intl.formatMessage({ id: "chatContent.image", defaultMessage: "Image" })} />;
+    return <MediaFallback {...fallbackProps} kind="image" />;
   }
 
   // The box never changes on load, or rows move under the reader. A known `dim`

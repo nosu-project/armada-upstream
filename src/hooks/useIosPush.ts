@@ -11,7 +11,7 @@ import {
   type PushTarget,
 } from "@/hooks/useNostrPush";
 import { usePushWatchSet } from "@/hooks/usePushWatchSet";
-import { useIntl } from "@/i18n";
+import { useIntl, languageOf } from "@/i18n";
 import { registerBeforeAccountExit } from "@/lib/beforeAccountExit";
 import { NOSTR_PUSH2_LIMITS, type PushPlane } from "@/lib/nappPush";
 import {
@@ -170,7 +170,7 @@ export function useIosPush(): UsePushNotificationsReturn {
   } = usePushWatchSet(prefs);
   const mediaPolicy = useMediaPolicyConfig();
   // The extension has no catalog of the app's choice; a language switch rewrites its config.
-  const { locale } = useIntl();
+  const locale = languageOf(useIntl().locale);
 
   // Keep the extension's config current; cleared whenever push is off or logged out so no key
   // lingers.

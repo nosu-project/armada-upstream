@@ -818,7 +818,10 @@ exists for the check and for translators.
   that never reach the screen.
 - **Dates and numbers use the app's language**, not the browser's: pass
   `intl.locale` (or `getLocale()` outside React) where code would pass
-  `undefined` to `toLocale*String` / `Intl.*`.
+  `undefined` to `toLocale*String` / `Intl.*`. That tag carries the user's
+  region (`en-GB`, `de-AT`, `en-BR` for a pt-BR browser reading English —
+  `formattingLocale`), so it is not a catalog key: a notifier or a catalog
+  lookup takes `languageOf(…)` / `getLanguage()`.
 - **Every new or changed message is translated into every catalog in the same
   change.** `npm run test` runs `npm run i18n:check`, which fails when `en.json`
   is stale, a catalog lacks or has extra ids, or a translation's placeholders and
@@ -831,7 +834,9 @@ exists for the check and for translators.
   sealed config; Android's service and iOS's extension get the locale in theirs
   and carry their own tables (`values-<lang>/strings.xml`,
   `ArmadaNotify`'s `Strings.swift`), which must stay in step with the
-  `notification.*` messages.
+  `notification.*` messages — `i18n:check` compares both against the catalogs
+  (`ANDROID_KEYS`/`SWIFT_KEYS` in `scripts/i18n.mjs` map each native key to
+  its message).
 
 ## Conventions
 

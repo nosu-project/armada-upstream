@@ -4,7 +4,7 @@
  * Pure and synchronous over an {@link ExportModel} built from the local rumor store.
  */
 
-import { getLocale, t } from "@/i18n/intl";
+import { getLanguage, t } from "@/i18n/intl";
 import { sanitizeUrl } from "@/lib/sanitizeUrl";
 
 export interface ExportProfile {
@@ -373,7 +373,7 @@ export function exportHtmlParts(model: ExportModel): string[] {
 
   const parts: string[] = [];
   parts.push(
-    `<!doctype html>\n<html lang="${escapeHtml(getLocale())}">\n<head>\n` +
+    `<!doctype html>\n<html lang="${escapeHtml(getLanguage())}">\n<head>\n` +
       `<meta charset="utf-8">\n<meta name="viewport" content="width=device-width, initial-scale=1">\n` +
       `<title>${escapeHtml(title)}</title>\n<style>${APP_STYLE}</style>\n<style>`,
   );

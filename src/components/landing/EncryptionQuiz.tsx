@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { defineMessages, FormattedMessage, useIntl } from "@/i18n";
 import { cn } from "@/lib/utils";
@@ -284,8 +284,9 @@ export function EncryptionQuiz() {
   const [revealed, setRevealed] = useState(false);
   const [picked, setPicked] = useState(false);
   const titleRef = useRef<HTMLSpanElement>(null);
-  // Initial noise only; the decode writes the rest straight into the node.
-  const [titleNoise] = useState(() => hex(title.length));
+  // Initial noise only; the decode writes the rest straight into the node. Re-rolled per
+  // language so the garble is as long as the title it hides.
+  const titleNoise = useMemo(() => hex(title.length), [title.length]);
   useDecodingTitle(titleRef, title, revealed && !picked);
   const onScreen = useOnScreen(sectionRef);
   // Stable, so memoized answers don't re-render.

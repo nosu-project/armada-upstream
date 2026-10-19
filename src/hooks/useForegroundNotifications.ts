@@ -491,9 +491,10 @@ export function useForegroundNotifications(): void {
 
     // Local reads only (author cache, then event store kind-0), so a missing profile never
     // delays the notification. No profile → "Anonymous", matching Android and `getDisplayName`.
-    const profileFor = async (pubkey: string): Promise<{ name: string; avatar?: string }> => {
+    const profileFor = async (pubkey: string): Promise<{ name: string; named: boolean; avatar?: string }> => {
       const present = (metadata: NostrMetadata | undefined, imeta?: ProfileImeta) => ({
         name: getDisplayName(metadata, pubkey),
+        named: !!(metadata?.name || metadata?.display_name),
         // https only (http is a failing mixed-content fetch), then the media policy. An
         // encrypted picture can't be an OS icon: its URL is ciphertext.
         avatar: mediaSrc(
@@ -504,7 +505,7 @@ export function useForegroundNotifications(): void {
         ),
       });
 
-      if (!pubkey) return { name: getDisplayName(undefined) };
+      if (!pubkey) return { name: getDisplayName(undefined), named: false };
       const qc = ctx.current.queryClient;
       const cached = qc.getQueryData<AuthorResult>(["author", pubkey]);
       if (cached?.metadata) return present(cached.metadata, cached.imeta);
@@ -526,7 +527,7 @@ export function useForegroundNotifications(): void {
         // Store unavailable — fall through.
       }
 
-      return { name: getDisplayName(undefined) };
+      return { name: getDisplayName(undefined), named: false };
     };
 
     /** Room title and icon, matching the Android conversation shortcut. Local reads only. */
@@ -564,9 +565,9 @@ export function useForegroundNotifications(): void {
       const keys = mentionPubkeys(content);
       if (keys.length === 0) return names;
       await Promise.all(keys.map(async (pk) => {
-        const { name } = await profileFor(pk);
+        const { name, named } = await profileFor(pk);
         // "Anonymous" is an absence; the raw token means more.
-        if (name && name !== getDisplayName(undefined)) names.set(pk, name);
+        if (named) names.set(pk, name);
       }));
       return names;
     };

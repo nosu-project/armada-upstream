@@ -40,7 +40,7 @@ import { toast } from "@/hooks/useToast";
 import { defineMessage, FormattedMessage, t, useIntl } from "@/i18n";
 import { getAvatarShape } from "@/lib/avatarShape";
 import { writeClipboardText } from "@/lib/clipboard";
-import { shortTimeAgo } from "@/lib/formatTime";
+import { shortTimeAgoPhrase } from "@/lib/formatTime";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { cn } from "@/lib/utils";
 
@@ -253,7 +253,7 @@ export function CommunityListingCard({
       key: "active",
       text: intl.formatMessage(
         { id: "communityListingCard.activeAgo", defaultMessage: "Active {time}" },
-        { time: shortTimeAgo(lastActiveAt) },
+        { time: shortTimeAgoPhrase(lastActiveAt) },
       ),
       hint: intl.formatMessage(ACTIVITY_HINT),
     });

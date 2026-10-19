@@ -50,7 +50,7 @@ final class StringsTests: XCTestCase {
         XCTAssertEqual(en.reacted(emoji: "🎉"), "Reacted 🎉 to your message")
         XCTAssertEqual(en.roomTitle(community: "Armada", channel: "general"), "Armada / #general")
         XCTAssertEqual(
-            Strings(locale: "de").repliedInThread(text: "klar"), "Hat im Thread geantwortet: klar"
+            Strings(locale: "de").repliedInThread(text: "klar"), "Im Thread geantwortet: klar"
         )
     }
 

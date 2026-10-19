@@ -27,7 +27,10 @@ export function BuzzDmName({
         </span>
       ))}
       {list.length > shown.length && (
-        <FormattedMessage id="buzzDmName.more" defaultMessage=" +{count}" values={{ count: list.length - shown.length }} />
+        <>
+          {" "}
+          <FormattedMessage id="buzzDmName.more" defaultMessage="+{count}" values={{ count: list.length - shown.length }} />
+        </>
       )}
     </>
   );

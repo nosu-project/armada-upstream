@@ -19,7 +19,7 @@ export interface MediaWithFallback {
   failed: boolean;
   /** Manual retry after total failure. */
   reset: () => void;
-  fallbackProps: Omit<MediaFallbackProps, "label" | "className" | "compact">;
+  fallbackProps: Omit<MediaFallbackProps, "kind" | "className" | "compact">;
 }
 
 /**

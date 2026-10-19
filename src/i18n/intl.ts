@@ -20,6 +20,11 @@ export type { MessageDescriptor };
 export type PrimitiveType = string | number | bigint | boolean | null | undefined | Date;
 export { defineMessage, defineMessages };
 
+/** The language subtag of a BCP 47 tag: `en-GB` → `en`. */
+export function languageOf(tag: string): string {
+  return tag.split("-")[0].toLowerCase();
+}
+
 const cache = createIntlCache();
 
 export function createAppIntl(locale: string, messages?: Catalog): IntlShape {
@@ -47,9 +52,14 @@ export function setIntl(next: IntlShape): void {
   current = next;
 }
 
-/** The active locale code, for `Intl.*` / `toLocale*String` calls outside React. */
+/** The active formatting tag (language plus the user's region), for `Intl.*` / `toLocale*String` outside React. */
 export function getLocale(): string {
   return current.locale;
+}
+
+/** The active interface language alone (`de`, not `de-AT`): what a catalog or a native notifier is keyed by. */
+export function getLanguage(): string {
+  return languageOf(current.locale);
 }
 
 /**

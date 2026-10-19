@@ -441,7 +441,6 @@ function DirectVideoPlayer({
   onPlayback: (patch: Pick<WatchSnapshot, "playing" | "time" | "rate">) => void;
   onEnded: () => void;
 }) {
-  const intl = useIntl();
   const { resolved, onError, failed, fallbackProps } = useMediaWithFallback({ url });
   const src = resolved.status === "ready" ? resolved.src : undefined;
 
@@ -501,7 +500,7 @@ function DirectVideoPlayer({
   if (failed) {
     return (
       <div className="absolute inset-0 flex items-center justify-center p-4">
-        <MediaFallback {...fallbackProps} label={intl.formatMessage({ id: "watchalong.video", defaultMessage: "Video" })} />
+        <MediaFallback {...fallbackProps} kind="video" />
       </div>
     );
   }

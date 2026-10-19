@@ -930,7 +930,7 @@ export function useRetireCommunityLinks(community: Community | undefined) {
       revokeAllMyLinks({ skipRegistry: true }),
       signers.size > 0 ? unlistLinks(signers) : Promise.resolve(0),
     ]);
-    // A wholesale rejection (t({ id: "useInvites.notReady", defaultMessage: "Not ready." })) revoked nothing: owe every link.
+    // A wholesale rejection ("Not ready.") revoked nothing: owe every link.
     const unrevoked = revoke.status === "fulfilled" ? revoke.value.failedSignerSks : myLinks.map((e) => e.signer_sk);
     const unlistFailed = unlist.status === "rejected";
 

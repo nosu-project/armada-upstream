@@ -44,7 +44,7 @@ import {
   nativeNotificationConfigAction,
   type NativeNotificationEnablement,
 } from "@/lib/nativeNotificationConfig";
-import { getLocale, useIntl } from "@/i18n";
+import { getLanguage, useIntl, languageOf } from "@/i18n";
 
 const NATIVE_INTENT_KEY = "armada:native-notif-intent";
 
@@ -152,7 +152,7 @@ export async function disableNativeNotificationsForAccountExit(): Promise<void> 
   // Close the gate synchronously so a rerender can't re-enqueue the outgoing account's payload.
   // Intent is unchanged.
   setEnabledShared("disabled");
-  await configureNative({ enabled: false, locale: getLocale() });
+  await configureNative({ enabled: false, locale: getLanguage() });
 }
 
 // One module-wide account-exit subscription so the native teardown doesn't run twice.
@@ -216,7 +216,7 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
   } = useKnownDmPeers();
   const { channelLevel, concordChannelLevel } = useNotifLevels();
   // Part of the deduped payload, so a language switch re-words the native side.
-  const { locale } = useIntl();
+  const locale = languageOf(useIntl().locale);
 
   const enablement = useSyncExternalStore(
     subscribeEnabled,

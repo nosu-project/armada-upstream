@@ -15,7 +15,7 @@ import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { forumImages, type ForumImage, type ForumPost, type ForumSort } from "@/concord/lib/forum";
 import { defineMessages, FormattedMessage, useIntl } from "@/i18n";
 import { getAvatarShape } from "@/lib/avatarShape";
-import { fullDateTime, shortTimeAgo } from "@/lib/formatTime";
+import { fullDateTime, shortTimeAgo, shortTimeAgoPhrase } from "@/lib/formatTime";
 import { mediaHost } from "@/lib/mediaPolicy";
 import { cn } from "@/lib/utils";
 
@@ -100,10 +100,11 @@ const ForumPostRow = memo(function ForumPostRow({
               <span title={fullDateTime(post.root.created_at)}> · {shortTimeAgo(post.root.created_at)}</span>
               {hasComments && (
                 <span title={fullDateTime(post.lastActivityAt)}>
+                  {" "}
                   <FormattedMessage
                     id="forumFeed.activeAgo"
-                    defaultMessage=" · active {time}"
-                    values={{ time: shortTimeAgo(post.lastActivityAt) }}
+                    defaultMessage="· active {time}"
+                    values={{ time: shortTimeAgoPhrase(post.lastActivityAt) }}
                   />
                 </span>
               )}

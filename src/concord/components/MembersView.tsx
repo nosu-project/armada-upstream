@@ -44,7 +44,7 @@ import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useMutedPubkeys } from "@/hooks/useMuteList";
 import { profileMatches, type SearchProfile } from "@/hooks/useSearchProfiles";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
-import { shortTimeAgo } from "@/lib/formatTime";
+import { shortTimeAgoPhrase } from "@/lib/formatTime";
 import { toast } from "@/hooks/useToast";
 import { useEventStore } from "@/hooks/useEventStore";
 import { defineMessages, FormattedMessage, t, useIntl } from "@/i18n";
@@ -779,7 +779,7 @@ function MemberRow({
                 <FormattedMessage
                   id="membersView.joinedAgo"
                   defaultMessage="joined {ago}"
-                  values={{ ago: shortTimeAgo(Math.floor(row.joinMs / 1000)) }}
+                  values={{ ago: shortTimeAgoPhrase(Math.floor(row.joinMs / 1000)) }}
                 />
               ) : (
                 <FormattedMessage id="membersView.joinUnknown" defaultMessage="join unknown" />
@@ -849,7 +849,7 @@ function MemberRow({
             <FormattedMessage
               id="membersView.seenAgo"
               defaultMessage="seen {ago}"
-              values={{ ago: shortTimeAgo(Math.floor(row.lastSeenMs / 1000)) }}
+              values={{ ago: shortTimeAgoPhrase(Math.floor(row.lastSeenMs / 1000)) }}
             />
           ) : (
             <FormattedMessage id="membersView.notSeen" defaultMessage="not seen" />

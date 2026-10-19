@@ -11,7 +11,7 @@ import { Button } from "@/components/ui/button";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { toast } from "@/hooks/useToast";
-import { ciGroupsOutcome, ciGroupsSummary, ciRunOutcome, ciWorkflowName, groupCIRunsByWorkflow, type CIRun, type CIRunJob, type CIWorkflowGroup } from "@/lib/ci";
+import { ciGroupsCounts, ciGroupsOutcome, ciRunOutcome, ciWorkflowName, groupCIRunsByWorkflow, type CIRun, type CIRunJob, type CIWorkflowGroup } from "@/lib/ci";
 import { shortTimeAgo } from "@/lib/formatTime";
 import { gitBodyPreview } from "@/lib/gitSummary";
 import {
@@ -29,7 +29,7 @@ import {
 } from "@/lib/gitActivity";
 import { gitworkshopTicketUrl } from "@/lib/gitworkshopUrl";
 import { cn } from "@/lib/utils";
-import { FormattedMessage, defineMessages, t, useIntl, type MessageDescriptor } from "@/i18n";
+import { FormattedMessage, defineMessages, t, useIntl, type IntlShape, type MessageDescriptor } from "@/i18n";
 import type { ReactNode } from "react";
 
 /** Callbacks that make the conversation panel writable; absent means read-only. */
@@ -496,11 +496,25 @@ function CIGroupRow({ entries }: { entries: readonly Extract<GitChannelTimelineE
             values={{
               name: (chunks: ReactNode[]) => <span className="font-medium text-foreground/90">{chunks}</span>,
               count: runs.length,
-              summary: ciGroupsSummary(groups),
+              summary: ciSummary(intl, groups),
             }}
           />}
     </NoticeRow>
   );
+}
+
+/** "2 passing, 1 failing", or the workflow count when none has an outcome yet. */
+function ciSummary(intl: IntlShape, groups: readonly CIWorkflowGroup[]): string {
+  const counts = ciGroupsCounts(groups);
+  const parts = [
+    counts.failing > 0 ? intl.formatMessage({ id: "gitTimeline.ci.failingCount", defaultMessage: "{count, plural, other {# failing}}" }, { count: counts.failing }) : undefined,
+    counts.running > 0 ? intl.formatMessage({ id: "gitTimeline.ci.runningCount", defaultMessage: "{count, plural, other {# running}}" }, { count: counts.running }) : undefined,
+    counts.passing > 0 ? intl.formatMessage({ id: "gitTimeline.ci.passingCount", defaultMessage: "{count, plural, other {# passing}}" }, { count: counts.passing }) : undefined,
+  ].filter((part): part is string => part !== undefined);
+  if (parts.length === 0) {
+    return intl.formatMessage({ id: "gitTimeline.ci.workflowCount", defaultMessage: "{count, plural, one {# workflow} other {# workflows}}" }, { count: groups.length });
+  }
+  return intl.formatList(parts, { type: "unit", style: "short" });
 }
 
 function ActorName({ pubkey, className }: { pubkey: string; className?: string }) {

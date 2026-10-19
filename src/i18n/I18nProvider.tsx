@@ -3,7 +3,7 @@ import { createIntl, RawIntlProvider, type IntlShape as ReactIntlShape } from "r
 
 import { setIntl } from "@/i18n/intl";
 import { usePreferredLocale } from "@/i18n/language";
-import { hasCatalog, loadCatalog, peekCatalog, type Catalog } from "@/i18n/locales";
+import { formattingLocale, hasCatalog, loadCatalog, peekCatalog, type Catalog } from "@/i18n/locales";
 
 interface Loaded {
   locale: string;
@@ -19,7 +19,7 @@ function resolveSync(locale: string): Loaded | null {
 
 function buildIntl({ locale, messages }: Loaded): ReactIntlShape {
   return createIntl({
-    locale,
+    locale: formattingLocale(locale),
     defaultLocale: "en",
     messages,
     onError: (err) => {
@@ -64,11 +64,11 @@ export function I18nProvider({ children }: { children: ReactNode }) {
   if (intl) setIntl(intl as unknown as Parameters<typeof setIntl>[0]);
 
   useEffect(() => {
-    if (intl) document.documentElement.lang = intl.locale;
-  }, [intl]);
+    if (loaded) document.documentElement.lang = loaded.locale;
+  }, [loaded]);
 
   // Only on the first paint of a translated language whose chunk isn't in yet;
-  // `preloadPreferredCatalog()` in main.tsx starts that fetch before React mounts.
+  // main.tsx starts that fetch before React mounts.
   if (!intl) return null;
   return <RawIntlProvider value={intl}>{children}</RawIntlProvider>;
 }

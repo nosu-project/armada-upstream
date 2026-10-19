@@ -1,3 +1,5 @@
+import { languageOf } from "@/i18n/intl";
+
 /** Languages with a bundled catalog, in picker order. English is the source language. */
 export const LANGUAGE_OPTIONS = [
   { code: "en", nativeName: "English" },
@@ -81,11 +83,36 @@ export function detectLocale(languages?: readonly string[]): LocaleCode {
 }
 
 /**
+ * The tag dates and numbers are formatted with: the interface language, with
+ * the user's region where they have one. An `en-GB` user reading English gets
+ * a 24-hour clock; a `pt-BR` user reading English gets `en-BR`. The language
+ * itself must stay the interface's, or plural rules disagree with the catalog.
+ */
+export function formattingLocale(language: string, languages?: readonly string[]): string {
+  const prefs = languages
+    ?? (typeof navigator === "undefined" ? [] : navigator.languages?.length ? navigator.languages : [navigator.language]);
+  let region: string | undefined;
+  for (const tag of prefs) {
+    if (!tag) continue;
+    let parsed: Intl.Locale;
+    try {
+      parsed = new Intl.Locale(tag);
+    } catch {
+      continue;
+    }
+    if (parsed.language === language) return parsed.region ? `${language}-${parsed.region}` : language;
+    region ??= parsed.region;
+  }
+  return region ? `${language}-${region}` : language;
+}
+
+/**
  * The language a background notifier should word its text in, with the
  * `notification.*` messages it needs. Absent when the language is English or
  * its catalog isn't loaded, which the notifiers read as English.
  */
-export function notificationLocale(locale: string): { locale: string; messages: Catalog } | undefined {
+export function notificationLocale(tag: string): { locale: string; messages: Catalog } | undefined {
+  const locale = languageOf(tag);
   const catalog = peekCatalog(locale);
   if (!catalog) return undefined;
   const messages: Catalog = {};

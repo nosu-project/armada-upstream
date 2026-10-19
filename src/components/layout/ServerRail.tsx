@@ -203,11 +203,12 @@ function Concord2MiniIcon({ communityId, name }: { communityId: string; name: st
 }
 
 function DmMiniIcon({ pubkey }: { pubkey: string }) {
+  const intl = useIntl();
   const { user } = useCurrentUser();
   const author = useAuthor(pubkey);
   const metadata = author.data?.metadata;
   const noteToSelf = pubkey === user?.pubkey;
-  const name = noteToSelf ? NOTE_TO_SELF_NAME : getDisplayName(metadata, pubkey);
+  const name = noteToSelf ? intl.formatMessage(NOTE_TO_SELF_NAME) : getDisplayName(metadata, pubkey);
   const unread = useDmPeerUnread(pubkey);
   return (
     <span className="relative flex items-center justify-center">
@@ -373,11 +374,12 @@ function Concord2DragGhost({ communityId, name }: { communityId: string; name: s
 }
 
 function DmDragGhost({ pubkey }: { pubkey: string }) {
+  const intl = useIntl();
   const { user } = useCurrentUser();
   const author = useAuthor(pubkey);
   const metadata = author.data?.metadata;
   const noteToSelf = pubkey === user?.pubkey;
-  const name = noteToSelf ? NOTE_TO_SELF_NAME : getDisplayName(metadata, pubkey);
+  const name = noteToSelf ? intl.formatMessage(NOTE_TO_SELF_NAME) : getDisplayName(metadata, pubkey);
   return (
     <span className="block size-12 rotate-[-6deg] scale-110 [filter:drop-shadow(0_8px_16px_rgba(0,0,0,0.55))_drop-shadow(0_0_8px_hsl(var(--primary)/0.6))]">
       {noteToSelf ? (
@@ -844,7 +846,7 @@ const DmButton = memo(function DmButton({
   const metadata = author.data?.metadata;
   // Own conversation is Note to Self, not the viewer's face.
   const noteToSelf = pubkey === user?.pubkey;
-  const name = noteToSelf ? NOTE_TO_SELF_NAME : getDisplayName(metadata, pubkey);
+  const name = noteToSelf ? intl.formatMessage(NOTE_TO_SELF_NAME) : getDisplayName(metadata, pubkey);
   const unread = useDmPeerUnread(pubkey);
   const displayedUnreadCount = unreadCount ?? (unread ? 1 : 0);
   const { dmLevel, setLevel: setNotifLevel } = useNotifLevels();

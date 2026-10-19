@@ -1,6 +1,8 @@
 import { Capacitor } from "@capacitor/core";
 import { useEffect, useRef, useState } from "react";
 
+import { useIntl } from "@/i18n";
+
 /** One throwaway context, so a browser without WebGL gives up the sea's space early. */
 function canWebGL(): boolean {
   try {
@@ -21,6 +23,11 @@ function canWebGL(): boolean {
  */
 export function SailingSea() {
   const hostRef = useRef<HTMLDivElement>(null);
+  const intl = useIntl();
+  const label = intl.formatMessage({ id: "sailingScene.label", defaultMessage: "Sail the Armada ship" });
+  // Read at mount through the ref, so a language switch relabels rather than remounts the scene.
+  const labelRef = useRef(label);
+  labelRef.current = label;
   const [supported, setSupported] = useState(
     () => typeof WebGLRenderingContext !== "undefined" && Capacitor.getPlatform() !== "android",
   );
@@ -46,7 +53,7 @@ export function SailingSea() {
       loading = true;
       void import("./sailingScene").then(({ mountSailingScene }) => {
         if (disposed) return;
-        const teardown = mountSailingScene(host);
+        const teardown = mountSailingScene(host, labelRef.current);
         if (teardown) cleanup = teardown;
         else setSupported(false);
       }).catch(() => {
@@ -61,6 +68,10 @@ export function SailingSea() {
       cleanup?.();
     };
   }, [supported]);
+
+  useEffect(() => {
+    hostRef.current?.querySelector("canvas")?.setAttribute("aria-label", label);
+  }, [label]);
 
   if (!supported) return null;
 

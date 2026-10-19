@@ -3,7 +3,7 @@
  * initial-load components can format money. Re-exported by `@/lib/bitcoin`.
  */
 import { esploraFetch } from './esplora';
-import { getLocale } from '@/i18n';
+import { getLocale, t } from '@/i18n';
 
 import type { CurrencyDisplay } from '@/contexts/AppContext';
 
@@ -20,9 +20,14 @@ export function formatBTC(sats: number): string {
   return satsToBTC(sats).replace(/\.?0+$/, '');
 }
 
+// toLocaleString builds a new Intl.NumberFormat per call; amounts render per row.
+let satsFormat: { locale: string; format: Intl.NumberFormat } | undefined;
+
 /** Format a satoshi amount with locale-aware thousand separators. */
 export function formatSats(sats: number): string {
-  return sats.toLocaleString(getLocale());
+  const locale = getLocale();
+  if (satsFormat?.locale !== locale) satsFormat = { locale, format: new Intl.NumberFormat(locale) };
+  return satsFormat.format.format(sats);
 }
 
 /**
@@ -77,7 +82,7 @@ export function usdToSats(usd: number, btcPrice: number): number {
 
 /** Exact satoshi amount with its unit (`"5,000 sats"`); never abbreviated, for payment surfaces. */
 export function formatSatsAmount(sats: number): string {
-  return `${formatSats(sats)} ${sats === 1 ? 'sat' : 'sats'}`;
+  return t({ id: 'bitcoinMoney.satsAmount', defaultMessage: '{count, plural, one {# sat} other {# sats}}' }, { count: sats });
 }
 
 /** Exact amount in the preferred currency; falls back to sats when no price is known. */

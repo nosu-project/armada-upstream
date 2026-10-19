@@ -129,8 +129,8 @@ export function HistoryAuditView({ community, onClose }: HistoryAuditViewProps) 
               <span>
                 {progress.label || (progress.phase === "idle" ? "" : intl.formatMessage(PHASE_LABEL[progress.phase]))}
                 {progress.total > 1
-                  ? intl.formatMessage(
-                    { id: "historyAuditView.progressCount", defaultMessage: " ({done}/{total})" },
+                  ? " " + intl.formatMessage(
+                    { id: "historyAuditView.progressCount", defaultMessage: "({done}/{total})" },
                     { done: progress.done, total: progress.total },
                   )
                   : ""}

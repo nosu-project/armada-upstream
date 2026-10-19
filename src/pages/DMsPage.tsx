@@ -1575,7 +1575,7 @@ function RecipientSuggestion({
   const { user } = useCurrentUser();
   // Picking yourself opens Note to Self, so label it that way.
   const noteToSelf = pubkey === user?.pubkey;
-  const name = noteToSelf ? NOTE_TO_SELF_NAME : getDisplayName(metadata, pubkey);
+  const name = noteToSelf ? intl.formatMessage(NOTE_TO_SELF_NAME) : getDisplayName(metadata, pubkey);
   const picture = sanitizeUrl(metadata?.picture);
   const npub = nip19.npubEncode(pubkey);
   const handle = metadata?.nip05 ?? `${npub.slice(0, 12)}…${npub.slice(-6)}`;
