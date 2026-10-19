@@ -8,6 +8,7 @@ import { Dialog, ChromeDialogContent } from "@/components/ui/dialog";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { toast } from "@/hooks/useToast";
+import { common, FormattedMessage, t, useIntl } from "@/i18n";
 import { getAvatarShape } from "@/lib/avatarShape";
 import { writeClipboardText } from "@/lib/clipboard";
 import { getThemedQRColors } from "@/lib/qrColors";
@@ -25,6 +26,7 @@ interface ProfileShareDialogProps {
  * WebView origin is unreachable. QR tinted via {@link getThemedQRColors}.
  */
 export function ProfileShareDialog({ open, onOpenChange }: ProfileShareDialogProps) {
+  const intl = useIntl();
   const { user } = useCurrentUser();
   const author = useAuthor(user?.pubkey);
   const metadata = author.data?.metadata;
@@ -32,7 +34,8 @@ export function ProfileShareDialog({ open, onOpenChange }: ProfileShareDialogPro
   const [qrDataUrl, setQrDataUrl] = useState("");
 
   const npub = tryNpubEncode(user?.pubkey);
-  const displayName = metadata?.name || metadata?.display_name || "your profile";
+  const displayName = metadata?.name || metadata?.display_name ||
+    intl.formatMessage({ id: "profileShareDialog.yourProfile", defaultMessage: "your profile" });
   const url = npub ? `${shareOrigin()}/${npub}` : "";
 
   useEffect(() => {
@@ -59,15 +62,15 @@ export function ProfileShareDialog({ open, onOpenChange }: ProfileShareDialogPro
         setCopied(true);
         setTimeout(() => setCopied(false), 1800);
       },
-      () => toast({ title: "Copy failed", variant: "destructive" }),
+      () => toast({ title: t({ id: "profileShareDialog.copyFailed", defaultMessage: "Copy failed" }), variant: "destructive" }),
     );
   };
 
   const share = () => {
     if (!url) return;
     void nativeShare({
-      title: `${displayName} on Armada`,
-      text: "Find me on Armada",
+      title: t({ id: "profileShareDialog.shareTitle", defaultMessage: "{name} on Armada" }, { name: displayName }),
+      text: t({ id: "profileShareDialog.shareText", defaultMessage: "Find me on Armada" }),
       url,
     });
   };
@@ -77,7 +80,7 @@ export function ProfileShareDialog({ open, onOpenChange }: ProfileShareDialogPro
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <ChromeDialogContent
-        title="Share your profile"
+        title={intl.formatMessage({ id: "profileShareDialog.title", defaultMessage: "Share your profile" })}
         // Stop Radix auto-focusing the link button.
         onOpenAutoFocus={(e) => e.preventDefault()}
       >
@@ -89,25 +92,29 @@ export function ProfileShareDialog({ open, onOpenChange }: ProfileShareDialogPro
             </AvatarFallback>
           </Avatar>
           <h2 className="chrome-dialog-title font-mono font-bold lowercase tracking-tight text-foreground">
-            share your profile
+            <FormattedMessage id="profileShareDialog.heading" defaultMessage="share your profile" />
           </h2>
           <p className="text-sm text-muted-foreground">
-            Scan or share this link to open{" "}
-            <span className="text-foreground">{displayName}</span> in Armada.
+            <FormattedMessage
+              id="profileShareDialog.intro"
+              defaultMessage="Scan or share this link to open <hl>{name}</hl> in Armada."
+              values={{ name: displayName, hl: (chunks) => <span className="text-foreground">{chunks}</span> }}
+            />
           </p>
         </div>
 
         <div className="mt-6 space-y-4 min-w-0">
           {!url ? (
             <div className="flex items-center justify-center gap-2 py-8 text-sm text-muted-foreground">
-              <Loader2 className="size-4 animate-spin" /> Preparing your link…
+              <Loader2 className="size-4 animate-spin" />{" "}
+              <FormattedMessage id="profileShareDialog.preparing" defaultMessage="Preparing your link…" />
             </div>
           ) : (
             <>
               {qrDataUrl ? (
                 <img
                   src={qrDataUrl}
-                  alt="Profile QR code"
+                  alt={intl.formatMessage({ id: "profileShareDialog.qrAlt", defaultMessage: "Profile QR code" })}
                   className="mx-auto w-64 clip-corner-lg"
                   decoding="async"
                 />
@@ -130,11 +137,11 @@ export function ProfileShareDialog({ open, onOpenChange }: ProfileShareDialogPro
               <div className="flex gap-2">
                 <Button className="flex-1 clip-corner-lg" onClick={copy}>
                   {copied
-                    ? <><Check className="size-4 mr-2" /> Copied</>
-                    : <><Copy className="size-4 mr-2" /> Copy link</>}
+                    ? <><Check className="size-4 mr-2" /> <FormattedMessage {...common.copied} /></>
+                    : <><Copy className="size-4 mr-2" /> <FormattedMessage {...common.copyLink} /></>}
                 </Button>
                 {showShare && (
-                  <Button variant="outline" className="clip-corner-lg" onClick={share} aria-label="Share">
+                  <Button variant="outline" className="clip-corner-lg" onClick={share} aria-label={intl.formatMessage(common.share)}>
                     <Share2 className="size-4" />
                   </Button>
                 )}

@@ -10,6 +10,7 @@ import { bytesToHex, controlSignerGroupKey, grantLocator, hex32, random32 } from
 import { base64ToBytes, bytesToBase64, decodeControlWrap, encodeControlWrap } from "@/concord/lib/rekey";
 import { adminRole, canActOnMember, canActOnPosition, emptyRoles, grantRefusal, moderatorRole, Permissions, rolesMakeStaff, STAFF_MASK, type MemberGrant, type Role } from "@/concord/lib/roles";
 import type { CommunityMetadata, Community, ImagePointer } from "@/concord/lib/types";
+import { t } from "@/i18n";
 
 /**
  * The `control_wrap` owed when a Grant leaves `member` staff (CORD-04 §3): the
@@ -27,9 +28,9 @@ async function controlWrapOwed(
   if (!community.controlPk || !makesStaff) return undefined;
   if (!community.controlRoot) {
     // Unreachable today (publishing needs the same secret), but guard the promotion anyway.
-    throw new Error("You don't hold this community's staff write key, so you can't promote to staff yet.");
+    throw new Error(t({ id: "useRoles.noStaffKey", defaultMessage: "You don't hold this community's staff write key, so you can't promote to staff yet." }));
   }
-  if (!nip44) throw new Error("This signer can't deliver the staff write key (NIP-44 unsupported).");
+  if (!nip44) throw new Error(t({ id: "useRoles.signerCantDeliverStaffKey", defaultMessage: "This signer can't deliver the staff write key (NIP-44 unsupported)." }));
   return await nip44.encrypt(
     member,
     bytesToBase64(encodeControlWrap(community.rootEpoch, community.controlRoot)),
@@ -52,7 +53,7 @@ export function useMetadataActions(community: Community | undefined) {
     { name?: string; description?: string; icon?: ImagePointer | null; banner?: ImagePointer | null; relays?: string[]; av_brokers?: string[]; message_expiration?: number }
   >({
     mutationFn: async (patch) => {
-      if (!user || !community) throw new Error("Not ready.");
+      if (!user || !community) throw new Error(t({ id: "useRoles.notReady", defaultMessage: "Not ready." }));
       const current: CommunityMetadata =
         folded?.metadata ?? ({ name: community.name, relays: community.relays } as CommunityMetadata);
 
@@ -123,7 +124,7 @@ export function useRoles(community: Community | undefined) {
 
   const saveRole = useMutation<string, Error, { role: Role }>({
     mutationFn: async ({ role }) => {
-      if (!user || !community) throw new Error("Not ready.");
+      if (!user || !community) throw new Error(t({ id: "useRoles.notReady", defaultMessage: "Not ready." }));
       const head = folded?.heads.get(role.roleId);
       await publishEdition(
         nostr,
@@ -143,7 +144,7 @@ export function useRoles(community: Community | undefined) {
 
   const setMemberRoles = useMutation<void, Error, { member: string; roleIds: string[] }>({
     mutationFn: async ({ member, roleIds }) => {
-      if (!user || !community) throw new Error("Not ready.");
+      if (!user || !community) throw new Error(t({ id: "useRoles.notReady", defaultMessage: "Not ready." }));
       // The fold's gate (CORD-04 §2/§3), checked before publishing so a doomed grant
       // fails with a reason instead of being silently dropped.
       const ownerHex = folded?.ownerHex ?? community.owner;
@@ -180,17 +181,17 @@ export function useRoles(community: Community | undefined) {
    */
   const setTier = useMutation<void, Error, { member: string; tier: "admin" | "moderator" | null }>({
     mutationFn: async ({ member, tier }) => {
-      if (!user || !community) throw new Error("Not ready.");
+      if (!user || !community) throw new Error(t({ id: "useRoles.notReady", defaultMessage: "Not ready." }));
       const ownerHex = folded?.ownerHex ?? community.owner;
       const roster = folded?.roster ?? emptyRoles();
 
       // Strict outrank over the member, and over the granted role's position.
       if (!canActOnMember(roster, user.pubkey, ownerHex, member, Permissions.MANAGE_ROLES)) {
-        throw new Error("You don't outrank this member.");
+        throw new Error(t({ id: "useRoles.dontOutrank", defaultMessage: "You don't outrank this member." }));
       }
       const minted = tier === "admin" ? adminRole(bytesToHex(random32())) : tier === "moderator" ? moderatorRole(bytesToHex(random32())) : undefined;
       if (minted && !canActOnPosition(roster, user.pubkey, ownerHex, minted.position, Permissions.MANAGE_ROLES)) {
-        throw new Error(tier === "admin" ? "Only the owner can grant Admin." : "You can't grant a role at this rank.");
+        throw new Error(tier === "admin" ? t({ id: "useRoles.onlyOwnerGrantsAdmin", defaultMessage: "Only the owner can grant Admin." }) : t({ id: "useRoles.cantGrantAtRank", defaultMessage: "You can't grant a role at this rank." }));
       }
 
       let roleId: string | undefined;

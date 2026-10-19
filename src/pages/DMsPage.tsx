@@ -132,6 +132,7 @@ import { buildEmojiMap } from "@/lib/customEmoji";
 import { emojify } from "@/components/chat/emojify";
 import { sanitizeUrl } from "@/lib/sanitizeUrl";
 import { cn } from "@/lib/utils";
+import { common, FormattedMessage, t, useIntl } from "@/i18n";
 
 import type { NostrRumor } from "@/lib/nostrRumor";
 import type { DmConversationLatest } from "@/lib/dmConversationIndex";
@@ -236,6 +237,7 @@ const ConversationRow = memo(function ConversationRow({
   // Per-person options are 1:1 only.
   const openProfile = useOpenProfile();
   const { toast } = useToast();
+  const intl = useIntl();
 
   // While searching, keep rows matching the name/handle or a decrypted message
   // (`messageMatch`, which then replaces the preview line).
@@ -289,7 +291,7 @@ const ConversationRow = memo(function ConversationRow({
                     emojiTags={preview?.tags}
                   />
                 ) : (
-                  "Encrypted message"
+                  <FormattedMessage id="dmsPage.row.encrypted" defaultMessage="Encrypted message" />
                 )}
               </div>
             )}
@@ -297,19 +299,26 @@ const ConversationRow = memo(function ConversationRow({
             {request && sharedCommunity && (
               <div className="flex items-center gap-1 text-2xs text-muted-foreground/80">
                 <Users className="size-3 shrink-0" aria-hidden />
-                <span className="truncate">Also in {sharedCommunity}</span>
+                <span className="truncate">
+                  <FormattedMessage
+                    id="dmsPage.row.alsoIn"
+                    defaultMessage="Also in {community}"
+                    values={{ community: sharedCommunity }}
+                  />
+                </span>
               </div>
             )}
           </div>
           {inCall ? (
             <span
               className="shrink-0 flex size-6 items-center justify-center rounded-full bg-success text-success-foreground"
-              aria-label="Voice call in progress"
+              aria-label={intl.formatMessage({ id: "dmsPage.row.inCall", defaultMessage: "Voice call in progress" })}
             >
               <Headphones className="size-3.5" />
             </span>
           ) : unread ? (
-            <span className="shrink-0 size-2.5 rounded-full bg-primary" aria-label="Unread messages" />
+            <span className="shrink-0 size-2.5 rounded-full bg-primary" aria-label={intl.formatMessage({ id: "dmsPage.row.unread", defaultMessage: "Unread messages" })}
+            />
           ) : null}
         </button>
       </ContextMenuTrigger>
@@ -323,37 +332,40 @@ const ConversationRow = memo(function ConversationRow({
               if (!group) actions.block(peers[0]);
             }}
           >
-            <UserX className="mr-2 size-4" /> Block
+            <UserX className="mr-2 size-4" /> <FormattedMessage id="dmsPage.block" defaultMessage="Block" />
           </ContextMenuItem>
         ) : (
           <>
             <ContextMenuItem onSelect={() => actions.togglePin(conversation)}>
               {pinned ? (
                 <>
-                  <PinOff className="mr-2 size-4" /> Unpin
+                  <PinOff className="mr-2 size-4" /> <FormattedMessage id="dmsPage.row.unpin" defaultMessage="Unpin" />
                 </>
               ) : (
                 <>
-                  <Pin className="mr-2 size-4" /> Pin
+                  <Pin className="mr-2 size-4" /> <FormattedMessage id="dmsPage.row.pin" defaultMessage="Pin" />
                 </>
               )}
             </ContextMenuItem>
             {!group && (
               <>
                 <ContextMenuItem onSelect={() => openProfile(tryNpubEncode(peers[0]) ?? peers[0])}>
-                  <User className="mr-2 size-4" /> View profile
+                  <User className="mr-2 size-4" /> <FormattedMessage id="dmsPage.viewProfile" defaultMessage="View profile" />
                 </ContextMenuItem>
                 <ContextMenuItem
                   onSelect={() => {
                     const npub = tryNpubEncode(peers[0]);
                     if (!npub) return;
                     writeClipboardText(npub).then(
-                      () => toast({ title: "Copied npub" }),
-                      () => toast({ title: "Copy failed", variant: "destructive" }),
+                      () => toast({ title: t({ id: "dmsPage.row.copiedNpub", defaultMessage: "Copied npub" }) }),
+                      () => toast({
+                        title: t({ id: "dmsPage.row.copyFailed", defaultMessage: "Copy failed" }),
+                        variant: "destructive",
+                      }),
                     );
                   }}
                 >
-                  <Copy className="mr-2 size-4" /> Copy npub
+                  <Copy className="mr-2 size-4" /> <FormattedMessage id="dmsPage.row.copyNpub" defaultMessage="Copy npub" />
                 </ContextMenuItem>
               </>
             )}
@@ -362,11 +374,12 @@ const ConversationRow = memo(function ConversationRow({
             <ContextMenuItem onSelect={() => actions.toggleRail(conversation)}>
               {onRail ? (
                 <>
-                  <PanelLeftDashed className="mr-2 size-4" /> Remove from rail
+                  <PanelLeftDashed className="mr-2 size-4" />{" "}
+                  <FormattedMessage id="dmsPage.row.removeFromRail" defaultMessage="Remove from rail" />
                 </>
               ) : (
                 <>
-                  <PanelLeft className="mr-2 size-4" /> Add to rail
+                  <PanelLeft className="mr-2 size-4" /> <FormattedMessage id="dmsPage.row.addToRail" defaultMessage="Add to rail" />
                 </>
               )}
             </ContextMenuItem>
@@ -374,7 +387,7 @@ const ConversationRow = memo(function ConversationRow({
             {/* Note to Self is a fixture of the list, so it has no close. */}
             {closable && (
               <ContextMenuItem onSelect={() => actions.close(conversation)}>
-                <X className="mr-2 size-4" /> Close DM
+                <X className="mr-2 size-4" /> <FormattedMessage id="dmsPage.row.closeDm" defaultMessage="Close DM" />
               </ContextMenuItem>
             )}
           </>
@@ -434,7 +447,7 @@ function DmPlaceholderRow({
             className="inline-flex items-center gap-1.5 clip-corner-lg bg-muted/60 px-2 py-1 text-xs text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
           >
             <Lock className="size-3" />
-            Encrypted message. Tap to decrypt.
+            <FormattedMessage id="dmsPage.placeholder.tapToDecrypt" defaultMessage="Encrypted message. Tap to decrypt." />
           </button>
         ) : (
           <Skeleton
@@ -452,22 +465,27 @@ function DmPlaceholderRow({
  * mixed threads. A Popover (not a tooltip) so it works on touch.
  */
 function DmLegacyBadge() {
+  const intl = useIntl();
   return (
     <Popover>
       <PopoverTrigger asChild>
         <button
           type="button"
           className="inline-flex items-center gap-0.5 clip-corner bg-muted/60 px-1.5 py-0.5 text-3xs font-medium leading-none text-muted-foreground/80 hover:text-foreground shrink-0 select-none"
-          aria-label="Older, less private encryption. Tap for details."
+          aria-label={intl.formatMessage({
+            id: "dmsPage.legacyBadge.label",
+            defaultMessage: "Older, less private encryption. Tap for details.",
+          })}
         >
           <Lock className="size-2.5" aria-hidden />
           NIP-04
         </button>
       </PopoverTrigger>
       <PopoverContent side="top" className="w-64 p-3 text-xs font-normal text-muted-foreground">
-        Sent with older DM encryption. It hides the message text, but not the
-        fact that you two are talking or when. Newer messages use stronger,
-        fully private encryption.
+        <FormattedMessage
+          id="dmsPage.legacyBadge.details"
+          defaultMessage="Sent with older DM encryption. It hides the message text, but not the fact that you two are talking or when. Newer messages use stronger, fully private encryption."
+        />
       </PopoverContent>
     </Popover>
   );
@@ -495,15 +513,20 @@ function DmLegacyFallbackNotice({
         <Lock className="size-4 mt-0.5 shrink-0 text-muted-foreground" aria-hidden />
         <div className="min-w-0 space-y-2">
           <p className="text-muted-foreground">
-            <span className="font-medium text-foreground">
-              <DisplayName pubkey={peer} name={name} />
-            </span> hasn't set
-            up private messaging yet, so we can't send them a fully-private DM.
-            You can still message them with older encryption. It hides what you
-            say, but not that you're talking or when.
+            <FormattedMessage
+              id="dmsPage.legacyFallback.description"
+              defaultMessage="{name} hasn't set up private messaging yet, so we can't send them a fully-private DM. You can still message them with older encryption. It hides what you say, but not that you're talking or when."
+              values={{
+                name: (
+                  <span className="font-medium text-foreground">
+                    <DisplayName pubkey={peer} name={name} />
+                  </span>
+                ),
+              }}
+            />
           </p>
           <Button size="sm" className="clip-corner-lg" onClick={onEnable}>
-            Message with legacy encryption
+            <FormattedMessage id="dmsPage.legacyFallback.enable" defaultMessage="Message with legacy encryption" />
           </Button>
         </div>
       </div>
@@ -550,6 +573,11 @@ function DmRequestNotice({
   onBlock?: () => void;
   blocking: boolean;
 }) {
+  const requestName = (
+    <span className="font-medium text-foreground">
+      {peer ? <DisplayName pubkey={peer} name={name} /> : name}
+    </span>
+  );
   return (
     // Action beside the text, not under it: this ADDS to the composer's height.
     <div className="mx-gutter mb-3 clip-hairline-lg [--fill:var(--muted)/0.4] [--fill-hover:var(--muted)/0.4] px-4 py-2.5 text-sm">
@@ -558,14 +586,32 @@ function DmRequestNotice({
         <div className="min-w-0 flex-1">
           {/* Wraps rather than truncates so narrow phones keep the community hint. */}
           <p className="text-muted-foreground break-words">
-            <span className="font-medium text-foreground">
-              {peer ? <DisplayName pubkey={peer} name={name} /> : name}
-            </span>{" "}
-            {peer ? "isn't someone you follow" : "includes people you don't follow"}
-            {sharedCommunity && ` · also in ${sharedCommunity}`}
+            {peer ? (
+              <FormattedMessage
+                id="dmsPage.request.notFollowed"
+                defaultMessage="{name} isn't someone you follow{shared, select, yes { · also in {community}} other {}}"
+                values={{ name: requestName, shared: sharedCommunity ? "yes" : "no", community: sharedCommunity }}
+              />
+            ) : (
+              <FormattedMessage
+                id="dmsPage.request.groupNotFollowed"
+                defaultMessage="{name} includes people you don't follow{shared, select, yes { · also in {community}} other {}}"
+                values={{ name: requestName, shared: sharedCommunity ? "yes" : "no", community: sharedCommunity }}
+              />
+            )}
           </p>
           <p className="text-xs text-muted-foreground/80">
-            Reply to accept. {peer ? "They aren't" : "Nobody here is"} notified.
+            {peer ? (
+              <FormattedMessage
+                id="dmsPage.request.replyToAccept"
+                defaultMessage="Reply to accept. They aren't notified."
+              />
+            ) : (
+              <FormattedMessage
+                id="dmsPage.request.replyToAcceptGroup"
+                defaultMessage="Reply to accept. Nobody here is notified."
+              />
+            )}
           </p>
         </div>
         {onBlock && (
@@ -577,7 +623,11 @@ function DmRequestNotice({
             disabled={blocking}
           >
             <UserX className="size-4" />
-            {blocking ? "Blocking…" : "Block"}
+            {blocking ? (
+              <FormattedMessage id="dmsPage.blocking" defaultMessage="Blocking…" />
+            ) : (
+              <FormattedMessage id="dmsPage.block" defaultMessage="Block" />
+            )}
           </Button>
         )}
       </div>
@@ -599,6 +649,7 @@ const Conversation = memo(function Conversation({
   onAccept: () => void;
   onBack: () => void;
 }) {
+  const intl = useIntl();
   const { user } = useCurrentUser();
   const location = useLocation();
   const openProfile = useOpenProfile();
@@ -781,11 +832,13 @@ const Conversation = memo(function Conversation({
   const [callWarnOpen, setCallWarnOpen] = useState(false);
   const callWarnToComposer = useRef(false);
   useEffect(() => setCallWarnOpen(false), [conversation]);
-  const callTooltip = peerCalling
-    ? "Join voice call"
-    : callBlocked
-      ? "Message them before you call"
-      : "Start voice call";
+  const joinCallLabel = intl.formatMessage({ id: "dmsPage.call.join", defaultMessage: "Join voice call" });
+  const startCallLabel = intl.formatMessage({ id: "dmsPage.call.start", defaultMessage: "Start voice call" });
+  const callWarnTitle = intl.formatMessage({
+    id: "dmsPage.call.warnTitle",
+    defaultMessage: "Message them before you call",
+  });
+  const callTooltip = peerCalling ? joinCallLabel : callBlocked ? callWarnTitle : startCallLabel;
 
   // Before we join, a ringing offer is the only presence signal for a blind-broker room.
   const dmOthersInVoice = useMemo(
@@ -869,8 +922,10 @@ const Conversation = memo(function Conversation({
         }
         // Only signing/encryption errors reach here; keep the composer content.
         toast({
-          title: "Message not sent",
-          description: e instanceof Error ? e.message : "Could not sign the message.",
+          title: t({ id: "dmsPage.notSent", defaultMessage: "Message not sent" }),
+          description: e instanceof Error
+            ? e.message
+            : t({ id: "dmsPage.notSentDescription", defaultMessage: "Could not sign the message." }),
           variant: "destructive",
         });
         throw e;
@@ -886,11 +941,19 @@ const Conversation = memo(function Conversation({
     onBack();
     try {
       await pendingMute;
-      toast({ title: "Blocked", description: `You won't see messages from ${name}.` });
+      toast({
+        title: t({ id: "dmsPage.blocked", defaultMessage: "Blocked" }),
+        description: t(
+          { id: "dmsPage.blockedDescription", defaultMessage: "You won't see messages from {name}." },
+          { name },
+        ),
+      });
     } catch (e) {
       toast({
-        title: "Couldn't block",
-        description: e instanceof Error ? e.message : "Failed to update your block list.",
+        title: t({ id: "dmsPage.blockFailed", defaultMessage: "Couldn't block" }),
+        description: e instanceof Error
+          ? e.message
+          : t({ id: "dmsPage.blockFailedDescription", defaultMessage: "Failed to update your block list." }),
         variant: "destructive",
       });
     }
@@ -905,7 +968,7 @@ const Conversation = memo(function Conversation({
         <Button
           variant="ghost"
           size="icon"
-          aria-label="Back to conversations"
+          aria-label={intl.formatMessage({ id: "dmsPage.backToConversations", defaultMessage: "Back to conversations" })}
           className="size-9 touch:size-11 shrink-0 sidebar:hidden"
           onClick={onBack}
         >
@@ -931,7 +994,7 @@ const Conversation = memo(function Conversation({
               <Button
                 variant="ghost"
                 size="icon"
-                aria-label={peerCalling ? "Join voice call" : "Start voice call"}
+                aria-label={peerCalling ? joinCallLabel : startCallLabel}
                 aria-haspopup={callBlocked ? "dialog" : undefined}
                 className={cn(
                   "relative size-8 touch:size-11 shrink-0",
@@ -960,7 +1023,7 @@ const Conversation = memo(function Conversation({
             <Button
               variant="ghost"
               size="icon"
-              aria-label="More options"
+              aria-label={intl.formatMessage({ id: "dmsPage.moreOptions", defaultMessage: "More options" })}
               className="size-8 touch:size-11 shrink-0 text-muted-foreground hover:text-foreground"
             >
               <MoreVertical className="size-4" />
@@ -969,7 +1032,7 @@ const Conversation = memo(function Conversation({
           <DropdownMenuContent align="end" className="w-64">
             <DropdownMenuItem onClick={() => setSearchOpen(true)}>
               <Search className="size-4" />
-              Search messages
+              <FormattedMessage id="dmsPage.searchMessages" defaultMessage="Search messages" />
             </DropdownMenuItem>
             <DropdownMenuSub>
               <DropdownMenuSubTrigger>
@@ -978,7 +1041,7 @@ const Conversation = memo(function Conversation({
                   const Icon = lvl === "nothing" ? BellOff : lvl === "mentions" ? AtSign : Bell;
                   return <Icon className="mr-2 size-4" />;
                 })()}
-                Notifications
+                <FormattedMessage id="dmsPage.notifications" defaultMessage="Notifications" />
               </DropdownMenuSubTrigger>
               <DropdownMenuSubContent className="w-48">
                 <DropdownMenuRadioGroup
@@ -986,13 +1049,16 @@ const Conversation = memo(function Conversation({
                   onValueChange={(v) => setNotifLevel(dmScopeKey(conversation), v as NotifLevel)}
                 >
                   <DropdownMenuRadioItem value="all">
-                    <Bell className="mr-2 size-4" /> All messages
+                    <Bell className="mr-2 size-4" />{" "}
+                    <FormattedMessage id="dmsPage.notifications.all" defaultMessage="All messages" />
                   </DropdownMenuRadioItem>
                   <DropdownMenuRadioItem value="mentions">
-                    <AtSign className="mr-2 size-4" /> Only @mentions
+                    <AtSign className="mr-2 size-4" />{" "}
+                    <FormattedMessage id="dmsPage.notifications.mentions" defaultMessage="Only @mentions" />
                   </DropdownMenuRadioItem>
                   <DropdownMenuRadioItem value="nothing">
-                    <BellOff className="mr-2 size-4" /> Nothing
+                    <BellOff className="mr-2 size-4" />{" "}
+                    <FormattedMessage id="dmsPage.notifications.nothing" defaultMessage="Nothing" />
                   </DropdownMenuRadioItem>
                 </DropdownMenuRadioGroup>
               </DropdownMenuSubContent>
@@ -1005,7 +1071,7 @@ const Conversation = memo(function Conversation({
                 ) : (
                   <ShieldCheck className="mr-2 size-4" />
                 )}
-                Encryption
+                <FormattedMessage id="dmsPage.encryption" defaultMessage="Encryption" />
               </DropdownMenuSubTrigger>
               <DropdownMenuSubContent className="w-64">
                 <DropdownMenuRadioGroup
@@ -1015,27 +1081,42 @@ const Conversation = memo(function Conversation({
                   <DropdownMenuRadioItem value="auto" className="items-start">
                     <Sparkles className="mr-2 mt-0.5 size-4 shrink-0" />
                     <div className="min-w-0">
-                      <div>Automatic</div>
+                      <div>
+                        <FormattedMessage id="dmsPage.encryption.auto" defaultMessage="Automatic" />
+                      </div>
                       <p className="text-xs text-muted-foreground">
-                        Private when possible, legacy only if you allow it.
+                        <FormattedMessage
+                          id="dmsPage.encryption.autoDescription"
+                          defaultMessage="Private when possible, legacy only if you allow it."
+                        />
                       </p>
                     </div>
                   </DropdownMenuRadioItem>
                   <DropdownMenuRadioItem value="nip17" className="items-start">
                     <ShieldCheck className="mr-2 mt-0.5 size-4 shrink-0" />
                     <div className="min-w-0">
-                      <div>Private (NIP-17)</div>
+                      <div>
+                        <FormattedMessage id="dmsPage.encryption.nip17" defaultMessage="Private (NIP-17)" />
+                      </div>
                       <p className="text-xs text-muted-foreground">
-                        Always fully private; hides that you're talking.
+                        <FormattedMessage
+                          id="dmsPage.encryption.nip17Description"
+                          defaultMessage="Always fully private; hides that you're talking."
+                        />
                       </p>
                     </div>
                   </DropdownMenuRadioItem>
                   <DropdownMenuRadioItem value="nip04" className="items-start">
                     <Lock className="mr-2 mt-0.5 size-4 shrink-0" />
                     <div className="min-w-0">
-                      <div>Legacy (NIP-04)</div>
+                      <div>
+                        <FormattedMessage id="dmsPage.encryption.nip04" defaultMessage="Legacy (NIP-04)" />
+                      </div>
                       <p className="text-xs text-muted-foreground">
-                        Older encryption; leaks who's talking and when.
+                        <FormattedMessage
+                          id="dmsPage.encryption.nip04Description"
+                          defaultMessage="Older encryption; leaks who's talking and when."
+                        />
                       </p>
                     </div>
                   </DropdownMenuRadioItem>
@@ -1050,7 +1131,9 @@ const Conversation = memo(function Conversation({
                   <Timer className="size-4 shrink-0" />
                   {/* Duration under the label: beside it, the label wraps. */}
                   <div className="min-w-0">
-                    <div>Disappearing messages</div>
+                    <div>
+                      <FormattedMessage id="dmsPage.disappearing" defaultMessage="Disappearing messages" />
+                    </div>
                     {disappearingTimer > 0 && (
                       <p className="text-xs text-muted-foreground">
                         {formatDisappearingDuration(disappearingTimer)}
@@ -1060,8 +1143,10 @@ const Conversation = memo(function Conversation({
                 </DropdownMenuSubTrigger>
                 <DropdownMenuSubContent className="w-56">
                   <p className="px-2 py-1.5 text-xs text-muted-foreground">
-                    New messages in this chat disappear for everyone in it after
-                    the time you pick. Anyone here can change it.
+                    <FormattedMessage
+                      id="dmsPage.disappearing.description"
+                      defaultMessage="New messages in this chat disappear for everyone in it after the time you pick. Anyone here can change it."
+                    />
                   </p>
                   <DropdownMenuRadioGroup
                     value={String(disappearingTimer)}
@@ -1084,14 +1169,14 @@ const Conversation = memo(function Conversation({
                 onFocus={() => prefetchProfile(peer)}
               >
                 <User className="size-4" />
-                View profile
+                <FormattedMessage id="dmsPage.viewProfile" defaultMessage="View profile" />
               </DropdownMenuItem>
             )}
             {dittoProfileHref && (
               <DropdownMenuItem asChild>
                 <a href={dittoProfileHref} target="_blank" rel="noopener noreferrer">
                   <DittoIcon className="size-4" />
-                  View on Ditto
+                  <FormattedMessage id="dmsPage.viewOnDitto" defaultMessage="View on Ditto" />
                 </a>
               </DropdownMenuItem>
             )}
@@ -1106,7 +1191,7 @@ const Conversation = memo(function Conversation({
                   {mute.muted ? (
                     <DropdownMenuItem disabled={mute.pending} onClick={() => void mute.toggle()}>
                       <UserCheck className="size-4" />
-                      Unblock person
+                      <FormattedMessage id="dmsPage.unblockPerson" defaultMessage="Unblock person" />
                     </DropdownMenuItem>
                   ) : (
                     <DropdownMenuItem
@@ -1114,7 +1199,7 @@ const Conversation = memo(function Conversation({
                       onClick={() => setMuteConfirmOpen(true)}
                     >
                       <UserX className="size-4" />
-                      Block person
+                      <FormattedMessage id="dmsPage.blockPerson" defaultMessage="Block person" />
                     </DropdownMenuItem>
                   )}
                   {/* DMs have no moderator: reports go to the public network in the
@@ -1124,7 +1209,7 @@ const Conversation = memo(function Conversation({
                     onClick={() => setReportOpen(true)}
                   >
                     <Flag className="size-4" />
-                    Report person
+                    <FormattedMessage id="dmsPage.reportPerson" defaultMessage="Report person" />
                   </DropdownMenuItem>
                 </ModerationMenuSection>
               </>
@@ -1137,7 +1222,7 @@ const Conversation = memo(function Conversation({
           value={searchQuery}
           onChange={setSearchQuery}
           onClose={closeSearch}
-          placeholder="Search messages…"
+          placeholder={intl.formatMessage({ id: "dmsPage.searchPlaceholder", defaultMessage: "Search messages…" })}
         />
       </header>
 
@@ -1148,10 +1233,15 @@ const Conversation = memo(function Conversation({
         <div className="flex items-center justify-between gap-3 border-b border-border/60 bg-muted/30 px-4 py-2">
           <div className="flex items-center gap-2 text-xs text-muted-foreground min-w-0">
             <Lock className="size-3.5 shrink-0" />
-            <span className="truncate">Messages are locked. Decrypt with your signer to read them.</span>
+            <span className="truncate">
+              <FormattedMessage
+                id="dmsPage.locked"
+                defaultMessage="Messages are locked. Decrypt with your signer to read them."
+              />
+            </span>
           </div>
           <Button size="sm" variant="secondary" className="shrink-0" onClick={decryptAll}>
-            Decrypt all
+            <FormattedMessage id="dmsPage.decryptAll" defaultMessage="Decrypt all" />
           </Button>
         </div>
       )}
@@ -1161,15 +1251,24 @@ const Conversation = memo(function Conversation({
           {searchResults.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-16 text-center">
               <Search className="size-10 text-muted-foreground/40 mb-3" />
-              <p className="text-sm text-muted-foreground">No matching messages</p>
+              <p className="text-sm text-muted-foreground">
+                <FormattedMessage id="dmsPage.search.noMatches" defaultMessage="No matching messages" />
+              </p>
               <p className="text-xs text-muted-foreground/60 mt-1">
-                Only loaded messages are searched. Scroll up to load more.
+                <FormattedMessage
+                  id="dmsPage.search.loadedOnly"
+                  defaultMessage="Only loaded messages are searched. Scroll up to load more."
+                />
               </p>
             </div>
           ) : (
             <>
               <p className="px-2 pb-1 text-2xs uppercase tracking-wide text-muted-foreground/80">
-                {searchResults.length} result{searchResults.length === 1 ? "" : "s"}
+                <FormattedMessage
+                  id="dmsPage.search.results"
+                  defaultMessage="{count, plural, one {# result} other {# results}}"
+                  values={{ count: searchResults.length }}
+                />
               </p>
               {searchResults.map((msg) => (
                 <ChatMessage
@@ -1210,18 +1309,28 @@ const Conversation = memo(function Conversation({
             noteToSelf ? (
               <div className="flex flex-col items-center justify-center py-16 text-center">
                 <NoteToSelfIcon sizePx={40} className="size-10 text-muted-foreground/40 mb-3" />
-                <p className="text-sm text-muted-foreground">No notes yet</p>
+                <p className="text-sm text-muted-foreground">
+                  <FormattedMessage id="dmsPage.empty.notesTitle" defaultMessage="No notes yet" />
+                </p>
                 <p className="text-xs text-muted-foreground/60 mt-1">
-                  Anything you send here is just for you, and syncs to your other
-                  devices.
+                  <FormattedMessage
+                    id="dmsPage.empty.notesDescription"
+                    defaultMessage="Anything you send here is just for you, and syncs to your other devices."
+                  />
                 </p>
               </div>
             ) : (
               <div className="flex flex-col items-center justify-center py-16 text-center">
                 <MessageSquare className="size-10 text-muted-foreground/40 mb-3" />
-                <p className="text-sm text-muted-foreground">No messages yet</p>
+                <p className="text-sm text-muted-foreground">
+                  <FormattedMessage id="dmsPage.empty.title" defaultMessage="No messages yet" />
+                </p>
                 <p className="text-xs text-muted-foreground/60 mt-1">
-                  {group ? `Say hello to ${name}!` : <>Say hello to <DisplayName pubkey={peer} name={name} />!</>}
+                  <FormattedMessage
+                    id="dmsPage.empty.sayHello"
+                    defaultMessage="Say hello to {name}!"
+                    values={{ name: group ? name : <DisplayName pubkey={peer} name={name} /> }}
+                  />
                 </p>
               </div>
             )
@@ -1311,7 +1420,9 @@ const Conversation = memo(function Conversation({
           shareRoute={chatRoute({ kind: "dm", peer: dmRouteParam(conversation) })}
           // A DM's recipient IS the bot, so invocations send untagged.
           botDmPeer={group ? undefined : peer}
-          placeholder={noteToSelf ? "Add a note…" : `Message ${name}…`}
+          placeholder={noteToSelf
+            ? intl.formatMessage({ id: "dmsPage.composer.note", defaultMessage: "Add a note…" })
+            : intl.formatMessage({ id: "dmsPage.composer.message", defaultMessage: "Message {name}…" }, { name })}
           replyTo={replyTo}
           sealed
           onCancelReply={() => setReplyTo(undefined)}
@@ -1331,7 +1442,7 @@ const Conversation = memo(function Conversation({
       <MountWhenOpened open={callWarnOpen}>
         <Dialog open={callWarnOpen} onOpenChange={setCallWarnOpen}>
           <ChromeDialogContent
-            title="Message them before you call"
+            title={callWarnTitle}
             className="sm:max-w-sm focus:outline-none"
             onOpenAutoFocus={(e) => {
               // Focus the surface: programmatic focus paints a ring on the button.
@@ -1352,12 +1463,14 @@ const Conversation = memo(function Conversation({
                 <PhoneOff className="size-6" />
               </div>
               <h2 className="chrome-dialog-title font-mono font-bold lowercase tracking-tight text-foreground">
-                message them before you call
+                <FormattedMessage id="dmsPage.call.warnHeading" defaultMessage="message them before you call" />
               </h2>
               <p className="text-sm text-muted-foreground">
-                <DisplayName pubkey={peer} name={name} /> probably won't get your call yet. Calls only
-                ring for people who follow you or have messaged you. Send them a message, and once they
-                reply, you can call.
+                <FormattedMessage
+                  id="dmsPage.call.warnDescription"
+                  defaultMessage="{name} probably won't get your call yet. Calls only ring for people who follow you or have messaged you. Send them a message, and once they reply, you can call."
+                  values={{ name: <DisplayName pubkey={peer} name={name} /> }}
+                />
               </p>
             </div>
             <div className="mt-6 flex items-center gap-2">
@@ -1371,7 +1484,7 @@ const Conversation = memo(function Conversation({
                 }}
               >
                 <Phone className="size-4" />
-                Call anyway
+                <FormattedMessage id="dmsPage.call.anyway" defaultMessage="Call anyway" />
               </Button>
               <Button
                 type="button"
@@ -1382,7 +1495,7 @@ const Conversation = memo(function Conversation({
                 }}
               >
                 <MessageSquare className="size-4" />
-                Send a message
+                <FormattedMessage id="dmsPage.call.sendMessage" defaultMessage="Send a message" />
               </Button>
             </div>
           </ChromeDialogContent>
@@ -1394,16 +1507,24 @@ const Conversation = memo(function Conversation({
           <AlertDialogContent>
             <AlertDialogHeader>
               <AlertDialogTitle>
-                Block <DisplayName pubkey={peer} name={name} />?
+                <FormattedMessage
+                  id="dmsPage.blockConfirm.title"
+                  defaultMessage="Block {name}?"
+                  values={{ name: <DisplayName pubkey={peer} name={name} /> }}
+                />
               </AlertDialogTitle>
               <AlertDialogDescription>
-                This conversation will be hidden and you won't see new messages from{" "}
-                <DisplayName pubkey={peer} name={name} />.
-                You can unblock them later from Settings.
+                <FormattedMessage
+                  id="dmsPage.blockConfirm.description"
+                  defaultMessage="This conversation will be hidden and you won't see new messages from {name}. You can unblock them later from Settings."
+                  values={{ name: <DisplayName pubkey={peer} name={name} /> }}
+                />
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
-              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogCancel>
+                <FormattedMessage {...common.cancel} />
+              </AlertDialogCancel>
               <AlertDialogAction
                 onClick={(e) => {
                   e.preventDefault();
@@ -1411,7 +1532,11 @@ const Conversation = memo(function Conversation({
                 }}
                 disabled={muteUser.isPending}
               >
-                {muteUser.isPending ? "Blocking…" : "Block"}
+                {muteUser.isPending ? (
+                  <FormattedMessage id="dmsPage.blocking" defaultMessage="Blocking…" />
+                ) : (
+                  <FormattedMessage id="dmsPage.block" defaultMessage="Block" />
+                )}
               </AlertDialogAction>
             </AlertDialogFooter>
           </AlertDialogContent>
@@ -1446,6 +1571,7 @@ function RecipientSuggestion({
   followed: boolean;
   onSelect: () => void;
 }) {
+  const intl = useIntl();
   const { user } = useCurrentUser();
   // Picking yourself opens Note to Self, so label it that way.
   const noteToSelf = pubkey === user?.pubkey;
@@ -1480,11 +1606,14 @@ function RecipientSuggestion({
             {noteToSelf ? name : <DisplayName pubkey={pubkey} name={name} />}
           </span>
           {followed && !noteToSelf && (
-            <UserCheck className="size-3.5 shrink-0 text-primary" aria-label="You follow this person" />
+            <UserCheck className="size-3.5 shrink-0 text-primary" aria-label={intl.formatMessage({ id: "dmsPage.recipient.followed", defaultMessage: "You follow this person" })}
+            />
           )}
         </div>
         <span className="block truncate text-xs text-muted-foreground">
-          {noteToSelf ? "Notes only you can read" : handle}
+          {noteToSelf
+            ? intl.formatMessage({ id: "dmsPage.recipient.noteToSelf", defaultMessage: "Notes only you can read" })
+            : handle}
         </span>
       </div>
     </button>
@@ -1518,6 +1647,7 @@ function ResolvedRecipientSuggestion({
 
 /** A chosen recipient in the group composer's "To:" field. */
 function RecipientChip({ pubkey, onRemove }: { pubkey: string; onRemove: () => void }) {
+  const intl = useIntl();
   const author = useAuthor(pubkey);
   const name = getDisplayName(author.data?.metadata, pubkey);
   return (
@@ -1532,7 +1662,7 @@ function RecipientChip({ pubkey, onRemove }: { pubkey: string; onRemove: () => v
       <button
         type="button"
         onClick={onRemove}
-        aria-label={`Remove ${name}`}
+        aria-label={intl.formatMessage({ id: "dmsPage.recipient.remove", defaultMessage: "Remove {name}" }, { name })}
         className="shrink-0 clip-corner text-muted-foreground hover:text-foreground"
       >
         <X className="size-3.5" />
@@ -1554,6 +1684,7 @@ function NewDMPane({
   onSelectRecipients: (pubkeys: string[]) => void;
   onCancel: () => void;
 }) {
+  const intl = useIntl();
   const { user } = useCurrentUser();
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
@@ -1631,7 +1762,7 @@ function NewDMPane({
         <Button
           variant="ghost"
           size="icon"
-          aria-label="Back to conversations"
+          aria-label={intl.formatMessage({ id: "dmsPage.backToConversations", defaultMessage: "Back to conversations" })}
           className="size-9 touch:size-11 shrink-0 sidebar:hidden"
           onClick={onCancel}
         >
@@ -1643,7 +1774,11 @@ function NewDMPane({
           <PenSquare className="size-4 text-muted-foreground shrink-0" />
         )}
         <h1 className="font-semibold truncate flex-1 min-w-0">
-          {group ? "New group" : "New message"}
+          {group ? (
+            <FormattedMessage id="dmsPage.newGroup" defaultMessage="New group" />
+          ) : (
+            <FormattedMessage id="dmsPage.newMessage" defaultMessage="New message" />
+          )}
         </h1>
         {group && (
           <Button
@@ -1652,13 +1787,13 @@ function NewDMPane({
             disabled={!canStart}
             onClick={() => onSelectRecipients(groupPeers)}
           >
-            Start
+            <FormattedMessage id="dmsPage.newDm.start" defaultMessage="Start" />
           </Button>
         )}
         <Button
           variant="ghost"
           size="icon"
-          aria-label="Cancel"
+          aria-label={intl.formatMessage(common.cancel)}
           className="size-8 shrink-0 text-muted-foreground hidden sidebar:inline-flex"
           onClick={onCancel}
         >
@@ -1668,7 +1803,7 @@ function NewDMPane({
 
       <div className="px-3 pt-3 pb-2 shrink-0">
         <label htmlFor="dm-recipient" className="mb-1.5 block text-xs font-medium text-muted-foreground">
-          To:
+          <FormattedMessage id="dmsPage.newDm.to" defaultMessage="To:" />
         </label>
         {group && chosen.length > 0 && (
           <div className="mb-2 flex flex-wrap gap-1.5">
@@ -1687,7 +1822,10 @@ function NewDMPane({
           value={query}
           onChange={setQuery}
           onKeyDown={handleKeyDown}
-          placeholder="Search a name or paste an npub…"
+          placeholder={intl.formatMessage({
+            id: "dmsPage.newDm.placeholder",
+            defaultMessage: "Search a name or paste an npub…",
+          })}
           autoComplete="off"
           busy={isFetching}
           className="h-10 touch:h-11"
@@ -1705,9 +1843,11 @@ function NewDMPane({
               <Users className="size-4" aria-hidden />
             </span>
             <span className="min-w-0 flex-1">
-              <span className="block truncate text-sm font-medium">New group</span>
+              <span className="block truncate text-sm font-medium">
+                <FormattedMessage id="dmsPage.newGroup" defaultMessage="New group" />
+              </span>
               <span className="block truncate text-xs text-muted-foreground">
-                Message several people at once
+                <FormattedMessage id="dmsPage.newDm.groupHint" defaultMessage="Message several people at once" />
               </span>
             </span>
             <ChevronRight className="size-4 shrink-0 text-muted-foreground" aria-hidden />
@@ -1741,13 +1881,23 @@ function NewDMPane({
             <p className="mx-auto max-w-xs text-sm text-muted-foreground">
               {trimmed
                 ? isFetching
-                  ? "Searching…"
-                  : "No one found. Try a different name, or paste an npub."
+                  ? <FormattedMessage id="dmsPage.newDm.searching" defaultMessage="Searching…" />
+                  : (
+                    <FormattedMessage
+                      id="dmsPage.newDm.noResults"
+                      defaultMessage="No one found. Try a different name, or paste an npub."
+                    />
+                  )
                 : group
                   ? canStart
-                    ? "Add anyone else, or press Start."
-                    : "Search for the people to include."
-                  : "Search for someone by name, or paste their npub to start a conversation."}
+                    ? <FormattedMessage id="dmsPage.newDm.addMore" defaultMessage="Add anyone else, or press Start." />
+                    : <FormattedMessage id="dmsPage.newDm.searchGroup" defaultMessage="Search for the people to include." />
+                  : (
+                    <FormattedMessage
+                      id="dmsPage.newDm.hint"
+                      defaultMessage="Search for someone by name, or paste their npub to start a conversation."
+                    />
+                  )}
             </p>
           </div>
         )}
@@ -1884,9 +2034,15 @@ function RequestsEntryRow({ count, onClick }: { count: number; onClick: () => vo
         <Inbox className="size-5" aria-hidden />
       </span>
       <div className="min-w-0 flex-1 space-y-0.5">
-        <div className="text-chat font-medium truncate">Message requests</div>
+        <div className="text-chat font-medium truncate">
+          <FormattedMessage id="dmsPage.requests.entryTitle" defaultMessage="Message requests" />
+        </div>
         <div className="text-sm text-muted-foreground truncate">
-          {count} {count === 1 ? "person you don't follow" : "people you don't follow"}
+          <FormattedMessage
+            id="dmsPage.requests.entryCount"
+            defaultMessage="{count, plural, one {# person you don't follow} other {# people you don't follow}}"
+            values={{ count }}
+          />
         </div>
       </div>
       <ChevronRight className="size-4 shrink-0 text-muted-foreground" aria-hidden />
@@ -1943,6 +2099,7 @@ export function ConversationList({
   const { config } = useAppContext();
   const muteUser = useMuteUser();
   const { toast } = useToast();
+  const intl = useIntl();
   const [search, setSearch] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -1978,8 +2135,10 @@ export function ConversationList({
         await muteUser.mutateAsync(peer);
       } catch (e) {
         toast({
-          title: "Couldn't block",
-          description: e instanceof Error ? e.message : "Please try again.",
+          title: t({ id: "dmsPage.blockFailed", defaultMessage: "Couldn't block" }),
+          description: e instanceof Error
+            ? e.message
+            : t({ id: "dmsPage.blockFailedRetry", defaultMessage: "Please try again." }),
           variant: "destructive",
         });
       }
@@ -2104,6 +2263,10 @@ export function ConversationList({
     [hasMore, isLoadingMore, loadMore],
   );
 
+  const markAllReadLabel = intl.formatMessage({ id: "dmsPage.list.markAllRead", defaultMessage: "Mark all as read" });
+  const searchLabel = intl.formatMessage({ id: "dmsPage.list.search", defaultMessage: "Search conversations" });
+  const newMessageLabel = intl.formatMessage({ id: "dmsPage.newMessage", defaultMessage: "New message" });
+
   const showRequestsEntry = config.showDmRequests && requestRows.length > 0 && search.trim().length === 0;
 
   return (
@@ -2133,11 +2296,11 @@ export function ConversationList({
                 className="flex items-center gap-1 pr-2 py-1 rounded text-xs font-semibold uppercase tracking-wider text-muted-foreground hover:text-foreground transition-colors"
               >
                 <ChevronLeft className="size-4" aria-hidden />
-                Requests
+                <FormattedMessage id="dmsPage.list.requests" defaultMessage="Requests" />
               </button>
             ) : (
               <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                Messages
+                <FormattedMessage id="dmsPage.list.messages" defaultMessage="Messages" />
               </span>
             )}
             <div className={cn("flex items-center gap-2", requesting && "hidden")}>
@@ -2148,13 +2311,13 @@ export function ConversationList({
                       variant="ghost"
                       size="icon"
                       className="size-8 touch:size-11 shrink-0 text-muted-foreground hover:text-foreground"
-                      aria-label="Mark all as read"
+                      aria-label={markAllReadLabel}
                       onClick={onMarkAllRead}
                     >
                       <CheckCheck className="size-4" />
                     </Button>
                   </TooltipTrigger>
-                  <TooltipContent>Mark all as read</TooltipContent>
+                  <TooltipContent>{markAllReadLabel}</TooltipContent>
                 </Tooltip>
               )}
               <Tooltip>
@@ -2163,14 +2326,14 @@ export function ConversationList({
                     variant="ghost"
                     size="icon"
                     className="size-8 touch:size-11 shrink-0 text-muted-foreground hover:text-foreground"
-                    aria-label="Search conversations"
+                    aria-label={searchLabel}
                     aria-pressed={searchOpen}
                     onClick={() => setSearchOpen(true)}
                   >
                     <Search className="size-4" />
                   </Button>
                 </TooltipTrigger>
-                <TooltipContent>Search conversations</TooltipContent>
+                <TooltipContent>{searchLabel}</TooltipContent>
               </Tooltip>
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -2178,13 +2341,13 @@ export function ConversationList({
                     variant="ghost"
                     size="icon"
                     className="size-8 touch:size-11 shrink-0 text-muted-foreground hover:text-foreground"
-                    aria-label="New message"
+                    aria-label={newMessageLabel}
                     onClick={onCompose}
                   >
                     <Plus className="size-4" />
                   </Button>
                 </TooltipTrigger>
-                <TooltipContent>New message</TooltipContent>
+                <TooltipContent>{newMessageLabel}</TooltipContent>
               </Tooltip>
             </div>
           </div>
@@ -2207,14 +2370,17 @@ export function ConversationList({
               onKeyDown={(e) => {
                 if (e.key === "Escape") closeSearch();
               }}
-              placeholder="Search messages or people…"
-              aria-label="Search conversations"
+              placeholder={intl.formatMessage({
+                id: "dmsPage.list.searchPlaceholder",
+                defaultMessage: "Search messages or people…",
+              })}
+              aria-label={searchLabel}
               className="h-8 touch:h-10 flex-1 border-0 bg-transparent px-1 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
             />
             <Button
               variant="ghost"
               size="icon"
-              aria-label="Close search"
+              aria-label={intl.formatMessage({ id: "dmsPage.list.closeSearch", defaultMessage: "Close search" })}
               className="size-8 touch:size-10 shrink-0 text-muted-foreground"
               onClick={closeSearch}
             >
@@ -2228,13 +2394,18 @@ export function ConversationList({
         {dmSupported && !requesting && <DmInboxNotice dismissible className="mb-2" />}
         {!dmSupported ? (
           <p className="text-sm text-muted-foreground p-3">
-            Your signer doesn't support encryption, so direct messages are unavailable.
+            <FormattedMessage
+              id="dmsPage.list.unsupported"
+              defaultMessage="Your signer doesn't support encryption, so direct messages are unavailable."
+            />
           </p>
         ) : requesting ? (
           <>
             <p className="px-2 pt-1 pb-2 text-xs text-muted-foreground">
-              Messages from people you don't follow. Reply to one and it moves
-              to your inbox. Nobody here is told you've seen theirs.
+              <FormattedMessage
+                id="dmsPage.requests.description"
+                defaultMessage="Messages from people you don't follow. Reply to one and it moves to your inbox. Nobody here is told you've seen theirs."
+              />
             </p>
             {requestRows.map((c, i) => renderRow(c, i, true))}
             {/* Sync only moves forward, so older-only senders need explicit backfill (useDm17Backfill). */}
@@ -2250,22 +2421,27 @@ export function ConversationList({
                   {backfill.isLoading ? (
                     <>
                       <Loader2 className="size-4 animate-spin" />
-                      Looking…
+                      <FormattedMessage id="dmsPage.requests.looking" defaultMessage="Looking…" />
                     </>
                   ) : (
-                    "Look for older requests"
+                    <FormattedMessage id="dmsPage.requests.loadOlder" defaultMessage="Look for older requests" />
                   )}
                 </Button>
               ) : (
                 <p className="text-xs text-muted-foreground">
-                  That's everything your relays still have.
+                  <FormattedMessage
+                    id="dmsPage.requests.exhausted"
+                    defaultMessage="That's everything your relays still have."
+                  />
                 </p>
               )}
               {olderFound !== undefined && (
                 <p className="text-xs text-muted-foreground">
-                  {olderFound === 0
-                    ? "No older requests found."
-                    : `Found ${olderFound} older ${olderFound === 1 ? "request" : "requests"}.`}
+                  <FormattedMessage
+                    id="dmsPage.requests.olderFound"
+                    defaultMessage="{count, plural, =0 {No older requests found.} one {Found # older request.} other {Found # older requests.}}"
+                    values={{ count: olderFound }}
+                  />
                 </p>
               )}
             </div>
@@ -2277,7 +2453,10 @@ export function ConversationList({
             {historyIncomplete && (
               <p className="flex items-center gap-1.5 px-2 pb-2 text-xs text-muted-foreground">
                 <Loader2 className="size-3 shrink-0 animate-spin" aria-hidden />
-                Older messages are still downloading, so some may not show up yet.
+                <FormattedMessage
+                  id="dmsPage.list.historyIncomplete"
+                  defaultMessage="Older messages are still downloading, so some may not show up yet."
+                />
               </p>
             )}
             {/* The request entry covers the whole list; hidden while searching. */}
@@ -2290,10 +2469,14 @@ export function ConversationList({
             {sectioned ? (
               <>
                 {/* First in the list it needs room under the top bar; after the requests row it doesn't. */}
-                <ConversationSectionHeader className={showRequestsEntry ? "pt-0.5" : "pt-[9px]"}>Pinned</ConversationSectionHeader>
+                <ConversationSectionHeader className={showRequestsEntry ? "pt-0.5" : "pt-[9px]"}>
+                  <FormattedMessage id="dmsPage.list.pinned" defaultMessage="Pinned" />
+                </ConversationSectionHeader>
                 {pinnedRows.map((c, i) => renderRow(c, i))}
                 {otherRows.length > 0 && (
-                  <ConversationSectionHeader className="pt-1">Recent</ConversationSectionHeader>
+                  <ConversationSectionHeader className="pt-1">
+                    <FormattedMessage id="dmsPage.list.recent" defaultMessage="Recent" />
+                  </ConversationSectionHeader>
                 )}
                 {/* Numbering continues across sections (position in the scroll container is what matters). */}
                 {otherRows.map((c, i) => renderRow(c, pinnedRows.length + i))}
@@ -2303,7 +2486,9 @@ export function ConversationList({
             )}
             {followSuggestions.length > 0 && (
               <>
-                <ConversationSectionHeader>People you follow</ConversationSectionHeader>
+                <ConversationSectionHeader>
+                  <FormattedMessage id="dmsPage.list.peopleYouFollow" defaultMessage="People you follow" />
+                </ConversationSectionHeader>
                 {followSuggestions.map((p) => (
                   <RecipientSuggestion
                     key={p.pubkey}
@@ -2320,7 +2505,10 @@ export function ConversationList({
             {/* Note to Self is always a row, so the hint sits under it. */}
             {onlyNoteToSelf && requestRows.length === 0 && search.trim().length === 0 && (
               <p className="text-sm text-muted-foreground p-3">
-                No conversations yet. Start one with the + button.
+                <FormattedMessage
+                  id="dmsPage.list.empty"
+                  defaultMessage="No conversations yet. Start one with the + button."
+                />
               </p>
             )}
             {isLoadingMore && (
@@ -2789,10 +2977,12 @@ export function DMsPage() {
           <div className="flex flex-1 items-center justify-center text-muted-foreground p-8 text-center">
             <div className="flex flex-col items-center gap-3 max-w-sm">
               <MessageSquare className="size-12 opacity-30" />
-              <p className="text-sm">Select a conversation</p>
+              <p className="text-sm">
+                <FormattedMessage id="dmsPage.selectConversation" defaultMessage="Select a conversation" />
+              </p>
               <Button className="mt-1 clip-corner-lg" onClick={startComposing}>
                 <PenSquare className="size-4" />
-                New message
+                <FormattedMessage id="dmsPage.newMessage" defaultMessage="New message" />
               </Button>
             </div>
           </div>

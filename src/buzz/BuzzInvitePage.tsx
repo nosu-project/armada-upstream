@@ -12,6 +12,7 @@ import {
   type BuzzJoinPolicy,
 } from "@/buzz/invite";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { common, FormattedMessage, t } from "@/i18n";
 import { toast } from "@/hooks/useToast";
 import { useUpdateUserGroupList } from "@/hooks/useUserGroupList";
 import { relayToHttpUrl, relayToRouteParam } from "@/lib/platform";
@@ -63,11 +64,13 @@ export function BuzzInvitePage() {
     () => async () => {
       if (!invite || !user || attempted.current) return;
       if (policy && !policyAccepted) {
-        setError("Accept the server's terms to join.");
+        setError(t({ id: "buzzInvitePage.acceptTerms", defaultMessage: "Accept the server's terms to join." }));
         return;
       }
       if (policy?.ageAttestationRequired && !ageConfirmed) {
-        setError("This server requires an age confirmation to join.");
+        setError(
+          t({ id: "buzzInvitePage.ageRequired", defaultMessage: "This server requires an age confirmation to join." }),
+        );
         return;
       }
       attempted.current = true;
@@ -81,11 +84,14 @@ export function BuzzInvitePage() {
         // Kind 10009 is the only store for added servers, so this write IS the add.
         // Awaited so a rejected publish fails the claim.
         await updateList({ type: "add-server", url: invite.relayUrl });
-        toast({ title: "Joined", description: previewName || invite.host });
+        toast({
+          title: t({ id: "buzzInvitePage.joined", defaultMessage: "Joined" }),
+          description: previewName || invite.host,
+        });
         navigate(`/s/${relayToRouteParam(invite.relayUrl)}`, { replace: true });
       } catch (e) {
         attempted.current = false; // allow a retry
-        setError(e instanceof Error ? e.message : "Couldn't join with that invite link.");
+        setError(e instanceof Error ? e.message : t({ id: "buzzInvitePage.joinFailed", defaultMessage: "Couldn't join with that invite link." }));
       } finally {
         setClaiming(false);
       }
@@ -105,41 +111,62 @@ export function BuzzInvitePage() {
         {!invite ? (
           <>
             <ServerCrash className="size-12 text-muted-foreground" />
-            <h1 className="text-2xl font-bold">Invite link didn’t work</h1>
+            <h1 className="text-2xl font-bold">
+              <FormattedMessage id="buzzInvitePage.failedTitle" defaultMessage="Invite link didn’t work" />
+            </h1>
             <p className="max-w-md text-muted-foreground">
-              This invite link is malformed or from a newer client.
+              <FormattedMessage
+                id="buzzInvitePage.malformed"
+                defaultMessage="This invite link is malformed or from a newer client."
+              />
             </p>
             <Button asChild>
-              <Link to="/">Back to base</Link>
+              <Link to="/">
+                <FormattedMessage id="buzzInvitePage.backToBase" defaultMessage="Back to base" />
+              </Link>
             </Button>
           </>
         ) : error ? (
           <>
             <ServerCrash className="size-12 text-destructive" />
-            <h1 className="text-2xl font-bold">Invite link didn’t work</h1>
+            <h1 className="text-2xl font-bold">
+              <FormattedMessage id="buzzInvitePage.failedTitle" defaultMessage="Invite link didn’t work" />
+            </h1>
             <p className="max-w-md text-muted-foreground">{error}</p>
             <Button onClick={() => void claim()} disabled={claiming || !user}>
-              Try again
+              <FormattedMessage {...common.tryAgain} />
             </Button>
           </>
         ) : (
           <>
             <PartyPopper className="size-12 text-primary" />
             <h1 className="text-2xl font-bold">
-              You’re invited to{" "}
-              {previewName ? <span>{previewName}</span> : invite.host}
+              <FormattedMessage
+                id="buzzInvitePage.invited"
+                defaultMessage="You’re invited to {name}"
+                values={{ name: previewName ? <span>{previewName}</span> : invite.host }}
+              />
             </h1>
             {!user ? (
               <>
                 <p className="max-w-md text-muted-foreground">
-                  Create an account or sign in to accept the invite.
+                  <FormattedMessage
+                    id="buzzInvitePage.signIn"
+                    defaultMessage="Create an account or sign in to accept the invite."
+                  />
                 </p>
                 <JoinButton size="lg" className="h-12 w-full max-w-xs clip-corner-lg text-base font-medium" />
               </>
             ) : policy === undefined || (policy === null && claiming) ? (
               <>
                 <Loader2 className="size-6 animate-spin text-muted-foreground" />
-                <p className="text-muted-foreground">Joining {previewName || invite.host}…</p>
+                <p className="text-muted-foreground">
+                  <FormattedMessage
+                    id="buzzInvitePage.joining"
+                    defaultMessage="Joining {name}…"
+                    values={{ name: previewName || invite.host }}
+                  />
+                </p>
               </>
             ) : policy ? (
               <div className="w-full max-w-sm space-y-3 text-left">
@@ -151,33 +178,34 @@ export function BuzzInvitePage() {
                     onChange={(e) => setPolicyAccepted(e.target.checked)}
                   />
                   <span>
-                    I accept this server’s{" "}
-                    {policy.termsMarkdown ? (
-                      <a
-                        href={`${invite.origin}/api/join-policy/terms`}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="underline hover:text-foreground"
-                      >
-                        Terms of Service
-                      </a>
-                    ) : (
-                      "terms"
-                    )}
-                    {policy.privacyMarkdown && (
-                      <>
-                        {" "}and{" "}
-                        <a
-                          href={`${invite.origin}/api/join-policy/privacy`}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="underline hover:text-foreground"
-                        >
-                          Privacy Policy
-                        </a>
-                      </>
-                    )}
-                    .
+                    <FormattedMessage
+                      id="buzzInvitePage.acceptPolicy"
+                      defaultMessage="I accept this server’s {hasTerms, select, yes {<termsLink>Terms of Service</termsLink>} other {terms}}{hasPrivacy, select, yes { and <privacyLink>Privacy Policy</privacyLink>} other {}}."
+                      values={{
+                        hasTerms: policy.termsMarkdown ? "yes" : "no",
+                        hasPrivacy: policy.privacyMarkdown ? "yes" : "no",
+                        termsLink: (chunks) => (
+                          <a
+                            href={`${invite.origin}/api/join-policy/terms`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="underline hover:text-foreground"
+                          >
+                            {chunks}
+                          </a>
+                        ),
+                        privacyLink: (chunks) => (
+                          <a
+                            href={`${invite.origin}/api/join-policy/privacy`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="underline hover:text-foreground"
+                          >
+                            {chunks}
+                          </a>
+                        ),
+                      }}
+                    />
                   </span>
                 </label>
                 {policy.ageAttestationRequired && (
@@ -188,7 +216,12 @@ export function BuzzInvitePage() {
                       checked={ageConfirmed}
                       onChange={(e) => setAgeConfirmed(e.target.checked)}
                     />
-                    <span>I confirm I meet this server’s minimum age requirement.</span>
+                    <span>
+                      <FormattedMessage
+                        id="buzzInvitePage.ageConfirm"
+                        defaultMessage="I confirm I meet this server’s minimum age requirement."
+                      />
+                    </span>
                   </label>
                 )}
                 <Button
@@ -196,13 +229,26 @@ export function BuzzInvitePage() {
                   disabled={claiming || !policyAccepted || (policy.ageAttestationRequired && !ageConfirmed)}
                   className="w-full clip-corner-lg"
                 >
-                  {claiming ? <><Loader2 className="size-4 mr-2 animate-spin" /> Joining…</> : "Join"}
+                  {claiming ? (
+                    <>
+                      <Loader2 className="size-4 mr-2 animate-spin" />{" "}
+                      <FormattedMessage id="buzzInvitePage.joiningButton" defaultMessage="Joining…" />
+                    </>
+                  ) : (
+                    <FormattedMessage id="buzzInvitePage.join" defaultMessage="Join" />
+                  )}
                 </Button>
               </div>
             ) : (
               <>
                 <Loader2 className="size-6 animate-spin text-muted-foreground" />
-                <p className="text-muted-foreground">Joining {previewName || invite.host}…</p>
+                <p className="text-muted-foreground">
+                  <FormattedMessage
+                    id="buzzInvitePage.joining"
+                    defaultMessage="Joining {name}…"
+                    values={{ name: previewName || invite.host }}
+                  />
+                </p>
               </>
             )}
           </>

@@ -206,39 +206,44 @@ enum NotificationPreview {
         }
     }
 
-    // MARK: - Media labels
+    // MARK: - Media kinds
 
-    /// Human label for the media a message carries, so a body left empty by
-    /// `cleanContent` reads "Sent an image" rather than "Sent a message".
+    /// What kind of media a message carries, for its "Sent …" line.
+    enum MediaKind {
+        case gif, image, video, voice, game
+    }
+
+    /// The media a message carries, so a body left empty by `cleanContent`
+    /// reads "Sent an image" rather than "Sent a message".
     ///
     /// The imeta `m` MIME wins over the URL extension: an encrypted attachment's
     /// blob URL carries no media extension at all, and a voice message recorded
     /// into a `.webm` container is only distinguishable from video by its MIME.
-    static func mediaLabel(imetaMime: String?, content: String) -> String? {
-        if let byMime = label(forMime: imetaMime) { return byMime }
+    static func mediaKind(imetaMime: String?, content: String) -> MediaKind? {
+        if let byMime = kind(forMime: imetaMime) { return byMime }
         guard !content.isEmpty else { return nil }
         var index = content.startIndex
         while let range = nextUrl(in: content, from: index) {
-            if let ext = mediaExtension(of: String(content[range])) { return label(forExtension: ext) }
+            if let ext = mediaExtension(of: String(content[range])) { return kind(forExtension: ext) }
             index = range.upperBound
         }
         return nil
     }
 
-    private static func label(forMime mime: String?) -> String? {
+    private static func kind(forMime mime: String?) -> MediaKind? {
         guard let mime = mime?.lowercased(), !mime.isEmpty else { return nil }
-        if mime == "image/gif" { return "a GIF" }
-        if mime.hasPrefix("image/") { return "an image" }
-        if mime.hasPrefix("video/") { return "a video" }
-        if mime.hasPrefix("audio/") { return "a voice message" }
-        if mime == "application/x-webxdc" { return "a game" }
+        if mime == "image/gif" { return .gif }
+        if mime.hasPrefix("image/") { return .image }
+        if mime.hasPrefix("video/") { return .video }
+        if mime.hasPrefix("audio/") { return .voice }
+        if mime == "application/x-webxdc" { return .game }
         return nil
     }
 
-    private static func label(forExtension ext: String) -> String? {
-        if ext == "gif" { return "a GIF" }
-        if ext == "xdc" { return "a game" }
-        return label(forMime: coarseMime(ext))
+    private static func kind(forExtension ext: String) -> MediaKind? {
+        if ext == "gif" { return .gif }
+        if ext == "xdc" { return .game }
+        return kind(forMime: coarseMime(ext))
     }
 
     private static func coarseMime(_ ext: String) -> String? {
@@ -295,43 +300,43 @@ enum NotificationPreview {
     // MARK: - Presentation
 
     /// The body text for one message line, before the sender is prefixed.
-    static func messageLine(_ msg: Message) -> String {
-        if msg.reaction { return "Reacted \(reactionEmoji(msg.content)) to your message" }
+    static func messageLine(_ msg: Message, strings: Strings) -> String {
+        if msg.reaction { return strings.reacted(emoji: reactionEmoji(msg.content)) }
 
         let cleaned = truncate(cleanContent(msg.content, names: msg.mentionNames))
         var text: String
         if !cleaned.isEmpty {
-            text = msg.threadReply ? "Replied in thread: \(cleaned)" : cleaned
-        } else if let label = mediaLabel(imetaMime: msg.imetaMime, content: msg.content) {
+            text = msg.threadReply ? strings.repliedInThread(text: cleaned) : cleaned
+        } else if let media = mediaKind(imetaMime: msg.imetaMime, content: msg.content) {
             // Stripping the URLs left nothing: name the media rather than the act.
-            text = "Sent \(label)"
+            text = strings.sent(media)
         } else if msg.kind == kindDmFile {
-            text = "Sent a file"
+            text = strings.sentFile
         } else if msg.threadReply {
-            text = "Replied in thread"
+            text = strings.repliedInThread
         } else {
-            text = msg.plane == .dm ? "Sent you a direct message" : "Sent a message"
+            text = msg.plane == .dm ? strings.sentDirectMessage : strings.sentMessage
         }
 
         // A mention is the reason this notification interrupted at all; say so
         // where the room, not the sender, is the title.
-        if msg.mention && msg.plane != .dm { return "@you \(text)" }
+        if msg.mention && msg.plane != .dm { return strings.mentionedYou(text: text) }
         return text
     }
 
     /// The line `present` would show, attributed to its sender where the title
     /// is the room.
-    static func attributedLine(_ msg: Message) -> String {
-        let line = messageLine(msg)
-        return msg.plane == .dm ? line : "\(msg.authorName): \(line)"
+    static func attributedLine(_ msg: Message, strings: Strings) -> String {
+        let line = messageLine(msg, strings: strings)
+        return msg.plane == .dm ? line : strings.attributed(name: msg.authorName, text: line)
     }
 
     /// Title and body for one message, in the MessagingStyle shape.
-    static func present(_ msg: Message) -> Presented {
+    static func present(_ msg: Message, strings: Strings) -> Presented {
         let isDm = msg.plane == .dm
         return Presented(
-            title: isDm ? msg.authorName : (msg.roomTitle.flatMap { $0.isEmpty ? nil : $0 } ?? "Chat"),
-            body: attributedLine(msg)
+            title: isDm ? msg.authorName : (msg.roomTitle.flatMap { $0.isEmpty ? nil : $0 } ?? strings.chat),
+            body: attributedLine(msg, strings: strings)
         )
     }
 }

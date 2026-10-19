@@ -46,9 +46,14 @@ public struct PreparedPush {
         public let groupName: String?
     }
 
-    static let dropped = PreparedPush(
-        drop: true, title: "", body: "", threadId: "", path: nil, quiet: true, sender: nil
-    )
+    /// Carries the text the caller shows in place of nothing, since iOS
+    /// cannot show nothing (see `drop`).
+    static func dropped(_ strings: Strings) -> PreparedPush {
+        PreparedPush(
+            drop: true, title: strings.appName, body: strings.messagesSynced, threadId: "",
+            path: nil, quiet: true, sender: nil
+        )
+    }
 }
 
 /// Open the event the gateway inlined, store it, and say what to show.
@@ -73,6 +78,8 @@ struct PushProcessor {
     /// from a relay later.
     let store: NotifyStore?
     let config: PushConfig
+    /// The app's language, from the config.
+    let strings: Strings
     let now: Int
 
     /// Where a refusal goes.
@@ -99,6 +106,7 @@ struct PushProcessor {
     ) {
         self.store = store
         self.config = config
+        self.strings = Strings(locale: config.locale)
         self.now = now
         self.trace = trace
         self.fetch = fetch
@@ -161,12 +169,12 @@ struct PushProcessor {
         }
         switch scope {
         case .dm:
-            return prepareDm(wrap: event) ?? Self.fallback(.dm, path: "/dm")
+            return prepareDm(wrap: event) ?? Self.fallback(.dm, path: "/dm", strings: strings)
         case .c2:
             return prepareConcord(wrap: event)
                 ?? Self.fallback(.c2, path: Concord.stream(for: event, in: config.concord).map {
                     "/c/\(escape($0.communityId))/\(escape($0.channelId))"
-                })
+                }, strings: strings)
         case .group, .groupMention:
             return prepareGroup(event: event, relays: relays)
         }
@@ -199,28 +207,31 @@ struct PushProcessor {
     /// What an event of a known plane shows when it cannot be opened: a bunker
     /// that did not answer, a login whose key never reaches the device, a
     /// legacy kind-4 DM. Mirrors the web worker's `FALLBACK_TEXT`.
-    static func fallback(_ scope: Scope, path: String?) -> PreparedPush {
+    static func fallback(_ scope: Scope, path: String?, strings: Strings) -> PreparedPush {
         let body: String
         let threadId: String
         switch scope {
         case .dm:
-            body = "New direct message"
+            body = strings.newDirectMessage
             threadId = "armada-dm"
         case .c2:
-            body = "New message in a community"
+            body = strings.newCommunityMessage
             threadId = "armada-c2"
         case .group:
-            body = "New message in a channel"
+            body = strings.newChannelMessage
             threadId = "armada-groups"
         case .groupMention:
-            body = "Someone mentioned you"
+            body = strings.someoneMentionedYou
             threadId = "armada-groups"
         }
         return PreparedPush(
-            drop: false, title: "New message", body: body, threadId: threadId,
+            drop: false, title: strings.newMessage, body: body, threadId: threadId,
             path: path, quiet: false, sender: nil
         )
     }
+
+    /// Show-nothing, worded in the app's language.
+    private var dropped: PreparedPush { .dropped(strings) }
 
     // MARK: - DM
 
@@ -292,12 +303,12 @@ struct PushProcessor {
         try? store?.writeDm(opened, self: config.selfPubkey, now: now)
 
         // Our own sent copy is addressed to us too, and is not news.
-        if opened.author == config.selfPubkey { return .dropped }
+        if opened.author == config.selfPubkey { return dropped }
 
         // Match the DM list: a group containing any muted participant is
         // hidden as a whole, even if this message's author is unmuted.
         if Self.isMutedDm(peers: opened.peers, config: config) {
-            return .dropped
+            return dropped
         }
 
         // The gateway has to watch every addressed gift wrap when either the
@@ -305,7 +316,7 @@ struct PushProcessor {
         // fallback after decrypt so that broad subscription cannot wake an
         // unrelated room. For a DM, `mentions` is equivalent to `all`.
         if Self.dmNotificationLevel(peers: opened.peers, config: config) == .nothing {
-            return .dropped
+            return dropped
         }
 
         // Reactions, deletes and timer changes are not messages.
@@ -325,7 +336,7 @@ struct PushProcessor {
             plane: .dm,
             kind: opened.kind,
             content: opened.content,
-            authorName: profile?.name ?? "Anonymous",
+            authorName: profile?.name ?? strings.anonymous,
             roomTitle: nil,
             imetaMime: NotificationPreview.firstImetaMime(opened.tags),
             mentionNames: store?.mentionNames(in: opened.content) ?? [:]
@@ -334,7 +345,7 @@ struct PushProcessor {
         shaped.threadReply = NotificationPreview.isThreadReply(
             kind: opened.kind, tags: opened.tags
         )
-        let presented = NotificationPreview.present(shaped)
+        let presented = NotificationPreview.present(shaped, strings: strings)
         return PreparedPush(
             drop: false,
             title: presented.title,
@@ -344,7 +355,7 @@ struct PushProcessor {
             quiet: false,
             sender: PreparedPush.Sender(
                 id: opened.author,
-                name: profile?.name ?? "Anonymous",
+                name: profile?.name ?? strings.anonymous,
                 avatarUrl: config.mediaPolicy.resolve(profile?.picture),
                 groupName: nil
             )
@@ -382,8 +393,8 @@ struct PushProcessor {
     private func requestPing(quiet: Bool) -> PreparedPush {
         PreparedPush(
             drop: false,
-            title: "Message requests",
-            body: quiet ? "You have new message requests" : "You have a new message request",
+            title: strings.messageRequests,
+            body: strings.newMessageRequest(many: quiet),
             threadId: "armada-dm-requests",
             path: "/dm",
             quiet: quiet,
@@ -417,29 +428,29 @@ struct PushProcessor {
         // Concord.futureHoldSecs), but never announced. Announcing it now would
         // buzz for a message the reader can't yet see, and the OS would stamp
         // the notification "in 5m" from its future createdAt.
-        if opened.createdAt > now + Concord.futureHoldSecs { return .dropped }
+        if opened.createdAt > now + Concord.futureHoldSecs { return dropped }
 
         // Our own message, sent from another device. The local send marks its
         // own event id, but nothing marks one made elsewhere — only the
         // decrypted author says so, and that is here.
-        if opened.author == config.selfPubkey { return .dropped }
+        if opened.author == config.selfPubkey { return dropped }
 
         // A muted channel/community (level `nothing`): stored above so its
         // timeline stays complete, and — here — never announced. The mute
         // normally means no gateway subscription at all, but a lingering one can
         // still wake the device, and this is where a leaked wrap is silenced
         // rather than presented as the gateway's static fallback text.
-        if stream.muted { return .dropped }
+        if stream.muted { return dropped }
 
         // A banned member (CORD-04): stored above like every other message,
         // folded off the timeline on read, and — here — never announced. The
         // author is on the encrypted rumor, so this is the first place it can
         // be checked.
-        if stream.banned.contains(opened.author) { return .dropped }
+        if stream.banned.contains(opened.author) { return dropped }
 
         // Sent before this membership began: stored above, never announced.
         if !Self.sentDuringMembership(createdAt: opened.createdAt, joinedAtMs: stream.joinedAtMs) {
-            return .dropped
+            return dropped
         }
 
         let directMention = opened.tags.contains {
@@ -453,22 +464,22 @@ struct PushProcessor {
         // A reaction notifies only when it points at one of YOUR messages; the
         // `p` tag is on the encrypted rumor, so this is the first place it can
         // be read at all.
-        if reaction && !mention { return .dropped }
+        if reaction && !mention { return dropped }
 
         // "Mentions only": the gateway can't filter an encrypted wrap, so it
         // wakes us for every message on this channel; here — the first place the
         // decrypted `p` tags are legible — we drop anything that doesn't tag the
         // viewer, matching the Android service and the channel's chosen level.
-        if stream.mentionOnly && !mention { return .dropped }
+        if stream.mentionOnly && !mention { return dropped }
 
         let profile = store?.profile(pubkey: opened.author)
         var message = NotificationPreview.Message(
             plane: .c2,
             kind: opened.kind,
             content: opened.content,
-            authorName: profile?.name ?? "Anonymous",
+            authorName: profile?.name ?? strings.anonymous,
             roomTitle: store?.concordRoomTitle(
-                communityId: stream.communityId, channelId: stream.channelId
+                communityId: stream.communityId, channelId: stream.channelId, strings: strings
             ),
             mention: mention,
             reaction: reaction,
@@ -479,7 +490,7 @@ struct PushProcessor {
             kind: opened.kind, tags: opened.tags
         )
 
-        let presented = NotificationPreview.present(message)
+        let presented = NotificationPreview.present(message, strings: strings)
         // A reaction points at the message it reacted to — the thing the reader
         // is being told about, and the only one of the two a timeline can show.
         //
@@ -497,7 +508,7 @@ struct PushProcessor {
             quiet: false,
             sender: PreparedPush.Sender(
                 id: opened.author,
-                name: profile?.name ?? "Anonymous",
+                name: profile?.name ?? strings.anonymous,
                 avatarUrl: Self.communityAvatarShown(author: opened.author, config: config)
                     ? config.mediaPolicy.resolve(profile?.picture) : nil,
                 groupName: message.roomTitle
@@ -522,7 +533,7 @@ struct PushProcessor {
             return nil
         }
 
-        if event.pubkey == config.selfPubkey { return .dropped }
+        if event.pubkey == config.selfPubkey { return dropped }
 
         // Ask each candidate relay's tenant and accept a name only if exactly
         // ONE knows this group: a hit on two would be two different groups that
@@ -544,7 +555,7 @@ struct PushProcessor {
             plane: .nip29,
             kind: event.kind,
             content: event.content,
-            authorName: profile?.name ?? "Anonymous",
+            authorName: profile?.name ?? strings.anonymous,
             roomTitle: only?.title,
             mention: mention,
             imetaMime: NotificationPreview.firstImetaMime(event.tags),
@@ -554,7 +565,7 @@ struct PushProcessor {
             kind: event.kind, tags: event.tags
         )
 
-        let presented = NotificationPreview.present(message)
+        let presented = NotificationPreview.present(message, strings: strings)
         let relay = only?.relay ?? relays.first
         let path = relay.map { groupPath(relayUrl: $0, groupId: groupId, eventId: eventId) }
         return PreparedPush(
@@ -566,7 +577,7 @@ struct PushProcessor {
             quiet: false,
             sender: PreparedPush.Sender(
                 id: event.pubkey,
-                name: profile?.name ?? "Anonymous",
+                name: profile?.name ?? strings.anonymous,
                 avatarUrl: config.mediaPolicy.resolve(profile?.picture),
                 groupName: only?.title
             )

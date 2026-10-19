@@ -33,6 +33,7 @@ import {
 } from "@/lib/watchalong";
 import { loadYouTubeApi, YT_STATE, type YTPlayer } from "@/lib/youtubeApi";
 import { cn } from "@/lib/utils";
+import { common, FormattedMessage, useIntl } from "@/i18n";
 
 function newId(): string {
   return crypto.randomUUID().slice(0, 8);
@@ -44,6 +45,7 @@ function newId(): string {
  * ads can't be skipped and desync playback; the drift guard resyncs after.
  */
 export function Watchalong({ sync }: { sync: AppSync }) {
+  const intl = useIntl();
   const api = useWebxdcApi(sync);
   const { user } = useCurrentUser();
 
@@ -294,14 +296,14 @@ export function Watchalong({ sync }: { sync: AppSync }) {
                 if (e.key === "Enter") addToQueue();
               }}
               inputMode="url"
-              placeholder="Paste a YouTube or video link"
-              aria-label="YouTube or video link"
+              placeholder={intl.formatMessage({ id: "watchalong.linkPlaceholder", defaultMessage: "Paste a YouTube or video link" })}
+              aria-label={intl.formatMessage({ id: "watchalong.linkLabel", defaultMessage: "YouTube or video link" })}
               className="h-full flex-1 min-w-0 border-0 bg-transparent px-1 text-sm shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
             />
           </div>
           <Button size="sm" className="h-9 touch:h-11 clip-corner-lg" onClick={addToQueue} disabled={!urlInput.trim()}>
             <Plus className="size-4" />
-            Add
+            <FormattedMessage {...common.add} />
           </Button>
         </div>
         {inputError && <p className="mt-1 px-1 text-xs text-destructive">{inputError}</p>}
@@ -320,18 +322,18 @@ export function Watchalong({ sync }: { sync: AppSync }) {
             />
           ) : currentPlayer !== "youtube" ? (
             <div className="absolute inset-0 flex items-center justify-center px-6 text-center text-sm text-white/70">
-              This video can't be played in this version of Armada.
+              <FormattedMessage id="watchalong.unsupported" defaultMessage="This video can't be played in this version of Armada." />
             </div>
           ) : nativeIosPlayer ? (
             <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-chrome-deep px-6 text-center text-white">
               <MonitorPlay className="size-10 text-primary" />
               <div>
-                <p className="text-sm font-semibold">YouTube opens in Armada's video player</p>
-                <p className="mt-1 text-xs text-white/60">It starts at the shared watch position.</p>
+                <p className="text-sm font-semibold"><FormattedMessage id="watchalong.iosPlayerTitle" defaultMessage="YouTube opens in Armada's video player" /></p>
+                <p className="mt-1 text-xs text-white/60"><FormattedMessage id="watchalong.iosPlayerBody" defaultMessage="It starts at the shared watch position." /></p>
               </div>
               <Button type="button" className="clip-corner-lg" onClick={openIosPlayer}>
                 <Play className="size-4 fill-current" />
-                Open player
+                <FormattedMessage id="watchalong.openPlayer" defaultMessage="Open player" />
               </Button>
               {nativePlayerErrorFor === currentKey && (
                 <button
@@ -339,7 +341,7 @@ export function Watchalong({ sync }: { sync: AppSync }) {
                   className="text-xs text-white/70 underline underline-offset-2"
                   onClick={() => openYouTubeTargetPage(current)}
                 >
-                  Open on YouTube instead
+                  <FormattedMessage id="watchalong.openOnYouTube" defaultMessage="Open on YouTube instead" />
                 </button>
               )}
             </div>
@@ -348,14 +350,14 @@ export function Watchalong({ sync }: { sync: AppSync }) {
           )}
           {currentPlayer === "youtube" && !nativeIosPlayer && !ready && (
             <div className="absolute inset-0 flex items-center justify-center text-sm text-white/70">
-              Loading player…
+              <FormattedMessage id="watchalong.loadingPlayer" defaultMessage="Loading player…" />
             </div>
           )}
         </div>
       ) : (
         <div className="flex flex-col items-center justify-center gap-2 clip-corner-lg bg-foreground/5 py-10 text-center">
           <MonitorPlay className="size-7 text-muted-foreground" />
-          <p className="text-xs text-muted-foreground">Paste a link above to start the queue.</p>
+          <p className="text-xs text-muted-foreground"><FormattedMessage id="watchalong.empty" defaultMessage="Paste a link above to start the queue." /></p>
         </div>
       )}
 
@@ -367,14 +369,14 @@ export function Watchalong({ sync }: { sync: AppSync }) {
                 variant="ghost"
                 size="icon"
                 className="size-8 touch:size-11 clip-corner-lg text-muted-foreground"
-                aria-label="Previous"
+                aria-label={intl.formatMessage({ id: "watchalong.previous", defaultMessage: "Previous" })}
                 disabled={!canPrev}
                 onClick={() => skip(-1)}
               >
                 <SkipBack className="size-4" />
               </Button>
             </TooltipTrigger>
-            <TooltipContent>Previous</TooltipContent>
+            <TooltipContent><FormattedMessage id="watchalong.previous" defaultMessage="Previous" /></TooltipContent>
           </Tooltip>
           <Tooltip>
             <TooltipTrigger asChild>
@@ -382,14 +384,16 @@ export function Watchalong({ sync }: { sync: AppSync }) {
                 variant="ghost"
                 size="icon"
                 className="size-8 touch:size-11 clip-corner-lg text-muted-foreground"
-                aria-label="Next"
+                aria-label={intl.formatMessage(common.next)}
                 disabled={!canNext}
                 onClick={() => skip(1)}
               >
                 <SkipForward className="size-4" />
               </Button>
             </TooltipTrigger>
-            <TooltipContent>Next</TooltipContent>
+            <TooltipContent>
+              <FormattedMessage {...common.next} />
+            </TooltipContent>
           </Tooltip>
         </div>
       )}
@@ -398,7 +402,7 @@ export function Watchalong({ sync }: { sync: AppSync }) {
         <div>
           <div className="flex items-center gap-1.5 pb-1.5 text-2xs font-semibold uppercase tracking-wide text-muted-foreground/80">
             <ListVideo className="size-3 text-primary" />
-            Up next · {snap.queue.length}
+            <FormattedMessage id="watchalong.upNext" defaultMessage="Up next · {count}" values={{ count: snap.queue.length }} />
           </div>
           <div className="flex flex-col gap-0.5 max-h-56 overflow-y-auto">
             {snap.queue.map((item, i) => (
@@ -437,6 +441,7 @@ function DirectVideoPlayer({
   onPlayback: (patch: Pick<WatchSnapshot, "playing" | "time" | "rate">) => void;
   onEnded: () => void;
 }) {
+  const intl = useIntl();
   const { resolved, onError, failed, fallbackProps } = useMediaWithFallback({ url });
   const src = resolved.status === "ready" ? resolved.src : undefined;
 
@@ -496,7 +501,7 @@ function DirectVideoPlayer({
   if (failed) {
     return (
       <div className="absolute inset-0 flex items-center justify-center p-4">
-        <MediaFallback {...fallbackProps} label="Video" />
+        <MediaFallback {...fallbackProps} label={intl.formatMessage({ id: "watchalong.video", defaultMessage: "Video" })} />
       </div>
     );
   }
@@ -529,7 +534,7 @@ function DirectVideoPlayer({
             }}
           >
             <Play className="size-4 fill-current" />
-            Join playback
+            <FormattedMessage id="watchalong.joinPlayback" defaultMessage="Join playback" />
           </Button>
         </div>
       )}
@@ -557,13 +562,19 @@ function QueueRow({
   onDown: () => void;
   onRemove: () => void;
 }) {
+  const intl = useIntl();
   const { data: meta } = useYouTubeTitle(item.videoId);
   const author = useAuthor(item.addedBy);
   const adderName = item.addedBy ? getDisplayName(author.data?.metadata, item.addedBy) : undefined;
 
   const title = item.playlistId
-    ? "Playlist"
-    : meta?.title ?? (item.videoId ? `youtu.be/${item.videoId}` : item.url ? directVideoTitle(item.url) : "Video");
+    ? intl.formatMessage({ id: "watchalong.playlist", defaultMessage: "Playlist" })
+    : meta?.title ??
+      (item.videoId
+        ? `youtu.be/${item.videoId}`
+        : item.url
+          ? directVideoTitle(item.url)
+          : intl.formatMessage({ id: "watchalong.video", defaultMessage: "Video" }));
 
   return (
     <div
@@ -572,7 +583,7 @@ function QueueRow({
         isCurrent ? "bg-primary/10" : "hover:bg-foreground/5",
       )}
     >
-      <button type="button" onClick={onPlay} className="flex items-center gap-2.5 min-w-0 flex-1 text-left" aria-label={`Play ${title}`}>
+      <button type="button" onClick={onPlay} className="flex items-center gap-2.5 min-w-0 flex-1 text-left" aria-label={intl.formatMessage({ id: "watchalong.play", defaultMessage: "Play {title}" }, { title })}>
         <div className="relative flex h-9 w-14 shrink-0 items-center justify-center overflow-hidden clip-corner bg-black/80">
           {item.playlistId ? (
             <ListVideo className="size-4 text-white/80" />
@@ -591,9 +602,13 @@ function QueueRow({
           <p className={cn("truncate text-xs", isCurrent ? "font-semibold text-foreground" : "font-medium")}>{title}</p>
           <p className="truncate text-2xs text-muted-foreground">
             {isCurrent ? (
-              "Now playing"
+              <FormattedMessage id="watchalong.nowPlaying" defaultMessage="Now playing" />
             ) : adderName ? (
-              <>Added by <DisplayName pubkey={item.addedBy} name={adderName} /></>
+              <FormattedMessage
+                id="watchalong.addedBy"
+                defaultMessage="Added by {name}"
+                values={{ name: <DisplayName pubkey={item.addedBy} name={adderName} /> }}
+              />
             ) : (
               meta?.author ?? ""
             )}
@@ -601,13 +616,13 @@ function QueueRow({
         </div>
       </button>
       <div className="flex shrink-0 items-center opacity-0 group-hover/row:opacity-100 touch:opacity-100 focus-within:opacity-100 transition-opacity">
-        <Button variant="ghost" size="icon" className="size-6 touch:size-11 clip-corner-lg text-muted-foreground" aria-label="Move up" disabled={!canUp} onClick={onUp}>
+        <Button variant="ghost" size="icon" className="size-6 touch:size-11 clip-corner-lg text-muted-foreground" aria-label={intl.formatMessage({ id: "watchalong.moveUp", defaultMessage: "Move up" })} disabled={!canUp} onClick={onUp}>
           <ArrowUp className="size-3.5" />
         </Button>
-        <Button variant="ghost" size="icon" className="size-6 touch:size-11 clip-corner-lg text-muted-foreground" aria-label="Move down" disabled={!canDown} onClick={onDown}>
+        <Button variant="ghost" size="icon" className="size-6 touch:size-11 clip-corner-lg text-muted-foreground" aria-label={intl.formatMessage({ id: "watchalong.moveDown", defaultMessage: "Move down" })} disabled={!canDown} onClick={onDown}>
           <ArrowDown className="size-3.5" />
         </Button>
-        <Button variant="ghost" size="icon" className="size-6 touch:size-11 clip-corner-lg text-muted-foreground hover:text-destructive" aria-label="Remove from queue" onClick={onRemove}>
+        <Button variant="ghost" size="icon" className="size-6 touch:size-11 clip-corner-lg text-muted-foreground hover:text-destructive" aria-label={intl.formatMessage({ id: "watchalong.removeFromQueue", defaultMessage: "Remove from queue" })} onClick={onRemove}>
           <Trash2 className="size-3.5" />
         </Button>
       </div>

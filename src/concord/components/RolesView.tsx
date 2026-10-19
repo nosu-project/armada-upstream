@@ -33,6 +33,12 @@ import {
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import type { Community } from "@/concord/lib/types";
 import { cn } from "@/lib/utils";
+import { common, FormattedMessage, t, useIntl, type IntlShape, type MessageDescriptor } from "@/i18n";
+
+/** A table label that may be a plain string or a message descriptor. */
+function labelText(intl: IntlShape, label: string | MessageDescriptor): string {
+  return typeof label === "string" ? label : intl.formatMessage(label);
+}
 
 /** Fallback swatch for a role on the theme default (`color === 0`). */
 const DEFAULT_SWATCH = "#5865f2";
@@ -68,6 +74,7 @@ export function RolesView({ community }: { community: Community }) {
 function RolesBody({ community }: { community: Community }) {
   const { folded, saveRole, isSavingRole, setMemberRoles, isSettingRoles, newRoleId } = useRoles(community);
   const { user } = useCurrentUser();
+  const intl = useIntl();
   const [editing, setEditing] = useState<Role | null>(null);
   const [confirmRevoke, setConfirmRevoke] = useState<Role | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -167,11 +174,29 @@ function RolesBody({ community }: { community: Community }) {
     const peers = landing.filter((r) => r.position === wanted.position && r.roleId !== wanted.roleId);
     const ahead = rendered.slice(0, rendered.findIndex((r) => r.roleId === wanted.roleId));
     const winner = ahead[ahead.length - 1];
-    return `${wanted.name} can't go there: the only position free for it is ${wanted.position}, which ${peers
-      .map((r) => r.name)
-      .join(" and ")} already ${peers.length === 1 ? "holds" : "hold"}, and ties go to the lower role id, so it would render${
-      winner ? ` behind ${winner.name}` : " out of order"
-    }, not where you dropped it. Nothing was published.`;
+    const values = {
+      role: wanted.name,
+      position: wanted.position,
+      peers: intl.formatList(peers.map((r) => r.name), { type: "conjunction" }),
+      count: peers.length,
+    };
+    return winner
+      ? intl.formatMessage(
+          {
+            id: "rolesView.unsatisfiableBehind",
+            defaultMessage:
+              "{role} can't go there: the only position free for it is {position}, which {peers} already {count, plural, one {holds} other {hold}}, and ties go to the lower role id, so it would render behind {winner}, not where you dropped it. Nothing was published.",
+          },
+          { ...values, winner: winner.name },
+        )
+      : intl.formatMessage(
+          {
+            id: "rolesView.unsatisfiableOutOfOrder",
+            defaultMessage:
+              "{role} can't go there: the only position free for it is {position}, which {peers} already {count, plural, one {holds} other {hold}}, and ties go to the lower role id, so it would render out of order, not where you dropped it. Nothing was published.",
+          },
+          values,
+        );
   };
 
   /** Independent publishes, not a transaction; report how far it got on failure. */
@@ -179,7 +204,7 @@ function RolesBody({ community }: { community: Community }) {
     // The actor must outrank both the old and new position.
     for (const { role, position } of moved) {
       if (!mayTouch(role.position) || !mayTouch(position)) {
-        setError("That move crosses your own rank.");
+        setError(t({ id: "rolesView.crossesRank", defaultMessage: "That move crosses your own rank." }));
         return;
       }
     }
@@ -190,7 +215,7 @@ function RolesBody({ community }: { community: Community }) {
         done++;
       }
     } catch (e) {
-      const why = e instanceof Error ? e.message : "Couldn't reorder roles.";
+      const why = e instanceof Error ? e.message : t({ id: "rolesView.reorderFailed", defaultMessage: "Couldn't reorder roles." });
       // A half-applied swap can leave peers the tie-break renders in the original
       // order, so name that outcome rather than suggest re-dragging.
       const landed = new Map(roles.map((r) => [r.roleId, r.position]));
@@ -201,8 +226,27 @@ function RolesBody({ community }: { community: Community }) {
       );
       setError(
         shared.length > 0
-          ? `${why} ${done} of ${moved.length} roles moved, leaving two or more roles on position ${shared.join(" and ")}. Nothing was undone. Roles at one position are peers and render by role id, so the list may look unchanged. Drag one of them again and accept the offer to even out the positions.`
-          : `${why} ${done} of ${moved.length} roles moved; the rest kept their old position. Nothing was undone. Reorder again to finish.`,
+          ? t(
+              {
+                id: "rolesView.reorderPartialShared",
+                defaultMessage:
+                  "{why} {done} of {total} roles moved, leaving two or more roles on position {positions}. Nothing was undone. Roles at one position are peers and render by role id, so the list may look unchanged. Drag one of them again and accept the offer to even out the positions.",
+              },
+              {
+                why,
+                done,
+                total: moved.length,
+                positions: intl.formatList(shared.map(String), { type: "conjunction" }),
+              },
+            )
+          : t(
+              {
+                id: "rolesView.reorderPartial",
+                defaultMessage:
+                  "{why} {done} of {total} roles moved; the rest kept their old position. Nothing was undone. Reorder again to finish.",
+              },
+              { why, done, total: moved.length },
+            ),
       );
     }
   };
@@ -230,7 +274,9 @@ function RolesBody({ community }: { community: Community }) {
     const next = found.filter((r): r is Role => r !== undefined);
     const plan = next.length === evenOut.length && next.length === roles.length ? planEvenOut(next) : null;
     if (!plan) {
-      setError("The roles changed while that was on screen. Drag it again.");
+      setError(
+        t({ id: "rolesView.rolesChanged", defaultMessage: "The roles changed while that was on screen. Drag it again." }),
+      );
       return;
     }
     const moved = plan
@@ -287,7 +333,7 @@ function RolesBody({ community }: { community: Community }) {
   const revokeRole = async (role: Role) => {
     setError(null);
     setEvenOut(null);
-    const { strippable, skipped, skippedOwner, skippedRank } = holdersOf(role);
+    const { strippable, skippedOwner, skippedRank } = holdersOf(role);
     let stripped = 0;
     try {
       for (const g of strippable) {
@@ -297,25 +343,47 @@ function RolesBody({ community }: { community: Community }) {
       // Clear `display` too: un-outranked holders keep the role, so a hoisted section would linger.
       await saveRole({ role: { ...role, permissions: 0n, display: undefined } });
       // Owner is separated: `canActOnMember` refuses them as a target outright.
-      const stillHold = [
-        skippedRank.length > 0
-          ? `${skippedRank.length} member${skippedRank.length === 1 ? "" : "s"} you don't outrank`
-          : null,
-        skippedOwner.length > 0 ? "the owner (never removable)" : null,
-      ]
-        .filter(Boolean)
-        .join(" and ");
+      const description =
+        skippedRank.length > 0 && skippedOwner.length > 0
+          ? t(
+              {
+                id: "rolesView.revokedStillHeldBoth",
+                defaultMessage:
+                  "It now confers nothing, but {count, plural, one {# member you don't outrank} other {# members you don't outrank}} and the owner (never removable) still list it.",
+              },
+              { count: skippedRank.length },
+            )
+          : skippedRank.length > 0
+            ? t(
+                {
+                  id: "rolesView.revokedStillHeldRank",
+                  defaultMessage:
+                    "It now confers nothing, but {count, plural, one {# member you don't outrank still lists} other {# members you don't outrank still list}} it.",
+                },
+                { count: skippedRank.length },
+              )
+            : skippedOwner.length > 0
+              ? t({
+                  id: "rolesView.revokedStillHeldOwner",
+                  defaultMessage: "It now confers nothing, but the owner (never removable) still lists it.",
+                })
+              : t({ id: "rolesView.revokedFromAll", defaultMessage: "Taken from every member; it now confers nothing." });
       toast({
-        title: "Role revoked",
-        description: stillHold
-          ? `It now confers nothing, but ${stillHold} still ${skipped.length === 1 ? "lists" : "list"} it.`
-          : "Taken from every member; it now confers nothing.",
+        title: t({ id: "rolesView.roleRevoked", defaultMessage: "Role revoked" }),
+        description,
       });
       setConfirmRevoke(null);
     } catch (e) {
-      const why = e instanceof Error ? e.message : "Couldn't revoke the role.";
+      const why = e instanceof Error ? e.message : t({ id: "rolesView.revokeFailed", defaultMessage: "Couldn't revoke the role." });
       setError(
-        `${why} ${stripped} of ${strippable.length} grants were stripped and the role still carries its permissions. Nothing was undone. Revoke again to finish.`,
+        t(
+          {
+            id: "rolesView.revokePartial",
+            defaultMessage:
+              "{why} {stripped} of {total} grants were stripped and the role still carries its permissions. Nothing was undone. Revoke again to finish.",
+          },
+          { why, stripped, total: strippable.length },
+        ),
       );
     }
   };
@@ -325,35 +393,64 @@ function RolesBody({ community }: { community: Community }) {
     return (
       <div className="flex flex-col gap-5">
         <div className="space-y-2">
-          <h2 className="font-mono text-xl font-bold lowercase tracking-tight">revoke {confirmRevoke.name}?</h2>
+          <h2 className="font-mono text-xl font-bold lowercase tracking-tight">
+            <FormattedMessage
+              id="rolesView.revokeHeading"
+              defaultMessage="revoke {name}?"
+              values={{ name: confirmRevoke.name }}
+            />
+          </h2>
           <p className="text-sm text-muted-foreground">
-            It will be stripped of every permission
-            {strippable.length > 0 &&
-              ` and taken from ${strippable.length === 1 ? "1 member" : `${strippable.length} members`}`}
-            .
+            {strippable.length > 0 ? (
+              <FormattedMessage
+                id="rolesView.revokeStripTaken"
+                defaultMessage="{count, plural, one {It will be stripped of every permission and taken from # member.} other {It will be stripped of every permission and taken from # members.}}"
+                values={{ count: strippable.length }}
+              />
+            ) : (
+              <FormattedMessage id="rolesView.revokeStrip" defaultMessage="It will be stripped of every permission." />
+            )}
           </p>
           {skippedRank.length > 0 && (
             <p className="text-sm text-muted-foreground">
-              You don't outrank <MemberNames members={skippedRank} />, so the role stays listed on{" "}
-              {skippedRank.length === 1 ? "their grant" : "their grants"}.
+              <FormattedMessage
+                id="rolesView.revokeSkippedRank"
+                defaultMessage="{count, plural, one {You don't outrank {names}, so the role stays listed on their grant.} other {You don't outrank {names}, so the role stays listed on their grants.}}"
+                values={{ count: skippedRank.length, names: <MemberNames members={skippedRank} /> }}
+              />
             </p>
           )}
           {skippedOwner.length > 0 && (
             <p className="text-sm text-muted-foreground">
-              The owner's grant can never be rewritten by anyone, so the role stays listed on it.
+              <FormattedMessage
+                id="rolesView.revokeSkippedOwner"
+                defaultMessage="The owner's grant can never be rewritten by anyone, so the role stays listed on it."
+              />
             </p>
           )}
           {skipped.length > 0 && (
             <p className="text-sm text-muted-foreground">
-              With no permissions left it confers nothing there either.
+              <FormattedMessage
+                id="rolesView.revokeConfersNothing"
+                defaultMessage="With no permissions left it confers nothing there either."
+              />
             </p>
           )}
           {/* No Role tombstone (CORD-04 §2); reuse only when nobody still holds it. */}
           <p className="text-sm text-muted-foreground">
-            Roles can't be deleted: they're part of the community's signed history, which every member's app
-            replays so that everyone sees the same list. So it stays here, holding one of the
-            community's {MAX_ROLES_PER_COMMUNITY} role slots, but grants nothing
-            {skipped.length === 0 ? ". You can rename it later to reuse the slot." : "."}
+            {skipped.length === 0 ? (
+              <FormattedMessage
+                id="rolesView.revokeNoDeleteReusable"
+                defaultMessage="Roles can't be deleted: they're part of the community's signed history, which every member's app replays so that everyone sees the same list. So it stays here, holding one of the community's {max} role slots, but grants nothing. You can rename it later to reuse the slot."
+                values={{ max: MAX_ROLES_PER_COMMUNITY }}
+              />
+            ) : (
+              <FormattedMessage
+                id="rolesView.revokeNoDelete"
+                defaultMessage="Roles can't be deleted: they're part of the community's signed history, which every member's app replays so that everyone sees the same list. So it stays here, holding one of the community's {max} role slots, but grants nothing."
+                values={{ max: MAX_ROLES_PER_COMMUNITY }}
+              />
+            )}
           </p>
         </div>
         {error && (
@@ -372,7 +469,7 @@ function RolesBody({ community }: { community: Community }) {
             }}
             disabled={busy}
           >
-            Cancel
+            <FormattedMessage {...common.cancel} />
           </Button>
           <Button
             type="button"
@@ -381,7 +478,14 @@ function RolesBody({ community }: { community: Community }) {
             onClick={() => void revokeRole(confirmRevoke)}
             disabled={busy}
           >
-            {busy ? <><Loader2 className="size-4 mr-2 animate-spin" /> Revoking...</> : "Revoke role"}
+            {busy ? (
+              <>
+                <Loader2 className="size-4 mr-2 animate-spin" />{" "}
+                <FormattedMessage id="rolesView.revoking" defaultMessage="Revoking..." />
+              </>
+            ) : (
+              <FormattedMessage id="rolesView.revokeRole" defaultMessage="Revoke role" />
+            )}
           </Button>
         </div>
       </div>
@@ -410,10 +514,10 @@ function RolesBody({ community }: { community: Community }) {
           setError(null);
           try {
             await saveRole({ role });
-            toast({ title: "Role saved" });
+            toast({ title: t({ id: "rolesView.roleSaved", defaultMessage: "Role saved" }) });
             setEditing(null);
           } catch (e) {
-            setError(e instanceof Error ? e.message : "Couldn't save the role.");
+            setError(e instanceof Error ? e.message : t({ id: "rolesView.saveFailed", defaultMessage: "Couldn't save the role." }));
           }
         }}
       />
@@ -423,8 +527,10 @@ function RolesBody({ community }: { community: Community }) {
   return (
     <div className="flex flex-col items-center gap-6">
       <p className="text-sm text-muted-foreground">
-        Roles bundle permissions at a rank. Lower position = higher authority; the owner is position 0 and
-        unmintable.
+        <FormattedMessage
+          id="rolesView.intro"
+          defaultMessage="Roles bundle permissions at a rank. Lower position = higher authority; the owner is position 0 and unmintable."
+        />
       </p>
 
       {error && (
@@ -434,8 +540,10 @@ function RolesBody({ community }: { community: Community }) {
             {evenOut && (
               <>
                 <span className="mt-2 block">
-                  Give every role its own position and this move works. It rewrites the position of roles you
-                  did not drag; nothing else about them changes.
+                  <FormattedMessage
+                    id="rolesView.evenOutOffer"
+                    defaultMessage="Give every role its own position and this move works. It rewrites the position of roles you did not drag; nothing else about them changes."
+                  />
                 </span>
                 <Button
                   type="button"
@@ -445,7 +553,14 @@ function RolesBody({ community }: { community: Community }) {
                   disabled={busy}
                   onClick={() => void applyEvenOut()}
                 >
-                  {busy ? <><Loader2 className="size-4 mr-2 animate-spin" /> Evening out...</> : "Even out positions and move"}
+                  {busy ? (
+                    <>
+                      <Loader2 className="size-4 mr-2 animate-spin" />{" "}
+                      <FormattedMessage id="rolesView.evening" defaultMessage="Evening out..." />
+                    </>
+                  ) : (
+                    <FormattedMessage id="rolesView.evenOut" defaultMessage="Even out positions and move" />
+                  )}
                 </Button>
               </>
             )}
@@ -455,7 +570,9 @@ function RolesBody({ community }: { community: Community }) {
 
       <div ref={listRef} className="w-full space-y-1 rounded-lg bg-secondary/40 p-1">
         {roles.length === 0 ? (
-          <div className="px-3 py-6 text-center text-xs text-muted-foreground">No roles yet.</div>
+          <div className="px-3 py-6 text-center text-xs text-muted-foreground">
+            <FormattedMessage id="rolesView.empty" defaultMessage="No roles yet." />
+          </div>
         ) : (
           roles.map((r, i) => {
             const movable = mayTouch(r.position) && !busy;
@@ -472,7 +589,7 @@ function RolesBody({ community }: { community: Community }) {
               >
                 <button
                   type="button"
-                  aria-label={`Reorder ${r.name}`}
+                  aria-label={intl.formatMessage({ id: "rolesView.reorder", defaultMessage: "Reorder {name}" }, { name: r.name })}
                   disabled={!movable}
                   onPointerDown={startDrag(i)}
                   onPointerMove={moveDrag}
@@ -503,19 +620,37 @@ function RolesBody({ community }: { community: Community }) {
                       className="inline-flex min-w-0 items-center gap-0.5 text-2xs text-muted-foreground"
                       title={
                         scopedTo.isPrivate
-                          ? `Access role: holders can read #${scopedTo.name}`
-                          : `Permissions apply only in #${scopedTo.name}`
+                          ? intl.formatMessage(
+                              { id: "rolesView.accessRoleTitle", defaultMessage: "Access role: holders can read #{channel}" },
+                              { channel: scopedTo.name },
+                            )
+                          : intl.formatMessage(
+                              { id: "rolesView.scopedTitle", defaultMessage: "Permissions apply only in #{channel}" },
+                              { channel: scopedTo.name },
+                            )
                       }
                     >
                       {scopedTo.isPrivate
-                        ? <Lock className="size-3 shrink-0" aria-label="Private channel access" />
+                        ? <Lock
+                            className="size-3 shrink-0"
+                            aria-label={intl.formatMessage({
+                              id: "rolesView.privateAccess",
+                              defaultMessage: "Private channel access",
+                            })}
+                          />
                         : <Hash className="size-3 shrink-0" aria-hidden />}
                       <span className="truncate max-w-24">{scopedTo.name}</span>
                     </span>
                   )}
                   <span
                     className="inline-flex shrink-0 items-center gap-0.5 text-2xs tabular-nums text-muted-foreground"
-                    title={`${holderCounts.get(r.roleId) ?? 0} member${(holderCounts.get(r.roleId) ?? 0) === 1 ? "" : "s"} hold this role`}
+                    title={intl.formatMessage(
+                      {
+                        id: "rolesView.holdersTitle",
+                        defaultMessage: "{count, plural, one {# member hold this role} other {# members hold this role}}",
+                      },
+                      { count: holderCounts.get(r.roleId) ?? 0 },
+                    )}
                   >
                     <Users className="size-3" aria-hidden />
                     {holderCounts.get(r.roleId) ?? 0}
@@ -530,9 +665,11 @@ function RolesBody({ community }: { community: Community }) {
       {/* CORD-04 §2 cap; revoked roles count (no tombstone). */}
       {roles.length >= MAX_ROLES_PER_COMMUNITY && (
         <p className="text-xs text-muted-foreground">
-          This community has reached the limit of {MAX_ROLES_PER_COMMUNITY} roles. Revoked roles still count,
-          since roles are part of the signed history and can't be deleted. To make room,
-          rename a revoked role that nobody holds and give it new permissions.
+          <FormattedMessage
+            id="rolesView.limitReached"
+            defaultMessage="This community has reached the limit of {max} roles. Revoked roles still count, since roles are part of the signed history and can't be deleted. To make room, rename a revoked role that nobody holds and give it new permissions."
+            values={{ max: MAX_ROLES_PER_COMMUNITY }}
+          />
         </p>
       )}
       {/* Wait for the fold: the cap reads 0/100 until it lands. */}
@@ -555,7 +692,7 @@ function RolesBody({ community }: { community: Community }) {
           });
         }}
       >
-        <Plus className="size-4 mr-2" /> Create role
+        <Plus className="size-4 mr-2" /> <FormattedMessage id="rolesView.createRole" defaultMessage="Create role" />
       </Button>
     </div>
   );
@@ -582,6 +719,7 @@ export function RoleEditor({
   onRevoke: () => void;
   onCancel: () => void;
 }) {
+  const intl = useIntl();
   const [name, setName] = useState(role.name);
   const [perms, setPerms] = useState<bigint>(role.permissions);
   const [display, setDisplay] = useState(Boolean(role.display));
@@ -612,8 +750,14 @@ export function RoleEditor({
         // keys, so warn before publishing.
         if (rescoped && savedChannel?.isPrivate) {
           const ok = confirm(
-            `Move this role off #${savedChannel.name}?\n\n` +
-            `It is part of #${savedChannel.name}'s access list. Holders will no longer count as members of the channel, but they keep the key they already have. Rotate the channel's key (community settings, channel access) to cut them off from what's said next.`,
+            t(
+              {
+                id: "rolesView.confirmRescope",
+                defaultMessage:
+                  "Move this role off #{channel}?\n\nIt is part of #{channel}'s access list. Holders will no longer count as members of the channel, but they keep the key they already have. Rotate the channel's key (community settings, channel access) to cut them off from what's said next.",
+              },
+              { channel: savedChannel.name },
+            ),
           );
           if (!ok) return;
         }
@@ -621,8 +765,14 @@ export function RoleEditor({
           !(role.scope.kind === "channel" && role.scope.channelId === scope.channelId);
         if (gainsPrivate && holders > 0) {
           const ok = confirm(
-            `Make this an access role for #${selectedChannel.name}?\n\n` +
-            `Its ${holders === 1 ? "holder" : `${holders} holders`} may read #${selectedChannel.name} from now on, but a save does NOT send them the channel key. Re-grant the role from the member list (or the channel's Add members) to deliver it.`,
+            t(
+              {
+                id: "rolesView.confirmGainsAccess",
+                defaultMessage:
+                  "Make this an access role for #{channel}?\n\n{count, plural, one {Its holder} other {Its # holders}} may read #{channel} from now on, but a save does NOT send them the channel key. Re-grant the role from the member list (or the channel's Add members) to deliver it.",
+              },
+              { channel: selectedChannel.name, count: holders },
+            ),
           );
           if (!ok) return;
         }
@@ -631,12 +781,16 @@ export function RoleEditor({
       className="flex flex-col gap-5"
     >
       <div className="space-y-1.5">
-        <Label htmlFor="role2-name">Role name</Label>
+        <Label htmlFor="role2-name">
+          <FormattedMessage id="rolesView.roleName" defaultMessage="Role name" />
+        </Label>
         <Input id="role2-name" value={name} onChange={(e) => setName(e.target.value)} autoFocus autoComplete="off" />
       </div>
 
       <div className="space-y-1.5">
-        <Label>Colour</Label>
+        <Label>
+          <FormattedMessage id="rolesView.colour" defaultMessage="Colour" />
+        </Label>
         <div className="flex items-center gap-3">
           <ColorPicker
             value={colorToHex(color) ?? DEFAULT_SWATCH}
@@ -647,71 +801,108 @@ export function RoleEditor({
             disabled={saving}
           />
           <span className="flex-1 text-xs text-muted-foreground">
-            {colorToHex(color)
-              ? "Tints the role badge and name."
-              : choseBlack
-                ? "Pure black is the wire value for \u201Ctheme default\u201D \u2014 pick #010101 for a near-black tint."
-                : "Using the theme default."}
+            {colorToHex(color) ? (
+              <FormattedMessage id="rolesView.colourTint" defaultMessage="Tints the role badge and name." />
+            ) : choseBlack ? (
+              <FormattedMessage
+                id="rolesView.colourBlack"
+                defaultMessage="Pure black is the wire value for “theme default” — pick #010101 for a near-black tint."
+              />
+            ) : (
+              <FormattedMessage id="rolesView.colourDefault" defaultMessage="Using the theme default." />
+            )}
           </span>
           {colorToHex(color) && (
             <Button type="button" variant="ghost" size="sm" onClick={() => setColor(0)} disabled={saving}>
-              Reset
+              <FormattedMessage id="rolesView.reset" defaultMessage="Reset" />
             </Button>
           )}
         </div>
       </div>
 
       <div className="space-y-1.5">
-        <Label htmlFor="role2-scope">Scope</Label>
+        <Label htmlFor="role2-scope">
+          <FormattedMessage id="rolesView.scope" defaultMessage="Scope" />
+        </Label>
         <Select value={scopeValue} onValueChange={setScopeValue}>
           <SelectTrigger id="role2-scope">
-            <SelectValue>{onDeletedScope ? <span className="text-muted-foreground">A deleted channel</span> : undefined}</SelectValue>
+            <SelectValue>{onDeletedScope ? <span className="text-muted-foreground">
+                  <FormattedMessage id="rolesView.deletedChannel" defaultMessage="A deleted channel" />
+                </span> : undefined}</SelectValue>
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="server">Entire community</SelectItem>
+            <SelectItem value="server">
+              <FormattedMessage id="rolesView.entireCommunity" defaultMessage="Entire community" />
+            </SelectItem>
             {channels.map((c) => (
               <SelectItem key={c.idHex} value={c.idHex}>
                 <span className="inline-flex items-center gap-1">
                   {c.isPrivate
-                    ? <Lock className="size-3.5 text-muted-foreground" aria-label="Private channel" />
+                    ? <Lock
+                        className="size-3.5 text-muted-foreground"
+                        aria-label={intl.formatMessage({ id: "rolesView.privateChannel", defaultMessage: "Private channel" })}
+                      />
                     : <Hash className="size-3.5 text-muted-foreground" aria-hidden />}
                   {c.name}
-                  {c.isPrivate && <span className="text-xs text-muted-foreground">· grants access</span>}
+                  {c.isPrivate && <span className="text-xs text-muted-foreground">
+                      <FormattedMessage id="rolesView.grantsAccess" defaultMessage="· grants access" />
+                    </span>}
                 </span>
               </SelectItem>
             ))}
           </SelectContent>
         </Select>
         <p className="text-xs text-muted-foreground">
-          {onDeletedScope
-            ? "The channel this role was scoped to has been deleted. Saving keeps the role as it is; pick a scope above to move it."
-            : selectedChannel?.isPrivate
-            ? <>Holders of this role can read <span className="font-medium">#{selectedChannel.name}</span>. Scoping a role to a private channel is how it grants access: granting the role sends the channel key, revoking it rotates the key away.</>
-            : selectedChannel
-              ? "Scoping names the channel this role is about. It does not confine the permission bits below."
-              : "Permissions apply across the whole community."}
+          {onDeletedScope ? (
+            <FormattedMessage
+              id="rolesView.scopeDeleted"
+              defaultMessage="The channel this role was scoped to has been deleted. Saving keeps the role as it is; pick a scope above to move it."
+            />
+          ) : selectedChannel?.isPrivate ? (
+            <FormattedMessage
+              id="rolesView.scopePrivate"
+              defaultMessage="Holders of this role can read <b>#{channel}</b>. Scoping a role to a private channel is how it grants access: granting the role sends the channel key, revoking it rotates the key away."
+              values={{ channel: selectedChannel.name, b: (chunks) => <span className="font-medium">{chunks}</span> }}
+            />
+          ) : selectedChannel ? (
+            <FormattedMessage
+              id="rolesView.scopeChannel"
+              defaultMessage="Scoping names the channel this role is about. It does not confine the permission bits below."
+            />
+          ) : (
+            <FormattedMessage id="rolesView.scopeServer" defaultMessage="Permissions apply across the whole community." />
+          )}
         </p>
       </div>
 
       <label htmlFor="role2-display" className="flex items-start gap-3 cursor-pointer">
         <Checkbox id="role2-display" checked={display} onCheckedChange={(c) => setDisplay(c === true)} className="mt-0.5" />
         <span className="min-w-0">
-          <span className="block text-sm font-medium">Display on member list</span>
-          <span className="block text-xs text-muted-foreground">Group holders under this role's own name in the member panel.</span>
+          <span className="block text-sm font-medium">
+            <FormattedMessage id="rolesView.display" defaultMessage="Display on member list" />
+          </span>
+          <span className="block text-xs text-muted-foreground">
+            <FormattedMessage
+              id="rolesView.displayHint"
+              defaultMessage="Group holders under this role's own name in the member panel."
+            />
+          </span>
         </span>
       </label>
 
       <div className="space-y-2">
-        <Label>Permissions</Label>
+        <Label>
+          <FormattedMessage id="rolesView.permissions" defaultMessage="Permissions" />
+        </Label>
         {selectedChannel && (
           // CORD-04 defines Role `scope` but never applies it (§3/§5), so bits are
           // community-wide; staff bits also mail the `control_root`.
           <p className="rounded-md bg-warning/10 px-3 py-2 text-xs text-warning">
-            These bits are <span className="font-medium">community-wide</span>, not limited to
-            #{selectedChannel.name}. The protocol has no channel-limited permissions. Ticking one
-            of Manage roles, Manage channels, Manage community, Ban, Create invites or Pin messages
-            also makes the holder staff and sends them the community's control key. For access
-            alone, leave every box unchecked.
+            <FormattedMessage
+              id="rolesView.scopeBitsWarning"
+              defaultMessage="These bits are <b>community-wide</b>, not limited to #{channel}. The protocol has no channel-limited permissions. Ticking one of Manage roles, Manage channels, Manage community, Ban, Create invites or Pin messages also makes the holder staff and sends them the community's control key. For access alone, leave every box unchecked."
+              values={{ channel: selectedChannel.name, b: (chunks) => <span className="font-medium">{chunks}</span> }}
+            />
           </p>
         )}
         <div className="space-y-2 rounded-lg bg-secondary/40 p-3">
@@ -722,8 +913,8 @@ export function RoleEditor({
               <label key={id} htmlFor={id} className="flex items-start gap-3 cursor-pointer">
                 <Checkbox id={id} checked={on} onCheckedChange={(c) => toggle(bit, c === true)} className="mt-0.5" />
                 <span className="min-w-0">
-                  <span className="block text-sm font-medium">{label}</span>
-                  <span className="block text-xs text-muted-foreground">{hint}</span>
+                  <span className="block text-sm font-medium">{labelText(intl, label)}</span>
+                  <span className="block text-xs text-muted-foreground">{labelText(intl, hint)}</span>
                 </span>
               </label>
             );
@@ -743,8 +934,11 @@ export function RoleEditor({
             type="button"
             variant="ghost"
             size="icon"
-            aria-label="Revoke role"
-            title="Revoke from every member (Concord cannot delete a role)"
+            aria-label={intl.formatMessage({ id: "rolesView.revokeRole", defaultMessage: "Revoke role" })}
+            title={intl.formatMessage({
+              id: "rolesView.revokeTitle",
+              defaultMessage: "Revoke from every member (Concord cannot delete a role)",
+            })}
             className="text-destructive hover:text-destructive"
             onClick={onRevoke}
             disabled={saving}
@@ -753,10 +947,17 @@ export function RoleEditor({
           </Button>
         )}
         <Button type="button" variant="ghost" className="flex-1" onClick={onCancel} disabled={saving}>
-          Cancel
+          <FormattedMessage {...common.cancel} />
         </Button>
         <Button type="submit" className={cn("flex-1 clip-corner-lg")} disabled={saving}>
-          {saving ? <><Loader2 className="size-4 mr-2 animate-spin" /> Saving...</> : "Save role"}
+          {saving ? (
+            <>
+              <Loader2 className="size-4 mr-2 animate-spin" />{" "}
+              <FormattedMessage id="rolesView.saving" defaultMessage="Saving..." />
+            </>
+          ) : (
+            <FormattedMessage id="rolesView.saveRole" defaultMessage="Save role" />
+          )}
         </Button>
       </div>
     </form>

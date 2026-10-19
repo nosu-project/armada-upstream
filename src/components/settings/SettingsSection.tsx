@@ -4,6 +4,7 @@ import { Link } from "react-router-dom";
 
 import { SettingsPageTitleContext } from "@/components/settings/settingsNav";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { useIntl } from "@/i18n";
 import { cn } from "@/lib/utils";
 
 import type { LucideIcon } from "lucide-react";
@@ -39,14 +40,15 @@ export function SettingsIcon({ icon: Icon, tone = "muted", className }: { icon: 
  * An ⓘ button whose popover holds the long explanation a row would otherwise
  * print. Never place one inside a pressable row: it would nest a button.
  */
-export function InfoTip({ label = "More info", children, className }: { label?: string; children: ReactNode; className?: string }) {
+export function InfoTip({ label, children, className }: { label?: string; children: ReactNode; className?: string }) {
+  const intl = useIntl();
   return (
     <>
       <Popover>
         <PopoverTrigger asChild>
           <button
             type="button"
-            aria-label={label}
+            aria-label={label ?? intl.formatMessage({ id: "settingsSection.moreInfo", defaultMessage: "More info" })}
             className={cn(
               // The hit area grows on touch without moving the layout around it.
               "relative inline-flex size-5 shrink-0 items-center justify-center align-middle text-muted-foreground/70 transition-colors hover:text-foreground focus-visible:outline-none focus-visible:text-foreground touch:after:absolute touch:after:-inset-3",
@@ -81,6 +83,7 @@ interface SettingsGroupProps {
 }
 
 export function SettingsGroup({ id, title, footer, info, bare, children, className }: SettingsGroupProps) {
+  const intl = useIntl();
   const pageTitle = useContext(SettingsPageTitleContext);
   const searchTitle = [pageTitle, typeof title === "string" ? title : ""].filter(Boolean).join(" ");
   return (
@@ -93,7 +96,7 @@ export function SettingsGroup({ id, title, footer, info, bare, children, classNa
       {title && (
         <h3 className="flex items-center gap-1 px-4 text-2xs font-semibold uppercase tracking-wider text-muted-foreground">
           {title}
-          {info && <InfoTip label={typeof title === "string" ? `About ${title.toLowerCase()}` : undefined}>{info}</InfoTip>}
+          {info && <InfoTip label={typeof title === "string" ? intl.formatMessage({ id: "settingsSection.aboutGroup", defaultMessage: "About {title}" }, { title: title.toLowerCase() }) : undefined}>{info}</InfoTip>}
         </h3>
       )}
       <div
@@ -153,6 +156,7 @@ export function SettingsRow({
   stack,
   className,
 }: SettingsRowProps) {
+  const intl = useIntl();
   if (label === undefined) {
     return <div className={cn("px-4 py-3.5", className)}>{children}</div>;
   }
@@ -173,7 +177,7 @@ export function SettingsRow({
         <div className={cn("text-sm font-medium leading-tight", destructive && "text-destructive")}>
           {label}
           {info && !pressable && (
-            <InfoTip label={typeof label === "string" ? `About ${label}` : undefined} className="-my-1 ml-1">{info}</InfoTip>
+            <InfoTip label={typeof label === "string" ? intl.formatMessage({ id: "settingsSection.aboutRow", defaultMessage: "About {label}" }, { label }) : undefined} className="-my-1 ml-1">{info}</InfoTip>
           )}
         </div>
         {description && (

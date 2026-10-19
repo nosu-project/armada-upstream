@@ -10,6 +10,7 @@ import { useCall } from "@/hooks/useCall";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { getAvatarShape, shapedAvatarSpeakingStyle } from "@/lib/avatarShape";
 import { getDisplayName } from "@/lib/getDisplayName";
+import { FormattedMessage, useIntl } from "@/i18n";
 import { cn } from "@/lib/utils";
 
 function ParticipantAvatar({ pubkey, className }: { pubkey: string; className?: string }) {
@@ -39,6 +40,7 @@ function ParticipantName({ pubkey }: { pubkey: string }) {
 
 /** The person is screen sharing; with `onWatch`, a button that tunes into the stream. */
 export function LiveBadge({ onWatch, className }: { onWatch?: () => void; className?: string }) {
+  const intl = useIntl();
   const cls = cn(
     "shrink-0 inline-flex items-center gap-1 rounded-sm bg-destructive px-1.5 h-4 text-3xs font-bold tracking-wide text-destructive-foreground",
     className,
@@ -46,12 +48,12 @@ export function LiveBadge({ onWatch, className }: { onWatch?: () => void; classN
   const content = (
     <>
       <ScreenShare className="size-3" aria-hidden />
-      LIVE
+      <FormattedMessage id="voicePresence.live" defaultMessage="LIVE" />
     </>
   );
   if (!onWatch) {
     return (
-      <span className={cls} aria-label="Streaming">
+      <span className={cls} aria-label={intl.formatMessage({ id: "voicePresence.streaming", defaultMessage: "Streaming" })}>
         {content}
       </span>
     );
@@ -64,8 +66,8 @@ export function LiveBadge({ onWatch, className }: { onWatch?: () => void; classN
         e.stopPropagation();
         onWatch();
       }}
-      aria-label="Watch stream"
-      title="Watch stream"
+      aria-label={intl.formatMessage({ id: "voicePresence.watchStream", defaultMessage: "Watch stream" })}
+      title={intl.formatMessage({ id: "voicePresence.watchStream", defaultMessage: "Watch stream" })}
       className={cn(cls, "cursor-pointer hover:bg-destructive/85 touch:h-6 touch:px-2")}
     >
       {content}
@@ -97,11 +99,12 @@ export function VoiceParticipantList({
   raised?: ReadonlySet<string>;
   className?: string;
 }) {
+  const intl = useIntl();
   if (participants.length === 0) return null;
   // Sort so rows don't reshuffle as presence/LiveKit events land.
   const sorted = [...participants].sort();
   return (
-    <div className={cn("flex flex-col pb-0.5", className)} aria-label={`${participants.length} in voice`}>
+    <div className={cn("flex flex-col pb-0.5", className)} aria-label={intl.formatMessage({ id: "voicePresence.inVoice", defaultMessage: "{count} in voice" }, { count: participants.length })}>
       {sorted.map((pk) => (
         <VoiceParticipantRow
           key={pk}
@@ -130,6 +133,7 @@ function VoiceParticipantRow({
   isStreaming?: boolean;
   isRaised?: boolean;
 }) {
+  const intl = useIntl();
   const author = useAuthor(pubkey);
   const { user } = useCurrentUser();
   const metadata = author.data?.metadata;
@@ -165,13 +169,13 @@ function VoiceParticipantRow({
         {isRaised && (
           <Hand
             className="size-3.5 shrink-0 text-warning"
-            aria-label="Hand raised"
+            aria-label={intl.formatMessage({ id: "voicePresence.handRaised", defaultMessage: "Hand raised" })}
           />
         )}
         {isMuted && (
           <MicOff
             className="size-3.5 shrink-0 text-destructive"
-            aria-label="Muted"
+            aria-label={intl.formatMessage({ id: "voicePresence.muted", defaultMessage: "Muted" })}
           />
         )}
         {/* Hover-revealed on pointer devices, always visible on touch. */}
@@ -196,6 +200,7 @@ export function VoicePresence({
   max?: number;
   className?: string;
 }) {
+  const intl = useIntl();
   if (participants.length === 0) return null;
   const shown = participants.slice(0, max);
   const overflow = participants.length - shown.length;
@@ -205,7 +210,7 @@ export function VoicePresence({
       <TooltipTrigger asChild>
         <span
           className={cn("flex items-center shrink-0 text-success", className)}
-          aria-label={`${participants.length} in voice`}
+          aria-label={intl.formatMessage({ id: "voicePresence.inVoice", defaultMessage: "{count} in voice" }, { count: participants.length })}
         >
           <Headphones className="size-3.5 mr-1" />
           <span className="flex -space-x-1.5">
@@ -222,7 +227,7 @@ export function VoicePresence({
       </TooltipTrigger>
       <TooltipContent className="max-w-48">
         <div className="text-xs font-semibold mb-0.5">
-          {participants.length} in voice
+          <FormattedMessage id="voicePresence.inVoice" defaultMessage="{count} in voice" values={{ count: participants.length }} />
         </div>
         {participants.map((pk) => (
           <ParticipantName key={pk} pubkey={pk} />

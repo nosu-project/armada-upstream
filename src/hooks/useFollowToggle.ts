@@ -5,6 +5,7 @@ import { useFollowActions } from "@/hooks/useFollowActions";
 import { useFollowList } from "@/hooks/useFollowList";
 import { toast } from "@/hooks/useToast";
 import { impact } from "@/lib/haptics";
+import { t } from "@/i18n";
 
 /** Backs the profile card's unfollow menu entry. */
 export function useFollowToggle(pubkey: string) {
@@ -28,16 +29,16 @@ export function useFollowToggle(pubkey: string) {
       if (isFollowing) {
         await unfollow(pubkey);
         impact("medium");
-        toast({ title: "Unfollowed" });
+        toast({ title: t({ id: "useFollowToggle.unfollowed", defaultMessage: "Unfollowed" }) });
       } else {
         await follow(pubkey);
         impact("medium");
-        toast({ title: "Followed" });
+        toast({ title: t({ id: "useFollowToggle.followed", defaultMessage: "Followed" }) });
       }
     } catch (err) {
       console.error("Follow toggle failed:", err);
       toast({
-        title: "Failed to update follow list",
+        title: t({ id: "useFollowToggle.failed", defaultMessage: "Failed to update follow list" }),
         description: err instanceof Error ? err.message : undefined,
         variant: "destructive",
       });

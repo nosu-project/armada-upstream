@@ -8,6 +8,7 @@
  * No ambient authority either. Stored in `sessionStorage` (dies with the tab).
  */
 
+import { t } from "@/i18n";
 import { bridgePortalUrl } from "@/lib/platform";
 
 const TOKEN_KEY = "armada:bridge-portal-token";
@@ -45,7 +46,7 @@ export function setBridgeToken(token: string | null): void {
 /** One JSON call against the portal; throws {@link BridgeApiError} with the portal's human-readable `error`. */
 export async function bridgeApi<T>(path: string, init?: RequestInit): Promise<T> {
   const base = bridgePortalUrl("/");
-  if (!base) throw new BridgeApiError("This build has no Discord bridge portal configured.", 0);
+  if (!base) throw new BridgeApiError(t({ id: "bridgeApi.notConfigured", defaultMessage: "This build has no Discord bridge portal configured." }), 0);
 
   const token = bridgeToken();
   let res: Response;
@@ -59,7 +60,7 @@ export async function bridgeApi<T>(path: string, init?: RequestInit): Promise<T>
       },
     });
   } catch {
-    throw new BridgeApiError("Couldn't reach the bridge portal. Check your connection.", 0);
+    throw new BridgeApiError(t({ id: "bridgeApi.unreachable", defaultMessage: "Couldn't reach the bridge portal. Check your connection." }), 0);
   }
 
   const body = (await res.json().catch(() => ({}))) as T & { error?: string };
@@ -180,14 +181,14 @@ export const rerunImportHistory = (importId: string) =>
  */
 export function connectDiscord({ timeoutMs = 5 * 60_000, pollMs = 2_000, closeGraceMs = 15_000 } = {}): Promise<void> {
   const base = bridgePortalUrl("/");
-  if (!base) return Promise.reject(new BridgeApiError("This build has no Discord bridge portal configured.", 0));
+  if (!base) return Promise.reject(new BridgeApiError(t({ id: "bridgeApi.notConfigured", defaultMessage: "This build has no Discord bridge portal configured." }), 0));
 
   const nonce = Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, "0")).join("");
   const url = `${base}/api/auth/discord?mode=popup&origin=${encodeURIComponent(window.location.origin)}&nonce=${nonce}`;
   const popup = window.open(url, "armada-bridge-discord", "width=520,height=780,menubar=no,toolbar=no");
   if (!popup) {
     return Promise.reject(
-      new BridgeApiError("Your browser blocked the Discord sign-in window. Allow popups and try again.", 0),
+      new BridgeApiError(t({ id: "bridgeApi.popupBlocked", defaultMessage: "Your browser blocked the Discord sign-in window. Allow popups and try again." }), 0),
     );
   }
 
@@ -247,14 +248,14 @@ export function connectDiscord({ timeoutMs = 5 * 60_000, pollMs = 2_000, closeGr
         return;
       }
       if (Date.now() - closedAt >= closeGraceMs) {
-        finish(() => reject(new BridgeApiError("Discord sign-in was cancelled.", 0)));
+        finish(() => reject(new BridgeApiError(t({ id: "bridgeApi.signInCancelled", defaultMessage: "Discord sign-in was cancelled." }), 0)));
       }
     }, 500);
 
     const timer = setTimeout(() => {
       finish(() => {
         popup.close();
-        reject(new BridgeApiError("Discord sign-in timed out.", 0));
+        reject(new BridgeApiError(t({ id: "bridgeApi.signInTimedOut", defaultMessage: "Discord sign-in timed out." }), 0));
       });
     }, timeoutMs);
   });

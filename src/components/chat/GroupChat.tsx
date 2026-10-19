@@ -1,5 +1,5 @@
 import { Hash, Loader2, Search } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useLocation } from "react-router-dom";
 
 import { ChatComposer } from "@/components/chat/ChatComposer";
@@ -46,6 +46,7 @@ import { threadSummary } from "@/components/chat/transport";
 import type { ChatMsg, ChatTransport, MessageCalendar } from "@/components/chat/transport";
 import { useChatEditing } from "@/components/chat/useChatEditing";
 import type { CalendarTransport } from "@/lib/calendar";
+import { FormattedMessage, t, useIntl } from "@/i18n";
 import type { NostrEvent } from "@nostrify/nostrify";
 
 /**
@@ -239,6 +240,7 @@ interface GroupChatProps {
  * relay only), assembled into a {@link ChatTransport} for the shared components.
  */
 export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = false, canModerate, calendar, searchQuery = "" }: GroupChatProps) {
+  const intl = useIntl();
   const { user } = useCurrentUser();
   const isTouch = useIsTouch();
   const location = useLocation();
@@ -377,7 +379,12 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
       if (action.kind === "openThread") {
         const latest = messages[messages.length - 1];
         if (latest) openThread(latest, true);
-        else toast({ title: "No message to thread", description: "Send a message first." });
+        else {
+          toast({
+            title: t({ id: "groupChat.noMessageToThread", defaultMessage: "No message to thread" }),
+            description: t({ id: "groupChat.sendFirst", defaultMessage: "Send a message first." }),
+          });
+        }
         return;
       }
       if (action.kind === "kick" || action.kind === "ban") {
@@ -385,7 +392,10 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
           pubkey: action.pubkey,
           reason: action.kind === "ban" ? action.reason : undefined,
         });
-        toast({ title: "User removed", description: "The user was removed from the channel." });
+        toast({
+          title: t({ id: "groupChat.userRemoved", defaultMessage: "User removed" }),
+          description: t({ id: "groupChat.userRemovedDescription", defaultMessage: "The user was removed from the channel." }),
+        });
       }
     },
     [removeUser, messages, openThread],
@@ -424,8 +434,10 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
         else await pin(event.id);
       } catch {
         toast({
-          title: pinned ? "Couldn't unpin" : "Couldn't pin",
-          description: "The relay rejected the change.",
+          title: pinned
+            ? t({ id: "groupChat.unpinFailed", defaultMessage: "Couldn't unpin" })
+            : t({ id: "groupChat.pinFailed", defaultMessage: "Couldn't pin" }),
+          description: t({ id: "groupChat.relayRejected", defaultMessage: "The relay rejected the change." }),
           variant: "destructive",
         });
       }
@@ -550,12 +562,18 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
             ) : searchResults.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-16 text-center">
                 <Search className="size-9 text-muted-foreground/40 mb-3" />
-                <p className="text-sm text-muted-foreground">No messages found</p>
+                <p className="text-sm text-muted-foreground">
+                  <FormattedMessage id="groupChat.noResults" defaultMessage="No messages found" />
+                </p>
               </div>
             ) : (
               <>
                 <p className="px-2 pb-1 text-2xs uppercase tracking-wide text-muted-foreground/80">
-                  {searchResults.length} result{searchResults.length === 1 ? "" : "s"}
+                  <FormattedMessage
+                    id="groupChat.resultCount"
+                    defaultMessage="{count, plural, one {# result} other {# results}}"
+                    values={{ count: searchResults.length }}
+                  />
                 </p>
                 {[...searchResults]
                   .sort((a, b) => a.created_at - b.created_at)
@@ -589,7 +607,9 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
             emptyState={
               <div className="flex flex-col items-center justify-center py-16 text-center">
                 <Hash className="size-10 text-muted-foreground/40 mb-3" />
-                <p className="text-sm text-muted-foreground">No messages yet</p>
+                <p className="text-sm text-muted-foreground">
+                  <FormattedMessage id="groupChat.empty" defaultMessage="No messages yet" />
+                </p>
               </div>
             }
             renderMessage={(msg, continuation) => (
@@ -622,7 +642,9 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
             // Built from the group's identity (as `recordSent` does), not the location.
             shareRoute={chatRoute({ kind: "nip29", relayUrl, groupId })}
             replyTo={replyTo}
-            placeholder={channelName ? `Message ${channelName}` : undefined}
+            placeholder={channelName
+              ? intl.formatMessage({ id: "groupChat.placeholder", defaultMessage: "Message {channel}" }, { channel: channelName })
+              : undefined}
             // Android Direct Share label; the publisher can't resolve NIP-29 metadata.
             shareLabel={channelName}
             shareIconUrl={groupDetails?.group?.picture}
@@ -645,18 +667,26 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
           <div className="border-t p-3 shrink-0 pb-safe">
             {user ? (
               <p className="text-xs text-muted-foreground text-center py-1">
-                Join this channel to send messages.
+                <FormattedMessage id="groupChat.joinToSend" defaultMessage="Join this channel to send messages." />
               </p>
             ) : (
               <p className="text-xs text-muted-foreground text-center py-1 flex items-center justify-center gap-1.5 flex-wrap">
-                <Button
-                  size="sm"
-                  onClick={() => setJoinDialogOpen(true)}
-                  className="clip-corner-lg h-7 touch:h-10 px-4"
-                >
-                  Join
-                </Button>
-                <span>to be a part of the chat</span>
+                <FormattedMessage
+                  id="groupChat.joinPrompt"
+                  defaultMessage="<join>Join</join> <text>to be a part of the chat</text>"
+                  values={{
+                    join: (chunks: ReactNode[]) => (
+                      <Button
+                        size="sm"
+                        onClick={() => setJoinDialogOpen(true)}
+                        className="clip-corner-lg h-7 touch:h-10 px-4"
+                      >
+                        {chunks}
+                      </Button>
+                    ),
+                    text: (chunks: ReactNode[]) => <span>{chunks}</span>,
+                  }}
+                />
               </p>
             )}
           </div>

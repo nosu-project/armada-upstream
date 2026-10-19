@@ -5,12 +5,14 @@ import { MessageMenuItems } from "@/components/chat/MessageMenuItems";
 import { usePointerOpened } from "@/components/chat/usePointerOpened";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useIntl } from "@/i18n";
 
 import type { MessageActionItem } from "@/components/chat/messageActions";
 
 /** The desktop toolbar's `⋯`: everything not worth a dedicated button. */
 export function MessageOverflowMenu({ actions }: { actions: MessageActionItem[] }) {
   const pointerOpened = usePointerOpened();
+  const intl = useIntl();
   if (actions.length === 0) return null;
 
   return (
@@ -21,7 +23,7 @@ export function MessageOverflowMenu({ actions }: { actions: MessageActionItem[] 
             <Button
               variant="ghost"
               size="icon"
-              aria-label="More actions"
+              aria-label={intl.formatMessage({ id: "messageOverflowMenu.moreActions", defaultMessage: "More actions" })}
               {...pointerOpened.triggerProps}
               className="size-9 md:size-7 touch:size-11 touch:md:size-11 text-muted-foreground hover:text-primary"
             >
@@ -29,7 +31,9 @@ export function MessageOverflowMenu({ actions }: { actions: MessageActionItem[] 
             </Button>
           </DropdownMenuTrigger>
         </TooltipTrigger>
-        <TooltipContent>More actions</TooltipContent>
+        <TooltipContent>
+          {intl.formatMessage({ id: "messageOverflowMenu.moreActions", defaultMessage: "More actions" })}
+        </TooltipContent>
       </Tooltip>
       <DropdownMenuContent align="end" className="w-52" onCloseAutoFocus={pointerOpened.onCloseAutoFocus}>
         <MessageMenuItems actions={actions} />

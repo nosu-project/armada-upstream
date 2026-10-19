@@ -5,6 +5,7 @@ import { createPortal } from "react-dom";
 import { WebxdcApp } from "@/components/apps/WebxdcApp";
 import { Watchalong } from "@/components/apps/Watchalong";
 import { Button } from "@/components/ui/button";
+import { FormattedMessage, useIntl } from "@/i18n";
 import { useConcordAppSync } from "@/concord/hooks/useConcordAppSync";
 import { useDmAppSync } from "@/hooks/useDmAppSync";
 import { useGroupAppSync } from "@/hooks/useGroupAppSync";
@@ -18,11 +19,17 @@ import {
 } from "@/contexts/AppsContext";
 import type { AppSync } from "@/hooks/useWebxdcApi";
 
-function appHeader(app: AppKind): { label: string; icon: React.ReactNode } {
+function appHeader(app: AppKind): { label: React.ReactNode; icon: React.ReactNode } {
   if (app.type === "youtube") {
-    return { label: "Watch together", icon: <MonitorPlay className="size-3 text-primary" /> };
+    return {
+      label: <FormattedMessage id="appsProvider.watchTogether" defaultMessage="Watch together" />,
+      icon: <MonitorPlay className="size-3 text-primary" />,
+    };
   }
-  return { label: app.name ?? "Webxdc app", icon: <Blocks className="size-3 text-primary" /> };
+  return {
+    label: app.name ?? <FormattedMessage id="appsProvider.webxdcApp" defaultMessage="Webxdc app" />,
+    icon: <Blocks className="size-3 text-primary" />,
+  };
 }
 
 function AppSurface({ app, sessionId, sync }: { app: AppKind; sessionId: string; sync: AppSync }) {
@@ -86,6 +93,7 @@ function RunningApp({
   onClose: () => void;
   onToggle: () => void;
 }) {
+  const intl = useIntl();
   const { label, icon } = appHeader(active.app);
 
   const renderStage = (sync: AppSync) => {
@@ -100,7 +108,11 @@ function RunningApp({
               variant="ghost"
               size="icon"
               className="size-6 touch:size-10 text-muted-foreground"
-              aria-label={stageOpen ? "Minimize app" : "Expand app"}
+              aria-label={
+                stageOpen
+                  ? intl.formatMessage({ id: "appsProvider.minimize", defaultMessage: "Minimize app" })
+                  : intl.formatMessage({ id: "appsProvider.expand", defaultMessage: "Expand app" })
+              }
               onClick={onToggle}
             >
               {stageOpen ? <Minimize2 className="size-3.5" /> : <Maximize2 className="size-3.5" />}
@@ -109,7 +121,7 @@ function RunningApp({
               variant="ghost"
               size="icon"
               className="size-6 touch:size-10 text-muted-foreground"
-              aria-label="Close app"
+              aria-label={intl.formatMessage({ id: "appsProvider.close", defaultMessage: "Close app" })}
               onClick={onClose}
             >
               <X className="size-3.5" />

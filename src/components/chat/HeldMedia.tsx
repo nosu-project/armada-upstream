@@ -2,6 +2,7 @@ import { EyeOff } from "lucide-react";
 
 import { useMediaHoldMode, useTrustMediaHost } from "@/components/chat/mediaHold";
 import { Button } from "@/components/ui/button";
+import { FormattedMessage, useIntl } from "@/i18n";
 
 import type { MouseEvent, PointerEvent } from "react";
 
@@ -26,20 +27,30 @@ export function HeldMedia({
   host?: string;
   onLoad: () => void;
 }) {
+  const intl = useIntl();
   const mode = useMediaHoldMode();
   const trustHost = useTrustMediaHost();
-  const noun = kind === "video" ? "Video" : kind === "audio" ? "Audio" : count > 1 ? `${count} images` : "Image";
+  const values = { kind, count: count > 1 ? count : 1, host };
 
   let title: string;
   let detail: string | undefined;
   if (host) {
-    title = `${noun} on ${host}`;
+    title = intl.formatMessage(
+      { id: "heldMedia.onHost", defaultMessage: "{kind, select, video {Video on {host}} audio {Audio on {host}} other {{count, plural, one {Image on {host}} other {# images on {host}}}}}" },
+      values,
+    );
   } else if (mode === "never") {
-    title = `${noun} not loaded`;
-    detail = "You load community media yourself.";
+    title = intl.formatMessage(
+      { id: "heldMedia.notLoaded", defaultMessage: "{kind, select, video {Video not loaded} audio {Audio not loaded} other {{count, plural, one {Image not loaded} other {# images not loaded}}}}" },
+      values,
+    );
+    detail = intl.formatMessage({ id: "heldMedia.notLoadedDetail", defaultMessage: "You load community media yourself." });
   } else {
-    title = `${noun} from a new member`;
-    detail = "Loads on its own once they've been around a day.";
+    title = intl.formatMessage(
+      { id: "heldMedia.newMember", defaultMessage: "{kind, select, video {Video from a new member} audio {Audio from a new member} other {{count, plural, one {Image from a new member} other {# images from a new member}}}}" },
+      values,
+    );
+    detail = intl.formatMessage({ id: "heldMedia.newMemberDetail", defaultMessage: "Loads on its own once they've been around a day." });
   }
 
   return (
@@ -57,7 +68,7 @@ export function HeldMedia({
             }}
             onPointerDown={stopPointer}
           >
-            Always load from {host}
+            <FormattedMessage id="heldMedia.alwaysLoad" defaultMessage="Always load from {host}" values={{ host }} />
           </button>
         ) : (
           detail && <div className="text-xs leading-snug text-muted-foreground">{detail}</div>
@@ -74,7 +85,7 @@ export function HeldMedia({
         }}
         onPointerDown={stopPointer}
       >
-        Load
+        <FormattedMessage id="heldMedia.load" defaultMessage="Load" />
       </Button>
     </div>
   );
@@ -93,7 +104,7 @@ export function HeldPreviews({ onLoad }: { onLoad: () => void }) {
       onPointerDown={stopPointer}
     >
       <EyeOff className="size-3.5" aria-hidden />
-      Load previews
+      <FormattedMessage id="heldMedia.loadPreviews" defaultMessage="Load previews" />
     </button>
   );
 }

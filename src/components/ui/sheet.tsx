@@ -4,6 +4,7 @@ import { X } from "lucide-react"
 import * as React from "react"
 
 import { useBackDismiss } from "@/hooks/useAndroidBack"
+import { common, FormattedMessage } from "@/i18n"
 import { cn } from "@/lib/utils"
 
 const Sheet = (props: React.ComponentProps<typeof SheetPrimitive.Root>) => (
@@ -77,7 +78,7 @@ const SheetContent = React.forwardRef<
         style={{ top: `calc(var(--safe-area-inset-top, env(safe-area-inset-top, 0px)) + 0.85rem)` }}
       >
         <X className={side === "left" ? "h-5 w-5 text-white" : "h-4 w-4 touch:h-5 touch:w-5"} strokeWidth={side === "left" ? 2.5 : 2} />
-        <span className="sr-only">Close</span>
+        <span className="sr-only"><FormattedMessage {...common.close} /></span>
       </SheetPrimitive.Close>
     </SheetPrimitive.Content>
   </SheetPortal>

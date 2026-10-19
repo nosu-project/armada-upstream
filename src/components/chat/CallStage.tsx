@@ -59,6 +59,7 @@ import {
   type PlaybackVolumeTarget,
 } from "@/components/VoiceUserContextMenu";
 import { useAuthor } from "@/hooks/useAuthor";
+import { defineMessages, FormattedMessage, useIntl } from "@/i18n";
 import { useCall } from "@/hooks/useCall";
 import { useVoiceActivity } from "@/hooks/useVoiceActivity";
 import { useScreenShareVolume, useUserVolume } from "@/hooks/useUserVolume";
@@ -327,6 +328,15 @@ function usePrimaryFloatingKey(args: {
   return screenShareKey ?? focusKey ?? heldSpeaker ?? speakingKey ?? fallbackKey;
 }
 
+const msg = defineMessages({
+  showDetails: { id: "callStage.showDetails", defaultMessage: "Show stream details" },
+  exitFullscreen: { id: "callStage.exitFullscreen", defaultMessage: "Exit fullscreen" },
+  viewFullscreen: { id: "callStage.viewFullscreen", defaultMessage: "View stream fullscreen" },
+  handRaised: { id: "callStage.handRaised", defaultMessage: "Hand raised" },
+  call: { id: "callStage.call", defaultMessage: "Call" },
+  connecting: { id: "callStage.connecting", defaultMessage: "Connecting…" },
+});
+
 /**
  * Display name with Concord's verification race (CORD-07 §4): LiveKit and the
  * presence claim arrive separately, so show "Verifying…" during a grace window
@@ -345,6 +355,7 @@ function useTileDisplayName(participant: Participant): {
   const author = useAuthor(verified ? pubkey : undefined);
   const metadata = author.data?.metadata;
   const scopedName = useScopedDisplayName(pubkey, metadata);
+  const intl = useIntl();
 
   const mountedAt = useRef(Date.now());
   const anchor =
@@ -361,7 +372,11 @@ function useTileDisplayName(participant: Participant): {
 
   return {
     pubkey,
-    displayName: verified ? scopedName : inGrace ? "Verifying…" : "Unverified",
+    displayName: verified
+      ? scopedName
+      : inGrace
+        ? intl.formatMessage({ id: "callStage.verifying", defaultMessage: "Verifying…" })
+        : intl.formatMessage({ id: "callStage.unverified", defaultMessage: "Unverified" }),
     verified,
     metadata,
     imeta: author.data?.imeta,
@@ -406,14 +421,16 @@ function VolumeMenu({
   const volume = target === "screenShare" ? screenShareVolume : userVolume;
   const setVolume = target === "screenShare" ? setScreenShareVolume : setUserVolume;
   const pct = Math.round(volume * 100);
+  const intl = useIntl();
+  const name = <DisplayName pubkey={verified ? pubkey : undefined} name={displayName} />;
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <button
           type="button"
           aria-label={target === "screenShare"
-            ? `Screen share volume for ${displayName}`
-            : `Volume for ${displayName}`}
+            ? intl.formatMessage({ id: "callStage.screenShareVolumeFor", defaultMessage: "Screen share volume for {name}" }, { name: displayName })
+            : intl.formatMessage({ id: "callStage.volumeFor", defaultMessage: "Volume for {name}" }, { name: displayName })}
           className={cn(
             nameplateClass,
             "cursor-pointer transition-[bottom] hover:bg-black/80",
@@ -426,8 +443,11 @@ function VolumeMenu({
       <DropdownMenuContent align="start" className="w-56 p-3">
         <div className="flex items-center justify-between gap-2 mb-2">
           <span className="text-sm font-medium truncate">
-            <DisplayName pubkey={verified ? pubkey : undefined} name={displayName} />
-            {target === "screenShare" && "'s screen share"}
+            {target === "screenShare" ? (
+              <FormattedMessage id="callStage.screenShareOf" defaultMessage="{name}'s screen share" values={{ name }} />
+            ) : (
+              name
+            )}
           </span>
           <span className="text-xs text-muted-foreground tabular-nums">{pct}%</span>
         </div>
@@ -465,11 +485,12 @@ function BlurredAvatarBackdrop({ picture, imeta }: { picture?: string; imeta?: I
 /** Raised-hand badge on a tile (Concord calls only). */
 function RaisedHandBadge({ pubkey }: { pubkey: string }) {
   const { raisedHands } = useVoiceActivity();
+  const intl = useIntl();
   if (!raisedHands.has(pubkey)) return null;
   return (
     <div
       className="absolute top-1.5 left-1.5 z-10 flex items-center justify-center rounded-md bg-warning text-warning-foreground size-6 shadow-md animate-in fade-in-0 zoom-in-75"
-      aria-label="Hand raised"
+      aria-label={intl.formatMessage(msg.handRaised)}
     >
       <Hand className="size-3.5" />
     </div>
@@ -603,6 +624,7 @@ function VideoTile({
 }) {
   const participant = trackRef.participant;
   const { pubkey, displayName, verified, metadata, imeta } = useTileDisplayName(participant);
+  const intl = useIntl();
   const shape = getAvatarShape(metadata);
   const isScreenShare = trackRef.source === Track.Source.ScreenShare;
   const { enabled: endToEndEncrypted } = useCallSignals();
@@ -712,15 +734,15 @@ function VideoTile({
           className="absolute top-1.5 left-1.5 z-10 inline-flex items-center gap-1 rounded-md bg-black/60 px-1.5 py-1 text-xs text-white/90 opacity-0 transition-opacity hover:bg-black/80 hover:text-white group-hover:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100"
         >
           <EyeOff className="size-3.5" />
-          Stop watching
+          <FormattedMessage id="callStage.stopWatching" defaultMessage="Stop watching" />
         </button>
       )}
       {isScreenShare && (
         <>
           <button
             type="button"
-            aria-label="Show stream details"
-            title="Show stream details"
+            aria-label={intl.formatMessage(msg.showDetails)}
+            title={intl.formatMessage(msg.showDetails)}
             onClick={openDetails}
             className="absolute top-1.5 right-[4.625rem] rounded-md bg-black/60 p-1 text-white/90 opacity-0 transition-opacity hover:bg-black/80 hover:text-white group-hover:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100"
           >
@@ -729,8 +751,8 @@ function VideoTile({
           {fullscreenAvailable && (
             <button
               type="button"
-              aria-label={fullscreen ? "Exit fullscreen" : "View stream fullscreen"}
-              title={fullscreen ? "Exit fullscreen" : "View stream fullscreen"}
+              aria-label={intl.formatMessage(fullscreen ? msg.exitFullscreen : msg.viewFullscreen)}
+              title={intl.formatMessage(fullscreen ? msg.exitFullscreen : msg.viewFullscreen)}
               onClick={toggleFullscreen}
               className="absolute top-1.5 right-10 rounded-md bg-black/60 p-1 text-white/90 opacity-0 transition-opacity hover:bg-black/80 hover:text-white group-hover:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100"
             >
@@ -836,6 +858,7 @@ function LocalHevcScreenShareTile({
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const [fullscreenControlsVisible, setFullscreenControlsVisible] = useState(false);
+  const intl = useIntl();
   const inheritedPortalContainer = usePortalContainer();
   const fullscreenAvailable = supportsElementFullscreen();
   useFullscreenControlsAutoHide(tileRef.current, fullscreen, setFullscreenControlsVisible);
@@ -890,8 +913,8 @@ function LocalHevcScreenShareTile({
         <video ref={videoRef} autoPlay muted playsInline className="h-full w-full object-contain" />
         <button
           type="button"
-          aria-label="Show stream details"
-          title="Show stream details"
+          aria-label={intl.formatMessage(msg.showDetails)}
+          title={intl.formatMessage(msg.showDetails)}
           onClick={openDetails}
           className="absolute top-1.5 right-[4.625rem] rounded-md bg-black/60 p-1 text-white/90 opacity-0 transition-opacity hover:bg-black/80 hover:text-white group-hover:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100"
         >
@@ -900,8 +923,8 @@ function LocalHevcScreenShareTile({
         {fullscreenAvailable && (
           <button
             type="button"
-            aria-label={fullscreen ? "Exit fullscreen" : "View stream fullscreen"}
-            title={fullscreen ? "Exit fullscreen" : "View stream fullscreen"}
+            aria-label={intl.formatMessage(fullscreen ? msg.exitFullscreen : msg.viewFullscreen)}
+            title={intl.formatMessage(fullscreen ? msg.exitFullscreen : msg.viewFullscreen)}
             onClick={toggleFullscreen}
             className="absolute top-1.5 right-10 rounded-md bg-black/60 p-1 text-white/90 opacity-0 transition-opacity hover:bg-black/80 hover:text-white group-hover:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100"
           >
@@ -917,7 +940,9 @@ function LocalHevcScreenShareTile({
           )}
         >
           <ScreenShare className="size-3 shrink-0" />
-          <span className="truncate">Your screen (H.265)</span>
+          <span className="truncate">
+            <FormattedMessage id="callStage.yourScreenHevc" defaultMessage="Your screen (H.265)" />
+          </span>
         </div>
         {fullscreen && (
           <div
@@ -940,7 +965,7 @@ function LocalHevcScreenShareTile({
         open={detailsOpen}
         portalContainer={portalContainer}
         encrypted={encrypted}
-        participantName="your screen"
+        participantName={intl.formatMessage({ id: "callStage.yourScreenLower", defaultMessage: "your screen" })}
         nativeHevcStatus={status}
         onOpenChange={setDetailsOpen}
       />
@@ -949,10 +974,15 @@ function LocalHevcScreenShareTile({
 }
 
 function FocusButton({ focused, onClick }: { focused: boolean; onClick: () => void }) {
+  const intl = useIntl();
   return (
     <button
       type="button"
-      aria-label={focused ? "Exit focus" : "Focus this tile"}
+      aria-label={
+        focused
+          ? intl.formatMessage({ id: "callStage.exitFocus", defaultMessage: "Exit focus" })
+          : intl.formatMessage({ id: "callStage.focusTile", defaultMessage: "Focus this tile" })
+      }
       onClick={onClick}
       className={cn(
         "absolute top-1.5 right-1.5 rounded-md bg-black/60 p-1 text-white/90 hover:bg-black/80 hover:text-white",
@@ -984,7 +1014,7 @@ function StreamInviteTile({ participant, owner }: { participant: Participant; ow
         className="relative inline-flex items-center gap-1.5 rounded-md bg-primary px-3 h-8 touch:h-11 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors"
       >
         <ScreenShare className="size-4" />
-        Watch stream
+        <FormattedMessage id="callStage.watchStream" defaultMessage="Watch stream" />
       </button>
     </div>
   );
@@ -1096,6 +1126,9 @@ function ShareSelector({
 }) {
   const { pubkey: sharer, label } = useShareSharerLabel(participant);
   const stop = (e: React.SyntheticEvent) => e.stopPropagation();
+  const intl = useIntl();
+  const prevLabel = intl.formatMessage({ id: "callStage.prevShare", defaultMessage: "Previous screen share" });
+  const nextLabel = intl.formatMessage({ id: "callStage.nextShare", defaultMessage: "Next screen share" });
   return (
     <div
       className="absolute top-1.5 left-1.5 flex items-center gap-1 rounded-md bg-black/70 px-1 py-0.5 text-2xs text-white"
@@ -1105,8 +1138,8 @@ function ShareSelector({
     >
       <button
         type="button"
-        aria-label="Previous screen share"
-        title="Previous screen share"
+        aria-label={prevLabel}
+        title={prevLabel}
         onPointerDown={stop}
         onClick={(e) => {
           e.stopPropagation();
@@ -1127,8 +1160,8 @@ function ShareSelector({
       </span>
       <button
         type="button"
-        aria-label="Next screen share"
-        title="Next screen share"
+        aria-label={nextLabel}
+        title={nextLabel}
         onPointerDown={stop}
         onClick={(e) => {
           e.stopPropagation();
@@ -1152,9 +1185,12 @@ function useShareSharerLabel(participant: Participant | null): {
   const { pubkey, verified } = resolve(identity);
   const author = useAuthor(verified ? pubkey : undefined);
   const scopedName = useScopedDisplayName(pubkey, author.data?.metadata);
+  const intl = useIntl();
   if (!participant) return { label: "" };
-  if (participant.isLocal) return { label: "Your screen" };
-  return verified ? { pubkey, label: scopedName } : { label: "Screen share" };
+  if (participant.isLocal) return { label: intl.formatMessage({ id: "callStage.yourScreen", defaultMessage: "Your screen" }) };
+  return verified
+    ? { pubkey, label: scopedName }
+    : { label: intl.formatMessage({ id: "callStage.screenShare", defaultMessage: "Screen share" }) };
 }
 
 /**
@@ -1214,10 +1250,14 @@ function CallStatus({ calling, since }: { calling: boolean; since: number }) {
     connectionState === ConnectionState.Reconnecting ||
     (rejoining && connectionState !== ConnectionState.Connected)
   ) {
-    return <span className="text-warning">Reconnecting…</span>;
+    return (
+      <span className="text-warning">
+        <FormattedMessage id="callStage.reconnecting" defaultMessage="Reconnecting…" />
+      </span>
+    );
   }
-  if (connectionState === ConnectionState.Connecting) return <span>Connecting…</span>;
-  if (calling) return <span>Calling…</span>;
+  if (connectionState === ConnectionState.Connecting) return <span><FormattedMessage {...msg.connecting} /></span>;
+  if (calling) return <span><FormattedMessage id="callStage.calling" defaultMessage="Calling…" /></span>;
   return <CallClock since={since} />;
 }
 
@@ -1276,6 +1316,7 @@ function HeroAvatarView({
   const shape = getAvatarShape(metadata);
   const hasCustomShape = !!shape;
   const s = HERO_SIZES[size];
+  const intl = useIntl();
   return (
     <div className="flex flex-col items-center gap-2 min-w-0">
       <div className="relative">
@@ -1302,7 +1343,7 @@ function HeroAvatarView({
               "absolute bottom-0 right-0 flex items-center justify-center rounded-full bg-background text-destructive shadow",
               s.badge,
             )}
-            aria-label="Muted"
+            aria-label={intl.formatMessage({ id: "callStage.muted", defaultMessage: "Muted" })}
           >
             <MicOff className={s.icon} />
           </span>
@@ -1313,7 +1354,7 @@ function HeroAvatarView({
               "absolute top-0 right-0 flex items-center justify-center rounded-full bg-warning text-warning-foreground shadow",
               s.badge,
             )}
-            aria-label="Hand raised"
+            aria-label={intl.formatMessage(msg.handRaised)}
           >
             <Hand className={s.icon} />
           </span>
@@ -1341,6 +1382,7 @@ function HeroParticipant({
   theater: boolean;
 }) {
   const { pubkey, displayName, verified, metadata } = useTileDisplayName(participant);
+  const intl = useIntl();
   const { raisedHands, streamingPubkeys } = useVoiceActivity();
   const { watch } = useScreenShareWatch();
   const streaming = verified && streamingPubkeys.has(pubkey);
@@ -1349,7 +1391,7 @@ function HeroParticipant({
       <HeroAvatarView
         metadata={metadata}
         name={displayName}
-        caption={participant.isLocal ? "You" : displayName}
+        caption={participant.isLocal ? intl.formatMessage({ id: "callStage.you", defaultMessage: "You" }) : displayName}
         speaking={speaking}
         muted={!participant.isMicrophoneEnabled}
         handRaised={raisedHands.has(pubkey)}
@@ -1434,6 +1476,7 @@ function CallHero({
 }) {
   const theater = variant === "theater";
   const boxRef = useRef<HTMLDivElement>(null);
+  const intl = useIntl();
   const controlSize = theater ? "rounded-lg size-14 touch:size-14" : "size-10 touch:size-11";
   const controls = (
     <div className={cn("flex flex-wrap items-center justify-center", theater ? "gap-4" : "gap-2.5")}>
@@ -1441,8 +1484,8 @@ function CallHero({
         <button
           type="button"
           onClick={onShowVideo}
-          aria-label="Show video"
-          title="Show video"
+          aria-label={intl.formatMessage({ id: "callStage.showVideo", defaultMessage: "Show video" })}
+          title={intl.formatMessage({ id: "callStage.showVideo", defaultMessage: "Show video" })}
           className={cn(
             "inline-flex items-center justify-center shrink-0 bg-primary/20 text-primary hover:bg-primary/30 transition-colors",
             controlSize,
@@ -1503,12 +1546,15 @@ function CallHero({
     </div>
   );
 
+  const theaterLabel = theater
+    ? intl.formatMessage({ id: "callStage.exitFullScreen", defaultMessage: "Exit full screen" })
+    : intl.formatMessage({ id: "callStage.fullScreen", defaultMessage: "Full screen" });
   const theaterToggle = (
     <button
       type="button"
       onClick={onToggleTheater}
-      aria-label={theater ? "Exit full screen" : "Full screen"}
-      title={theater ? "Exit full screen" : "Full screen"}
+      aria-label={theaterLabel}
+      title={theaterLabel}
       className="absolute right-2 z-10 rounded-md p-1.5 touch:p-2.5 text-muted-foreground hover:text-foreground hover:bg-foreground/10"
       style={{
         top: theater
@@ -1556,7 +1602,7 @@ function CallHero({
       <div
         ref={boxRef}
         role="region"
-        aria-label="Call"
+        aria-label={intl.formatMessage(msg.call)}
         className="relative clip-corner-lg overflow-hidden bg-chrome-deep shadow-lg"
       >
         {backdrop}
@@ -1618,6 +1664,7 @@ export function CallStage({
 }) {
   const { setStageOpen, stageFloating, floatingVariant, stageDocked, exiting, activeCall } = useCall();
   const isDesktop = useIsDesktop();
+  const intl = useIntl();
   const { enabled: endToEndEncrypted, hevcScreenShare } = useCallSignals();
   const participants = useParticipants();
   const resolveIdentity = useVoiceIdentity();
@@ -2014,17 +2061,21 @@ export function CallStage({
           onClick={() => setFocusKey(null)}
         >
           <Minimize2 className="size-3.5" />
-          Show all
+          <FormattedMessage id="callStage.showAll" defaultMessage="Show all" />
         </button>
       )}
       {participantCount > 2 && (
         <span className="text-xs text-muted-foreground tabular-nums shrink-0">
-          {participantCount} in call
+          <FormattedMessage id="callStage.inCall" defaultMessage="{count} in call" values={{ count: participantCount }} />
         </span>
       )}
       <button
         type="button"
-        aria-label={theater ? "Exit theater mode" : "Theater mode"}
+        aria-label={
+          theater
+            ? intl.formatMessage({ id: "callStage.exitTheater", defaultMessage: "Exit theater mode" })
+            : intl.formatMessage({ id: "callStage.theater", defaultMessage: "Theater mode" })
+        }
         className="shrink-0 rounded-md p-1 touch:p-2.5 text-muted-foreground hover:text-foreground hover:bg-foreground/10"
         onClick={() => setTheater((t) => !t)}
       >
@@ -2033,8 +2084,8 @@ export function CallStage({
       {!theater && (
         <button
           type="button"
-          aria-label="Hide video"
-          title="Hide video"
+          aria-label={intl.formatMessage({ id: "callStage.hideVideo", defaultMessage: "Hide video" })}
+          title={intl.formatMessage({ id: "callStage.hideVideo", defaultMessage: "Hide video" })}
           className="shrink-0 rounded-md p-1 touch:p-2.5 text-muted-foreground hover:text-foreground hover:bg-foreground/10"
           onClick={() => setStageOpen(false)}
         >
@@ -2141,7 +2192,7 @@ export function CallStage({
       <div
         role="dialog"
         aria-modal="true"
-        aria-label="Call"
+        aria-label={intl.formatMessage(msg.call)}
         className="fixed inset-0 z-50 animate-in fade-in-0 duration-150"
       >
         {hero("theater")}
@@ -2157,7 +2208,7 @@ export function CallStage({
         ref={setTheaterEl}
         role="dialog"
         aria-modal="true"
-        aria-label="Call"
+        aria-label={intl.formatMessage(msg.call)}
         className="fixed inset-0 z-50 flex flex-col bg-background/95 backdrop-blur-sm animate-in fade-in-0 duration-150"
       >
         <div
@@ -2221,7 +2272,7 @@ export function CallStage({
             </div>
           ) : (
             <div className="flex h-full w-full items-center justify-center text-xs text-muted-foreground">
-              Connecting…
+              <FormattedMessage {...msg.connecting} />
             </div>
           )}
           {showingShare && sortedShareKeys.length > 1 && (
@@ -2264,7 +2315,7 @@ export function CallStage({
         <div
           onPointerDown={beginDockedResize}
           role="separator"
-          aria-label="Resize call pane"
+          aria-label={intl.formatMessage({ id: "callStage.resize", defaultMessage: "Resize call pane" })}
           aria-orientation="horizontal"
           className="group/resize shrink-0 h-2.5 flex items-center justify-center cursor-ns-resize touch-none"
         >

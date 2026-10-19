@@ -1,39 +1,53 @@
+import { t } from "@/i18n";
+
 export const NOTIFICATION_SOUND_SETTINGS_KEY = "armada:notification-sound";
 
 export const NOTIFICATION_SOUNDS = [
   {
     id: "signal",
-    label: "Signal",
+    get label() {
+      return t({ id: "notificationSounds.signal", defaultMessage: "Signal" });
+    },
     creator: "pedr01",
     src: "/sounds/notifications/signal.mp3",
   },
   {
     id: "pulse",
-    label: "Pulse",
+    get label() {
+      return t({ id: "notificationSounds.pulse", defaultMessage: "Pulse" });
+    },
     creator: "deadrobotmusic",
     src: "/sounds/notifications/pulse.mp3",
   },
   {
     id: "spark",
-    label: "Spark",
+    get label() {
+      return t({ id: "notificationSounds.spark", defaultMessage: "Spark" });
+    },
     creator: "AnthonyRox",
     src: "/sounds/notifications/spark.mp3",
   },
   {
     id: "low-bell",
-    label: "Low bell",
+    get label() {
+      return t({ id: "notificationSounds.lowBell", defaultMessage: "Low bell" });
+    },
     creator: "LegitCheese",
     src: "/sounds/notifications/low-bell.mp3",
   },
   {
     id: "bright-chime",
-    label: "Bright chime",
+    get label() {
+      return t({ id: "notificationSounds.brightChime", defaultMessage: "Bright chime" });
+    },
     creator: "Jofae",
     src: "/sounds/notifications/bright-chime.mp3",
   },
   {
     id: "ocean",
-    label: "Ocean",
+    get label() {
+      return t({ id: "notificationSounds.ocean", defaultMessage: "Ocean" });
+    },
     creator: "Guilherme Marçal Silva",
     src: "/sounds/notifications/ocean.mp3",
   },

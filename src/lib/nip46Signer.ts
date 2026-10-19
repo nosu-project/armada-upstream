@@ -23,6 +23,7 @@
 import type { NostrEvent, NostrSigner } from "@nostrify/nostrify";
 import type { NostrConnectRequest, NostrConnectResponse } from "@nostrify/types";
 
+import { t } from "@/i18n";
 import type { BtcSigner } from "@/lib/bitcoin-signers";
 import type { Nip46Transport } from "@/lib/nip46Transport";
 import { logSync } from "@/lib/syncLog";
@@ -334,7 +335,13 @@ export class Nip46Signer implements NostrSigner, BtcSigner {
       const msg = error instanceof Error ? error.message : String(error);
       if (looksLikeCapabilityError(msg)) {
         throw new Error(
-          `Your remote signer doesn't support sending Bitcoin. Update your signer, or log in with your secret key. (${msg})`,
+          t(
+            {
+              id: "nip46Signer.psbtUnsupported",
+              defaultMessage: "Your remote signer doesn't support sending Bitcoin. Update your signer, or log in with your secret key. ({detail})",
+            },
+            { detail: msg },
+          ),
         );
       }
       throw error;

@@ -1,7 +1,69 @@
 <?xml version='1.0' encoding='utf-8'?>
 <resources>
-    <string name="app_name">Armada</string>
-    <string name="title_activity_main">Armada</string>
-    <string name="package_name">buzz.armada.app</string>
-    <string name="custom_url_scheme">buzz.armada.app</string>
+    <string name="app_name" translatable="false">Armada</string>
+    <string name="title_activity_main" translatable="false">Armada</string>
+    <string name="package_name" translatable="false">buzz.armada.app</string>
+    <string name="custom_url_scheme" translatable="false">buzz.armada.app</string>
+
+    <!-- Notification texts: the same English as `notificationMessages` in
+         src/lib/notificationPreview.ts; each values-<lang> carries the rest. -->
+    <string name="notif_reacted">Reacted %1$s to your message</string>
+    <string name="notif_replied_in_thread_with">Replied in thread: %1$s</string>
+    <string name="notif_replied_in_thread">Replied in thread</string>
+    <string name="notif_sent_gif">Sent a GIF</string>
+    <string name="notif_sent_image">Sent an image</string>
+    <string name="notif_sent_video">Sent a video</string>
+    <string name="notif_sent_voice">Sent a voice message</string>
+    <string name="notif_sent_game">Sent a game</string>
+    <string name="notif_sent_file">Sent a file</string>
+    <string name="notif_sent_direct_message">Sent you a direct message</string>
+    <string name="notif_sent_message">Sent a message</string>
+    <string name="notif_mentioned_you">\@you %1$s</string>
+    <string name="notif_attributed">%1$s: %2$s</string>
+    <string name="notif_chat">Chat</string>
+    <string name="notif_anonymous">Anonymous</string>
+    <string name="notif_someone">Someone</string>
+    <string name="notif_you">You</string>
+    <string name="notif_group">Group</string>
+    <string name="notif_community">Community</string>
+    <string name="notif_channel">channel</string>
+    <string name="notif_room_title">%1$s / #%2$s</string>
+    <string name="notif_name_joiner">", "</string>
+    <string name="notif_names_more">%1$s +%2$d</string>
+    <string name="notif_new_message">New message</string>
+    <string name="notif_new_direct_message">New direct message</string>
+    <string name="notif_direct_messages">Direct messages</string>
+    <string name="notif_message_requests">Message requests</string>
+    <string name="notif_new_message_request">You have a new message request</string>
+    <string name="notif_git_activity">Git activity</string>
+    <string name="notif_git_issue">%1$s opened an issue in %2$s</string>
+    <string name="notif_git_pr">%1$s opened a pull request in %2$s</string>
+    <string name="notif_git_comment">%1$s commented on a ticket in %2$s</string>
+    <string name="notif_git_status">%1$s changed a ticket status in %2$s</string>
+    <string name="notif_missed_call">Missed call</string>
+    <string name="notif_incoming_call">Incoming call</string>
+    <string name="notif_reply">Reply</string>
+    <string name="notif_mark_read">Mark read</string>
+    <string name="notif_not_sent">⚠️ Not sent: %1$s</string>
+    <string name="notif_connected">Connected for instant notifications</string>
+
+    <string name="channel_service_name">Background connection</string>
+    <string name="channel_service_description">Keeps Armada connected for instant notifications</string>
+    <string name="channel_messages_name">Notifications</string>
+    <string name="channel_messages_description">Mentions, replies, reactions and direct messages</string>
+    <string name="channel_calls_name">Incoming calls</string>
+    <string name="channel_calls_description">Voice call rings</string>
+    <string name="channel_ongoing_call_name">Ongoing calls</string>
+    <string name="channel_ongoing_call_description">Shows a persistent notification while you are in a voice call.</string>
+    <string name="channel_mesh_name">Bluetooth mesh</string>
+    <string name="channel_mesh_description">Keeps the nearby Bluetooth mesh chat connected.</string>
+
+    <string name="call_voice_call">Voice call</string>
+    <string name="call_mute">Mute</string>
+    <string name="call_unmute">Unmute</string>
+    <string name="call_accept">Accept</string>
+    <string name="call_decline">Decline</string>
+    <string name="mesh_active_title">Mesh chat active</string>
+    <string name="mesh_active_text">Connected to nearby devices over Bluetooth</string>
+    <string name="fullscreen_exit_hint">Press Back to exit full screen</string>
 </resources>

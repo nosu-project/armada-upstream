@@ -33,10 +33,12 @@ import {
   mentionPubkeys,
   NOTIFICATION_BADGE_ICON,
   NOTIFICATION_FALLBACK_ICON,
+  notificationMessages,
   presentNotification,
   type NotificationMessage,
   type PresentedNotification,
 } from "@/lib/notificationPreview";
+import { t } from "@/i18n";
 import { concordRoomIdentity, nip29RoomIdentity } from "@/lib/notificationRoom";
 import {
   loadNotificationSoundSettings,
@@ -502,7 +504,7 @@ export function useForegroundNotifications(): void {
         ),
       });
 
-      if (!pubkey) return { name: "Anonymous" };
+      if (!pubkey) return { name: getDisplayName(undefined) };
       const qc = ctx.current.queryClient;
       const cached = qc.getQueryData<AuthorResult>(["author", pubkey]);
       if (cached?.metadata) return present(cached.metadata, cached.imeta);
@@ -524,7 +526,7 @@ export function useForegroundNotifications(): void {
         // Store unavailable — fall through.
       }
 
-      return { name: "Anonymous" };
+      return { name: getDisplayName(undefined) };
     };
 
     /** Room title and icon, matching the Android conversation shortcut. Local reads only. */
@@ -564,7 +566,7 @@ export function useForegroundNotifications(): void {
       await Promise.all(keys.map(async (pk) => {
         const { name } = await profileFor(pk);
         // "Anonymous" is an absence; the raw token means more.
-        if (name && name !== "Anonymous") names.set(pk, name);
+        if (name && name !== getDisplayName(undefined)) names.set(pk, name);
       }));
       return names;
     };
@@ -791,8 +793,8 @@ export function useForegroundNotifications(): void {
           if (cand.plane === "dm" && dmGeneric) {
             // Content-blind: nothing the sender controls (name/avatar/text).
             presented = {
-              title: "Message request",
-              body: "You have a new message request",
+              title: t(notificationMessages.messageRequest),
+              body: t(notificationMessages.newMessageRequest, { count: 1 }),
               icon: NOTIFICATION_FALLBACK_ICON,
               badge: NOTIFICATION_BADGE_ICON,
             };
@@ -800,8 +802,8 @@ export function useForegroundNotifications(): void {
             // Repository activity keeps its own shape rather than going through the presenter.
             const { name, avatar } = await profileFor(cand.author);
             presented = {
-              title: `${name} ${cand.git.action} in ${cand.git.repository}`,
-              body: cand.git.ticketTitle ?? "New activity in the destination channel",
+              title: t(notificationMessages.gitActivity, { name, action: cand.git.action, repository: cand.git.repository }),
+              body: cand.git.ticketTitle ?? t(notificationMessages.gitActivityFallback),
               icon: avatar ?? NOTIFICATION_FALLBACK_ICON,
               badge: NOTIFICATION_BADGE_ICON,
             };

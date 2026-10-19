@@ -3,6 +3,7 @@ import { ArrowLeft } from "lucide-react";
 import { ServerRail } from "@/components/layout/ServerRail";
 import { Button } from "@/components/ui/button";
 import { useBackOrHome } from "@/hooks/useBackOrHome";
+import { common, useIntl } from "@/i18n";
 
 import type { ReactNode } from "react";
 
@@ -18,13 +19,14 @@ interface DetailPageProps {
 export function DetailPage({ title, icon, children, overlay }: DetailPageProps) {
   // A cold load has nothing to go back to, so it lands home.
   const back = useBackOrHome();
+  const intl = useIntl();
 
   return (
     <>
       <ServerRail />
       <main className="relative flex-1 min-w-0 flex flex-col safe-area-top">
         <header className="relative h-12 touch:h-[3.25rem] mx-gutter mt-1 sidebar:mt-3 w-[calc(100%-2*var(--gutter))] max-w-2xl sm:mx-auto px-2 sidebar:px-3 flex items-center gap-1.5 shrink-0 clip-corner-lg bg-chrome">
-          <Button variant="ghost" size="icon" className="size-9 touch:size-11 shrink-0" aria-label="Back" onClick={back}>
+          <Button variant="ghost" size="icon" className="size-9 touch:size-11 shrink-0" aria-label={intl.formatMessage(common.back)} onClick={back}>
             <ArrowLeft className="size-5" />
           </Button>
           {icon}

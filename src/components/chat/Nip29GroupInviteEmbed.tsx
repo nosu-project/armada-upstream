@@ -14,6 +14,7 @@ import { nip29GroupPath, relayRejectionMessage, type GroupAddress } from "@/lib/
 import { normalizeRelayUrl } from "@/lib/platform";
 import { displayHost, sanitizeImageSrc } from "@/lib/sanitizeUrl";
 import { cn } from "@/lib/utils";
+import { FormattedMessage, t, useIntl } from "@/i18n";
 
 interface Nip29GroupInviteEmbedProps {
   group: GroupAddress;
@@ -26,6 +27,7 @@ interface Nip29GroupInviteEmbedProps {
  * group's 39000 needs AUTH, which an unsolicited embed must not answer.
  */
 export function Nip29GroupInviteEmbed({ group, className }: Nip29GroupInviteEmbedProps) {
+  const intl = useIntl();
   const navigate = useNavigate();
   const { user } = useCurrentUser();
   const meta = useLocalGroupMeta(group.relay, group.groupId);
@@ -46,7 +48,10 @@ export function Nip29GroupInviteEmbed({ group, className }: Nip29GroupInviteEmbe
 
   const doJoin = async () => {
     if (!user) {
-      toast({ title: "Sign in to join", description: "Create an account or sign in to accept this invite." });
+      toast({
+        title: t({ id: "nip29GroupInviteEmbed.signInTitle", defaultMessage: "Sign in to join" }),
+        description: t({ id: "nip29GroupInviteEmbed.signInDescription", defaultMessage: "Create an account or sign in to accept this invite." }),
+      });
       return;
     }
     try {
@@ -54,10 +59,13 @@ export function Nip29GroupInviteEmbed({ group, className }: Nip29GroupInviteEmbe
       // Joining is the explicit intent that puts the group in the 10009 list (the rail's source).
       updateList({ type: "add-group", ref: { id: group.groupId, relay: group.relay } }).catch(() => undefined);
       setJoined(true);
-      toast({ title: "Join request sent", description: "The relay will admit you automatically or after review." });
+      toast({
+        title: t({ id: "nip29GroupInviteEmbed.requestSentTitle", defaultMessage: "Join request sent" }),
+        description: t({ id: "nip29GroupInviteEmbed.requestSentDescription", defaultMessage: "The relay will admit you automatically or after review." }),
+      });
       navigate(path);
     } catch (e) {
-      toast({ title: "Couldn't join", description: relayRejectionMessage(e), variant: "destructive" });
+      toast({ title: t({ id: "nip29GroupInviteEmbed.joinFailed", defaultMessage: "Couldn't join" }), description: relayRejectionMessage(e), variant: "destructive" });
     }
   };
 
@@ -71,7 +79,9 @@ export function Nip29GroupInviteEmbed({ group, className }: Nip29GroupInviteEmbe
     >
       <div className="px-3.5 py-3 space-y-2.5">
         <p className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground">
-          {group.inviteCode ? "You've been invited to join a channel" : "Channel"}
+          {group.inviteCode
+            ? intl.formatMessage({ id: "nip29GroupInviteEmbed.invited", defaultMessage: "You've been invited to join a channel" })
+            : intl.formatMessage({ id: "nip29GroupInviteEmbed.channel", defaultMessage: "Channel" })}
         </p>
 
         <div className="flex items-center gap-3 min-w-0">
@@ -93,11 +103,13 @@ export function Nip29GroupInviteEmbed({ group, className }: Nip29GroupInviteEmbe
 
         {inList || joined ? (
           <Button variant="secondary" className="w-full clip-corner-lg" onClick={() => navigate(path)}>
-            Open
+            <FormattedMessage id="nip29GroupInviteEmbed.open" defaultMessage="Open" />
           </Button>
         ) : (
           <Button className="w-full clip-corner-lg" onClick={doJoin} disabled={join.isPending}>
-            {join.isPending ? "Joining…" : "Join"}
+            {join.isPending
+              ? intl.formatMessage({ id: "nip29GroupInviteEmbed.joining", defaultMessage: "Joining…" })
+              : intl.formatMessage({ id: "nip29GroupInviteEmbed.join", defaultMessage: "Join" })}
           </Button>
         )}
       </div>

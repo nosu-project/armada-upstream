@@ -2,6 +2,7 @@ import type { NostrFilter } from "@nostrify/nostrify";
 import type { NostrRumor } from "@/lib/nostrRumor";
 import { nip19 } from "nostr-tools";
 
+import { getLocale, t } from "@/i18n";
 import { normalizeRelayUrl, relayToRouteParam } from "@/lib/platform";
 import { tryNaddrEncode } from "@/lib/safeNip19";
 
@@ -11,7 +12,7 @@ import { tryNaddrEncode } from "@/lib/safeNip19";
 export function relayRejectionMessage(err: unknown): string {
   const raw = err instanceof Error ? err.message : typeof err === "string" ? err : "";
   const trimmed = raw.trim();
-  if (!trimmed) return "The relay rejected the message.";
+  if (!trimmed) return t({ id: "nip29.relayRejected", defaultMessage: "The relay rejected the message." });
   const m = trimmed.match(/^(blocked|restricted|invalid|error|rate-limited|duplicate|pow):\s*(.+)$/i);
   const message = m ? m[2] : trimmed;
   return message.length > 200 ? message.slice(0, 197) + "…" : message;
@@ -306,27 +307,34 @@ export function buildCalendarEventTags(groupId: string, input: CalendarEventInpu
 }
 
 export function formatCalendarEventWhen(event: CalendarEvent): string {
+  const locale = getLocale();
   if (event.kind === KIND_CALENDAR_TIME) {
     const start = new Date(Number(event.start) * 1000);
     const end = event.end ? new Date(Number(event.end) * 1000) : undefined;
     const dateFmt: Intl.DateTimeFormatOptions = { weekday: "short", month: "short", day: "numeric" };
     const timeFmt: Intl.DateTimeFormatOptions = { hour: "numeric", minute: "2-digit" };
-    const startStr = `${start.toLocaleDateString(undefined, dateFmt)}, ${start.toLocaleTimeString(undefined, timeFmt)}`;
+    const at = (d: Date) =>
+      t({ id: "nip29.calendar.dateTime", defaultMessage: "{date}, {time}" }, {
+        date: d.toLocaleDateString(locale, dateFmt),
+        time: d.toLocaleTimeString(locale, timeFmt),
+      });
+    const startStr = at(start);
     if (!end) return startStr;
     const sameDay = start.toDateString() === end.toDateString();
-    if (sameDay) return `${startStr} – ${end.toLocaleTimeString(undefined, timeFmt)}`;
-    return `${startStr} – ${end.toLocaleDateString(undefined, dateFmt)}, ${end.toLocaleTimeString(undefined, timeFmt)}`;
+    const endStr = sameDay ? end.toLocaleTimeString(locale, timeFmt) : at(end);
+    return t({ id: "nip29.calendar.range", defaultMessage: "{start} – {end}" }, { start: startStr, end: endStr });
   }
   // All-day: parse as UTC to avoid TZ drift.
   const dateFmt: Intl.DateTimeFormatOptions = { weekday: "short", month: "short", day: "numeric", timeZone: "UTC" };
   const start = new Date(`${event.start}T00:00:00Z`);
-  const startStr = start.toLocaleDateString(undefined, dateFmt);
-  if (!event.end || event.end === event.start) return `${startStr} · All day`;
+  const startStr = start.toLocaleDateString(locale, dateFmt);
+  const allDay = () => t({ id: "nip29.calendar.allDay", defaultMessage: "{date} · All day" }, { date: startStr });
+  if (!event.end || event.end === event.start) return allDay();
   // `end` is exclusive — show the last included day.
   const endExclusive = new Date(`${event.end}T00:00:00Z`);
   endExclusive.setUTCDate(endExclusive.getUTCDate() - 1);
-  if (endExclusive.toDateString() === start.toDateString()) return `${startStr} · All day`;
-  return `${startStr} – ${endExclusive.toLocaleDateString(undefined, dateFmt)}`;
+  if (endExclusive.toDateString() === start.toDateString()) return allDay();
+  return t({ id: "nip29.calendar.range", defaultMessage: "{start} – {end}" }, { start: startStr, end: endExclusive.toLocaleDateString(locale, dateFmt) });
 }
 
 export function parseRsvpStatus(event: NostrRumor): RsvpStatus | undefined {

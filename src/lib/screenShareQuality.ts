@@ -6,6 +6,8 @@ import {
   type VideoCodec,
 } from "livekit-client";
 
+import { t } from "@/i18n";
+
 export const SCREEN_SHARE_QUALITY_KEY = "armada:voice:screenShareQuality";
 
 export const SCREEN_SHARE_RESOLUTIONS = [
@@ -17,11 +19,41 @@ export const SCREEN_SHARE_RESOLUTIONS = [
 
 export const SCREEN_SHARE_FRAME_RATES = [5, 15, 30, 60] as const;
 export const SCREEN_SHARE_CODECS = [
-  { id: "vp8", label: "VP8", description: "Best compatibility" },
-  { id: "h264", label: "H.264", description: "Often hardware accelerated" },
-  { id: "h265", label: "H.265 / HEVC", description: "Hardware and viewer support required" },
-  { id: "vp9", label: "VP9", description: "Better detail at lower bitrates" },
-  { id: "av1", label: "AV1", description: "Best compression, highest encoder cost" },
+  {
+    id: "vp8",
+    label: "VP8",
+    get description() {
+      return t({ id: "screenShareQuality.codec.vp8", defaultMessage: "Best compatibility" });
+    },
+  },
+  {
+    id: "h264",
+    label: "H.264",
+    get description() {
+      return t({ id: "screenShareQuality.codec.h264", defaultMessage: "Often hardware accelerated" });
+    },
+  },
+  {
+    id: "h265",
+    label: "H.265 / HEVC",
+    get description() {
+      return t({ id: "screenShareQuality.codec.h265", defaultMessage: "Hardware and viewer support required" });
+    },
+  },
+  {
+    id: "vp9",
+    label: "VP9",
+    get description() {
+      return t({ id: "screenShareQuality.codec.vp9", defaultMessage: "Better detail at lower bitrates" });
+    },
+  },
+  {
+    id: "av1",
+    label: "AV1",
+    get description() {
+      return t({ id: "screenShareQuality.codec.av1", defaultMessage: "Best compression, highest encoder cost" });
+    },
+  },
 ] as const satisfies ReadonlyArray<{
   id: VideoCodec;
   label: string;
@@ -30,13 +62,21 @@ export const SCREEN_SHARE_CODECS = [
 export const SCREEN_SHARE_DELIVERY_MODES = [
   {
     id: "full",
-    label: "Full quality",
-    description: "Send one full-resolution stream to every viewer",
+    get label() {
+      return t({ id: "screenShareQuality.delivery.full.label", defaultMessage: "Full quality" });
+    },
+    get description() {
+      return t({ id: "screenShareQuality.delivery.full.description", defaultMessage: "Send one full-resolution stream to every viewer" });
+    },
   },
   {
     id: "adaptive",
-    label: "Adaptive",
-    description: "Also send a half-resolution layer for smaller views",
+    get label() {
+      return t({ id: "screenShareQuality.delivery.adaptive.label", defaultMessage: "Adaptive" });
+    },
+    get description() {
+      return t({ id: "screenShareQuality.delivery.adaptive.description", defaultMessage: "Also send a half-resolution layer for smaller views" });
+    },
   },
 ] as const;
 export const MIN_SCREEN_SHARE_BITRATE = 250_000;

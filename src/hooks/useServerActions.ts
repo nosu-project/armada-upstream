@@ -4,6 +4,7 @@ import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useMutes } from "@/hooks/useMutes";
 import { toast } from "@/hooks/useToast";
 import { useUpdateUserGroupList } from "@/hooks/useUserGroupList";
+import { t } from "@/i18n";
 import { relayToRouteParam } from "@/lib/platform";
 import { writeClipboardText } from "@/lib/clipboard";
 import { isPublishQueuedError } from "@/lib/publishOutbox";
@@ -34,8 +35,8 @@ export function useServerActions(relayUrl: string): UseServerActionsReturn {
   const copyLink = () => {
     const link = `${shareOrigin()}/s/${relayToRouteParam(relayUrl)}`;
     writeClipboardText(link).then(
-      () => toast({ title: "Copied link" }),
-      () => toast({ title: "Copy failed", variant: "destructive" }),
+      () => toast({ title: t({ id: "useServerActions.copiedLink", defaultMessage: "Copied link" }) }),
+      () => toast({ title: t({ id: "useServerActions.copyFailed", defaultMessage: "Copy failed" }), variant: "destructive" }),
     );
   };
 
@@ -47,22 +48,29 @@ export function useServerActions(relayUrl: string): UseServerActionsReturn {
     const pending = updateList({ type: "remove-server", url: relayUrl });
     navigate("/");
     pending.then(
-      () => toast({ title: "Server removed", description: relayUrl }),
+      () => toast({ title: t({ id: "useServerActions.removed", defaultMessage: "Server removed" }), description: relayUrl }),
       (err) => {
         // Queued publishes are signed and durable; a delay, not a failure.
         if (isPublishQueuedError(err)) {
           toast({
-            title: "Server removed",
-            description: `${relayUrl} will sync when the network is back.`,
+            title: t({ id: "useServerActions.removed", defaultMessage: "Server removed" }),
+            description: t(
+              { id: "useServerActions.removedQueued", defaultMessage: "{relayUrl} will sync when the network is back." },
+              { relayUrl },
+            ),
           });
           return;
         }
         console.warn("Failed to sync server removal to group list:", err);
         toast({
-          title: "Couldn't remove server everywhere",
-          description:
-            `Hidden on this device, but your synced community list still has ${relayUrl}` +
-            `, so it will come back on other devices. ${err instanceof Error ? err.message : ""}`.trimEnd(),
+          title: t({ id: "useServerActions.removeFailed", defaultMessage: "Couldn't remove server everywhere" }),
+          description: t(
+            {
+              id: "useServerActions.removeFailedDescription",
+              defaultMessage: "Hidden on this device, but your synced community list still has {relayUrl}, so it will come back on other devices. {reason}",
+            },
+            { relayUrl, reason: err instanceof Error ? err.message : "" },
+          ).trimEnd(),
           variant: "destructive",
         });
       },

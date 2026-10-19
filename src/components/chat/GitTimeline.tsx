@@ -29,6 +29,7 @@ import {
 } from "@/lib/gitActivity";
 import { gitworkshopTicketUrl } from "@/lib/gitworkshopUrl";
 import { cn } from "@/lib/utils";
+import { FormattedMessage, defineMessages, t, useIntl, type MessageDescriptor } from "@/i18n";
 import type { ReactNode } from "react";
 
 /** Callbacks that make the conversation panel writable; absent means read-only. */
@@ -48,8 +49,13 @@ function TicketIcon({ ticket, className }: { ticket: GitTicket; className?: stri
   return <Icon className={cn("size-3.5 shrink-0", ticket.type === "issue" ? "text-emerald-500" : "text-violet-500", className)} />;
 }
 
-function ticketType(ticket: GitTicket) {
-  return ticket.type === "issue" ? "Issue" : "Pull request";
+const TICKET_TYPES = defineMessages({
+  issue: { id: "gitTimeline.ticketType.issue", defaultMessage: "Issue" },
+  pullRequest: { id: "gitTimeline.ticketType.pullRequest", defaultMessage: "Pull request" },
+});
+
+function ticketType(ticket: GitTicket): MessageDescriptor {
+  return ticket.type === "issue" ? TICKET_TYPES.issue : TICKET_TYPES.pullRequest;
 }
 
 /** A chat row's avatar gutter, so Git row text aligns with messages. */
@@ -131,7 +137,11 @@ function BodyPreview({ content, onOpen, className }: { content: string; onOpen: 
     <button type="button" onClick={onOpen} className={cn("block w-full text-left", className)}>
       <span className="line-clamp-2 text-sm leading-5 text-muted-foreground">
         {preview.text}
-        {preview.truncated && <span className="ml-1 text-muted-foreground/70 underline underline-offset-2">more</span>}
+        {preview.truncated && (
+          <span className="ml-1 text-muted-foreground/70 underline underline-offset-2">
+            <FormattedMessage id="gitTimeline.more" defaultMessage="more" />
+          </span>
+        )}
       </span>
     </button>
   );
@@ -149,8 +159,6 @@ function TicketSubject({ ticket, onOpen }: { ticket: GitTicket; onOpen: () => vo
 function TicketOpenedGroupRow({ entries, onOpen }: { entries: readonly Extract<GitChannelTimelineEntry, { type: "git-ticket-opened" }>[]; onOpen: (ticket: GitTicket) => void }) {
   const { ticket, repository } = entries[0].activity;
   const tickets = entries.map((entry) => entry.activity.ticket);
-  const noun = ticket.type === "issue" ? "issue" : "pull request";
-  const action = tickets.length === 1 ? `opened ${ticket.type === "issue" ? "an" : "a"} ${noun}` : `opened ${tickets.length} ${noun}s`;
   return (
     <article data-git-entry className="px-2.5">
       <div className="flex items-start gap-3 rounded py-1.5 transition-colors hover:bg-secondary/40">
@@ -158,7 +166,13 @@ function TicketOpenedGroupRow({ entries, onOpen }: { entries: readonly Extract<G
         <div className="min-w-0 flex-1 pr-2">
           <p className="flex flex-wrap items-baseline gap-x-1.5">
             <ActorName pubkey={ticket.author} className="text-chat" />
-            <span className="text-xs text-muted-foreground">{action} in {repository.identifier}</span>
+            <span className="text-xs text-muted-foreground">
+              <FormattedMessage
+                id="gitTimeline.opened"
+                defaultMessage="{type, select, issue {{count, plural, =1 {opened an issue in {repository}} other {opened # issues in {repository}}}} other {{count, plural, =1 {opened a pull request in {repository}} other {opened # pull requests in {repository}}}}}"
+                values={{ type: ticket.type, count: tickets.length, repository: repository.identifier }}
+              />
+            </span>
           </p>
           {tickets.map((opened) => <TicketSubject key={opened.id} ticket={opened} onOpen={() => onOpen(opened)} />)}
           {tickets.length === 1 && <BodyPreview content={ticket.content} onOpen={() => onOpen(ticket)} />}
@@ -177,7 +191,7 @@ function CommentGroupRow({ entries, onOpen }: { entries: readonly Extract<GitCha
         <div className="flex items-start">
           <span className={GUTTER} />
           <button type="button" onClick={open} className="min-w-0 flex-1 truncate pr-2 text-left text-xs text-muted-foreground hover:text-foreground">
-            on {ticket.subject}
+            <FormattedMessage id="gitTimeline.onTicket" defaultMessage="on {subject}" values={{ subject: ticket.subject }} />
           </button>
         </div>
         {entries.map((entry, index) => (
@@ -214,30 +228,37 @@ function GitCommentRow({ entry, onOpen, continuation }: { entry: Extract<GitChan
   );
 }
 
-function statusVerb(status: GitTicketStatus): string {
-  switch (status) {
-    case "closed": return "closed";
-    case "merged": return "merged";
-    case "resolved": return "resolved";
-    case "draft": return "marked as draft";
-    default: return "reopened";
-  }
-}
-
 /** Status changes on one ticket shown as their outcome. */
 function StatusGroupRow({ entries, onOpen }: { entries: readonly Extract<GitChannelTimelineEntry, { type: "git-status" }>[]; onOpen: (ticket: GitTicket) => void }) {
   const last = entries[entries.length - 1];
   const { ticket, status } = last.activity;
   const resolved = gitStatusFromKind(status.kind, ticket.kind);
+  const intl = useIntl();
   return (
     <NoticeRow
       icon={<TicketIcon ticket={ticket} />}
       onClick={() => onOpen(ticket)}
-      label={`Open ${ticket.subject}`}
+      label={intl.formatMessage({ id: "gitTimeline.openTicket", defaultMessage: "Open {subject}" }, { subject: ticket.subject })}
     >
-      <ActorName pubkey={status.author} className="text-xs" /> {statusVerb(resolved)}{" "}
-      <span className="text-foreground/90">{ticket.subject}</span>
-      {entries.length > 1 && <span className="text-muted-foreground/70"> · {entries.length} status changes</span>}
+      <FormattedMessage
+        id="gitTimeline.statusChanged"
+        defaultMessage="{actor} {status, select, closed {closed} merged {merged} resolved {resolved} draft {marked as draft} other {reopened}} {subject}"
+        values={{
+          actor: <ActorName pubkey={status.author} className="text-xs" />,
+          status: resolved,
+          subject: <span className="text-foreground/90">{ticket.subject}</span>,
+        }}
+      />
+      {entries.length > 1 && (
+        <span className="text-muted-foreground/70">
+          {" · "}
+          <FormattedMessage
+            id="gitTimeline.statusChangeCount"
+            defaultMessage="{count, plural, one {# status change} other {# status changes}}"
+            values={{ count: entries.length }}
+          />
+        </span>
+      )}
     </NoticeRow>
   );
 }
@@ -248,18 +269,30 @@ function ActorAvatar({ pubkey }: { pubkey: string }) {
   return <><AvatarImage src={author.data?.metadata?.picture} imeta={author.data?.imeta?.picture} alt={name} /><AvatarFallback className="text-3xs font-semibold">{name.slice(0, 1)}</AvatarFallback></>;
 }
 
+const CI_OUTCOMES = defineMessages({
+  success: { id: "gitTimeline.ci.success", defaultMessage: "succeeded" },
+  failure: { id: "gitTimeline.ci.failure", defaultMessage: "failed" },
+  timedOut: { id: "gitTimeline.ci.timedOut", defaultMessage: "timed out" },
+  startupFailure: { id: "gitTimeline.ci.startupFailure", defaultMessage: "failed to start" },
+  cancelled: { id: "gitTimeline.ci.cancelled", defaultMessage: "was cancelled" },
+  skipped: { id: "gitTimeline.ci.skipped", defaultMessage: "was skipped" },
+  queued: { id: "gitTimeline.ci.queued", defaultMessage: "is queued" },
+  inProgress: { id: "gitTimeline.ci.inProgress", defaultMessage: "is running" },
+  finished: { id: "gitTimeline.ci.finished", defaultMessage: "finished" },
+});
+
 /** Unknown outcomes read as neutral. */
-function ciOutcomePresentation(outcome: string): { Icon: typeof CheckCircle2; tone: string; label: string } {
+function ciOutcomePresentation(outcome: string): { Icon: typeof CheckCircle2; tone: string; label: MessageDescriptor } {
   switch (outcome) {
-    case "success": return { Icon: CheckCircle2, tone: "text-emerald-500", label: "succeeded" };
-    case "failure": return { Icon: XCircle, tone: "text-destructive", label: "failed" };
-    case "timed_out": return { Icon: Clock, tone: "text-destructive", label: "timed out" };
-    case "startup_failure": return { Icon: XCircle, tone: "text-destructive", label: "failed to start" };
-    case "cancelled": return { Icon: CircleSlash, tone: "text-muted-foreground", label: "was cancelled" };
-    case "skipped": return { Icon: CircleSlash, tone: "text-muted-foreground", label: "was skipped" };
-    case "queued": return { Icon: Clock, tone: "text-muted-foreground", label: "is queued" };
-    case "in_progress": return { Icon: Loader2, tone: "text-muted-foreground", label: "is running" };
-    default: return { Icon: CircleDot, tone: "text-muted-foreground", label: "finished" };
+    case "success": return { Icon: CheckCircle2, tone: "text-emerald-500", label: CI_OUTCOMES.success };
+    case "failure": return { Icon: XCircle, tone: "text-destructive", label: CI_OUTCOMES.failure };
+    case "timed_out": return { Icon: Clock, tone: "text-destructive", label: CI_OUTCOMES.timedOut };
+    case "startup_failure": return { Icon: XCircle, tone: "text-destructive", label: CI_OUTCOMES.startupFailure };
+    case "cancelled": return { Icon: CircleSlash, tone: "text-muted-foreground", label: CI_OUTCOMES.cancelled };
+    case "skipped": return { Icon: CircleSlash, tone: "text-muted-foreground", label: CI_OUTCOMES.skipped };
+    case "queued": return { Icon: Clock, tone: "text-muted-foreground", label: CI_OUTCOMES.queued };
+    case "in_progress": return { Icon: Loader2, tone: "text-muted-foreground", label: CI_OUTCOMES.inProgress };
+    default: return { Icon: CircleDot, tone: "text-muted-foreground", label: CI_OUTCOMES.finished };
   }
 }
 
@@ -271,6 +304,7 @@ const CI_LOG_MAX_BYTES = 512 * 1024;
  * `content` tail previews immediately, so an unreachable host still shows something.
  */
 function CIJobLog({ job }: { job: CIRunJob }) {
+  const intl = useIntl();
   const [open, setOpen] = useState(false);
   const [text, setText] = useState<string>();
   const [error, setError] = useState<string>();
@@ -283,7 +317,7 @@ function CIJobLog({ job }: { job: CIRunJob }) {
     setOpen(next);
     if (!next || text !== undefined || loading || !url) return;
     if (!/^https:\/\//i.test(url)) {
-      setError("Log URL is not https.");
+      setError(t({ id: "gitTimeline.log.notHttps", defaultMessage: "Log URL is not https." }));
       return;
     }
     setLoading(true);
@@ -291,9 +325,13 @@ function CIJobLog({ job }: { job: CIRunJob }) {
       const response = await fetch(url);
       if (!response.ok) throw new Error(`${response.status}`);
       const body = await response.text();
-      setText(body.length > CI_LOG_MAX_BYTES ? `${body.slice(0, CI_LOG_MAX_BYTES)}\n…truncated` : body);
+      setText(body.length > CI_LOG_MAX_BYTES
+        ? `${body.slice(0, CI_LOG_MAX_BYTES)}\n${t({ id: "gitTimeline.log.truncated", defaultMessage: "…truncated" })}`
+        : body);
     } catch (e) {
-      setError(e instanceof Error ? `Couldn't load the log (${e.message}).` : "Couldn't load the log.");
+      setError(e instanceof Error
+        ? t({ id: "gitTimeline.log.loadFailedReason", defaultMessage: "Couldn't load the log ({reason})." }, { reason: e.message })
+        : t({ id: "gitTimeline.log.loadFailed", defaultMessage: "Couldn't load the log." }));
     } finally {
       setLoading(false);
     }
@@ -314,8 +352,8 @@ function CIJobLog({ job }: { job: CIRunJob }) {
             href={url}
             target="_blank"
             rel="noreferrer"
-            title="Open the full log"
-            aria-label="Open the full log"
+            title={intl.formatMessage({ id: "gitTimeline.log.open", defaultMessage: "Open the full log" })}
+            aria-label={intl.formatMessage({ id: "gitTimeline.log.open", defaultMessage: "Open the full log" })}
             className="text-muted-foreground hover:text-foreground"
           >
             <ExternalLink className="size-3" />
@@ -330,7 +368,11 @@ function CIJobLog({ job }: { job: CIRunJob }) {
               <code className="font-mono whitespace-pre">{body}</code>
             </pre>
           ) : (
-            !loading && !error && <p className="mt-1 text-2xs text-muted-foreground">No log output.</p>
+            !loading && !error && (
+              <p className="mt-1 text-2xs text-muted-foreground">
+                <FormattedMessage id="gitTimeline.log.empty" defaultMessage="No log output." />
+              </p>
+            )
           )}
         </>
       )}
@@ -343,16 +385,24 @@ function CIJobLog({ job }: { job: CIRunJob }) {
  * coordinator to a repo, so it's a claim. `time` only inside the fold.
  */
 function CIRunSentence({ run, time = false }: { run: CIRun; time?: boolean }) {
+  const intl = useIntl();
   const { label } = ciOutcomePresentation(ciRunOutcome(run));
   return (
-    <>
-      <span className="font-medium text-foreground/90">{ciWorkflowName(run)}</span>
-      <span> {label}</span>
-      {run.commit && <span> on <span className="font-mono">{run.commit.slice(0, 7)}</span></span>}
-      {time && <span> · {shortTimeAgo(run.createdAt)}</span>}
-      <span> · reported by </span>
-      <ActorName pubkey={run.author} className="text-xs" />
-    </>
+    <FormattedMessage
+      id="gitTimeline.ci.runSentence"
+      defaultMessage="<name>{workflow}</name> {outcome}{hasCommit, select, yes { on <mono>{commit}</mono>} other {}}{hasTime, select, yes { · {time}} other {}} · reported by {actor}"
+      values={{
+        name: (chunks: ReactNode[]) => <span className="font-medium text-foreground/90">{chunks}</span>,
+        mono: (chunks: ReactNode[]) => <span className="font-mono">{chunks}</span>,
+        workflow: ciWorkflowName(run),
+        outcome: intl.formatMessage(label),
+        hasCommit: run.commit ? "yes" : "no",
+        commit: run.commit?.slice(0, 7) ?? "",
+        hasTime: time ? "yes" : "no",
+        time: shortTimeAgo(run.createdAt),
+        actor: <ActorName pubkey={run.author} className="text-xs" />,
+      }}
+    />
   );
 }
 
@@ -378,14 +428,15 @@ function CIRunLine({ run }: { run: CIRun }) {
 }
 
 function CIHistoryStrip({ runs }: { runs: readonly CIRun[] }) {
+  const intl = useIntl();
   const shown = runs.slice(0, 12);
   return (
     <p className="mt-0.5 flex flex-wrap items-center gap-1 text-3xs text-muted-foreground/70">
-      <span>before that</span>
+      <span><FormattedMessage id="gitTimeline.ci.beforeThat" defaultMessage="before that" /></span>
       {shown.map((run) => {
         const outcome = ciRunOutcome(run);
         return (
-          <span key={run.id} title={[run.commit?.slice(0, 7), ciOutcomePresentation(outcome).label, shortTimeAgo(run.createdAt)].filter(Boolean).join(" · ")}>
+          <span key={run.id} title={[run.commit?.slice(0, 7), intl.formatMessage(ciOutcomePresentation(outcome).label), shortTimeAgo(run.createdAt)].filter(Boolean).join(" · ")}>
             <CIOutcomeIcon outcome={outcome} className="size-3" />
           </span>
         );
@@ -411,6 +462,7 @@ function CIWorkflowDetail({ group }: { group: CIWorkflowGroup }) {
 
 /** A stretch of CI runs folded to each workflow's current state; runs open on click. */
 function CIGroupRow({ entries }: { entries: readonly Extract<GitChannelTimelineEntry, { type: "git-ci-run" }>[] }) {
+  const intl = useIntl();
   const [open, setOpen] = useState(false);
   const runs = useMemo(() => entries.map((entry) => entry.activity.run), [entries]);
   const groups = useMemo(() => groupCIRunsByWorkflow(runs), [runs]);
@@ -422,20 +474,31 @@ function CIGroupRow({ entries }: { entries: readonly Extract<GitChannelTimelineE
     <NoticeRow
       icon={<CIOutcomeIcon outcome={ciGroupsOutcome(groups)} />}
       onClick={() => setOpen((previous) => !previous)}
-      label={open ? "Hide CI runs" : "Show CI runs"}
+      label={open
+        ? intl.formatMessage({ id: "gitTimeline.ci.hideRuns", defaultMessage: "Hide CI runs" })
+        : intl.formatMessage({ id: "gitTimeline.ci.showRuns", defaultMessage: "Show CI runs" })}
       detail={open ? <div className="mt-1 space-y-2 border-l border-border pl-2.5">{groups.map((group) => <CIWorkflowDetail key={group.name} group={group} />)}</div> : undefined}
     >
       {only
-        ? <>
-            <span className="font-medium text-foreground/90">{only.name}</span>
-            <span> {ciOutcomePresentation(ciRunOutcome(only.latest)).label}</span>
-            <span> · latest of {only.runs.length} runs</span>
-          </>
-        : <>
-            <span className="font-medium text-foreground/90">CI</span>
-            <span> · {runs.length} runs</span>
-            <span> · {ciGroupsSummary(groups)}</span>
-          </>}
+        ? <FormattedMessage
+            id="gitTimeline.ci.workflowLatest"
+            defaultMessage="<name>{workflow}</name> {outcome} · latest of {count, plural, one {# run} other {# runs}}"
+            values={{
+              name: (chunks: ReactNode[]) => <span className="font-medium text-foreground/90">{chunks}</span>,
+              workflow: only.name,
+              outcome: intl.formatMessage(ciOutcomePresentation(ciRunOutcome(only.latest)).label),
+              count: only.runs.length,
+            }}
+          />
+        : <FormattedMessage
+            id="gitTimeline.ci.groupSummary"
+            defaultMessage="<name>CI</name> · {count, plural, one {# run} other {# runs}} · {summary}"
+            values={{
+              name: (chunks: ReactNode[]) => <span className="font-medium text-foreground/90">{chunks}</span>,
+              count: runs.length,
+              summary: ciGroupsSummary(groups),
+            }}
+          />}
     </NoticeRow>
   );
 }
@@ -446,15 +509,24 @@ function ActorName({ pubkey, className }: { pubkey: string; className?: string }
   return <span className={cn("font-semibold text-foreground", className ?? "text-sm")}>{name}</span>;
 }
 
-function statusOptions(status: GitTicketStatus, ticket: GitTicket): Array<{ label: string; kind: GitStatusKind }> {
+const STATUS_ACTIONS = defineMessages({
+  reopen: { id: "gitTimeline.status.reopen", defaultMessage: "Reopen" },
+  markOpen: { id: "gitTimeline.status.markOpen", defaultMessage: "Mark open" },
+  markResolved: { id: "gitTimeline.status.markResolved", defaultMessage: "Mark resolved" },
+  markMerged: { id: "gitTimeline.status.markMerged", defaultMessage: "Mark merged" },
+  markDraft: { id: "gitTimeline.status.markDraft", defaultMessage: "Mark draft" },
+  close: { id: "gitTimeline.status.close", defaultMessage: "Close" },
+});
+
+function statusOptions(status: GitTicketStatus, ticket: GitTicket): Array<{ label: MessageDescriptor; kind: GitStatusKind }> {
   if (status === "closed" || status === "merged" || status === "resolved") {
-    return [{ label: "Reopen", kind: GIT_STATUS_OPEN_KIND }];
+    return [{ label: STATUS_ACTIONS.reopen, kind: GIT_STATUS_OPEN_KIND }];
   }
-  const options: Array<{ label: string; kind: GitStatusKind }> = [];
-  if (status === "draft") options.push({ label: "Mark open", kind: GIT_STATUS_OPEN_KIND });
-  options.push({ label: ticket.kind === GIT_ISSUE_KIND ? "Mark resolved" : "Mark merged", kind: GIT_STATUS_APPLIED_KIND });
-  if (status === "open" && ticket.kind !== GIT_ISSUE_KIND) options.push({ label: "Mark draft", kind: GIT_STATUS_DRAFT_KIND });
-  options.push({ label: "Close", kind: GIT_STATUS_CLOSED_KIND });
+  const options: Array<{ label: MessageDescriptor; kind: GitStatusKind }> = [];
+  if (status === "draft") options.push({ label: STATUS_ACTIONS.markOpen, kind: GIT_STATUS_OPEN_KIND });
+  options.push({ label: ticket.kind === GIT_ISSUE_KIND ? STATUS_ACTIONS.markResolved : STATUS_ACTIONS.markMerged, kind: GIT_STATUS_APPLIED_KIND });
+  if (status === "open" && ticket.kind !== GIT_ISSUE_KIND) options.push({ label: STATUS_ACTIONS.markDraft, kind: GIT_STATUS_DRAFT_KIND });
+  options.push({ label: STATUS_ACTIONS.close, kind: GIT_STATUS_CLOSED_KIND });
   return options;
 }
 
@@ -464,7 +536,7 @@ function TicketStatusControls({ ticket, status, onSet }: { ticket: GitTicket; st
     <div className="mt-2 flex flex-wrap gap-1.5">
       {statusOptions(status, ticket).map(({ label, kind }) => (
         <Button
-          key={label}
+          key={kind}
           variant="secondary"
           size="sm"
           className="h-7 px-2.5 text-xs"
@@ -472,11 +544,11 @@ function TicketStatusControls({ ticket, status, onSet }: { ticket: GitTicket; st
           onClick={() => {
             setBusy(true);
             onSet(ticket, kind)
-              .catch((error) => toast({ title: "Couldn't update status", description: error instanceof Error ? error.message : undefined, variant: "destructive" }))
+              .catch((error) => toast({ title: t({ id: "gitTimeline.status.updateFailed", defaultMessage: "Couldn't update status" }), description: error instanceof Error ? error.message : undefined, variant: "destructive" }))
               .finally(() => setBusy(false));
           }}
         >
-          {label}
+          <FormattedMessage {...label} />
         </Button>
       ))}
     </div>
@@ -486,16 +558,30 @@ function TicketStatusControls({ ticket, status, onSet }: { ticket: GitTicket; st
 
 function TicketHeader({ ticket, status, actions }: { ticket: GitTicket; status: GitTicketStatus; actions?: TicketPanelActions }) {
   const workshopUrl = useMemo(() => gitworkshopTicketUrl(ticket), [ticket]);
-  const repository = ticket.repositoryAddress?.identifier ?? "Unknown repository";
+  const intl = useIntl();
+  const repository = ticket.repositoryAddress?.identifier
+    ?? intl.formatMessage({ id: "gitTimeline.unknownRepository", defaultMessage: "Unknown repository" });
   return (
     <div className="px-3 pb-2">
       <div className="flex items-center gap-1.5 text-2xs font-semibold uppercase tracking-wider text-muted-foreground">
         <TicketIcon ticket={ticket} />
-        <span className="truncate">{ticketType(ticket)} · {repository}</span>
+        <span className="truncate">
+          <FormattedMessage
+            id="gitTimeline.ticketInRepository"
+            defaultMessage="{type} · {repository}"
+            values={{ type: intl.formatMessage(ticketType(ticket)), repository }}
+          />
+        </span>
       </div>
       <h2 className="mt-1 text-lg font-semibold leading-snug break-words">{ticket.subject}</h2>
       <div className="mt-1 flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
-        <span className="capitalize">{status}</span>
+        <span className="capitalize">
+          <FormattedMessage
+            id="gitTimeline.status"
+            defaultMessage="{status, select, open {open} draft {draft} closed {closed} merged {merged} resolved {resolved} other {{status}}}"
+            values={{ status }}
+          />
+        </span>
         {workshopUrl && (
           <a href={workshopUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 hover:text-foreground hover:underline">
             <ExternalLink className="size-3" />
@@ -554,13 +640,13 @@ function TicketThread({ ticket, members, activities, open, onClose, onExpandChan
       deleteMessage: onDeleteComment
         ? (event) => {
             const comment = byId.get(event.id);
-            if (comment) onDeleteComment(ticket, comment).catch(failed("Couldn't delete comment"));
+            if (comment) onDeleteComment(ticket, comment).catch(failed(t({ id: "gitTimeline.deleteCommentFailed", defaultMessage: "Couldn't delete comment" })));
           }
         : undefined,
     };
   }, [comments, ticket, onComment, onEditComment, onDeleteComment]);
   const mentionPubkeys = useMemo(() => [...members], [members]);
-  const noun = ticket.type === "issue" ? "issue" : "pull request";
+  const intl = useIntl();
 
   return (
     <ThreadPanel
@@ -573,13 +659,25 @@ function TicketThread({ ticket, members, activities, open, onClose, onExpandChan
       open={open}
       onClose={onClose}
       onExpandChange={onExpandChange}
-      title={ticketType(ticket)}
+      title={intl.formatMessage(ticketType(ticket))}
       rootHeader={<TicketHeader ticket={ticket} status={status} actions={actions} />}
       rootReadOnly
       documentMarkdown
       // Repository discussion is public, unlike the community around it.
-      placeholder={`Comment publicly on this ${noun}…`}
-      readOnlyNotice={`Sign in to comment on this ${noun}.`}
+      placeholder={intl.formatMessage(
+        {
+          id: "gitTimeline.commentPlaceholder",
+          defaultMessage: "{type, select, issue {Comment publicly on this issue…} other {Comment publicly on this pull request…}}",
+        },
+        { type: ticket.type },
+      )}
+      readOnlyNotice={intl.formatMessage(
+        {
+          id: "gitTimeline.signInToComment",
+          defaultMessage: "{type, select, issue {Sign in to comment on this issue.} other {Sign in to comment on this pull request.}}",
+        },
+        { type: ticket.type },
+      )}
     />
   );
 }

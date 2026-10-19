@@ -4,6 +4,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import { useCall } from "@/hooks/useCall";
 import { useIsDesktop } from "@/hooks/useIsDesktop";
 import { cn } from "@/lib/utils";
+import { FormattedMessage, useIntl } from "@/i18n";
 
 const POS_KEY = "armada:mobile-call-preview:pos";
 const SIZE_KEY = "armada:mobile-call-preview:width";
@@ -149,6 +150,7 @@ export function MobileCallPreview({
   onExpand?: () => void;
   onHide: () => void;
 }) {
+  const intl = useIntl();
   const isDesktop = useIsDesktop();
   const { callBarHeight } = useCall();
   const bodyRef = useRef<HTMLDivElement | null>(null);
@@ -368,7 +370,7 @@ export function MobileCallPreview({
         <div
           onPointerDown={beginResize}
           role="presentation"
-          aria-label="Resize call preview"
+          aria-label={intl.formatMessage({ id: "mobileCallPreview.resize", defaultMessage: "Resize call preview" })}
           className={cn(
             "shrink-0 flex items-center justify-center touch-none cursor-nwse-resize",
             "size-6 touch:size-8",
@@ -399,16 +401,18 @@ export function MobileCallPreview({
             gesture === "drag" ? "cursor-grabbing" : "cursor-grab",
           )}
           role="presentation"
-          aria-label="Drag call preview"
+          aria-label={intl.formatMessage({ id: "mobileCallPreview.drag", defaultMessage: "Drag call preview" })}
         >
           <GripHorizontal className="size-4 shrink-0 text-muted-foreground" aria-hidden />
-          <span className="text-xs font-medium text-muted-foreground truncate">Call</span>
+          <span className="text-xs font-medium text-muted-foreground truncate">
+            <FormattedMessage id="mobileCallPreview.call" defaultMessage="Call" />
+          </span>
         </div>
         {onExpand && (
           <button
             type="button"
-            aria-label="Return to call"
-            title="Return to call"
+            aria-label={intl.formatMessage({ id: "mobileCallPreview.returnToCall", defaultMessage: "Return to call" })}
+            title={intl.formatMessage({ id: "mobileCallPreview.returnToCall", defaultMessage: "Return to call" })}
             onPointerDown={(e) => e.stopPropagation()}
             onClick={onExpand}
             className="shrink-0 rounded-md p-1 text-muted-foreground hover:text-foreground hover:bg-foreground/10 touch:p-1.5"
@@ -418,8 +422,8 @@ export function MobileCallPreview({
         )}
         <button
           type="button"
-          aria-label="Hide video preview"
-          title="Hide video preview"
+          aria-label={intl.formatMessage({ id: "mobileCallPreview.hidePreview", defaultMessage: "Hide video preview" })}
+          title={intl.formatMessage({ id: "mobileCallPreview.hidePreview", defaultMessage: "Hide video preview" })}
           onPointerDown={(e) => e.stopPropagation()}
           onClick={onHide}
           className="shrink-0 rounded-md p-1 text-muted-foreground hover:text-foreground hover:bg-foreground/10 touch:p-1.5"

@@ -76,6 +76,7 @@ import { RELAY_LIST_DISCOVERY_RELAYS } from "@/lib/platform";
 
 import type { NostrFilter } from "@nostrify/nostrify";
 import type { NostrRumor } from "@/lib/nostrRumor";
+import { defineMessages, t, type MessageDescriptor } from "@/i18n";
 
 /** NIP-88 poll kind — polls render inline in the group timeline. */
 const KIND_POLL = 1068;
@@ -127,14 +128,14 @@ export interface SyncState {
   done: boolean;
 }
 
-const PHASE_OPENING: Record<Exclude<SyncPhase, "done">, string> = {
-  relays: "locating signed relay map",
-  settings: "establishing secure channel",
-  groups: "mounting channel directory",
-  messages: "syncing recent transmissions",
-  communities: "restoring encrypted communities",
-  channels: "decrypting channel history",
-};
+const PHASE_OPENING: Record<Exclude<SyncPhase, "done">, MessageDescriptor> = defineMessages({
+  relays: { id: "useInitialSync.phase.relays", defaultMessage: "locating signed relay map" },
+  settings: { id: "useInitialSync.phase.settings", defaultMessage: "establishing secure channel" },
+  groups: { id: "useInitialSync.phase.groups", defaultMessage: "mounting channel directory" },
+  messages: { id: "useInitialSync.phase.messages", defaultMessage: "syncing recent transmissions" },
+  communities: { id: "useInitialSync.phase.communities", defaultMessage: "restoring encrypted communities" },
+  channels: { id: "useInitialSync.phase.channels", defaultMessage: "decrypting channel history" },
+});
 
 /**
  * One-time post-login sync for `pubkey`, with live progress:
@@ -188,8 +189,13 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
       setState({
         phase: "done",
         log: [
-          { id: "auth", text: `authenticated ${pubkey.slice(0, 8)}…${pubkey.slice(-4)}`, status: "OK", tone: "ok" },
-          { id: "offline", text: "offline mode active", status: "MESH", tone: "info" },
+          {
+            id: "auth",
+            text: t({ id: "useInitialSync.authenticated", defaultMessage: "authenticated {key}" }, { key: `${pubkey.slice(0, 8)}…${pubkey.slice(-4)}` }),
+            status: t({ id: "useInitialSync.status.ok", defaultMessage: "OK" }),
+            tone: "ok",
+          },
+          { id: "offline", text: t({ id: "useInitialSync.offlineMode", defaultMessage: "offline mode active" }), status: t({ id: "useInitialSync.status.mesh", defaultMessage: "MESH" }), tone: "info" },
         ],
         done: true,
       });
@@ -208,7 +214,7 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
     const begin = (phase: Exclude<SyncPhase, "done">): string => {
       const id = `${phase}`;
       logSync("gate", `phase "${phase}" started`);
-      log.push({ id, text: PHASE_OPENING[phase] });
+      log.push({ id, text: t(PHASE_OPENING[phase]) });
       // After lifting, a straggling branch must not re-raise the overlay.
       if (!cancelled && !lifted) setState({ phase, log: [...log], done: false });
       return id;
@@ -254,7 +260,7 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
       lifted = true;
       clearTimeout(budget);
       clearTimeout(hardCap);
-      note("ready", "all systems nominal", "READY", "ok");
+      note("ready", t({ id: "useInitialSync.ready", defaultMessage: "all systems nominal" }), t({ id: "useInitialSync.status.ready", defaultMessage: "READY" }), "ok");
       setState((s) => ({ ...s, phase: "done", done: true }));
     };
     /** Lift once the budget elapsed AND settings settled (settings decides theme/relay config). */
@@ -276,7 +282,7 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
 
     void (async () => {
       const shortPk = `${pubkey.slice(0, 8)}…${pubkey.slice(-4)}`;
-      note("auth", `authenticated ${shortPk}`, "OK", "ok");
+      note("auth", t({ id: "useInitialSync.authenticated", defaultMessage: "authenticated {key}" }, { key: shortPk }), t({ id: "useInitialSync.status.ok", defaultMessage: "OK" }), "ok");
 
       const rId = begin("relays");
       let accountRelays = accountDataRelays(configRef.current, pubkey);
@@ -358,12 +364,12 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
             ...accountRelays,
             ...discovery.relays.filter((relay) => relay.write).map((relay) => relay.url),
           ]);
-          resolve(rId, `${discovery.relays.length} FOUND`);
+          resolve(rId, t({ id: "useInitialSync.status.found", defaultMessage: "{count} FOUND" }, { count: discovery.relays.length }));
         } else {
-          resolve(rId, "APP DEFAULTS", "info");
+          resolve(rId, t({ id: "useInitialSync.status.appDefaults", defaultMessage: "APP DEFAULTS" }), "info");
         }
       } catch {
-        resolve(rId, "APP DEFAULTS", "warn");
+        resolve(rId, t({ id: "useInitialSync.status.appDefaults", defaultMessage: "APP DEFAULTS" }), "warn");
       }
       if (cancelled) return;
 
@@ -605,7 +611,9 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
         }
         resolve(
           sId,
-          automaticSettingsSync ? (settingsFound ? "RESTORED" : "DEFAULTS") : "OFF",
+          automaticSettingsSync
+            ? (settingsFound ? t({ id: "useInitialSync.status.restored", defaultMessage: "RESTORED" }) : t({ id: "useInitialSync.status.defaults", defaultMessage: "DEFAULTS" }))
+            : t({ id: "useInitialSync.status.off", defaultMessage: "OFF" }),
           settingsFound ? "ok" : "info",
         );
       };
@@ -654,7 +662,7 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
           // Best-effort.
         }
         if (groups.length > 0) {
-          resolve(gId, `${groups.length} ${groups.length === 1 ? "channel" : "channels"}`);
+          resolve(gId, t({ id: "useInitialSync.status.channels", defaultMessage: "{count, plural, one {# channel} other {# channels}}" }, { count: groups.length }));
         } else {
           drop(gId);
         }
@@ -681,7 +689,7 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
               }
             }),
           );
-          resolve(mId, `${messageCount} cached`);
+          resolve(mId, t({ id: "useInitialSync.status.cached", defaultMessage: "{count} cached" }, { count: messageCount }));
         }
       };
 
@@ -712,7 +720,7 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
             logSync("gate", `concord list fetch FAILED: ${err instanceof Error ? err.message : String(err)}`);
           }
           if (concordLive.length > 0) {
-            resolve(vId, `${concordLive.length} ${concordLive.length === 1 ? "community" : "communities"}`);
+            resolve(vId, t({ id: "useInitialSync.status.communities", defaultMessage: "{count, plural, one {# community} other {# communities}}" }, { count: concordLive.length }));
           } else {
             drop(vId);
           }
@@ -739,9 +747,9 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
             }),
           ]);
           if (warm) {
-            resolve(hId, `${warm.messages} decrypted`);
+            resolve(hId, t({ id: "useInitialSync.status.decrypted", defaultMessage: "{count} decrypted" }, { count: warm.messages }));
           } else {
-            resolve(hId, "CONTINUING", "warn");
+            resolve(hId, t({ id: "useInitialSync.status.continuing", defaultMessage: "CONTINUING" }), "warn");
           }
         }
         if (cancelled) return;

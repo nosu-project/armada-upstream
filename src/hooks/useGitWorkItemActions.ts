@@ -21,6 +21,7 @@ import { APP_NAME } from "@/lib/platform";
 import { queueSignedEvent, removeQueuedPublish } from "@/lib/publishOutbox";
 import { publishTimeoutMs } from "@/lib/publishTimeout";
 import { emitWireScopes } from "@/wire/bus";
+import { t } from "@/i18n";
 
 export interface GitWorkItemRepository {
   address: GitRepositoryAddress;
@@ -42,8 +43,8 @@ export function useGitWorkItemActions() {
     scopes: readonly string[],
     createdAt?: number,
   ): Promise<NostrEvent> => {
-    if (!user) throw new Error("Sign in to participate in repository discussions.");
-    if (!relays.length) throw new Error("This repository has no reachable activity relays.");
+    if (!user) throw new Error(t({ id: "useGitWorkItemActions.signIn", defaultMessage: "Sign in to participate in repository discussions." }));
+    if (!relays.length) throw new Error(t({ id: "useGitWorkItemActions.noRelays", defaultMessage: "This repository has no reachable activity relays." }));
 
     // As in useNostrPublish: our version, not a carried-forward `client` tag.
     const tags = [
@@ -57,7 +58,7 @@ export function useGitWorkItemActions() {
       created_at: createdAt ?? Math.floor(Date.now() / 1000),
     });
     if (event.pubkey !== user.pubkey) {
-      throw new Error("Signed event pubkey does not match the currently selected account.");
+      throw new Error(t({ id: "useGitWorkItemActions.wrongAccount", defaultMessage: "Signed event pubkey does not match the currently selected account." }));
     }
 
     const store = await eventStore;
@@ -74,7 +75,10 @@ export function useGitWorkItemActions() {
       await removeQueuedPublish(event.id).catch(() => undefined);
     }
     if (!results.some((result) => result.status === "fulfilled")) {
-      toast({ title: "Delivery queued", description: "No repository relay answered. The post is saved and will retry." });
+      toast({
+        title: t({ id: "useGitWorkItemActions.queued.title", defaultMessage: "Delivery queued" }),
+        description: t({ id: "useGitWorkItemActions.queued.description", defaultMessage: "No repository relay answered. The post is saved and will retry." }),
+      });
     }
     return event;
   }, [eventStore, nostr, user]);

@@ -34,6 +34,7 @@ import type { InviteBundle } from "@/concord/lib/invite";
 import { KIND_DIRECT_INVITE, KIND_WRAP } from "@/concord/lib/kinds";
 
 import type { NostrEvent } from "@nostrify/nostrify";
+import { t } from "@/i18n";
 
 /** The signed-in user this module's background invite paths operate for. */
 type InviteUser = NonNullable<ReturnType<typeof useCurrentUser>["user"]>;
@@ -374,9 +375,9 @@ export function useAcceptDirectInvite() {
 
   return useMutation<{ communityId: string; name: string }, Error, { invite: ParkedInvite }>({
     mutationFn: async ({ invite }) => {
-      if (!user) throw new Error("Sign in to accept an invite.");
+      if (!user) throw new Error(t({ id: "useDirectInvites.signInToAccept", defaultMessage: "Sign in to accept an invite." }));
       const { bundle } = invite;
-      if (directInviteExpired(bundle)) throw new Error("This invite has expired.");
+      if (directInviteExpired(bundle)) throw new Error(t({ id: "useDirectInvites.expired", defaultMessage: "This invite has expired." }));
 
       // No accepting into a dissolved community, as with link joins (`completeJoin`).
       await assertNotDissolved(nostr, bundle);

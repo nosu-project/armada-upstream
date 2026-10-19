@@ -62,6 +62,7 @@ import { writeClipboardText } from "@/lib/clipboard";
 import { reportDestination, type ReportTarget } from "@/lib/report";
 import { chatUrl, type ChatRoute } from "@/lib/routes";
 import { cn } from "@/lib/utils";
+import { common, FormattedMessage, useIntl } from "@/i18n";
 
 import type { MessageActionItem } from "@/components/chat/messageActions";
 import { useChatEditing } from "@/components/chat/useChatEditing";
@@ -139,6 +140,7 @@ export function ThreadMessage({
   const author = useAuthor(event.pubkey);
   const metadata = author.data?.metadata;
   const displayName = useScopedDisplayName(event.pubkey, metadata);
+  const intl = useIntl();
   const when = new Date(event.created_at * 1000);
 
   const [jsonOpen, setJsonOpen] = useState(false);
@@ -206,37 +208,37 @@ export function ThreadMessage({
   // One action list drives the sheet, `⋯` overflow and right-click menu (as ChatMessage).
   const menuActions: MessageActionItem[] = [];
   if (canZap && !isEditing) {
-    menuActions.push({ id: "zap", label: "Zap message", icon: Zap, onSelect: () => setZapOpen(true) });
+    menuActions.push({ id: "zap", label: intl.formatMessage({ id: "threadPanel.action.zap", defaultMessage: "Zap message" }), icon: Zap, onSelect: () => setZapOpen(true) });
   }
   if (canEdit && !isEditing) {
-    menuActions.push({ id: "edit", label: "Edit message", icon: Pencil, onSelect: () => onEdit?.(event) });
+    menuActions.push({ id: "edit", label: intl.formatMessage({ id: "threadPanel.action.edit", defaultMessage: "Edit message" }), icon: Pencil, onSelect: () => onEdit?.(event) });
   }
   menuActions.push({
     id: "copy-text",
-    label: "Copy text",
+    label: intl.formatMessage({ id: "threadPanel.action.copyText", defaultMessage: "Copy text" }),
     icon: Copy,
     groupStart: true,
     onSelect: () => writeClipboardText(event.content).catch(() => undefined),
   });
   if (!isRumor) {
-    menuActions.push({ id: "copy-id", label: "Copy message ID", icon: Link2, onSelect: copyMessageId });
+    menuActions.push({ id: "copy-id", label: intl.formatMessage({ id: "threadPanel.action.copyId", defaultMessage: "Copy message ID" }), icon: Link2, onSelect: copyMessageId });
   }
   if (permalink) {
     menuActions.push({
       id: "copy-link",
-      label: "Copy message link",
+      label: intl.formatMessage({ id: "threadPanel.action.copyLink", defaultMessage: "Copy message link" }),
       icon: LinkIcon,
       onSelect: () =>
         writeClipboardText(chatUrl({ ...permalink, messageId: event.id })).catch(() => undefined),
     });
   }
-  menuActions.push({ id: "json", label: "View event JSON", icon: Braces, onSelect: () => setJsonOpen(true) });
+  menuActions.push({ id: "json", label: intl.formatMessage({ id: "threadPanel.action.viewJson", defaultMessage: "View event JSON" }), icon: Braces, onSelect: () => setJsonOpen(true) });
   const showHide = hiddenMessages.canHide && !isEditing && !isOwn;
   const showReport = canReport && !isEditing;
   if (showHide) {
     menuActions.push({
       id: "hide",
-      label: "Hide message",
+      label: intl.formatMessage({ id: "threadPanel.action.hide", defaultMessage: "Hide message" }),
       icon: EyeOff,
       moderation: true,
       onSelect: () => hiddenMessages.hide(event.id),
@@ -245,7 +247,7 @@ export function ThreadMessage({
   if (showReport) {
     menuActions.push({
       id: "report",
-      label: "Report message",
+      label: intl.formatMessage({ id: "threadPanel.action.report", defaultMessage: "Report message" }),
       icon: Flag,
       destructive: true,
       moderation: true,
@@ -255,7 +257,7 @@ export function ThreadMessage({
   if (canDelete && !isEditing) {
     menuActions.push({
       id: "delete",
-      label: "Delete message",
+      label: intl.formatMessage({ id: "threadPanel.action.delete", defaultMessage: "Delete message" }),
       icon: Trash2,
       destructive: true,
       // Your own message is housekeeping; someone else's is moderation.
@@ -303,12 +305,14 @@ export function ThreadMessage({
           className="font-semibold text-primary hover:underline touch:py-2"
           onClick={() => onEditSubmit?.(event, editText)}
         >
-          Save
+          <FormattedMessage {...common.save} />
         </button>
         <button type="button" className="hover:text-foreground touch:py-2" onClick={() => onEditCancel?.()}>
-          Cancel
+          <FormattedMessage {...common.cancel} />
         </button>
-        <span className="opacity-70">escape to cancel · enter to save</span>
+        <span className="opacity-70">
+          <FormattedMessage id="threadPanel.editHint" defaultMessage="escape to cancel · enter to save" />
+        </span>
       </div>
     </div>
   ) : (
@@ -427,8 +431,8 @@ export function ThreadMessage({
                 {shortTimeAgo(event.created_at)}
               </span>
             ) : (
-              <span className="text-2xs text-muted-foreground/70 shrink-0" title={when.toLocaleString()}>
-                {when.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}
+              <span className="text-2xs text-muted-foreground/70 shrink-0" title={when.toLocaleString(intl.locale)}>
+                {when.toLocaleTimeString(intl.locale, { hour: "numeric", minute: "2-digit" })}
               </span>
             )}
           </div>
@@ -443,7 +447,7 @@ export function ThreadMessage({
               className="inline-flex items-center gap-1 clip-corner px-2 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-secondary/60 hover:text-foreground touch:py-2"
             >
               <Reply className="size-3.5" />
-              Reply
+              <FormattedMessage {...common.reply} />
             </button>
           </div>
         )}
@@ -488,18 +492,25 @@ export function ThreadMessage({
     <AlertDialog open={confirmDelete} onOpenChange={setConfirmDelete}>
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle>Delete message?</AlertDialogTitle>
+          <AlertDialogTitle>
+            <FormattedMessage id="threadPanel.deleteDialog.title" defaultMessage="Delete message?" />
+          </AlertDialogTitle>
           <AlertDialogDescription>
-            This can't be undone. Relays and clients that already have it may keep their copy.
+            <FormattedMessage
+              id="threadPanel.deleteDialog.description"
+              defaultMessage="This can't be undone. Relays and clients that already have it may keep their copy."
+            />
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
-          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogCancel>
+            <FormattedMessage {...common.cancel} />
+          </AlertDialogCancel>
           <AlertDialogAction
             className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             onClick={() => onDelete?.(event)}
           >
-            Delete
+            <FormattedMessage {...common.delete} />
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>
@@ -522,8 +533,8 @@ export function ThreadMessage({
         source={event}
         description={
           isRumor
-            ? "The raw, unsigned rumor for this message."
-            : "The raw signed event for this message."
+            ? intl.formatMessage({ id: "threadPanel.json.rumor", defaultMessage: "The raw, unsigned rumor for this message." })
+            : intl.formatMessage({ id: "threadPanel.json.signed", defaultMessage: "The raw signed event for this message." })
         }
       />
     )}
@@ -577,9 +588,8 @@ interface ThreadPanelProps {
  * (`threadRepliesFor`/`sendThreadReply`); replies never appear in the main timeline.
  */
 export function ThreadPanel({ root, rootTitle, transport, relayUrl, groupId, canWrite, mentionPubkeys, botCommands, conversationRelays, encryptAttachments = false, disappearingTimer, autoFocus = false, open = true, permalink, onClose, onExpandChange, title, rootHeader, rootReadOnly = false, documentMarkdown = false, placeholder, readOnlyNotice }: ThreadPanelProps) {
+  const intl = useIntl();
   const isPost = Boolean(rootTitle);
-  const replyNoun = isPost ? "comment" : "reply";
-  const replyNounPlural = isPost ? "comments" : "replies";
   const threadRepliesFor = transport.threadRepliesFor;
   const isLoading = transport.threadLoading?.(root.id) ?? false;
   // Replies bypass MessageTimeline's filter, so drop muted authors here. The count
@@ -738,8 +748,8 @@ export function ThreadPanel({ root, rootTitle, transport, relayUrl, groupId, can
           <MessagesSquare className="size-4 shrink-0" />
           <span className="italic">
             {rootMuted
-              ? "You blocked the person who started this thread."
-              : "Original message not loaded. It may be older than the channel window."}
+              ? intl.formatMessage({ id: "threadPanel.rootBlocked", defaultMessage: "You blocked the person who started this thread." })
+              : intl.formatMessage({ id: "threadPanel.rootUnavailable", defaultMessage: "Original message not loaded. It may be older than the channel window." })}
           </span>
         </div>
       ) : (
@@ -757,8 +767,18 @@ export function ThreadPanel({ root, rootTitle, transport, relayUrl, groupId, can
         {!isLoading && (
           <span className="text-2xs text-muted-foreground/60 shrink-0">
             {replies.length === 0
-              ? `No ${replyNounPlural} yet`
-              : `${replies.length} ${replies.length === 1 ? replyNoun : replyNounPlural}`}
+              ? isPost
+                ? intl.formatMessage({ id: "threadPanel.noComments", defaultMessage: "No comments yet" })
+                : intl.formatMessage({ id: "threadPanel.noReplies", defaultMessage: "No replies yet" })
+              : isPost
+                ? intl.formatMessage(
+                  { id: "threadPanel.commentCount", defaultMessage: "{count, plural, one {# comment} other {# comments}}" },
+                  { count: replies.length },
+                )
+                : intl.formatMessage(
+                  { id: "threadPanel.replyCount", defaultMessage: "{count, plural, one {# reply} other {# replies}}" },
+                  { count: replies.length },
+                )}
           </span>
         )}
         <div className="h-px flex-1 bg-border/60" />
@@ -782,14 +802,14 @@ export function ThreadPanel({ root, rootTitle, transport, relayUrl, groupId, can
         <div className="flex items-center gap-2 min-w-0">
           <MessagesSquare className="size-4 text-muted-foreground shrink-0" />
           <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground truncate">
-            {title ?? (isPost ? "Post" : "Thread")}{replies.length > 0 ? ` · ${replies.length}` : ""}
+            {title ?? (isPost ? intl.formatMessage({ id: "threadPanel.post", defaultMessage: "Post" }) : intl.formatMessage({ id: "threadPanel.thread", defaultMessage: "Thread" }))}{replies.length > 0 ? ` · ${replies.length}` : ""}
           </h3>
         </div>
         <div className="flex items-center gap-1">
-          <Button variant="ghost" size="icon" aria-label={isExpanded ? "Collapse thread" : "Expand thread"} className="size-6 touch:size-10 hidden md:inline-flex" onClick={() => setIsExpanded(v => !v)}>
+          <Button variant="ghost" size="icon" aria-label={isExpanded ? intl.formatMessage({ id: "threadPanel.collapse", defaultMessage: "Collapse thread" }) : intl.formatMessage({ id: "threadPanel.expand", defaultMessage: "Expand thread" })} className="size-6 touch:size-10 hidden md:inline-flex" onClick={() => setIsExpanded(v => !v)}>
             {isExpanded ? <Minimize2 className="size-4" /> : <Maximize2 className="size-4" />}
           </Button>
-          <Button variant="ghost" size="icon" aria-label="Close thread" className="size-6 touch:size-10" onClick={onClose}>
+          <Button variant="ghost" size="icon" aria-label={intl.formatMessage({ id: "threadPanel.close", defaultMessage: "Close thread" })} className="size-6 touch:size-10" onClick={onClose}>
             <X className="size-4" />
           </Button>
         </div>
@@ -825,10 +845,10 @@ export function ThreadPanel({ root, rootTitle, transport, relayUrl, groupId, can
               type="button"
               onClick={() => scrollToBottom()}
               className="pointer-events-auto inline-flex items-center gap-1.5 clip-corner-lg bg-secondary/90 backdrop-blur px-4 py-2 text-xs font-medium text-foreground shadow-lg hover:bg-secondary transition-colors"
-              aria-label="Jump to latest replies"
+              aria-label={intl.formatMessage({ id: "threadPanel.jumpToLatestReplies", defaultMessage: "Jump to latest replies" })}
             >
               <ChevronDown className="size-4" />
-              Jump to latest
+              <FormattedMessage id="threadPanel.jumpToLatest" defaultMessage="Jump to latest" />
             </button>
           </div>
         )}
@@ -845,7 +865,7 @@ export function ThreadPanel({ root, rootTitle, transport, relayUrl, groupId, can
           messages={[]}
           mentionPubkeys={mentionPubkeys}
           canMentionEveryone={transport.canMentionEveryone}
-          placeholder={placeholder ?? (isPost ? "Add a comment…" : "Reply in thread…")}
+          placeholder={placeholder ?? (isPost ? intl.formatMessage({ id: "threadPanel.placeholderComment", defaultMessage: "Add a comment…" }) : intl.formatMessage({ id: "threadPanel.placeholderReply", defaultMessage: "Reply in thread…" }))}
           draftScope={`thread:${root.id}`}
           // No `shareRoute`: the room's own composer is the share destination.
           autoFocus={autoFocus}
@@ -860,7 +880,7 @@ export function ThreadPanel({ root, rootTitle, transport, relayUrl, groupId, can
       ) : (
         <div className="p-3 shrink-0 pb-safe">
           <p className="text-xs text-muted-foreground text-center py-1">
-            {readOnlyNotice ?? "Join this channel to reply."}
+            {readOnlyNotice ?? intl.formatMessage({ id: "threadPanel.joinToReply", defaultMessage: "Join this channel to reply." })}
           </p>
         </div>
       )}

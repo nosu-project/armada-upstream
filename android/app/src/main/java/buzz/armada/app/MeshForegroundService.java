@@ -56,13 +56,14 @@ public class MeshForegroundService extends Service {
         NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && nm != null) {
             NotificationChannel ch = new NotificationChannel(
-                    CHANNEL_ID, "Bluetooth mesh", NotificationManager.IMPORTANCE_LOW);
-            ch.setDescription("Keeps the nearby Bluetooth mesh chat connected.");
+                    CHANNEL_ID, AppLocale.string(this, R.string.channel_mesh_name),
+                    NotificationManager.IMPORTANCE_LOW);
+            ch.setDescription(AppLocale.string(this, R.string.channel_mesh_description));
             nm.createNotificationChannel(ch);
         }
         Notification n = new NotificationCompat.Builder(this, CHANNEL_ID)
-                .setContentTitle("Mesh chat active")
-                .setContentText("Connected to nearby devices over Bluetooth")
+                .setContentTitle(AppLocale.string(this, R.string.mesh_active_title))
+                .setContentText(AppLocale.string(this, R.string.mesh_active_text))
                 .setSmallIcon(R.mipmap.ic_launcher)
                 .setOngoing(true)
                 .setPriority(NotificationCompat.PRIORITY_LOW)

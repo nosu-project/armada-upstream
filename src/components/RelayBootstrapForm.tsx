@@ -13,10 +13,34 @@ import {
   useNip65RelaySetup,
 } from "@/hooks/useNip65RelaySetup";
 import { toast } from "@/hooks/useToast";
+import { common, FormattedMessage, t, useIntl } from "@/i18n";
 import { normalizeRelayUrl } from "@/lib/platform";
 import type { RelayListDiscovery, RelayPreference } from "@/lib/nip65";
 
 const EMPTY_RELAY_PREFERENCES: RelayPreference[] = [];
+
+function savedDescription(accepted: number, rejected: number): string {
+  return rejected > 0
+    ? t(
+        {
+          id: "relayBootstrapForm.savedPartial",
+          defaultMessage: "Saved on {accepted} {accepted, plural, one {relay} other {relays}}; {rejected} didn't accept it.",
+        },
+        { accepted, rejected },
+      )
+    : t(
+        { id: "relayBootstrapForm.saved", defaultMessage: "Saved on {accepted} {accepted, plural, one {relay} other {relays}}." },
+        { accepted },
+      );
+}
+
+const tryAgainReach = () =>
+  t({
+    id: "relayBootstrapForm.unconfirmedAppRelays",
+    defaultMessage:
+      "Couldn't reach enough relays to confirm your account has no saved setup yet. Try again, or look up a relay you've used before.",
+  });
+const couldNotSave = () => t({ id: "relayBootstrapForm.couldNotSave", defaultMessage: "Couldn't save. Try again." });
 
 export function RelayBootstrapForm({
   onDone,
@@ -25,6 +49,7 @@ export function RelayBootstrapForm({
   onDone?: () => void;
   onSkip?: () => void;
 }) {
+  const intl = useIntl();
   const { discoverWithStatus, adopt, publish } = useNip65RelaySetup();
   const { config } = useAppContext();
   const { user } = useCurrentUser();
@@ -50,15 +75,21 @@ export function RelayBootstrapForm({
   const restore = (found: RelayListDiscovery) => {
     adopt(found);
     toast({
-      title: "Setup found",
-      description: `Restored ${found.relays.length} ${found.relays.length === 1 ? "relay" : "relays"} for your account.`,
+      title: t({ id: "relayBootstrapForm.setupFound", defaultMessage: "Setup found" }),
+      description: t(
+        {
+          id: "relayBootstrapForm.restored",
+          defaultMessage: "Restored {count} {count, plural, one {relay} other {relays}} for your account.",
+        },
+        { count: found.relays.length },
+      ),
     });
     onDone?.();
   };
 
   const find = async () => {
     if (!normalized) {
-      setError("Enter a relay address that starts with wss://.");
+      setError(t({ id: "relayBootstrapForm.enterWss", defaultMessage: "Enter a relay address that starts with wss://." }));
       return;
     }
     setBusy(true);
@@ -73,11 +104,15 @@ export function RelayBootstrapForm({
         setCheckedRelay(normalized);
       } else {
         setError(
-          "Couldn't reach enough relays to confirm your account has no saved setup yet. Check the address and try again.",
+          t({
+            id: "relayBootstrapForm.unconfirmedRelay",
+            defaultMessage:
+              "Couldn't reach enough relays to confirm your account has no saved setup yet. Check the address and try again.",
+          }),
         );
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Couldn't look that up. Try again.");
+      setError(err instanceof Error ? err.message : t({ id: "relayBootstrapForm.lookupFailed", defaultMessage: "Couldn't look that up. Try again." }));
     } finally {
       setBusy(false);
     }
@@ -90,10 +125,8 @@ export function RelayBootstrapForm({
     try {
       const result = await publish(urls.map((url) => ({ url, read: true, write: true })));
       toast({
-        title: "Saved",
-        description: result.rejected.length > 0
-          ? `Saved on ${result.accepted.length} ${result.accepted.length === 1 ? "relay" : "relays"}; ${result.rejected.length} didn't accept it.`
-          : `Saved on ${result.accepted.length} ${result.accepted.length === 1 ? "relay" : "relays"}.`,
+        title: t({ id: "relayBootstrapForm.savedTitle", defaultMessage: "Saved" }),
+        description: savedDescription(result.accepted.length, result.rejected.length),
       });
       onDone?.();
     } catch (err) {
@@ -101,7 +134,7 @@ export function RelayBootstrapForm({
         restore(err.discovery);
         return;
       }
-      setError(err instanceof Error ? err.message : "Couldn't save. Try again.");
+      setError(err instanceof Error ? err.message : couldNotSave());
     } finally {
       setBusy(false);
     }
@@ -119,7 +152,7 @@ export function RelayBootstrapForm({
     try {
       read = await discoverWithStatus(urls);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Couldn't look up your setup. Try again.");
+      setError(err instanceof Error ? err.message : t({ id: "relayBootstrapForm.lookupSetupFailed", defaultMessage: "Couldn't look up your setup. Try again." }));
       setBusy(false);
       return;
     }
@@ -129,9 +162,7 @@ export function RelayBootstrapForm({
       return;
     }
     if (!relayListAbsenceConfirmed(read.answered, urls)) {
-      setError(
-        "Couldn't reach enough relays to confirm your account has no saved setup yet. Try again, or look up a relay you've used before.",
-      );
+      setError(tryAgainReach());
       setBusy(false);
       return;
     }
@@ -140,7 +171,12 @@ export function RelayBootstrapForm({
 
   const saveExisting = async () => {
     if (editedRelays.length === 0) {
-      setError("Keep at least one relay so your account can be found on your other devices.");
+      setError(
+        t({
+          id: "relayBootstrapForm.keepOne",
+          defaultMessage: "Keep at least one relay so your account can be found on your other devices.",
+        }),
+      );
       return;
     }
     setBusy(true);
@@ -151,14 +187,12 @@ export function RelayBootstrapForm({
         return existing ?? { url, read: true, write: true };
       }));
       toast({
-        title: "Saved",
-        description: result.rejected.length > 0
-          ? `Saved on ${result.accepted.length} ${result.accepted.length === 1 ? "relay" : "relays"}; ${result.rejected.length} didn't accept it.`
-          : `Saved on ${result.accepted.length} ${result.accepted.length === 1 ? "relay" : "relays"}.`,
+        title: t({ id: "relayBootstrapForm.savedTitle", defaultMessage: "Saved" }),
+        description: savedDescription(result.accepted.length, result.rejected.length),
       });
       onDone?.();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Couldn't save. Try again.");
+      setError(err instanceof Error ? err.message : couldNotSave());
     } finally {
       setBusy(false);
     }
@@ -173,7 +207,7 @@ export function RelayBootstrapForm({
             setEditedRelays(relays);
             setError(undefined);
           }}
-          emptyText="Add at least one relay before saving."
+          emptyText={intl.formatMessage({ id: "relayBootstrapForm.emptyText", defaultMessage: "Add at least one relay before saving." })}
         />
         {error && <p className="text-sm text-destructive" role="alert">{error}</p>}
         <Button
@@ -182,7 +216,7 @@ export function RelayBootstrapForm({
           onClick={() => void saveExisting()}
           disabled={busy || editedRelays.length === 0}
         >
-          {busy ? "Saving…" : "Save"}
+          {busy ? <FormattedMessage {...common.saving} /> : <FormattedMessage {...common.save} />}
         </Button>
       </div>
     );
@@ -193,13 +227,13 @@ export function RelayBootstrapForm({
       <div className="space-y-1.5">
         <div className="flex items-center gap-1">
           <label htmlFor={inputId} className="text-xs font-medium text-muted-foreground">
-            Relay address
+            <FormattedMessage id="relayBootstrapForm.relayAddress" defaultMessage="Relay address" />
           </label>
           <Popover>
             <PopoverTrigger asChild>
               <button
                 type="button"
-                aria-label="What is a relay address?"
+                aria-label={intl.formatMessage({ id: "relayBootstrapForm.whatIsRelay", defaultMessage: "What is a relay address?" })}
                 className="-m-1.5 flex size-7 items-center justify-center clip-corner-lg p-1.5 text-muted-foreground/60 hover:text-muted-foreground touch:size-11"
               >
                 <HelpCircle className="size-3.5" />
@@ -210,10 +244,11 @@ export function RelayBootstrapForm({
               align="start"
               className="max-w-64 text-xs leading-relaxed text-muted-foreground"
             >
-              A relay is a server that stores your account's data. If you've used Armada or
-              another Nostr app before, enter a relay you used. It looks like{" "}
-              <span className="font-mono text-foreground">wss://relay.example.com</span>. Not
-              sure? You can skip this; Armada still works with its built-in relays.
+              <FormattedMessage
+                id="relayBootstrapForm.relayHelp"
+                defaultMessage="A relay is a server that stores your account's data. If you've used Armada or another Nostr app before, enter a relay you used. It looks like <mono>wss://relay.example.com</mono>. Not sure? You can skip this; Armada still works with its built-in relays."
+                values={{ mono: (chunks) => <span className="font-mono text-foreground">{chunks}</span> }}
+              />
             </PopoverContent>
           </Popover>
         </div>
@@ -235,9 +270,11 @@ export function RelayBootstrapForm({
 
       {checkedRelay && (
         <div className="clip-corner-lg bg-secondary/50 p-3 text-xs leading-relaxed text-muted-foreground">
-          We didn't find a saved setup on that relay. You can start fresh here. Armada will
-          remember <strong>{checkedRelay}</strong> as your account's home so your servers and
-          settings follow you to your other devices. Nothing is saved until you confirm.
+          <FormattedMessage
+            id="relayBootstrapForm.notFound"
+            defaultMessage="We didn't find a saved setup on that relay. You can start fresh here. Armada will remember <b>{relay}</b> as your account's home so your servers and settings follow you to your other devices. Nothing is saved until you confirm."
+            values={{ relay: checkedRelay, b: (chunks) => <strong>{chunks}</strong> }}
+          />
         </div>
       )}
 
@@ -251,7 +288,7 @@ export function RelayBootstrapForm({
           onClick={() => void create([checkedRelay])}
           disabled={busy}
         >
-          Use this relay
+          <FormattedMessage id="relayBootstrapForm.useThisRelay" defaultMessage="Use this relay" />
         </Button>
       ) : (
         <Button
@@ -261,7 +298,11 @@ export function RelayBootstrapForm({
           onClick={find}
           disabled={busy || !value.trim()}
         >
-          {busy ? "Looking…" : "Look up my setup"}
+          {busy ? (
+            <FormattedMessage id="relayBootstrapForm.looking" defaultMessage="Looking…" />
+          ) : (
+            <FormattedMessage id="relayBootstrapForm.lookUp" defaultMessage="Look up my setup" />
+          )}
         </Button>
       )}
 
@@ -274,18 +315,21 @@ export function RelayBootstrapForm({
             onClick={() => void chooseAppRelays()}
             disabled={busy}
           >
-            Use this app's relays
+            <FormattedMessage id="relayBootstrapForm.useAppRelays" defaultMessage="Use this app's relays" />
           </Button>
           <p className="text-center text-xs text-muted-foreground">
-            Checks for an existing setup first; if there is none, saves{" "}
-            {config.appRelays.map((url, index) => (
-              <span key={url}>
-                {index > 0 && ", "}
-                <span className="font-mono text-foreground">{url.replace(/^wss?:\/\//, "").replace(/\/$/, "")}</span>
-              </span>
-            ))}{" "}
-            as your account's home so your servers and settings follow you to your other
-            devices.
+            <FormattedMessage
+              id="relayBootstrapForm.appRelaysHelp"
+              defaultMessage="Checks for an existing setup first; if there is none, saves {relays} as your account's home so your servers and settings follow you to your other devices."
+              values={{
+                relays: config.appRelays.map((url, index) => (
+                  <span key={url}>
+                    {index > 0 && ", "}
+                    <span className="font-mono text-foreground">{url.replace(/^wss?:\/\//, "").replace(/\/$/, "")}</span>
+                  </span>
+                )),
+              }}
+            />
           </p>
         </div>
       )}
@@ -299,11 +343,13 @@ export function RelayBootstrapForm({
             onClick={onSkip}
             disabled={busy}
           >
-            Skip for now
+            <FormattedMessage id="relayBootstrapForm.skipForNow" defaultMessage="Skip for now" />
           </Button>
           <p className="text-center text-xs text-muted-foreground">
-            Armada keeps working with its default relays. You can set up your own anytime in
-            Settings.
+            <FormattedMessage
+              id="relayBootstrapForm.skipHelp"
+              defaultMessage="Armada keeps working with its default relays. You can set up your own anytime in Settings."
+            />
           </p>
         </div>
       )}

@@ -28,6 +28,7 @@ import {
 } from "@/lib/nativeNotifications";
 import { isIOS, isNativeRuntime, isStandalonePwa } from "@/lib/platform";
 import { isDesktop } from "@/lib/desktop";
+import { FormattedMessage, getLocale, t, useIntl } from "@/i18n";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -46,11 +47,16 @@ import { Switch } from "@/components/ui/switch";
  * a content-blind nostr-push gateway (see useWebPushNotifications).
  */
 export function NotificationSettings() {
+  const intl = useIntl();
   const { user } = useCurrentUser();
   const native = useNativeNotifications();
 
   if (!user) {
-    return <NoticeGroup>Log in to enable notifications.</NoticeGroup>;
+    return (
+      <NoticeGroup>
+        <FormattedMessage id="notificationSettings.logIn" defaultMessage="Log in to enable notifications." />
+      </NoticeGroup>
+    );
   }
 
   if (native.supported) {
@@ -58,9 +64,9 @@ export function NotificationSettings() {
       <>
         {native.enabled && <BatteryOptimizationWarning />}
         <NotificationToggles
-          title="Background notifications"
-          description="Get notified even when Armada is closed."
-          info="Armada stays connected in the background to notify you, without Google services."
+          title={intl.formatMessage({ id: "notificationSettings.background", defaultMessage: "Background notifications" })}
+          description={intl.formatMessage({ id: "notificationSettings.notifiedWhenClosed", defaultMessage: "Get notified even when Armada is closed." })}
+          info={intl.formatMessage({ id: "notificationSettings.backgroundInfo", defaultMessage: "Armada stays connected in the background to notify you, without Google services." })}
           enabled={native.enabled}
           busy={native.busy}
           blocked={false}
@@ -97,6 +103,7 @@ function NativeNotificationHealthPanel({
 }: {
   native: UseNativeNotificationsReturn;
 }) {
+  const intl = useIntl();
   const health = native.health;
   if (!health) return null;
 
@@ -123,7 +130,7 @@ function NativeNotificationHealthPanel({
   };
 
   return (
-    <SettingsGroup title="Status">
+    <SettingsGroup title={intl.formatMessage({ id: "notificationSettings.status", defaultMessage: "Status" })}>
       {(blocked || degraded || callsBlocked) && (
         <SettingsRow className="bg-warning/10">
           <div className="flex items-start gap-2">
@@ -131,24 +138,24 @@ function NativeNotificationHealthPanel({
             <div className="min-w-0 flex-1 space-y-2">
               <p className="text-xs">
                 {appBlocked
-                  ? "Android is blocking Armada notifications at the app level."
+                  ? <FormattedMessage id="notificationSettings.health.appBlocked" defaultMessage="Android is blocking Armada notifications at the app level." />
                   : messagesBlocked
-                    ? "Android's Armada message channel is turned off."
+                    ? <FormattedMessage id="notificationSettings.health.messagesBlocked" defaultMessage="Android's Armada message channel is turned off." />
                     : messagesQuiet
-                      ? "Android's Armada message channel is below high priority, so alerts may be silent or have no banner."
+                      ? <FormattedMessage id="notificationSettings.health.messagesQuiet" defaultMessage="Android's Armada message channel is below high priority, so alerts may be silent or have no banner." />
                     : serviceBlocked
-                      ? "The background-service notification channel is turned off. Android cannot run the background connection without it."
+                      ? <FormattedMessage id="notificationSettings.health.serviceBlocked" defaultMessage="The background-service notification channel is turned off. Android cannot run the background connection without it." />
                       : stopped
-                        ? "The background notification service is not running with a complete configuration."
+                        ? <FormattedMessage id="notificationSettings.health.stopped" defaultMessage="The background notification service is not running with a complete configuration." />
                         : staleConfig
-                          ? "The background service has not loaded the latest notification configuration."
+                          ? <FormattedMessage id="notificationSettings.health.staleConfig" defaultMessage="The background service has not loaded the latest notification configuration." />
                           : disconnected
-                            ? "The service is running, but none of its relay connections are open."
+                            ? <FormattedMessage id="notificationSettings.health.disconnected" defaultMessage="The service is running, but none of its relay connections are open." />
                             : signerUnavailable
-                              ? "The background signer is unavailable, so encrypted DMs and relay authentication can fail while Armada is closed."
+                              ? <FormattedMessage id="notificationSettings.health.signerUnavailable" defaultMessage="The background signer is unavailable, so encrypted DMs and relay authentication can fail while Armada is closed." />
                               : callsBlocked
-                                ? "Android's incoming-call notification channel is turned off."
-                                : "Android's incoming-call channel is below high priority, so calls may not ring."}
+                                ? <FormattedMessage id="notificationSettings.health.callsBlocked" defaultMessage="Android's incoming-call notification channel is turned off." />
+                                : <FormattedMessage id="notificationSettings.health.callsQuiet" defaultMessage="Android's incoming-call channel is below high priority, so calls may not ring." />}
               </p>
               <div className="flex flex-wrap gap-2">
                 {(appBlocked || messagesBlocked || messagesQuiet) && (
@@ -158,7 +165,7 @@ function NativeNotificationHealthPanel({
                     className="h-8 text-xs touch:h-11"
                     onClick={() => open(appBlocked ? undefined : "messages")}
                   >
-                    Open notification settings
+                    <FormattedMessage id="notificationSettings.openNotificationSettings" defaultMessage="Open notification settings" />
                   </Button>
                 )}
                 {(callsBlocked || callsQuiet) && (
@@ -168,7 +175,7 @@ function NativeNotificationHealthPanel({
                     className="h-8 text-xs touch:h-11"
                     onClick={() => open("calls")}
                   >
-                    Open call settings
+                    <FormattedMessage id="notificationSettings.openCallSettings" defaultMessage="Open call settings" />
                   </Button>
                 )}
                 {serviceBlocked && (
@@ -178,7 +185,7 @@ function NativeNotificationHealthPanel({
                     className="h-8 text-xs touch:h-11"
                     onClick={() => open("service")}
                   >
-                    Open service settings
+                    <FormattedMessage id="notificationSettings.openServiceSettings" defaultMessage="Open service settings" />
                   </Button>
                 )}
               </div>
@@ -188,45 +195,50 @@ function NativeNotificationHealthPanel({
       )}
 
       <details className="px-4 py-3.5 text-xs">
-        <summary className="cursor-pointer text-sm font-medium">Notification diagnostics</summary>
+        <summary className="cursor-pointer text-sm font-medium">
+          <FormattedMessage id="notificationSettings.diagnostics" defaultMessage="Notification diagnostics" />
+        </summary>
         <dl className="mt-3 grid grid-cols-[minmax(0,1fr)_auto] gap-x-4 gap-y-1 text-muted-foreground">
-          <dt>Service / config</dt>
+          <dt><FormattedMessage id="notificationSettings.diag.serviceConfig" defaultMessage="Service / config" /></dt>
           <dd className="text-right text-foreground">
-            {health.serviceRunning ? "running" : "stopped"} / {health.configEnabled
-              ? health.loadedConfigRevision === health.configRevision ? "loaded" : "stale"
-              : "off"}
+            <FormattedMessage id="notificationSettings.diag.serviceConfigValue" defaultMessage="{service, select, running {running} other {stopped}} / {config, select, loaded {loaded} stale {stale} other {off}}" values={{
+              service: health.serviceRunning ? "running" : "stopped",
+              config: health.configEnabled
+                ? health.loadedConfigRevision === health.configRevision ? "loaded" : "stale"
+                : "off",
+            }} />
           </dd>
-          <dt>Watches</dt>
+          <dt><FormattedMessage id="notificationSettings.diag.watches" defaultMessage="Watches" /></dt>
           <dd className="text-right text-foreground">
-            {health.relayWatchCount} relays · {health.groupWatchCount} groups · {health.dmPeerWatchCount} DMs · {health.concordStreamWatchCount} streams
+            <FormattedMessage id="notificationSettings.diag.watchesValue" defaultMessage="{relays} relays · {groups} groups · {dms} DMs · {streams} streams" values={{ relays: health.relayWatchCount, groups: health.groupWatchCount, dms: health.dmPeerWatchCount, streams: health.concordStreamWatchCount }} />
           </dd>
-          <dt>Relay sockets</dt>
+          <dt><FormattedMessage id="notificationSettings.diag.relaySockets" defaultMessage="Relay sockets" /></dt>
           <dd className="text-right text-foreground">
-            {health.socketOpenCount}/{health.socketTotalCount} open
+            <FormattedMessage id="notificationSettings.diag.relaySocketsValue" defaultMessage="{open}/{total} open" values={{ open: health.socketOpenCount, total: health.socketTotalCount }} />
           </dd>
-          <dt>Message / call / service channels</dt>
+          <dt><FormattedMessage id="notificationSettings.diag.channels" defaultMessage="Message / call / service channels" /></dt>
           <dd className="text-right text-foreground">
             {formatImportance(health.messageChannelImportance)} / {formatImportance(health.callChannelImportance)} / {formatImportance(health.serviceChannelImportance)}
           </dd>
-          <dt>Signer / relay auth</dt>
+          <dt><FormattedMessage id="notificationSettings.diag.signerAuth" defaultMessage="Signer / relay auth" /></dt>
           <dd className="text-right text-foreground">
             {health.signerStatus} / {health.authStatus}
           </dd>
-          <dt>Last config / sign / auth</dt>
+          <dt><FormattedMessage id="notificationSettings.diag.lastConfig" defaultMessage="Last config / sign / auth" /></dt>
           <dd className="text-right text-foreground">
             {formatHealthTime(health.lastConfigAt)} / {formatHealthTime(health.lastSignAt)} / {formatHealthTime(health.lastAuthAt)}
           </dd>
-          <dt>Last relay event</dt>
+          <dt><FormattedMessage id="notificationSettings.diag.lastEvent" defaultMessage="Last relay event" /></dt>
           <dd className="text-right text-foreground">{formatHealthTime(health.lastEventAt)}</dd>
-          <dt>Last notification post</dt>
+          <dt><FormattedMessage id="notificationSettings.diag.lastPost" defaultMessage="Last notification post" /></dt>
           <dd className="text-right text-foreground">{formatHealthTime(health.lastPresentedAt)}</dd>
-          <dt>Active notifications</dt>
+          <dt><FormattedMessage id="notificationSettings.diag.active" defaultMessage="Active notifications" /></dt>
           <dd className="text-right text-foreground">{health.activeNotificationCount}</dd>
-          <dt>Last error</dt>
+          <dt><FormattedMessage id="notificationSettings.diag.lastError" defaultMessage="Last error" /></dt>
           <dd className="text-right text-foreground">
             {health.lastError
               ? `${health.lastError} · ${formatHealthTime(health.lastErrorAt)}`
-              : "none"}
+              : <FormattedMessage id="notificationSettings.diag.none" defaultMessage="none" />}
           </dd>
         </dl>
         <Button
@@ -235,7 +247,7 @@ function NativeNotificationHealthPanel({
           className="mt-2 h-8 px-2 text-xs touch:h-11"
           onClick={() => void native.refreshHealth()}
         >
-          Refresh
+          <FormattedMessage id="notificationSettings.refresh" defaultMessage="Refresh" />
         </Button>
       </details>
     </SettingsGroup>
@@ -243,8 +255,8 @@ function NativeNotificationHealthPanel({
 }
 
 function formatHealthTime(timestamp: number): string {
-  if (!timestamp) return "never";
-  return new Date(timestamp).toLocaleString();
+  if (!timestamp) return t({ id: "notificationSettings.diag.never", defaultMessage: "never" });
+  return new Date(timestamp).toLocaleString(getLocale());
 }
 
 function formatImportance(importance: number): string {
@@ -253,6 +265,7 @@ function formatImportance(importance: number): string {
 
 /** Sound for the web/desktop client; native platforms own audio. */
 function NotificationSoundSettings() {
+  const intl = useIntl();
   const [settings, setSettings] = useState<NotificationSoundSettingsValue>(
     loadNotificationSoundSettings,
   );
@@ -272,25 +285,27 @@ function NotificationSoundSettings() {
   };
 
   return (
-    <SettingsGroup title="Sound">
+    <SettingsGroup title={intl.formatMessage({ id: "notificationSettings.sound", defaultMessage: "Sound" })}>
       <SettingsRow
-        label="Notification sound"
-        description="Plays for new activity while Armada is open."
+        label={intl.formatMessage({ id: "notificationSettings.notificationSound", defaultMessage: "Notification sound" })}
+        description={intl.formatMessage({ id: "notificationSettings.notificationSoundDescription", defaultMessage: "Plays for new activity while Armada is open." })}
         info={(
-          <>
-            Background push and Android use the sound selected by your device. Browsers may require
-            one interaction with Armada before allowing in-page audio. Sounds are CC0 or CC BY-SA;
-            see the{" "}
-            <a
-              className="underline underline-offset-2 hover:text-foreground"
-              href="/sounds/notifications/LICENSES.md"
-              target="_blank"
-              rel="noreferrer"
-            >
-              sound credits
-            </a>
-            .
-          </>
+          <FormattedMessage
+            id="notificationSettings.soundInfo"
+            defaultMessage="Background push and Android use the sound selected by your device. Browsers may require one interaction with Armada before allowing in-page audio. Sounds are CC0 or CC BY-SA; see the <link>sound credits</link>."
+            values={{
+              link: (chunks) => (
+                <a
+                  className="underline underline-offset-2 hover:text-foreground"
+                  href="/sounds/notifications/LICENSES.md"
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  {chunks}
+                </a>
+              ),
+            }}
+          />
         )}
       >
         <Switch
@@ -300,19 +315,19 @@ function NotificationSoundSettings() {
       </SettingsRow>
 
       {settings.enabled && (
-        <SettingsRow stack label="Sound">
+        <SettingsRow stack label={intl.formatMessage({ id: "notificationSettings.sound", defaultMessage: "Sound" })}>
           <div className="flex items-center gap-2">
             <Select
               value={settings.sound}
               onValueChange={(sound) => update({ sound: sound as NotificationSoundId })}
             >
-              <SelectTrigger aria-label="Notification sound" className="min-w-0 flex-1 sm:w-56">
+              <SelectTrigger aria-label={intl.formatMessage({ id: "notificationSettings.notificationSound", defaultMessage: "Notification sound" })} className="min-w-0 flex-1 sm:w-56">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
                 {NOTIFICATION_SOUNDS.map((sound) => (
                   <SelectItem key={sound.id} value={sound.id}>
-                    {sound.label} by {sound.creator}
+                    <FormattedMessage id="notificationSettings.soundBy" defaultMessage="{label} by {creator}" values={{ label: sound.label, creator: sound.creator }} />
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -321,7 +336,7 @@ function NotificationSoundSettings() {
               type="button"
               size="icon"
               variant="secondary"
-              aria-label="Preview sound"
+              aria-label={intl.formatMessage({ id: "notificationSettings.previewSound", defaultMessage: "Preview sound" })}
               className="size-10 shrink-0 clip-corner touch:size-11"
               onClick={() => playNotificationSound({ settings, preview: true })}
             >
@@ -332,10 +347,10 @@ function NotificationSoundSettings() {
       )}
 
       {settings.enabled && (
-        <SettingsRow stack label="Volume">
+        <SettingsRow stack label={intl.formatMessage({ id: "notificationSettings.volume", defaultMessage: "Volume" })}>
           <div className="flex items-center gap-3 sm:w-72">
             <Slider
-              aria-label="Notification sound volume"
+              aria-label={intl.formatMessage({ id: "notificationSettings.volumeLabel", defaultMessage: "Notification sound volume" })}
               className="flex-1 touch:h-11"
               min={0}
               max={1}
@@ -343,7 +358,9 @@ function NotificationSoundSettings() {
               value={[settings.volume]}
               onValueChange={([volume]) => update({ volume })}
             />
-            <span className="w-11 shrink-0 text-right text-sm tabular-nums">{Math.round(settings.volume * 100)}%</span>
+            <span className="w-11 shrink-0 text-right text-sm tabular-nums">
+              {intl.formatNumber(settings.volume, { style: "percent", maximumFractionDigits: 0 })}
+            </span>
           </div>
         </SettingsRow>
       )}
@@ -388,7 +405,7 @@ function BatteryOptimizationWarning() {
           <AlertTriangle className="mt-0.5 size-4 shrink-0 text-warning" />
           <div className="min-w-0 flex-1">
             <p className="text-xs">
-              Battery optimization can stop notifications while your device is idle or after a reboot.
+              <FormattedMessage id="notificationSettings.batteryWarning" defaultMessage="Battery optimization can stop notifications while your device is idle or after a reboot." />
             </p>
             <Button
               size="sm"
@@ -396,7 +413,7 @@ function BatteryOptimizationWarning() {
               className="mt-2 h-8 text-xs touch:h-11"
               onClick={() => requestIgnoreBatteryOptimizations()}
             >
-              Disable battery optimization
+              <FormattedMessage id="notificationSettings.disableBattery" defaultMessage="Disable battery optimization" />
             </Button>
           </div>
         </div>
@@ -422,6 +439,7 @@ function WebPushSettings() {
     setPrefs,
     retry,
   } = useWebPushNotifications();
+  const intl = useIntl();
 
   // Without Web Push (Brave with Google push off, no gateway), offer foreground notifications.
   if (!supported) {
@@ -448,7 +466,7 @@ function WebPushSettings() {
               <p>{error}</p>
             </div>
             <Button size="sm" variant="secondary" className="touch:h-11" onClick={retry}>
-              Retry notification setup
+              <FormattedMessage id="notificationSettings.retrySetup" defaultMessage="Retry notification setup" />
             </Button>
           </div>
         </SettingsRow>
@@ -458,22 +476,22 @@ function WebPushSettings() {
 
   return (
     <NotificationToggles
-      title="Enable push notifications"
+      title={intl.formatMessage({ id: "notificationSettings.enablePush", defaultMessage: "Enable push notifications" })}
       description={!ready
-        ? "Preparing secure background notifications…"
-        : "Get notified even when Armada is closed."}
+        ? intl.formatMessage({ id: "notificationSettings.preparing", defaultMessage: "Preparing secure background notifications…" })
+        : intl.formatMessage({ id: "notificationSettings.notifiedWhenClosed", defaultMessage: "Get notified even when Armada is closed." })}
       info={!ready || hasNappPush()
         ? undefined
         : hasIosPush()
           // No Notification Service Extension yet, so the lock screen shows the gateway's fixed text.
-          ? "Notifications don't name the sender or quote the message. Armada decrypts it when you open it."
-          : "Armada repairs expired browser subscriptions whenever you return."}
+          ? intl.formatMessage({ id: "notificationSettings.iosPushInfo", defaultMessage: "Notifications don't name the sender or quote the message. Armada decrypts it when you open it." })
+          : intl.formatMessage({ id: "notificationSettings.webPushInfo", defaultMessage: "Armada repairs expired browser subscriptions whenever you return." })}
       enabled={enabled}
       busy={busy}
       blocked={permission === "denied"}
       blockedMessage={isIOS()
-        ? "Notifications are blocked. Allow Armada in iPhone Settings → Notifications."
-        : "Notifications are blocked in your browser settings."}
+        ? intl.formatMessage({ id: "notificationSettings.blockedIos", defaultMessage: "Notifications are blocked. Allow Armada in iPhone Settings → Notifications." })
+        : intl.formatMessage({ id: "notificationSettings.blockedBrowser", defaultMessage: "Notifications are blocked in your browser settings." })}
       prefs={prefs}
       onToggle={(v) => (v ? enable() : disable())}
       onSetPrefs={(p) => setPrefs(p).catch(() => {})}
@@ -505,8 +523,7 @@ function IosNotificationHintText({
   if (reason === "native-runtime") {
     return (
       <p className="text-sm text-muted-foreground">
-        This version of the Armada app can&rsquo;t receive background notifications. Update to a
-        newer build to turn them on.
+        <FormattedMessage id="notificationSettings.ios.nativeRuntime" defaultMessage="This version of the Armada app can’t receive background notifications. Update to a newer build to turn them on." />
       </p>
     );
   }
@@ -514,8 +531,7 @@ function IosNotificationHintText({
   if (reason === "gateway") {
     return (
       <p className="text-sm text-muted-foreground">
-        This build of Armada has no background push service configured. Your iPhone is not the
-        problem; whoever built or deployed it needs to configure a push gateway.
+        <FormattedMessage id="notificationSettings.ios.gateway" defaultMessage="This build of Armada has no background push service configured. Your iPhone is not the problem; whoever built or deployed it needs to configure a push gateway." />
       </p>
     );
   }
@@ -525,13 +541,14 @@ function IosNotificationHintText({
     return (
       <div className="space-y-2">
         <p className="text-sm text-muted-foreground">
-          Notifications need service workers, which are switched off on this device.
+          <FormattedMessage id="notificationSettings.ios.serviceWorker" defaultMessage="Notifications need service workers, which are switched off on this device." />
         </p>
         <p className="text-xs text-muted-foreground">
-          If <strong>Lockdown Mode</strong> is on (Settings → Privacy &amp; Security → Lockdown
-          Mode), it disables web notifications. To use them, turn it off or exclude Armada under its
-          &ldquo;Configure Web Browsing&rdquo; / Safari exceptions. A content blocker
-          can have the same effect.
+          <FormattedMessage
+            id="notificationSettings.ios.lockdown"
+            defaultMessage="If <b>Lockdown Mode</b> is on (Settings → Privacy & Security → Lockdown Mode), it disables web notifications. To use them, turn it off or exclude Armada under its “Configure Web Browsing” / Safari exceptions. A content blocker can have the same effect."
+            values={{ b: (chunks) => <strong>{chunks}</strong> }}
+          />
         </p>
       </div>
     );
@@ -541,13 +558,14 @@ function IosNotificationHintText({
     return (
       <div className="space-y-2">
         <p className="text-sm text-muted-foreground">
-          To get notifications on iPhone or iPad, open Armada in Safari, tap Share, choose
-          <strong> Add to Home Screen</strong>, keep <strong>Open as Web App</strong> turned on,
-          then launch Armada from the new icon.
+          <FormattedMessage
+            id="notificationSettings.ios.install"
+            defaultMessage="To get notifications on iPhone or iPad, open Armada in Safari, tap Share, choose <b>Add to Home Screen</b>, keep <b>Open as Web App</b> turned on, then launch Armada from the new icon."
+            values={{ b: (chunks) => <strong>{chunks}</strong> }}
+          />
         </p>
         <p className="text-xs text-muted-foreground">
-          iOS only delivers notifications to apps installed on the Home Screen, not to sites open
-          in a browser tab.
+          <FormattedMessage id="notificationSettings.ios.installNote" defaultMessage="iOS only delivers notifications to apps installed on the Home Screen, not to sites open in a browser tab." />
         </p>
       </div>
     );
@@ -555,7 +573,7 @@ function IosNotificationHintText({
   if (reason === "insecure-context") {
     return (
       <p className="text-sm text-muted-foreground">
-        Background notifications require Armada to be served over HTTPS.
+        <FormattedMessage id="notificationSettings.ios.insecure" defaultMessage="Background notifications require Armada to be served over HTTPS." />
       </p>
     );
   }
@@ -563,13 +581,14 @@ function IosNotificationHintText({
   return (
     <div className="space-y-2">
       <p className="text-sm text-muted-foreground">
-        Armada is open as a Home Screen app, but iOS has not exposed Web Push to this install.
-        Update iOS, check that Lockdown Mode is not blocking Armada, then remove and add it again
-        with <strong>Open as Web App</strong> turned on.
+        <FormattedMessage
+          id="notificationSettings.ios.reinstall"
+          defaultMessage="Armada is open as a Home Screen app, but iOS has not exposed Web Push to this install. Update iOS, check that Lockdown Mode is not blocking Armada, then remove and add it again with <b>Open as Web App</b> turned on."
+          values={{ b: (chunks) => <strong>{chunks}</strong> }}
+        />
       </p>
       <p className="text-xs text-muted-foreground">
-        Web Push requires iOS 16.4 or later. Reinstalling is only useful for this specific missing
-        API state; it is not a general fix for a broken subscription.
+        <FormattedMessage id="notificationSettings.ios.reinstallNote" defaultMessage="Web Push requires iOS 16.4 or later. Reinstalling is only useful for this specific missing API state; it is not a general fix for a broken subscription." />
       </p>
     </div>
   );
@@ -583,6 +602,7 @@ function IosNotificationHintText({
 function ForegroundOnlySettings() {
   const { apiAvailable, permission, enabled, setEnabled, prefs, setPrefs } =
     useForegroundNotificationSettings();
+  const intl = useIntl();
 
   const desktop = isDesktop();
   const blocked = apiAvailable && permission === "denied";
@@ -591,32 +611,32 @@ function ForegroundOnlySettings() {
     return (
       <NoticeGroup>
         {desktop
-          ? "This version of Armada can't show notifications."
-          : "This browser doesn't support notifications. Use Chrome, Firefox, or the Android app."}
+          ? <FormattedMessage id="notificationSettings.desktopUnsupported" defaultMessage="This version of Armada can't show notifications." />
+          : <FormattedMessage id="notificationSettings.browserUnsupported" defaultMessage="This browser doesn't support notifications. Use Chrome, Firefox, or the Android app." />}
       </NoticeGroup>
     );
   }
 
   return (
     <NotificationToggles
-      title="Notifications while Armada is open"
+      title={intl.formatMessage({ id: "notificationSettings.foreground", defaultMessage: "Notifications while Armada is open" })}
       description={desktop
-        ? "Including when minimized to the tray."
-        : "This browser can't notify you while Armada is closed."}
+        ? intl.formatMessage({ id: "notificationSettings.foregroundDesktop", defaultMessage: "Including when minimized to the tray." })
+        : intl.formatMessage({ id: "notificationSettings.foregroundBrowser", defaultMessage: "This browser can't notify you while Armada is closed." })}
       info={desktop
-        ? "Armada shows a system notification for new messages while it's running, including when it's minimized to the tray."
-        : "This browser doesn't support background push, so you'll get a system notification for new messages only while Armada is open and you're not looking at the conversation. For notifications when Armada is closed, use a browser that supports Web Push (Chrome, Firefox, or Brave with Google push services enabled), or the Android app."}
+        ? intl.formatMessage({ id: "notificationSettings.foregroundDesktopInfo", defaultMessage: "Armada shows a system notification for new messages while it's running, including when it's minimized to the tray." })
+        : intl.formatMessage({ id: "notificationSettings.foregroundBrowserInfo", defaultMessage: "This browser doesn't support background push, so you'll get a system notification for new messages only while Armada is open and you're not looking at the conversation. For notifications when Armada is closed, use a browser that supports Web Push (Chrome, Firefox, or Brave with Google push services enabled), or the Android app." })}
       enabled={enabled}
       busy={false}
       blocked={blocked}
       blockedMessage={desktop
-        ? "Notifications are blocked. Allow Armada in your system notification settings."
-        : "Notifications are blocked in your browser settings."}
+        ? intl.formatMessage({ id: "notificationSettings.blockedDesktop", defaultMessage: "Notifications are blocked. Allow Armada in your system notification settings." })
+        : intl.formatMessage({ id: "notificationSettings.blockedBrowser", defaultMessage: "Notifications are blocked in your browser settings." })}
       // Permission never asked: the master wish defaults on, so without this it looks enabled but never fires.
       hint={apiAvailable && permission === "default"
         ? desktop
-          ? "Armada isn't allowed to notify yet. Turn this on to ask."
-          : "Your browser hasn't allowed notifications yet. Turn this on to ask."
+          ? intl.formatMessage({ id: "notificationSettings.askDesktop", defaultMessage: "Armada isn't allowed to notify yet. Turn this on to ask." })
+          : intl.formatMessage({ id: "notificationSettings.askBrowser", defaultMessage: "Your browser hasn't allowed notifications yet. Turn this on to ask." })
         : undefined}
       prefs={prefs}
       onToggle={(v) => setEnabled(v).catch(() => {})}
@@ -639,11 +659,14 @@ function NotificationToggles(props: {
   onToggle: (value: boolean) => void;
   onSetPrefs: (next: PushPrefs) => void;
 }) {
+  const intl = useIntl();
   const { title, description, info, enabled, busy, blocked, blockedMessage, hint, prefs } = props;
 
   const setPref = (key: keyof PushPrefs) => (value: boolean) => {
     props.onSetPrefs({ ...prefs, [key]: value });
   };
+
+  const messageRequests = intl.formatMessage({ id: "notificationSettings.pref.requests", defaultMessage: "Message requests" });
 
   const setDmRequests = (value: DmRequestLevel) => {
     props.onSetPrefs({ ...prefs, dmRequests: value });
@@ -672,31 +695,31 @@ function NotificationToggles(props: {
       </SettingsGroup>
 
       {enabled && (
-        <SettingsGroup title="Notify me about">
+        <SettingsGroup title={intl.formatMessage({ id: "notificationSettings.notifyAbout", defaultMessage: "Notify me about" })}>
           <PrefRow
-            label="Mentions"
-            description="When someone @-mentions you in a channel."
+            label={intl.formatMessage({ id: "notificationSettings.pref.mentions", defaultMessage: "Mentions" })}
+            description={intl.formatMessage({ id: "notificationSettings.pref.mentionsDescription", defaultMessage: "When someone @-mentions you in a channel." })}
             checked={prefs.mentions}
             disabled={busy}
             onChange={setPref("mentions")}
           />
           <PrefRow
-            label="Replies"
-            description="When someone replies to your message."
+            label={intl.formatMessage({ id: "notificationSettings.pref.replies", defaultMessage: "Replies" })}
+            description={intl.formatMessage({ id: "notificationSettings.pref.repliesDescription", defaultMessage: "When someone replies to your message." })}
             checked={prefs.replies}
             disabled={busy}
             onChange={setPref("replies")}
           />
           <PrefRow
-            label="Reactions"
-            description="When someone reacts to your message."
+            label={intl.formatMessage({ id: "notificationSettings.pref.reactions", defaultMessage: "Reactions" })}
+            description={intl.formatMessage({ id: "notificationSettings.pref.reactionsDescription", defaultMessage: "When someone reacts to your message." })}
             checked={prefs.reactions}
             disabled={busy}
             onChange={setPref("reactions")}
           />
           <PrefRow
-            label="Direct messages"
-            description="When you receive a DM."
+            label={intl.formatMessage({ id: "notificationSettings.pref.dms", defaultMessage: "Direct messages" })}
+            description={intl.formatMessage({ id: "notificationSettings.pref.dmsDescription", defaultMessage: "When you receive a DM." })}
             checked={prefs.directMessages}
             disabled={busy}
             onChange={setPref("directMessages")}
@@ -704,9 +727,9 @@ function NotificationToggles(props: {
           {prefs.directMessages && (
             <SettingsRow
               stack
-              label="Message requests"
-              description="DMs from people you don't follow."
-              info="A stranger controls the text, name and picture a notification shows."
+              label={messageRequests}
+              description={intl.formatMessage({ id: "notificationSettings.pref.requestsDescription", defaultMessage: "DMs from people you don't follow." })}
+              info={intl.formatMessage({ id: "notificationSettings.pref.requestsInfo", defaultMessage: "A stranger controls the text, name and picture a notification shows." })}
               className="pl-8"
             >
               <Select
@@ -714,20 +737,20 @@ function NotificationToggles(props: {
                 onValueChange={(v) => setDmRequests(v as DmRequestLevel)}
                 disabled={busy}
               >
-                <SelectTrigger className="w-full sm:w-36" aria-label="Message requests">
+                <SelectTrigger className="w-full sm:w-36" aria-label={messageRequests}>
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="full">Show fully</SelectItem>
-                  <SelectItem value="generic">Hide content</SelectItem>
-                  <SelectItem value="off">Don't notify</SelectItem>
+                  <SelectItem value="full"><FormattedMessage id="notificationSettings.pref.showFully" defaultMessage="Show fully" /></SelectItem>
+                  <SelectItem value="generic"><FormattedMessage id="notificationSettings.pref.hideContent" defaultMessage="Hide content" /></SelectItem>
+                  <SelectItem value="off"><FormattedMessage id="notificationSettings.pref.dontNotify" defaultMessage="Don't notify" /></SelectItem>
                 </SelectContent>
               </Select>
             </SettingsRow>
           )}
           <PrefRow
-            label="All channel messages"
-            description="Every message in your channels, not just mentions. Noisy in busy servers."
+            label={intl.formatMessage({ id: "notificationSettings.pref.allChannel", defaultMessage: "All channel messages" })}
+            description={intl.formatMessage({ id: "notificationSettings.pref.allChannelDescription", defaultMessage: "Every message in your channels, not just mentions. Noisy in busy servers." })}
             checked={prefs.allGroupMessages}
             disabled={busy}
             onChange={setPref("allGroupMessages")}

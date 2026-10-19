@@ -1,3 +1,5 @@
+import { getLocale, t } from "@/i18n";
+
 /** Format seconds to m:ss or h:mm:ss. */
 export function formatTime(seconds: number): string {
   if (!isFinite(seconds) || seconds < 0) return '0:00';
@@ -22,13 +24,13 @@ const YEAR = 365.25 * DAY;
  */
 export function shortTimeAgo(timestamp: number): string {
   const diff = Math.floor(Date.now() / 1000) - timestamp;
-  if (diff < MINUTE) return "now";
-  if (diff < HOUR) return `${Math.floor(diff / MINUTE)}m`;
-  if (diff < DAY) return `${Math.floor(diff / HOUR)}h`;
-  if (diff < WEEK) return `${Math.floor(diff / DAY)}d`;
-  if (diff < MONTH) return `${Math.floor(diff / WEEK)}w`;
-  if (diff < YEAR) return `${Math.floor(diff / MONTH)}mo`;
-  return `${Math.floor(diff / YEAR)}y`;
+  if (diff < MINUTE) return t({ id: "formatTime.short.now", defaultMessage: "now" });
+  if (diff < HOUR) return t({ id: "formatTime.short.minutes", defaultMessage: "{count}m" }, { count: Math.floor(diff / MINUTE) });
+  if (diff < DAY) return t({ id: "formatTime.short.hours", defaultMessage: "{count}h" }, { count: Math.floor(diff / HOUR) });
+  if (diff < WEEK) return t({ id: "formatTime.short.days", defaultMessage: "{count}d" }, { count: Math.floor(diff / DAY) });
+  if (diff < MONTH) return t({ id: "formatTime.short.weeks", defaultMessage: "{count}w" }, { count: Math.floor(diff / WEEK) });
+  if (diff < YEAR) return t({ id: "formatTime.short.months", defaultMessage: "{count}mo" }, { count: Math.floor(diff / MONTH) });
+  return t({ id: "formatTime.short.years", defaultMessage: "{count}y" }, { count: Math.floor(diff / YEAR) });
 }
 
 /** Format a unix-seconds timestamp as a long relative string ("2 days ago"). */
@@ -39,28 +41,38 @@ export function relativeTime(timestamp: number): string {
   const days = Math.floor(hours / 24);
 
   if (days > 30) {
-    const months = Math.floor(days / 30);
-    return months === 1 ? "1 month ago" : `${months} months ago`;
+    return t(
+      { id: "formatTime.monthsAgo", defaultMessage: "{count, plural, one {# month ago} other {# months ago}}" },
+      { count: Math.floor(days / 30) },
+    );
   }
-  if (days > 0) return days === 1 ? "1 day ago" : `${days} days ago`;
-  if (hours > 0) return hours === 1 ? "1 hour ago" : `${hours} hours ago`;
-  if (minutes > 0) return minutes === 1 ? "1 minute ago" : `${minutes} minutes ago`;
-  return "just now";
+  if (days > 0) return t({ id: "formatTime.daysAgo", defaultMessage: "{count, plural, one {# day ago} other {# days ago}}" }, { count: days });
+  if (hours > 0) return t({ id: "formatTime.hoursAgo", defaultMessage: "{count, plural, one {# hour ago} other {# hours ago}}" }, { count: hours });
+  if (minutes > 0) {
+    return t({ id: "formatTime.minutesAgo", defaultMessage: "{count, plural, one {# minute ago} other {# minutes ago}}" }, { count: minutes });
+  }
+  return t({ id: "formatTime.justNow", defaultMessage: "just now" });
 }
 
 // toLocaleTimeString builds a new Intl.DateTimeFormat per call; every row calls this.
-let clockFormat: Intl.DateTimeFormat | undefined;
+let clockFormat: { locale: string; format: Intl.DateTimeFormat } | undefined;
 
 /** Format a unix-seconds timestamp as a short local clock time ("3:07 PM"). */
 export function shortClockTime(timestamp: number): string {
-  clockFormat ??= new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" });
-  return clockFormat.format(new Date(timestamp * 1000));
+  const locale = getLocale();
+  if (clockFormat?.locale !== locale) {
+    clockFormat = { locale, format: new Intl.DateTimeFormat(locale, { hour: "numeric", minute: "2-digit" }) };
+  }
+  return clockFormat.format.format(new Date(timestamp * 1000));
 }
 
-let fullFormat: Intl.DateTimeFormat | undefined;
+let fullFormat: { locale: string; format: Intl.DateTimeFormat } | undefined;
 
 /** Full local date and time, for surfaces without day dividers. */
 export function fullDateTime(timestamp: number): string {
-  fullFormat ??= new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
-  return fullFormat.format(new Date(timestamp * 1000));
+  const locale = getLocale();
+  if (fullFormat?.locale !== locale) {
+    fullFormat = { locale, format: new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "short" }) };
+  }
+  return fullFormat.format.format(new Date(timestamp * 1000));
 }

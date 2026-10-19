@@ -4,6 +4,8 @@
  * the poll with `["response", id]`. Pure, so both transports tally identically.
  */
 
+import { t } from "@/i18n";
+
 /** NIP-88 poll kind (the poll itself; renders as a timeline message). */
 export const KIND_POLL = 1068;
 /** NIP-88 poll vote kind (an `e`-referencing side event, tallied per poll). */
@@ -119,7 +121,7 @@ export function isPollEnded(endsAt: number | undefined): boolean {
 /** Format an `endsAt` timestamp as a short relative string ("in 3d"). */
 export function formatEndsAt(endsAt: number): string {
   const diff = endsAt - Math.floor(Date.now() / 1000);
-  if (diff < 3600) return `in ${Math.max(1, Math.floor(diff / 60))}m`;
-  if (diff < 86400) return `in ${Math.floor(diff / 3600)}h`;
-  return `in ${Math.floor(diff / 86400)}d`;
+  if (diff < 3600) return t({ id: "polls.endsInMinutes", defaultMessage: "in {count}m" }, { count: Math.max(1, Math.floor(diff / 60)) });
+  if (diff < 86400) return t({ id: "polls.endsInHours", defaultMessage: "in {count}h" }, { count: Math.floor(diff / 3600) });
+  return t({ id: "polls.endsInDays", defaultMessage: "in {count}d" }, { count: Math.floor(diff / 86400) });
 }

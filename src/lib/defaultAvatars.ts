@@ -16,6 +16,9 @@
  * (see AGENTS.md), so the placeholders must be replaced with art Soapbox has
  * permission for.
  */
+
+import { t } from "@/i18n";
+
 export interface DefaultAvatar {
   /** Names the choice, not the file; nothing resolves by it. */
   id: string;
@@ -54,7 +57,9 @@ export const DEFAULT_AVATARS: readonly DefaultAvatar[] = [
   {
     id: "banana-king",
     url: `${BLOSSOM}/a4a82e86634d19798a4802213cb11a3b1952cd8231f4617c46eddc3ff9003b68.jpeg`,
-    label: "Banana King by Aiden J arts",
+    get label() {
+      return t({ id: "defaultAvatars.bananaKing", defaultMessage: "Banana King by Aiden J arts" });
+    },
     size: 69586,
     dim: "500x500",
     blurhash: "LlMRA7tkcHp0ysRPtQocV[oeR4X9",
@@ -62,7 +67,9 @@ export const DEFAULT_AVATARS: readonly DefaultAvatar[] = [
   {
     id: "tucan",
     url: `${BLOSSOM}/e1fbf54bcf436a8a386998365f203709b903a30449aaf59e5f80a7ac203d2166.png`,
-    label: "Toucan by eempo",
+    get label() {
+      return t({ id: "defaultAvatars.tucan", defaultMessage: "Toucan by eempo" });
+    },
     size: 57031,
     dim: "1024x1024",
     blurhash: "LdQaZrK7I;#i,-$dxYo#}%aKs.S%",
@@ -70,7 +77,9 @@ export const DEFAULT_AVATARS: readonly DefaultAvatar[] = [
   {
     id: "skull",
     url: `${BLOSSOM}/e3fe43939426e06bdd609cdafe791f126129285daaacafe659af4c67ba99da1a.jpeg`,
-    label: "Skull by Julian Cela",
+    get label() {
+      return t({ id: "defaultAvatars.skull", defaultMessage: "Skull by Julian Cela" });
+    },
     size: 60424,
     dim: "500x500",
     blurhash: "L7Bq3fn%00IB~qWBM{WB4UIVxu-;",
@@ -78,7 +87,9 @@ export const DEFAULT_AVATARS: readonly DefaultAvatar[] = [
   {
     id: "dragon",
     url: `${BLOSSOM}/249ab58208fc33c559b240db3bfa601b6fd7e9f15cabd9aac15ac0b22df5a6f1.png`,
-    label: "Dragon by gravestoneghost",
+    get label() {
+      return t({ id: "defaultAvatars.dragon", defaultMessage: "Dragon by gravestoneghost" });
+    },
     size: 107135,
     dim: "500x500",
     blurhash: "L98#prRgDgS7L~W9oaMuZ{kZtpoH",
@@ -86,7 +97,9 @@ export const DEFAULT_AVATARS: readonly DefaultAvatar[] = [
   {
     id: "skull-bw",
     url: `${BLOSSOM}/efce6e73cfc8ee57eb2492c0dfefa091a643c4a0aaeb732bcdfe3d742e465d4d.png`,
-    label: "B&W Skull by collegeartist1",
+    get label() {
+      return t({ id: "defaultAvatars.skullBw", defaultMessage: "B&W Skull by collegeartist1" });
+    },
     size: 199333,
     dim: "500x500",
     blurhash: "LCEo[Ixu00M{?bj[D%ay00Rj~qt7",
@@ -94,7 +107,9 @@ export const DEFAULT_AVATARS: readonly DefaultAvatar[] = [
   {
     id: "gamer-kitty",
     url: `${BLOSSOM}/fe80167b2ff4f1344bad29b2d429ceee3e448d087be053dabe0eae81e68ccd33.png`,
-    label: "Gamer Kitty by dudsflausino",
+    get label() {
+      return t({ id: "defaultAvatars.gamerKitty", defaultMessage: "Gamer Kitty by dudsflausino" });
+    },
     size: 36204,
     dim: "500x500",
     blurhash: "LZKJvtog51ofwIaiX9oI0bWF-hj?",
@@ -102,7 +117,9 @@ export const DEFAULT_AVATARS: readonly DefaultAvatar[] = [
   {
     id: "agent-flower",
     url: `${BLOSSOM}/836dd87cc9d92ba2411ee1574f60825e23733aca2406ed20c735e19486e49222.png`,
-    label: "Agent Flower by Milo",
+    get label() {
+      return t({ id: "defaultAvatars.agentFlower", defaultMessage: "Agent Flower by Milo" });
+    },
     size: 298783,
     dim: "500x500",
     blurhash: "LB9YY-WX1bob$MjZJnWX1coJ|^R+",
@@ -110,7 +127,9 @@ export const DEFAULT_AVATARS: readonly DefaultAvatar[] = [
   {
     id: "hatcat",
     url: `${BLOSSOM}/d44ab1328a81e0d958fd7ccab38bf39de87e2b3b945483c25d2a2295be8c1f30.jpeg`,
-    label: "Hatcat by xaibott",
+    get label() {
+      return t({ id: "defaultAvatars.hatcat", defaultMessage: "Hatcat by xaibott" });
+    },
     size: 52731,
     dim: "500x500",
     blurhash: "LHH2fk|3wCIWPKOmx[S2%UXnOaNY",
@@ -118,7 +137,9 @@ export const DEFAULT_AVATARS: readonly DefaultAvatar[] = [
   {
     id: "cyber-oni",
     url: `${BLOSSOM}/3387dac6f93c41bd0197a021b6aa6fa9133d7c0b3ac83a0a589854604aacd783.jpeg`,
-    label: "Cyber Oni by KrakenM",
+    get label() {
+      return t({ id: "defaultAvatars.cyberOni", defaultMessage: "Cyber Oni by KrakenM" });
+    },
     size: 638225,
     dim: "1748x1687",
     blurhash: "LK8$H@kD8^i{Y$j[q^ae8^af$,j@",
@@ -127,7 +148,9 @@ export const DEFAULT_AVATARS: readonly DefaultAvatar[] = [
   {
     id: "dinosaur",
     url: `${BLOSSOM}/059741915d1c4bd314c2fac070e88b30e39191b968aef21b95afbad77d62fc13.png`,
-    label: "Dinosaur",
+    get label() {
+      return t({ id: "defaultAvatars.dinosaur", defaultMessage: "Dinosaur" });
+    },
     size: 23134,
     dim: "1024x1024",
     blurhash: "LGM*]4tP?d-=x]ofaxR$?JofD}Ri",
@@ -135,7 +158,9 @@ export const DEFAULT_AVATARS: readonly DefaultAvatar[] = [
   {
     id: "pig",
     url: `${BLOSSOM}/acb67a9a7cdaf3899920fb38e9c4a464e30b81226216f9c7e8981fbeb5718554.png`,
-    label: "Pig",
+    get label() {
+      return t({ id: "defaultAvatars.pig", defaultMessage: "Pig" });
+    },
     size: 29863,
     dim: "1024x1024",
     blurhash: "LES$DA$+?@.6%LkBjbaf?@oyDkVv",
@@ -143,7 +168,9 @@ export const DEFAULT_AVATARS: readonly DefaultAvatar[] = [
   {
     id: "incognito",
     url: `${BLOSSOM}/8824ab40bd276a02e32cc3d76f44f908c1038d6fb7da5b5f6a8a59b5a5974df8.png`,
-    label: "Incognito",
+    get label() {
+      return t({ id: "defaultAvatars.incognito", defaultMessage: "Incognito" });
+    },
     size: 29005,
     dim: "1024x1024",
     blurhash: "LGNKF.xu_4xvxuj[offQ_4j[9EWB",

@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { getLocale, t } from "@/i18n";
 import { oembedDescription } from "@/lib/linkEmbed";
 
 /** One image of a link preview: the card's thumbnail plus, when known, a full-size original for the lightbox. */
@@ -140,7 +141,6 @@ function mediaOf(embed: unknown): RichEmbedImage[] {
   }
 }
 
-const COUNT = new Intl.NumberFormat();
 
 /** A Bluesky post view as a {@link RichEmbed}: its text, counts, images and time. */
 export function fromBlueskyPost(post: BlueskyPost): RichEmbed {
@@ -154,9 +154,9 @@ export function fromBlueskyPost(post: BlueskyPost): RichEmbed {
     },
     description: post.record.text?.trim() || undefined,
     fields: countFields([
-      ["Reposts", post.repostCount],
-      ["Likes", post.likeCount],
-      ["Quotes", post.quoteCount],
+      [t({ id: "richEmbed.field.reposts", defaultMessage: "Reposts" }), post.repostCount],
+      [t({ id: "richEmbed.field.likes", defaultMessage: "Likes" }), post.likeCount],
+      [t({ id: "richEmbed.field.quotes", defaultMessage: "Quotes" }), post.quoteCount],
     ]),
     images: labelled ? [] : mediaOf(post.embed),
     footer: { text: "Bluesky", timestamp: unixSeconds(post.indexedAt) },
@@ -232,16 +232,16 @@ function unixSeconds(iso: string | undefined): number | undefined {
 }
 
 function countFields(counts: [string, number | undefined | null][]): RichEmbed["fields"] {
-  const fields = counts.flatMap(([name, n]) => (typeof n === "number" ? [{ name, value: COUNT.format(n) }] : []));
+  const fields = counts.flatMap(([name, n]) => (typeof n === "number" ? [{ name, value: new Intl.NumberFormat(getLocale()).format(n) }] : []));
   return fields.length ? fields : undefined;
 }
 
 export function fromGitHubRepo(repo: z.infer<typeof GitHubRepoSchema>): RichEmbed {
   const fields = countFields([
-    ["Stars", repo.stargazers_count],
-    ["Forks", repo.forks_count],
+    [t({ id: "richEmbed.field.stars", defaultMessage: "Stars" }), repo.stargazers_count],
+    [t({ id: "richEmbed.field.forks", defaultMessage: "Forks" }), repo.forks_count],
   ]) ?? [];
-  if (repo.language) fields.push({ name: "Language", value: repo.language });
+  if (repo.language) fields.push({ name: t({ id: "richEmbed.field.language", defaultMessage: "Language" }), value: repo.language });
   return {
     provider: "GitHub",
     author: { name: repo.owner.login, icon: repo.owner.avatar_url },
@@ -255,20 +255,24 @@ export function fromGitHubRepo(repo: z.infer<typeof GitHubRepoSchema>): RichEmbe
 export function fromGitHubIssue(target: GitHubTarget, issue: z.infer<typeof GitHubIssueSchema>): RichEmbed {
   const isPull = !!issue.pull_request;
   const state = issue.pull_request?.merged_at
-    ? "Merged"
+    ? t({ id: "richEmbed.state.merged", defaultMessage: "Merged" })
     : issue.draft && issue.state === "open"
-      ? "Draft"
-      : issue.state === "open" ? "Open" : "Closed";
+      ? t({ id: "richEmbed.state.draft", defaultMessage: "Draft" })
+      : issue.state === "open"
+        ? t({ id: "richEmbed.state.open", defaultMessage: "Open" })
+        : t({ id: "richEmbed.state.closed", defaultMessage: "Closed" });
   // Issue and PR templates leave their instructions as HTML comments.
   const body = issue.body?.replace(/<!--[\s\S]*?-->/g, "").trim().slice(0, 600);
   return {
     provider: `GitHub · ${target.owner}/${target.repo}`,
     author: issue.user ? { name: issue.user.login, icon: issue.user.avatar_url } : undefined,
-    title: `${isPull ? "Pull request" : "Issue"} #${issue.number}: ${issue.title}`,
+    title: isPull
+      ? t({ id: "richEmbed.pullRequestTitle", defaultMessage: "Pull request #{number}: {title}" }, { number: String(issue.number), title: issue.title })
+      : t({ id: "richEmbed.issueTitle", defaultMessage: "Issue #{number}: {title}" }, { number: String(issue.number), title: issue.title }),
     description: body || undefined,
     fields: [
-      { name: "State", value: state },
-      ...(countFields([["Comments", issue.comments]]) ?? []),
+      { name: t({ id: "richEmbed.field.state", defaultMessage: "State" }), value: state },
+      ...(countFields([[t({ id: "richEmbed.field.comments", defaultMessage: "Comments" }), issue.comments]]) ?? []),
     ],
     images: [],
     footer: { text: "GitHub", timestamp: unixSeconds(issue.created_at) },
@@ -354,11 +358,11 @@ export function fromHackerNews(item: z.infer<typeof HackerNewsItemSchema>): Rich
   return {
     provider: "Hacker News",
     author: item.by ? { name: item.by } : undefined,
-    title: item.title ?? (item.type === "comment" ? "Comment" : undefined),
+    title: item.title ?? (item.type === "comment" ? t({ id: "richEmbed.hnComment", defaultMessage: "Comment" }) : undefined),
     description: hnText(item.text) ?? linked,
     fields: countFields([
-      ["Points", item.score],
-      ["Comments", item.descendants],
+      [t({ id: "richEmbed.field.points", defaultMessage: "Points" }), item.score],
+      [t({ id: "richEmbed.field.comments", defaultMessage: "Comments" }), item.descendants],
     ]),
     images: [],
     footer: item.time ? { text: "Hacker News", timestamp: item.time } : undefined,

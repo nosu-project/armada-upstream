@@ -12,6 +12,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { useAuthor } from "@/hooks/useAuthor";
+import { FormattedMessage, t, useIntl } from "@/i18n";
 import { searchGitRepositories, useGitRepositoryDirectory } from "@/hooks/useGitRepositoryDirectory";
 import type { GitRepositoryAnnouncement } from "@/lib/gitActivity";
 import { resolveGitRepositoryAnnouncement } from "@/lib/gitRepositoryResolver";
@@ -61,7 +62,10 @@ export function OwnerSlashRepo({ owner, name, className }: { owner: string; name
 }
 
 function RepositoryRow({ repository, connected, onSelect }: { repository: GitRepositoryAnnouncement; connected: boolean; onSelect: () => void }) {
-  const subtitle = connected ? "Already connected to this community" : repository.description;
+  const intl = useIntl();
+  const subtitle = connected
+    ? intl.formatMessage({ id: "repositoryPicker.alreadyConnected", defaultMessage: "Already connected to this community" })
+    : repository.description;
   return (
     <button
       type="button"
@@ -88,6 +92,7 @@ export function RepositoryPicker({ connectedCoordinates, onSelect, autoFocus = t
   autoFocus?: boolean;
   className?: string;
 }) {
+  const intl = useIntl();
   const { nostr } = useNostr();
   const [query, setQuery] = useState("");
   const [resolving, setResolving] = useState(false);
@@ -117,7 +122,7 @@ export function RepositoryPicker({ connectedCoordinates, onSelect, autoFocus = t
     try {
       const resolved = await resolveGitRepositoryAnnouncement(nostr, query.trim());
       if (connectedCoordinates.has(resolved.address.coordinate)) {
-        setError("This repository is already connected.");
+        setError(t({ id: "repositoryPicker.alreadyConnectedError", defaultMessage: "This repository is already connected." }));
         return;
       }
       onSelect({
@@ -128,7 +133,11 @@ export function RepositoryPicker({ connectedCoordinates, onSelect, autoFocus = t
         owner: resolved.address.owner,
       });
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Couldn't resolve that repository address.");
+      setError(
+        e instanceof Error
+          ? e.message
+          : t({ id: "repositoryPicker.resolveFailed", defaultMessage: "Couldn't resolve that repository address." }),
+      );
     } finally {
       setResolving(false);
     }
@@ -140,7 +149,7 @@ export function RepositoryPicker({ connectedCoordinates, onSelect, autoFocus = t
         <SearchField
           value={query}
           onChange={setQuery}
-          placeholder="Search, or paste an address"
+          placeholder={intl.formatMessage({ id: "repositoryPicker.searchPlaceholder", defaultMessage: "Search, or paste an address" })}
           autoFocus={autoFocus}
           disabled={resolving}
           busy={resolving}
@@ -152,7 +161,7 @@ export function RepositoryPicker({ connectedCoordinates, onSelect, autoFocus = t
             <TooltipTrigger asChild>
               <button
                 type="button"
-                aria-label="What can I paste?"
+                aria-label={intl.formatMessage({ id: "repositoryPicker.whatCanIPaste", defaultMessage: "What can I paste?" })}
                 className="flex size-9 touch:size-11 shrink-0 items-center justify-center clip-corner-lg text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
               >
                 <HelpCircle className="size-4" />
@@ -160,10 +169,11 @@ export function RepositoryPicker({ connectedCoordinates, onSelect, autoFocus = t
             </TooltipTrigger>
             {/* Above the dialog this usually sits in (z-[250]). */}
             <TooltipContent side="top" className="z-[260] max-w-60 text-center text-xs">
-              Search the public ngit directory by name, or paste a repository
-              address: an <span className="font-mono">naddr1…</span> or an{" "}
-              <span className="font-mono">nostr://</span> remote from your git
-              client.
+              <FormattedMessage
+                id="repositoryPicker.pasteHint"
+                defaultMessage="Search the public ngit directory by name, or paste a repository address: an <mono>naddr1…</mono> or an <mono>nostr://</mono> remote from your git client."
+                values={{ mono: (chunks) => <span className="font-mono">{chunks}</span> }}
+              />
             </TooltipContent>
           </Tooltip>
         </TooltipProvider>
@@ -180,18 +190,24 @@ export function RepositoryPicker({ connectedCoordinates, onSelect, autoFocus = t
               {resolving ? <Loader2 className="size-4 animate-spin text-muted-foreground" /> : <FolderGit2 className="size-4 text-muted-foreground" />}
             </span>
             <span className="min-w-0 flex-1">
-              <span className="block text-sm font-medium text-foreground">{resolving ? "Resolving address…" : "Use this repository address"}</span>
+              <span className="block text-sm font-medium text-foreground">{resolving
+                  ? <FormattedMessage id="repositoryPicker.resolving" defaultMessage="Resolving address…" />
+                  : <FormattedMessage id="repositoryPicker.useAddress" defaultMessage="Use this repository address" />}</span>
               <span className="block truncate text-xs text-muted-foreground">{query.trim()}</span>
             </span>
           </button>
         ) : directory.isLoading ? (
           <p className="flex items-center gap-2 px-2.5 py-3 text-xs text-muted-foreground">
             <Loader2 className="size-3.5 animate-spin" />
-            Loading the public repository directory…
+            <FormattedMessage id="repositoryPicker.loadingDirectory" defaultMessage="Loading the public repository directory…" />
           </p>
         ) : results.length > 0 ? (
           <>
-            {!query.trim() && <p className="px-2.5 pt-1.5 text-3xs font-semibold uppercase tracking-wider text-muted-foreground">Recently announced</p>}
+            {!query.trim() && (
+              <p className="px-2.5 pt-1.5 text-3xs font-semibold uppercase tracking-wider text-muted-foreground">
+                <FormattedMessage id="repositoryPicker.recentlyAnnounced" defaultMessage="Recently announced" />
+              </p>
+            )}
             {results.map((repository) => (
               <RepositoryRow
                 key={repository.address.coordinate}
@@ -203,9 +219,17 @@ export function RepositoryPicker({ connectedCoordinates, onSelect, autoFocus = t
           </>
         ) : (
           <p className="px-2.5 py-3 text-xs text-muted-foreground">
-            {directory.isError
-              ? "Couldn't reach the repository directory. You can still paste an naddr or nostr:// address."
-              : "No repositories match. Try another name, or paste an naddr / nostr:// address."}
+            {directory.isError ? (
+              <FormattedMessage
+                id="repositoryPicker.directoryUnreachable"
+                defaultMessage="Couldn't reach the repository directory. You can still paste an naddr or nostr:// address."
+              />
+            ) : (
+              <FormattedMessage
+                id="repositoryPicker.noMatches"
+                defaultMessage="No repositories match. Try another name, or paste an naddr / nostr:// address."
+              />
+            )}
           </p>
         )}
       </div>

@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
 import { Crop, ZoomIn, ZoomOut, RotateCcw } from 'lucide-react';
 import { isGifBytes, runGifCrop } from '@/lib/runGifCrop';
+import { FormattedMessage, common, useIntl } from '@/i18n';
 
 interface ImageCropDialogProps {
   open: boolean;
@@ -49,7 +50,9 @@ async function getCroppedBlob(imageSrc: string, pixelCrop: Area, maxEdge?: numbe
   });
 }
 
-export function ImageCropDialog({ open, imageSrc, aspect, title = 'Crop Image', maxEdge, onCancel, onCrop }: ImageCropDialogProps) {
+export function ImageCropDialog({ open, imageSrc, aspect, title: titleProp, maxEdge, onCancel, onCrop }: ImageCropDialogProps) {
+  const intl = useIntl();
+  const title = titleProp ?? intl.formatMessage({ id: 'imageCropDialog.title', defaultMessage: 'Crop Image' });
   const [crop, setCrop] = useState<Point>({ x: 0, y: 0 });
   const [zoom, setZoom] = useState(1);
   const [croppedAreaPixels, setCroppedAreaPixels] = useState<Area | null>(null);
@@ -112,18 +115,24 @@ export function ImageCropDialog({ open, imageSrc, aspect, title = 'Crop Image', 
           <div className="flex justify-between items-center">
             <Button variant="ghost" size="sm" onClick={handleReset} className="text-xs gap-1.5 h-8">
               <RotateCcw className="size-3" />
-              Reset
+              <FormattedMessage id="imageCropDialog.reset" defaultMessage="Reset" />
             </Button>
-            <p className="text-xs text-muted-foreground">Drag to reposition · Pinch or scroll to zoom</p>
+            <p className="text-xs text-muted-foreground">
+              <FormattedMessage id="imageCropDialog.hint" defaultMessage="Drag to reposition · Pinch or scroll to zoom" />
+            </p>
           </div>
         </div>
 
         <ChromeDialogFooter>
           <Button variant="secondary" onClick={onCancel} disabled={isProcessing}>
-            Cancel
+            <FormattedMessage {...common.cancel} />
           </Button>
           <Button onClick={handleConfirm} disabled={isProcessing}>
-            {isProcessing ? 'Processing…' : 'Apply crop'}
+            {isProcessing ? (
+              <FormattedMessage id="imageCropDialog.processing" defaultMessage="Processing…" />
+            ) : (
+              <FormattedMessage id="imageCropDialog.apply" defaultMessage="Apply crop" />
+            )}
           </Button>
         </ChromeDialogFooter>
       </ChromeDialogContent>

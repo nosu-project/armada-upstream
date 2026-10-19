@@ -1,6 +1,7 @@
 import { memo, useEffect, useRef, useState } from "react";
 
 import { FallbackImage } from "@/components/ui/FallbackImage";
+import { useIntl } from "@/i18n";
 import { cn } from "@/lib/utils";
 
 import { captureMirrors, captureUrl, useCaptureSize, type CaptureSize } from "./captures";
@@ -131,6 +132,7 @@ export const TvDrum = memo(function TvDrum({
   const n = channels.length;
   const [current, setCurrent] = useState(0);
   const size = useCaptureSize();
+  const intl = useIntl();
 
   useEffect(() => {
     const root = rootRef.current;
@@ -343,7 +345,11 @@ export const TvDrum = memo(function TvDrum({
               tabIndex={front ? -1 : 0}
               disabled={front}
               onClick={() => onTune(rel)}
-              aria-label={front ? undefined : `Tune to the ${channel.word}`}
+              aria-label={
+                front
+                  ? undefined
+                  : intl.formatMessage({ id: "tvDrum.tuneTo", defaultMessage: "Tune to the {word}" }, { word: channel.word })
+              }
               className={cn(CASING, "block w-full text-left disabled:cursor-[inherit] focus-visible:outline-none focus-visible:ring-ring")}
             >
               <div
@@ -353,7 +359,11 @@ export const TvDrum = memo(function TvDrum({
                 )}
               >
                 <div data-picture="" className="absolute inset-0 origin-center">
-                  <Capture slug={channel.slug} size={size} alt={front ? `Armada: ${channel.label}` : ""} />
+                  <Capture slug={channel.slug} size={size} alt={
+                    front
+                      ? intl.formatMessage({ id: "tvDrum.captureAlt", defaultMessage: "Armada: {label}" }, { label: channel.label })
+                      : ""
+                  } />
                 </div>
 
                 <div data-gun="red" aria-hidden="true" className="pointer-events-none absolute inset-0 opacity-0 mix-blend-screen">

@@ -11,6 +11,7 @@ import { KIND_FOLLOW_LIST } from "@/lib/selfSyncKinds";
 
 import type { FollowListData } from "@/hooks/useFollowList";
 import type { NostrRumor } from "@/lib/nostrRumor";
+import { t } from "@/i18n";
 
 export interface UseFollowActionsReturn {
   isPending: boolean;
@@ -57,7 +58,7 @@ export function useFollowActions(): UseFollowActionsReturn {
 
   const mutateFollowList = useCallback(
     async (targetPubkey: string, action: "follow" | "unfollow") => {
-      if (!user) throw new Error("Not logged in");
+      if (!user) throw new Error(t({ id: "useFollowActions.notLoggedIn", defaultMessage: "Not logged in" }));
       setIsPending(true);
 
       try {

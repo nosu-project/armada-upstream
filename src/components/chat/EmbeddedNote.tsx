@@ -45,6 +45,7 @@ import { openUrl } from "@/lib/share";
 import { THEME_DEFINITION_KIND, parseDittoTheme } from "@/lib/themeEvent";
 import { cn } from "@/lib/utils";
 import { formatSats, receiptAmountSats, receiptZapRequest } from "@/lib/zaps";
+import { FormattedMessage, common, defineMessages, t, useIntl, type MessageDescriptor } from "@/i18n";
 
 import type { NostrRumor } from "@/lib/nostrRumor";
 import type { PollTally } from "@/lib/polls";
@@ -64,7 +65,7 @@ interface EmbeddedNoteProps {
 
 /** Label + icon for a kind rendered as a compact preview card. */
 interface KindMeta {
-  label: string;
+  label: MessageDescriptor;
   Icon?: ComponentType<{ className?: string }>;
 }
 
@@ -73,36 +74,64 @@ interface KindMeta {
  * or a media manifest). Text-note kinds render through {@link ChatContent};
  * reactions, polls and emoji packs have dedicated branches.
  */
+const KIND_LABELS = defineMessages({
+  profile: { id: "embeddedNote.kind.profile", defaultMessage: "Profile" },
+  followList: { id: "embeddedNote.kind.followList", defaultMessage: "Follow list" },
+  repost: { id: "embeddedNote.kind.repost", defaultMessage: "Repost" },
+  badgeAward: { id: "embeddedNote.kind.badgeAward", defaultMessage: "Badge award" },
+  photo: { id: "embeddedNote.kind.photo", defaultMessage: "Photo" },
+  video: { id: "embeddedNote.kind.video", defaultMessage: "Video" },
+  shortVideo: { id: "embeddedNote.kind.shortVideo", defaultMessage: "Short video" },
+  zap: { id: "embeddedNote.kind.zap", defaultMessage: "Zap" },
+  zapReceipt: { id: "embeddedNote.kind.zapReceipt", defaultMessage: "Zap receipt" },
+  highlight: { id: "embeddedNote.kind.highlight", defaultMessage: "Highlight" },
+  relayList: { id: "embeddedNote.kind.relayList", defaultMessage: "Relay list" },
+  peopleList: { id: "embeddedNote.kind.peopleList", defaultMessage: "People list" },
+  badge: { id: "embeddedNote.kind.badge", defaultMessage: "Badge" },
+  article: { id: "embeddedNote.kind.article", defaultMessage: "Article" },
+  articleDraft: { id: "embeddedNote.kind.articleDraft", defaultMessage: "Article draft" },
+  publication: { id: "embeddedNote.kind.publication", defaultMessage: "Publication" },
+  publicationSection: { id: "embeddedNote.kind.publicationSection", defaultMessage: "Publication section" },
+  podcast: { id: "embeddedNote.kind.podcast", defaultMessage: "Podcast" },
+  podcastTrailer: { id: "embeddedNote.kind.podcastTrailer", defaultMessage: "Podcast trailer" },
+  listing: { id: "embeddedNote.kind.listing", defaultMessage: "Listing" },
+  calendarEvent: { id: "embeddedNote.kind.calendarEvent", defaultMessage: "Calendar event" },
+  playlist: { id: "embeddedNote.kind.playlist", defaultMessage: "Playlist" },
+  music: { id: "embeddedNote.kind.music", defaultMessage: "Music" },
+  magicDeck: { id: "embeddedNote.kind.magicDeck", defaultMessage: "Magic deck" },
+  treasure: { id: "embeddedNote.kind.treasure", defaultMessage: "Treasure" },
+});
+
 const KIND_META: Record<number, KindMeta> = {
-  0: { label: "Profile", Icon: User },
-  3: { label: "Follow list", Icon: Users },
-  6: { label: "Repost" },
-  8: { label: "Badge award", Icon: Award },
-  16: { label: "Repost" },
-  20: { label: "Photo", Icon: ImageIcon },
-  21: { label: "Video", Icon: Film },
-  22: { label: "Short video", Icon: Film },
-  8333: { label: "Zap", Icon: Zap },
-  9735: { label: "Zap receipt", Icon: Zap },
-  9802: { label: "Highlight", Icon: Highlighter },
-  10002: { label: "Relay list", Icon: Server },
-  30000: { label: "People list", Icon: Users },
-  30009: { label: "Badge", Icon: Award },
-  30023: { label: "Article", Icon: FileText },
-  30024: { label: "Article draft", Icon: FileText },
-  30040: { label: "Publication", Icon: FileText },
-  30041: { label: "Publication section", Icon: FileText },
-  30054: { label: "Podcast", Icon: Mic },
-  30055: { label: "Podcast trailer", Icon: Mic },
-  30402: { label: "Listing", Icon: Tag },
-  31922: { label: "Calendar event", Icon: CalendarDays },
-  31923: { label: "Calendar event", Icon: CalendarDays },
-  34139: { label: "Playlist", Icon: Music },
-  34236: { label: "Short video", Icon: Film },
-  36787: { label: "Music", Icon: Music },
-  37381: { label: "Magic deck", Icon: Layers },
-  37516: { label: "Treasure", Icon: Gem },
-  39089: { label: "People list", Icon: Users },
+  0: { label: KIND_LABELS.profile, Icon: User },
+  3: { label: KIND_LABELS.followList, Icon: Users },
+  6: { label: KIND_LABELS.repost },
+  8: { label: KIND_LABELS.badgeAward, Icon: Award },
+  16: { label: KIND_LABELS.repost },
+  20: { label: KIND_LABELS.photo, Icon: ImageIcon },
+  21: { label: KIND_LABELS.video, Icon: Film },
+  22: { label: KIND_LABELS.shortVideo, Icon: Film },
+  8333: { label: KIND_LABELS.zap, Icon: Zap },
+  9735: { label: KIND_LABELS.zapReceipt, Icon: Zap },
+  9802: { label: KIND_LABELS.highlight, Icon: Highlighter },
+  10002: { label: KIND_LABELS.relayList, Icon: Server },
+  30000: { label: KIND_LABELS.peopleList, Icon: Users },
+  30009: { label: KIND_LABELS.badge, Icon: Award },
+  30023: { label: KIND_LABELS.article, Icon: FileText },
+  30024: { label: KIND_LABELS.articleDraft, Icon: FileText },
+  30040: { label: KIND_LABELS.publication, Icon: FileText },
+  30041: { label: KIND_LABELS.publicationSection, Icon: FileText },
+  30054: { label: KIND_LABELS.podcast, Icon: Mic },
+  30055: { label: KIND_LABELS.podcastTrailer, Icon: Mic },
+  30402: { label: KIND_LABELS.listing, Icon: Tag },
+  31922: { label: KIND_LABELS.calendarEvent, Icon: CalendarDays },
+  31923: { label: KIND_LABELS.calendarEvent, Icon: CalendarDays },
+  34139: { label: KIND_LABELS.playlist, Icon: Music },
+  34236: { label: KIND_LABELS.shortVideo, Icon: Film },
+  36787: { label: KIND_LABELS.music, Icon: Music },
+  37381: { label: KIND_LABELS.magicDeck, Icon: Layers },
+  37516: { label: KIND_LABELS.treasure, Icon: Gem },
+  39089: { label: KIND_LABELS.peopleList, Icon: Users },
 };
 
 /** NIP-68 photo kinds (images in imeta). */
@@ -199,11 +228,12 @@ export function EmbeddedEventCard({ event, sourceUrl, className }: { event: Nost
 }
 
 function GenericEventCard({ event, sourceUrl, className }: { event: NostrRumor; sourceUrl?: string; className?: string }) {
+  const intl = useIntl();
   const author = useAuthor(event.pubkey);
   const metadata = author.data?.metadata;
   const displayName = getDisplayName(metadata, event.pubkey);
   const meta = KIND_META[event.kind];
-  const label = meta?.label ?? null;
+  const label = meta ? intl.formatMessage(meta.label) : null;
   const title = event.tags.find(([name]) => name === "title")?.[1];
 
   const reactionEmoji = event.kind === 7
@@ -372,7 +402,17 @@ function EmbeddedZapCard({ event }: { event: NostrRumor }) {
         <Zap className="size-4" />
       </div>
       <div className="min-w-0">
-        <div className="text-sm font-semibold">{sats > 0 ? `${formatSats(sats)} sats` : "Zap"}</div>
+        <div className="text-sm font-semibold">
+          {sats > 0 ? (
+            <FormattedMessage
+              id="embeddedNote.zapSats"
+              defaultMessage="{amount} sats"
+              values={{ amount: formatSats(sats) }}
+            />
+          ) : (
+            <FormattedMessage {...KIND_LABELS.zap} />
+          )}
+        </div>
         {comment.trim().length > 0 && (
           <p className="text-xs text-muted-foreground truncate">{comment.trim()}</p>
         )}
@@ -611,6 +651,7 @@ function DeckQuantityBadge({ quantity }: { quantity: number }) {
  * Ditto's MagicDeckContent.
  */
 function EmbeddedMagicDeckCard({ event }: { event: NostrRumor }) {
+  const intl = useIntl();
   const tag = (name: string) => event.tags.find(([n]) => n === name)?.[1];
   const all = (name: string) => event.tags.filter(([n]) => n === name).map(([, v]) => v);
   const title = tag("title");
@@ -653,7 +694,7 @@ function EmbeddedMagicDeckCard({ event }: { event: NostrRumor }) {
         <div className="overflow-hidden rounded-xl empty:hidden">
           <FallbackImage
             src={banner}
-            alt={title ?? "Magic deck"}
+            alt={title ?? intl.formatMessage(KIND_LABELS.magicDeck)}
             className="w-full max-h-[200px] object-cover"
             loading="lazy"
             decoding="async"
@@ -671,7 +712,13 @@ function EmbeddedMagicDeckCard({ event }: { event: NostrRumor }) {
       {commanders.length > 0 && (
         <div className="flex items-center gap-2">
           <Shield className="size-3.5 text-muted-foreground shrink-0" />
-          <span className="text-xs text-muted-foreground">Commander{commanders.length > 1 ? "s" : ""}:</span>
+          <span className="text-xs text-muted-foreground">
+            <FormattedMessage
+              id="embeddedNote.deck.commanders"
+              defaultMessage="{count, plural, one {Commander:} other {Commanders:}}"
+              values={{ count: commanders.length }}
+            />
+          </span>
           <span className="text-xs font-medium truncate">{commanders.join(" & ")}</span>
         </div>
       )}
@@ -679,7 +726,9 @@ function EmbeddedMagicDeckCard({ event }: { event: NostrRumor }) {
       {companion && (
         <div className="flex items-center gap-2">
           <Sparkles className="size-3.5 text-muted-foreground shrink-0" />
-          <span className="text-xs text-muted-foreground">Companion:</span>
+          <span className="text-xs text-muted-foreground">
+            <FormattedMessage id="embeddedNote.deck.companion" defaultMessage="Companion:" />
+          </span>
           <span className="text-xs font-medium truncate">{companion}</span>
         </div>
       )}
@@ -691,25 +740,43 @@ function EmbeddedMagicDeckCard({ event }: { event: NostrRumor }) {
         {totalCards > 0 && (
           <Badge variant="secondary" className="text-2xs gap-1 font-medium">
             <CardsIcon className="size-3" />
-            {totalCards} cards
+            <FormattedMessage
+              id="embeddedNote.deck.cards"
+              defaultMessage="{count, plural, other {# cards}}"
+              values={{ count: totalCards }}
+            />
           </Badge>
         )}
         {totalSideboard > 0 && (
-          <Badge variant="secondary" className="text-2xs gap-1 font-medium">{totalSideboard} sideboard</Badge>
+          <Badge variant="secondary" className="text-2xs gap-1 font-medium">
+            <FormattedMessage
+              id="embeddedNote.deck.sideboardCount"
+              defaultMessage="{count, plural, other {# sideboard}}"
+              values={{ count: totalSideboard }}
+            />
+          </Badge>
         )}
       </div>
 
       {mainDeck.length > 0 && (
         <div className="clip-hairline-lg [--edge:var(--border)/0.5] [--fill:var(--background)/0.4] [--fill-hover:var(--background)/0.4] overflow-hidden" onClick={(e) => e.stopPropagation()}>
           <div className="flex items-center justify-between px-3 py-1.5 bg-secondary/30 border-b border-border/50">
-            <span className="text-2xs font-medium text-muted-foreground">{visualView ? "Visual spoiler" : "Decklist"}</span>
+            <span className="text-2xs font-medium text-muted-foreground">{visualView ? (
+                <FormattedMessage id="embeddedNote.deck.visualSpoiler" defaultMessage="Visual spoiler" />
+              ) : (
+                <FormattedMessage id="embeddedNote.deck.decklist" defaultMessage="Decklist" />
+              )}</span>
             <button
               type="button"
               onClick={() => setVisualView((v) => !v)}
               className="flex items-center gap-1 text-2xs text-muted-foreground hover:text-foreground transition-colors touch:py-1"
             >
               {visualView ? <List className="size-3.5" /> : <Palette className="size-3.5" />}
-              {visualView ? "List" : "Visual"}
+              {visualView ? (
+                <FormattedMessage id="embeddedNote.deck.list" defaultMessage="List" />
+              ) : (
+                <FormattedMessage id="embeddedNote.deck.visual" defaultMessage="Visual" />
+              )}
             </button>
           </div>
 
@@ -723,7 +790,9 @@ function EmbeddedMagicDeckCard({ event }: { event: NostrRumor }) {
               {sideboard.length > 0 && (
                 <>
                   <div className="px-1 py-2 mt-1">
-                    <span className="text-2xs font-semibold uppercase tracking-wider text-muted-foreground">Sideboard</span>
+                    <span className="text-2xs font-semibold uppercase tracking-wider text-muted-foreground">
+                      <FormattedMessage id="embeddedNote.deck.sideboard" defaultMessage="Sideboard" />
+                    </span>
                   </div>
                   <div className="grid grid-cols-4 gap-1.5">
                     {sideboard.map((card, i) => (
@@ -741,7 +810,9 @@ function EmbeddedMagicDeckCard({ event }: { event: NostrRumor }) {
               {sideboard.length > 0 && (
                 <>
                   <div className="px-3 py-1.5 bg-secondary/40 border-y border-border/50">
-                    <span className="text-2xs font-semibold uppercase tracking-wider text-muted-foreground">Sideboard</span>
+                    <span className="text-2xs font-semibold uppercase tracking-wider text-muted-foreground">
+                      <FormattedMessage id="embeddedNote.deck.sideboard" defaultMessage="Sideboard" />
+                    </span>
                   </div>
                   {sideboard.map((card, i) => (
                     <DeckCardRow key={`s-${card.name}-${i}`} card={card} onClick={() => setLightboxIndex(mainDeck.length + i)} />
@@ -784,12 +855,23 @@ function rot13(str: string): string {
   });
 }
 
-const TREASURE_SIZE_LABELS: Record<string, string> = {
-  micro: "Micro", small: "Small", regular: "Regular", large: "Large", other: "Other",
-};
-const TREASURE_TYPE_LABELS: Record<string, string> = {
-  traditional: "Traditional", multi: "Multi-cache", mystery: "Mystery",
-};
+const TREASURE_SIZE_LABELS: Record<string, MessageDescriptor> = defineMessages({
+  micro: { id: "embeddedNote.treasure.size.micro", defaultMessage: "Micro" },
+  small: { id: "embeddedNote.treasure.size.small", defaultMessage: "Small" },
+  regular: { id: "embeddedNote.treasure.size.regular", defaultMessage: "Regular" },
+  large: { id: "embeddedNote.treasure.size.large", defaultMessage: "Large" },
+  other: { id: "embeddedNote.treasure.size.other", defaultMessage: "Other" },
+});
+const TREASURE_TYPE_LABELS: Record<string, MessageDescriptor> = defineMessages({
+  traditional: { id: "embeddedNote.treasure.type.traditional", defaultMessage: "Traditional" },
+  multi: { id: "embeddedNote.treasure.type.multi", defaultMessage: "Multi-cache" },
+  mystery: { id: "embeddedNote.treasure.type.mystery", defaultMessage: "Mystery" },
+});
+
+/** Own keys only: a sender-chosen `toString` must not index the prototype. */
+function treasureLabel(table: Record<string, MessageDescriptor>, key: string): MessageDescriptor | undefined {
+  return Object.hasOwn(table, key) ? table[key] : undefined;
+}
 
 /**
  * Treasure/geocache (kind 37516): `name`, difficulty `D`, terrain `T`, size `S`,
@@ -797,6 +879,7 @@ const TREASURE_TYPE_LABELS: Record<string, string> = {
  * Ported from Ditto's GeocacheContent.
  */
 function EmbeddedTreasureCard({ event }: { event: NostrRumor }) {
+  const intl = useIntl();
   const tag = (name: string) => event.tags.find(([n]) => n === name)?.[1];
   const all = (name: string) => event.tags.filter(([n]) => n === name).map(([, v]) => v);
 
@@ -823,6 +906,8 @@ function EmbeddedTreasureCard({ event }: { event: NostrRumor }) {
   const [index, setIndex] = useState<number | null>(null);
   const [hintRevealed, setHintRevealed] = useState(false);
   const decodedHint = useMemo(() => (hint ? rot13(hint) : ""), [hint]);
+  const typeLabel = treasureLabel(TREASURE_TYPE_LABELS, cacheType);
+  const sizeLabel = treasureLabel(TREASURE_SIZE_LABELS, size);
 
   return (
     <div className="space-y-2 min-w-0">
@@ -834,10 +919,10 @@ function EmbeddedTreasureCard({ event }: { event: NostrRumor }) {
       )}
 
       <div className="flex flex-wrap gap-1.5">
-        <Badge variant="secondary" className="text-2xs gap-1 font-medium">{TREASURE_TYPE_LABELS[cacheType] ?? cacheType}</Badge>
+        <Badge variant="secondary" className="text-2xs gap-1 font-medium">{typeLabel ? intl.formatMessage(typeLabel) : cacheType}</Badge>
         <Badge variant="secondary" className="text-2xs gap-1 font-medium">
           <Package className="size-3" />
-          {TREASURE_SIZE_LABELS[size] ?? size}
+          {sizeLabel ? intl.formatMessage(sizeLabel) : size}
         </Badge>
         {geohash && (
           <Badge variant="secondary" className="text-2xs gap-1 font-medium">
@@ -895,7 +980,7 @@ function EmbeddedTreasureCard({ event }: { event: NostrRumor }) {
           className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors touch:py-1"
         >
           {hintRevealed ? <EyeOff className="size-3.5" /> : <Eye className="size-3.5" />}
-          {hintRevealed ? decodedHint : "Show hint"}
+          {hintRevealed ? decodedHint : <FormattedMessage id="embeddedNote.treasure.showHint" defaultMessage="Show hint" />}
         </button>
       )}
 
@@ -979,7 +1064,7 @@ function TagPreviewCard({ event, meta }: { event: NostrRumor; meta: KindMeta }) 
       {!title && !summary && !cover && (
         <div className="flex items-center gap-2 py-1 text-muted-foreground">
           {Icon && <Icon className="size-4 shrink-0" />}
-          <span className="text-sm font-medium">{meta.label}</span>
+          <span className="text-sm font-medium"><FormattedMessage {...meta.label} /></span>
         </div>
       )}
     </div>
@@ -1030,7 +1115,11 @@ function EmbedTruncatedBody({ children }: { children: ReactNode }) {
           }}
           className="mt-0.5 text-xs touch:text-sm font-semibold text-primary hover:underline touch:py-1"
         >
-          {expanded ? "Show less" : "Show more"}
+          {expanded ? (
+            <FormattedMessage id="embeddedNote.showLess" defaultMessage="Show less" />
+          ) : (
+            <FormattedMessage id="embeddedNote.showMore" defaultMessage="Show more" />
+          )}
         </button>
       )}
     </div>
@@ -1059,14 +1148,22 @@ function SourceLink({ url }: { url: string | undefined }) {
       {favicon
         ? <img src={favicon} alt="" className="size-3.5 shrink-0 rounded-sm object-contain" loading="lazy" />
         : <ExternalLink className="size-3 shrink-0" />}
-      <span className="truncate">View on {displayHost(safe)}</span>
+      <span className="truncate">
+        <FormattedMessage
+          id="embeddedNote.viewOnHost"
+          defaultMessage="View on {host}"
+          values={{ host: displayHost(safe) }}
+        />
+      </span>
       <ExternalLink className="size-3 shrink-0" />
     </button>
   );
 }
 
 /** "View on Ditto" off-ramp; `iconOnly` when a source link holds the lead slot. */
-function DittoLink({ href, label = "View on Ditto", iconOnly = false }: { href: string; label?: string; iconOnly?: boolean }) {
+function DittoLink({ href, label: labelProp, iconOnly = false }: { href: string; label?: string; iconOnly?: boolean }) {
+  const intl = useIntl();
+  const label = labelProp ?? intl.formatMessage({ id: "embeddedNote.viewOnDitto", defaultMessage: "View on Ditto" });
   if (iconOnly) {
     return (
       <a
@@ -1103,7 +1200,9 @@ function DittoLink({ href, label = "View on Ditto", iconOnly = false }: { href: 
 
 /** Copies the NIP-21 URI (a `nostr:` href only works with a registered scheme handler). */
 function CopyIdButton({ uri, className }: { uri: string; className?: string }) {
+  const intl = useIntl();
   const [copied, setCopied] = useState(false);
+  const copyLabel = intl.formatMessage({ id: "embeddedNote.copyEventId", defaultMessage: "Copy event ID" });
 
   const copy = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -1111,9 +1210,12 @@ function CopyIdButton({ uri, className }: { uri: string; className?: string }) {
       () => {
         setCopied(true);
         setTimeout(() => setCopied(false), 1500);
-        toast({ title: "Copied event ID" });
+        toast({ title: t({ id: "embeddedNote.copiedEventId", defaultMessage: "Copied event ID" }) });
       },
-      () => toast({ title: "Couldn't copy event ID", variant: "destructive" }),
+      () => toast({
+        title: t({ id: "embeddedNote.copyEventIdFailed", defaultMessage: "Couldn't copy event ID" }),
+        variant: "destructive",
+      }),
     );
   };
 
@@ -1121,8 +1223,8 @@ function CopyIdButton({ uri, className }: { uri: string; className?: string }) {
     <button
       type="button"
       onClick={copy}
-      title="Copy event ID"
-      aria-label="Copy event ID"
+      title={copyLabel}
+      aria-label={copyLabel}
       className={cn(
         "shrink-0 grid place-items-center size-6 touch:size-8 -mr-1 -mb-0.5 clip-corner-lg",
         "text-muted-foreground hover:text-primary hover:bg-secondary transition-colors",
@@ -1163,6 +1265,8 @@ function EmbeddedNoteTombstone({ label, nip19Id, retrying, onRetry, className }:
   onRetry: () => void;
   className?: string;
 }) {
+  const intl = useIntl();
+  const retryLabel = intl.formatMessage(common.retry);
   return (
     <div
       className={cn(
@@ -1173,7 +1277,13 @@ function EmbeddedNoteTombstone({ label, nip19Id, retrying, onRetry, className }:
     >
       <div className="flex items-center gap-2 min-w-0 py-1">
         <FileQuestion className="size-4 shrink-0" />
-        <span className="text-sm truncate">Couldn't load event {label.slice(0, 12)}…</span>
+        <span className="text-sm truncate">
+          <FormattedMessage
+            id="embeddedNote.loadFailed"
+            defaultMessage="Couldn't load event {id}…"
+            values={{ id: label.slice(0, 12) }}
+          />
+        </span>
       </div>
       <div className="flex items-center gap-2 min-w-0">
         {nip19Id && <DittoLink href={dittoNip19Url(nip19Id)} />}
@@ -1185,8 +1295,8 @@ function EmbeddedNoteTombstone({ label, nip19Id, retrying, onRetry, className }:
               onRetry();
             }}
             disabled={retrying}
-            title="Retry"
-            aria-label="Retry"
+            title={retryLabel}
+            aria-label={retryLabel}
             className={cn(
               "shrink-0 grid place-items-center size-6 touch:size-8 clip-corner-lg",
               "text-muted-foreground hover:text-primary hover:bg-secondary transition-colors disabled:opacity-60",

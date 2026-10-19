@@ -5,7 +5,6 @@ import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useDm17Conversations } from "@/hooks/useDm17";
 import { useEventStore } from "@/hooks/useEventStore";
 import { useMediaPolicy } from "@/hooks/useMediaPolicy";
-import { getDisplayName } from "@/lib/getDisplayName";
 import { mediaSrc } from "@/lib/mediaPolicy";
 import { DM_PEER_SEP } from "@/lib/nip17/conversation";
 import { chatRoute, parseChatRoute } from "@/lib/routes";
@@ -128,9 +127,9 @@ export function useShareShortcuts(): void {
     for (const c of ranked) {
       if (c.peer) {
         const metadata = profiles.get(c.peer);
-        const name = getDisplayName(metadata);
+        // getDisplayName's chain without its "Anonymous" fallback, which the npub replaces.
         const label =
-          name !== "Anonymous" ? name : `${nip19.npubEncode(c.peer).slice(0, 12)}…`;
+          metadata?.name || metadata?.display_name || `${nip19.npubEncode(c.peer).slice(0, 12)}…`;
         const iconUrl = mediaSrc(metadata?.picture, mediaPolicyRef.current);
         shortcuts.push({ id: c.id, label, ...(iconUrl ? { iconUrl } : {}) });
       } else if (c.label) {

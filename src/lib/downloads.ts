@@ -4,6 +4,8 @@
  * from the NIP-82 release events (`src/lib/releases.ts`).
  */
 
+import { t } from "@/i18n";
+
 export type DownloadOs = "linux" | "windows" | "macos" | "android" | "ios";
 
 export interface DownloadPlatform {
@@ -82,20 +84,26 @@ export interface AppStore {
 export const ANDROID_STORES: AppStore[] = [
   {
     label: "Google Play",
-    hint: "Install from the Play Store",
+    get hint() {
+      return t({ id: "downloads.hint.googlePlay", defaultMessage: "Install from the Play Store" });
+    },
     url: "https://play.google.com/store/apps/details?id=buzz.armada.app&hl=en-US",
     icon: "/stores/google-play.svg",
   },
   {
     label: "F-Droid",
-    hint: "Add the Soapbox repository",
+    get hint() {
+      return t({ id: "downloads.hint.fdroid", defaultMessage: "Add the Soapbox repository" });
+    },
     // The npkg F-Droid repo; the link hands repo + pinned fingerprint to the F-Droid app.
     url: `https://${NPKG_HOST}/fdroid/soapbox.pub/buzz.armada.app/repo?fingerprint=1b043939b45972c680a518799d5098dd25edcc78ddeda2c6476722ed1f571832`,
     icon: "/stores/fdroid.svg",
   },
   {
     label: "Zapstore",
-    hint: "The Nostr-native app store",
+    get hint() {
+      return t({ id: "downloads.hint.zapstore", defaultMessage: "The Nostr-native app store" });
+    },
     url: "https://zapstore.dev/apps/buzz.armada.app",
     icon: "/stores/zapstore.png",
   },

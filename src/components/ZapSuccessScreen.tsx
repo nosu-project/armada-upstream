@@ -8,6 +8,7 @@ import { useAppContext } from '@/hooks/useAppContext';
 import { useAuthor } from '@/hooks/useAuthor';
 import { formatMoneyAmount } from '@/lib/bitcoinMoney';
 import { useEsploraApis } from '@/hooks/useEsploraApis';
+import { common, FormattedMessage, useIntl } from '@/i18n';
 
 interface ZapSuccessScreenProps {
   /** Recipient pubkey (hex), used when `recipientLabel` is omitted. */
@@ -30,11 +31,12 @@ export function ZapSuccessScreen({
   txid,
   onClose,
 }: ZapSuccessScreenProps) {
+  const intl = useIntl();
   const { data: author } = useAuthor(recipientPubkey);
   const { config } = useAppContext();
   const esploraApis = useEsploraApis();
   const metadata = author?.metadata;
-  const fallbackName = metadata?.name || metadata?.display_name || 'Anonymous';
+  const fallbackName = metadata?.name || metadata?.display_name || intl.formatMessage({ id: 'zapSuccessScreen.anonymous', defaultMessage: 'Anonymous' });
   const displayName = recipientLabel ?? fallbackName;
   const avatarShape = getAvatarShape(metadata);
 
@@ -56,7 +58,11 @@ export function ZapSuccessScreen({
 
       <div className="grid gap-1">
         <h2 className="text-lg font-semibold tracking-tight">
-          {recipientLabel ? 'Donation sent' : 'Bitcoin sent'}
+          {recipientLabel ? (
+            <FormattedMessage id="zapSuccessScreen.donationSent" defaultMessage="Donation sent" />
+          ) : (
+            <FormattedMessage id="zapSuccessScreen.bitcoinSent" defaultMessage="Bitcoin sent" />
+          )}
         </h2>
         <div className="text-4xl font-bold tabular-nums">
           {amountDisplay}
@@ -71,7 +77,9 @@ export function ZapSuccessScreen({
           </AvatarFallback>
         </Avatar>
         <div className="min-w-0 text-left">
-          <div className="text-2xs text-muted-foreground leading-tight">To</div>
+          <div className="text-2xs text-muted-foreground leading-tight">
+            <FormattedMessage id="zapSuccessScreen.to" defaultMessage="To" />
+          </div>
           <div className="text-sm font-medium truncate max-w-[220px]">
             {/* A campaign label isn't a Nostr profile, so no custom emoji. */}
             {recipientLabel ?? <DisplayName pubkey={recipientPubkey} name={fallbackName} />}
@@ -94,12 +102,12 @@ export function ZapSuccessScreen({
               onClick={onClose}
             >
               <ExternalLink className="size-4 mr-2" />
-              View transaction
+              <FormattedMessage id="zapSuccessScreen.viewTransaction" defaultMessage="View transaction" />
             </a>
           </Button>
         )}
         <Button type="button" onClick={onClose} className="w-full">
-          Done
+          <FormattedMessage {...common.done} />
         </Button>
       </div>
     </div>

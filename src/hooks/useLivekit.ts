@@ -8,6 +8,7 @@ import { relayToHttpUrl } from "@/lib/platform";
 
 import type { NostrEvent } from "@nostrify/nostrify";
 import type { NostrSigner } from "@nostrify/types";
+import { t } from "@/i18n";
 
 /** NIP-98 HTTP Auth event kind. */
 const KIND_HTTP_AUTH = 27235;
@@ -71,12 +72,12 @@ async function fetchLivekitToken(
   });
 
   if (!res.ok) {
-    throw new Error(`LiveKit token request failed: HTTP ${res.status}`);
+    throw new Error(t({ id: "useLivekit.tokenFailed", defaultMessage: "LiveKit token request failed: HTTP {status}" }, { status: res.status }));
   }
   // An SPA catch-all returns HTML with 200; don't parse it as JSON.
   const contentType = res.headers.get("content-type") ?? "";
   if (!contentType.includes("json")) {
-    throw new Error("The relay did not return a voice token (no LiveKit support?)");
+    throw new Error(t({ id: "useLivekit.noToken", defaultMessage: "The relay did not return a voice token (no LiveKit support?)" }));
   }
 
   const data: Record<string, string> = await res.json();
@@ -94,7 +95,7 @@ export function useLivekitToken(relayUrl: string, roomId: string, enabled: boole
   return useQuery({
     queryKey: ["nip29", "livekit-token", relayUrl, roomId, user?.pubkey],
     queryFn: async () => {
-      if (!user) throw new Error("Not logged in");
+      if (!user) throw new Error(t({ id: "useLivekit.notLoggedIn", defaultMessage: "Not logged in" }));
       return fetchLivekitToken(relayUrl, roomId, user.signer);
     },
     enabled: enabled && Boolean(user),

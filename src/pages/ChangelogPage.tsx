@@ -7,6 +7,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { parseChangelog } from "@/lib/changelog";
 import type { ChangelogCategory, ChangelogEntry } from "@/lib/changelog";
 import { useBackOrHome } from "@/hooks/useBackOrHome";
+import { common, defineMessages, FormattedMessage, useIntl, type MessageDescriptor } from "@/i18n";
 
 const GITLAB_REPO = "https://gitlab.com/soapbox-pub/armada";
 
@@ -20,11 +21,20 @@ const CATEGORY_STYLES: Record<ChangelogCategory, { icon: typeof Plus; colorClass
   Security:   { icon: ShieldAlert, colorClass: "text-purple-600 dark:text-purple-400" },
 };
 
+const CATEGORY_LABELS: Record<ChangelogCategory, MessageDescriptor> = defineMessages({
+  Added: { id: "changelogPage.category.added", defaultMessage: "Added" },
+  Changed: { id: "changelogPage.category.changed", defaultMessage: "Changed" },
+  Deprecated: { id: "changelogPage.category.deprecated", defaultMessage: "Deprecated" },
+  Removed: { id: "changelogPage.category.removed", defaultMessage: "Removed" },
+  Fixed: { id: "changelogPage.category.fixed", defaultMessage: "Fixed" },
+  Security: { id: "changelogPage.category.security", defaultMessage: "Security" },
+});
+
 /** Format "2026-03-26" as a readable date string. */
-function formatDate(raw: string): string {
+function formatDate(raw: string, locale: string): string {
   const date = new Date(raw + "T00:00:00");
   if (isNaN(date.getTime())) return raw;
-  return date.toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" });
+  return date.toLocaleDateString(locale, { year: "numeric", month: "long", day: "numeric" });
 }
 
 const commitSha = import.meta.env.COMMIT_SHA;
@@ -33,6 +43,7 @@ const buildDate = import.meta.env.BUILD_DATE;
 const isPreRelease = !commitTag;
 
 export function ChangelogPage() {
+  const intl = useIntl();
   const back = useBackOrHome();
   const [content, setContent] = useState<string | null>(null);
   const [error, setError] = useState(false);
@@ -53,20 +64,26 @@ export function ChangelogPage() {
   return (
     <main className="flex-1 min-w-0 flex flex-col safe-area-top">
       <header className="relative h-12 touch:h-[3.25rem] mx-gutter mt-1 sidebar:mt-3 w-[calc(100%-2*var(--gutter))] max-w-2xl sm:mx-auto px-2 sidebar:px-3 flex items-center gap-1.5 shrink-0 clip-corner-lg bg-chrome">
-        <Button variant="ghost" size="icon" className="size-9 shrink-0" aria-label="Back" onClick={back}>
+        <Button variant="ghost" size="icon" className="size-9 shrink-0" aria-label={intl.formatMessage(common.back)} onClick={back}>
           <ArrowLeft className="size-5" />
         </Button>
-        <h1 className="font-semibold truncate leading-tight">Changelog</h1>
+        <h1 className="font-semibold truncate leading-tight">
+          <FormattedMessage id="changelogPage.title" defaultMessage="Changelog" />
+        </h1>
       </header>
 
       <div className="flex-1 min-h-0 overflow-y-auto safe-area-bottom">
         <div className="max-w-2xl mx-auto px-4 sm:px-6 pb-16 pt-3 space-y-4">
           {error ? (
-            <p className="text-sm text-muted-foreground pt-4">Failed to load changelog.</p>
+            <p className="text-sm text-muted-foreground pt-4">
+              <FormattedMessage id="changelogPage.loadFailed" defaultMessage="Failed to load changelog." />
+            </p>
           ) : content === null ? (
             <ChangelogSkeleton />
           ) : entries.length === 0 ? (
-            <p className="text-sm text-muted-foreground pt-4">No releases yet.</p>
+            <p className="text-sm text-muted-foreground pt-4">
+              <FormattedMessage id="changelogPage.empty" defaultMessage="No releases yet." />
+            </p>
           ) : (
             <>
               {isPreRelease && latestVersion && <PreReleaseBanner latestVersion={latestVersion} />}
@@ -77,7 +94,9 @@ export function ChangelogPage() {
                 <>
                   <div className="flex items-center gap-3 pt-4 pb-1">
                     <div className="h-px flex-1 bg-border" />
-                    <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Past releases</span>
+                    <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                      <FormattedMessage id="changelogPage.pastReleases" defaultMessage="Past releases" />
+                    </span>
                     <div className="h-px flex-1 bg-border" />
                   </div>
 
@@ -96,6 +115,7 @@ export function ChangelogPage() {
 
 /** Hero treatment for the most recent release — no card, centered version + date. */
 function LatestRelease({ entry }: { entry: ChangelogEntry }) {
+  const intl = useIntl();
   const contentRef = useRef<HTMLUListElement>(null);
   const [overflows, setOverflows] = useState(false);
   const [expanded, setExpanded] = useState(false);
@@ -127,7 +147,7 @@ function LatestRelease({ entry }: { entry: ChangelogEntry }) {
         rel="noopener noreferrer"
         className="flex items-center justify-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors mt-1"
       >
-        {formatDate(entry.date)}
+        {formatDate(entry.date, intl.locale)}
       </a>
 
       <div className="relative mt-4">
@@ -151,7 +171,9 @@ function LatestRelease({ entry }: { entry: ChangelogEntry }) {
                   <TooltipTrigger asChild>
                     <Icon className={`size-4 shrink-0 mt-1 cursor-default ${style.colorClass}`} />
                   </TooltipTrigger>
-                  <TooltipContent side="left">{section.category}</TooltipContent>
+                  <TooltipContent side="left">
+                    {CATEGORY_LABELS[section.category] ? intl.formatMessage(CATEGORY_LABELS[section.category]) : section.category}
+                  </TooltipContent>
                 </Tooltip>
                 <span>{item}</span>
               </li>
@@ -168,7 +190,11 @@ function LatestRelease({ entry }: { entry: ChangelogEntry }) {
           className="w-full text-sm text-primary hover:underline mt-1"
           onClick={() => setExpanded((v) => !v)}
         >
-          {expanded ? "Show less" : "Read more"}
+          {expanded ? (
+            <FormattedMessage id="changelogPage.showLess" defaultMessage="Show less" />
+          ) : (
+            <FormattedMessage id="changelogPage.readMore" defaultMessage="Read more" />
+          )}
         </button>
       )}
 
@@ -180,6 +206,7 @@ const ENTRY_MAX_HEIGHT = 240; // px — entries taller than this get a "Read mor
 
 /** A single changelog release card with truncation for long entries. */
 function ChangelogEntryCard({ entry }: { entry: ChangelogEntry }) {
+  const intl = useIntl();
   const contentRef = useRef<HTMLUListElement>(null);
   const [overflows, setOverflows] = useState(false);
   const [expanded, setExpanded] = useState(false);
@@ -212,7 +239,7 @@ function ChangelogEntryCard({ entry }: { entry: ChangelogEntry }) {
           rel="noopener noreferrer"
           className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors ml-auto"
         >
-          <span>{formatDate(entry.date)}</span>
+          <span>{formatDate(entry.date, intl.locale)}</span>
         </a>
       </div>
 
@@ -237,7 +264,9 @@ function ChangelogEntryCard({ entry }: { entry: ChangelogEntry }) {
                   <TooltipTrigger asChild>
                     <Icon className={`size-3.5 shrink-0 mt-[3px] cursor-default ${style.colorClass}`} />
                   </TooltipTrigger>
-                  <TooltipContent side="left">{section.category}</TooltipContent>
+                  <TooltipContent side="left">
+                    {CATEGORY_LABELS[section.category] ? intl.formatMessage(CATEGORY_LABELS[section.category]) : section.category}
+                  </TooltipContent>
                 </Tooltip>
                 <span>{item}</span>
               </li>
@@ -254,7 +283,11 @@ function ChangelogEntryCard({ entry }: { entry: ChangelogEntry }) {
            className="w-full text-sm text-primary hover:underline py-2"
           onClick={() => setExpanded((v) => !v)}
         >
-          {expanded ? "Show less" : "Read more"}
+          {expanded ? (
+            <FormattedMessage id="changelogPage.showLess" defaultMessage="Show less" />
+          ) : (
+            <FormattedMessage id="changelogPage.readMore" defaultMessage="Read more" />
+          )}
         </button>
       )}
     </div>
@@ -263,11 +296,14 @@ function ChangelogEntryCard({ entry }: { entry: ChangelogEntry }) {
 
 /** Banner shown at the top of the changelog for untagged (pre-release) builds. */
 function PreReleaseBanner({ latestVersion }: { latestVersion: string }) {
+  const intl = useIntl();
   return (
     <div className="clip-hairline-lg [--edge:var(--warning)/0.5] [--fill:var(--warning)/0.05] [--fill-hover:var(--warning)/0.05] px-4 py-3 space-y-1.5">
       <div className="flex items-center gap-2">
         <FlaskConical className="size-4 text-warning shrink-0" />
-        <span className="text-sm font-medium text-warning">Pre-release build</span>
+        <span className="text-sm font-medium text-warning">
+          <FormattedMessage id="changelogPage.preRelease.title" defaultMessage="Pre-release build" />
+        </span>
         {commitSha && buildDate && (
           <a
             href={`${GITLAB_REPO}/-/commit/${commitSha}`}
@@ -275,20 +311,27 @@ function PreReleaseBanner({ latestVersion }: { latestVersion: string }) {
             rel="noopener noreferrer"
             className="ml-auto text-2xs text-warning/70 hover:text-warning transition-colors"
           >
-            {formatDate(buildDate.split("T")[0])}
+            {formatDate(buildDate.split("T")[0], intl.locale)}
           </a>
         )}
       </div>
       <p className="text-xs text-warning/80">
-        This build contains changes not yet included in a release.{" "}
-        <a
-          href={`${GITLAB_REPO}/-/compare/v${latestVersion}...${commitSha || "main"}`}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="underline underline-offset-2 hover:text-warning transition-colors"
-        >
-          View unreleased changes
-        </a>
+        <FormattedMessage
+          id="changelogPage.preRelease.description"
+          defaultMessage="This build contains changes not yet included in a release. <link>View unreleased changes</link>"
+          values={{
+            link: (chunks) => (
+              <a
+                href={`${GITLAB_REPO}/-/compare/v${latestVersion}...${commitSha || "main"}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="underline underline-offset-2 hover:text-warning transition-colors"
+              >
+                {chunks}
+              </a>
+            ),
+          }}
+        />
       </p>
     </div>
   );

@@ -2,6 +2,7 @@ import { createContext, useContext } from "react";
 import { Copy, Link } from "lucide-react";
 
 import type { MessageActionItem } from "@/components/chat/messageActions";
+import { common, t } from "@/i18n";
 import { writeClipboardText } from "@/lib/clipboard";
 
 /**
@@ -46,7 +47,9 @@ export function linkActionsAt(target: EventTarget | null): MessageActionItem[] |
   const text = url.protocol === "mailto:" ? raw.slice("mailto:".length) : raw;
   return [{
     id: "copy-link-target",
-    label: url.protocol === "mailto:" ? "Copy email address" : "Copy link",
+    label: url.protocol === "mailto:"
+      ? t({ id: "chatImageMenuContext.copyEmail", defaultMessage: "Copy email address" })
+      : t(common.copyLink),
     icon: Link,
     onSelect: () => writeClipboardText(text).catch(() => undefined),
   }];
@@ -68,7 +71,7 @@ export function selectionActionsIn(row: Element): MessageActionItem[] | null {
   if (!text.trim()) return null;
   return [{
     id: "copy-selection",
-    label: "Copy selection",
+    label: t({ id: "chatImageMenuContext.copySelection", defaultMessage: "Copy selection" }),
     icon: Copy,
     onSelect: () => writeClipboardText(text).catch(() => undefined),
   }];

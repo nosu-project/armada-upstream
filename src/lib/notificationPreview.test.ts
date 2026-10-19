@@ -1,9 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+
+import { createAppIntl, setIntl } from "@/i18n/intl";
+import { loadCatalog, notificationLocale } from "@/i18n/locales";
 
 import {
   attributedLine,
   cleanContent,
-  mediaLabel,
+  mediaKind,
   mentionPubkeys,
   messageLine,
   NOTIFICATION_BADGE_ICON,
@@ -87,27 +90,27 @@ describe("cleanContent", () => {
   });
 });
 
-describe("mediaLabel", () => {
+describe("mediaKind", () => {
   it("prefers the imeta MIME over the URL extension", () => {
     // A voice message recorded into a .webm container is only distinguishable
     // from video by its audio/* MIME.
-    expect(mediaLabel("audio/webm", "https://x.example/a.webm")).toBe("a voice message");
-    expect(mediaLabel(undefined, "https://x.example/a.webm")).toBe("a video");
+    expect(mediaKind("audio/webm", "https://x.example/a.webm")).toBe("voice");
+    expect(mediaKind(undefined, "https://x.example/a.webm")).toBe("video");
   });
 
   it("labels by extension when no MIME is given", () => {
-    expect(mediaLabel(undefined, "https://x.example/a.gif")).toBe("a GIF");
-    expect(mediaLabel(undefined, "https://x.example/a.png")).toBe("an image");
-    expect(mediaLabel(undefined, "https://x.example/a.mp3")).toBe("a voice message");
-    expect(mediaLabel(undefined, "https://x.example/a.xdc")).toBe("a game");
+    expect(mediaKind(undefined, "https://x.example/a.gif")).toBe("gif");
+    expect(mediaKind(undefined, "https://x.example/a.png")).toBe("image");
+    expect(mediaKind(undefined, "https://x.example/a.mp3")).toBe("voice");
+    expect(mediaKind(undefined, "https://x.example/a.xdc")).toBe("game");
   });
 
   it("labels an encrypted attachment, whose URL has no extension", () => {
-    expect(mediaLabel("image/jpeg", "https://blossom.example/abcdef")).toBe("an image");
+    expect(mediaKind("image/jpeg", "https://blossom.example/abcdef")).toBe("image");
   });
 
   it("is undefined when nothing names a media kind", () => {
-    expect(mediaLabel(undefined, "just text")).toBeUndefined();
+    expect(mediaKind(undefined, "just text")).toBeUndefined();
   });
 });
 
@@ -225,5 +228,20 @@ describe("attributedLine", () => {
     const m = msg({ roomTitle: "Armada / #general" });
     expect(attributedLine(m)).toBe("alex: hello");
     expect(presentNotification(m).body).toBe(attributedLine(m));
+  });
+});
+
+describe("localized wording", () => {
+  afterEach(() => setIntl(createAppIntl("en")));
+
+  it("words lines in the installed language, as the worker installs it from its config", async () => {
+    await loadCatalog("de");
+    const slice = notificationLocale("de");
+    expect(slice).toBeDefined();
+    expect(Object.keys(slice!.messages).every((id) => id.startsWith("notification."))).toBe(true);
+
+    setIntl(createAppIntl("de", slice!.messages));
+    expect(messageLine(msg({ content: "https://x.example/a.png" }))).toBe("Hat ein Bild gesendet");
+    expect(attributedLine(msg({ plane: "c2", authorName: "Ana", content: "hallo" }))).toBe("Ana: hallo");
   });
 });

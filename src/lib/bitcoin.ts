@@ -11,6 +11,7 @@ import {
 import { encodePsbtV2, type PsbtV2Input, type PsbtV2Output } from './psbtV2';
 
 import { DUST_LIMIT, estimateFee, type UTXO } from './esploraApi';
+import { getLocale, t } from '@/i18n';
 
 /** Strict 32-byte hex validator (either case). */
 function isValidPubkeyHex(s: string): boolean {
@@ -119,6 +120,14 @@ export interface PsbtRecipient {
   amountSats: number;
 }
 
+function insufficientFunds(need: number, have: number): string {
+  const locale = getLocale();
+  return t(
+    { id: "bitcoin.insufficientFunds", defaultMessage: "Insufficient funds. Need {need} sats, have {have} sats." },
+    { need: need.toLocaleString(locale), have: have.toLocaleString(locale) },
+  );
+}
+
 /**
  * Build an unsigned Taproot PSBT paying many recipients in one tx ("zap all").
  * Each amount must be ≥ {@link DUST_LIMIT} or the tx won't broadcast; callers filter.
@@ -131,12 +140,15 @@ export function buildUnsignedPsbtMulti(
   utxos: UTXO[],
   feeRate: number,
 ): UnsignedPsbt {
-  if (recipients.length === 0) throw new Error('At least one recipient is required.');
+  if (recipients.length === 0) throw new Error(t({ id: "bitcoin.noRecipients", defaultMessage: "At least one recipient is required." }));
 
   for (const r of recipients) {
     if (!Number.isFinite(r.amountSats) || r.amountSats < DUST_LIMIT) {
       throw new Error(
-        `Each recipient must receive at least ${DUST_LIMIT} sats (dust limit). Got ${r.amountSats}.`,
+        t(
+          { id: "bitcoin.belowDust", defaultMessage: "Each recipient must receive at least {min} sats (dust limit). Got {amount}." },
+          { min: DUST_LIMIT, amount: r.amountSats },
+        ),
       );
     }
   }
@@ -177,9 +189,7 @@ export function buildUnsignedPsbtMulti(
   const change = totalInput - totalOut - fee;
 
   if (change < 0) {
-    throw new Error(
-      `Insufficient funds. Need ${(totalOut + fee).toLocaleString()} sats, have ${totalInput.toLocaleString()} sats.`,
-    );
+    throw new Error(insufficientFunds(totalOut + fee, totalInput));
   }
 
   for (const r of recipients) {
@@ -243,19 +253,19 @@ export function buildUnsignedSilentPaymentPsbt(
     throw new Error('Silent payment send: invalid sender pubkey.');
   }
   if (utxos.length === 0) {
-    throw new Error('Silent payment send: no UTXOs available.');
+    throw new Error(t({ id: "bitcoin.spNoUtxos", defaultMessage: "Silent payment send: no UTXOs available." }));
   }
   if (!Number.isFinite(amountSats) || amountSats < 546) {
-    throw new Error(`Silent payment send: amount must be at least 546 sats (got ${amountSats}).`);
+    throw new Error(t({ id: "bitcoin.spBelowMinimum", defaultMessage: "Silent payment send: amount must be at least 546 sats (got {amount})." }, { amount: amountSats }));
   }
 
   const sp = decodeSilentPaymentAddress(spAddress);
   if (sp.network !== 'mainnet') {
-    throw new Error('Silent payment send: testnet addresses are not supported.');
+    throw new Error(t({ id: "bitcoin.spTestnet", defaultMessage: "Silent payment send: testnet addresses are not supported." }));
   }
   if (sp.version !== 0) {
     // v1+ are reserved; refuse rather than truncate the payload as the BIP allows.
-    throw new Error(`Silent payment send: address version ${sp.version} is not yet supported.`);
+    throw new Error(t({ id: "bitcoin.spVersion", defaultMessage: "Silent payment send: address version {version} is not yet supported." }, { version: sp.version }));
   }
 
   const internalPubkey = hexToBytes(senderPubkeyHex);
@@ -274,9 +284,7 @@ export function buildUnsignedSilentPaymentPsbt(
   const fee = estimateFee(utxos.length, numOutputs, feeRate);
   const change = totalInput - amountSats - fee;
   if (change < 0) {
-    throw new Error(
-      `Insufficient funds. Need ${(amountSats + fee).toLocaleString()} sats, have ${totalInput.toLocaleString()} sats.`,
-    );
+    throw new Error(insufficientFunds(amountSats + fee, totalInput));
   }
 
   const psbtInputs: PsbtV2Input[] = utxos.map((u) => ({

@@ -44,6 +44,7 @@ import {
   getPublishedScreenShareSenderStats,
   type ScreenShareSenderStats,
 } from "@/lib/screenShare";
+import { common, FormattedMessage, useIntl, type IntlShape } from "@/i18n";
 
 interface ScreenShareQualityDialogProps {
   open: boolean;
@@ -59,6 +60,121 @@ interface ScreenShareQualityDialogProps {
 
 function bitrateText(quality: ScreenShareQuality): string {
   return String(Number((quality.maxBitrate / 1_000_000).toFixed(2)));
+}
+
+const mbps = (bps: number) => (bps / 1_000_000).toFixed(2);
+
+/** The live sender's stats as one "; "-separated line, each clause a whole message. */
+function senderSummary(intl: IntlShape, stats: ScreenShareSenderStats): string {
+  const parts: string[] = [];
+  const width = stats.captureWidth ?? "?";
+  const height = stats.captureHeight ?? "?";
+  parts.push(stats.captureFrameRate
+    ? intl.formatMessage(
+      { id: "screenShareQualityDialog.stats.captureAt", defaultMessage: "Capture {width}×{height} at {fps} FPS" },
+      { width, height, fps: Math.round(stats.captureFrameRate) },
+    )
+    : intl.formatMessage(
+      { id: "screenShareQualityDialog.stats.capture", defaultMessage: "Capture {width}×{height}" },
+      { width, height },
+    ));
+  const encodedFps = stats.encodedFrameRate ? Math.round(stats.encodedFrameRate) : undefined;
+  if (stats.encodedWidth && stats.encodedHeight) {
+    const dims = { width: stats.encodedWidth, height: stats.encodedHeight };
+    parts.push(encodedFps
+      ? intl.formatMessage(
+        { id: "screenShareQualityDialog.stats.encodedAt", defaultMessage: "encoded {width}×{height} at {fps} FPS" },
+        { ...dims, fps: encodedFps },
+      )
+      : intl.formatMessage(
+        { id: "screenShareQualityDialog.stats.encoded", defaultMessage: "encoded {width}×{height}" },
+        dims,
+      ));
+  } else if (encodedFps) {
+    parts.push(intl.formatMessage(
+      { id: "screenShareQualityDialog.stats.encodedFps", defaultMessage: "encoded at {fps} FPS" },
+      { fps: encodedFps },
+    ));
+  }
+  if (stats.codec) {
+    const codec = stats.codec.toUpperCase();
+    parts.push(stats.encoderImplementation
+      ? intl.formatMessage(
+        { id: "screenShareQualityDialog.stats.codecVia", defaultMessage: "{codec} via {encoder}" },
+        { codec, encoder: stats.encoderImplementation },
+      )
+      : codec);
+  } else if (stats.encoderImplementation) {
+    parts.push(intl.formatMessage(
+      { id: "screenShareQualityDialog.stats.via", defaultMessage: "via {encoder}" },
+      { encoder: stats.encoderImplementation },
+    ));
+  }
+  if (stats.actualBitrate !== undefined) {
+    parts.push(intl.formatMessage(
+      { id: "screenShareQualityDialog.stats.mediaSent", defaultMessage: "{mbps} Mbps media sent" },
+      { mbps: mbps(stats.actualBitrate) },
+    ));
+  }
+  if (stats.targetBitrate !== undefined) {
+    parts.push(intl.formatMessage(
+      { id: "screenShareQualityDialog.stats.webrtcTarget", defaultMessage: "{mbps} Mbps WebRTC target" },
+      { mbps: mbps(stats.targetBitrate) },
+    ));
+  }
+  if (stats.configuredMaxBitrate !== undefined) {
+    parts.push(intl.formatMessage(
+      { id: "screenShareQualityDialog.stats.ceiling", defaultMessage: "{mbps} Mbps ceiling" },
+      { mbps: mbps(stats.configuredMaxBitrate) },
+    ));
+  }
+  if (stats.qualityLimitationReason && stats.qualityLimitationReason !== "none") {
+    parts.push(intl.formatMessage(
+      { id: "screenShareQualityDialog.stats.limitedBy", defaultMessage: "limited by {reason}" },
+      { reason: stats.qualityLimitationReason },
+    ));
+  }
+  return parts.join("; ");
+}
+
+/** The native HEVC publisher's status, in the same shape as {@link senderSummary}. */
+function nativeSummary(intl: IntlShape, status: DesktopHevcScreenShareStatus): string {
+  const width = status.width ?? "?";
+  const height = status.height ?? "?";
+  const parts: string[] = [
+    status.frameRate
+      ? intl.formatMessage(
+        { id: "screenShareQualityDialog.native.sizeAt", defaultMessage: "{width}×{height} at {fps} FPS" },
+        { width, height, fps: status.frameRate },
+      )
+      : `${width}×${height}`,
+  ];
+  const backend = status.backend ?? "FFmpeg/VA-API";
+  parts.push(status.device
+    ? intl.formatMessage(
+      { id: "screenShareQualityDialog.native.viaOn", defaultMessage: "H.265 via {backend} on {device}" },
+      { backend, device: status.device },
+    )
+    : intl.formatMessage(
+      { id: "screenShareQualityDialog.native.via", defaultMessage: "H.265 via {backend}" },
+      { backend },
+    ));
+  if (status.bitrate) {
+    parts.push(intl.formatMessage(
+      { id: "screenShareQualityDialog.native.cbrTarget", defaultMessage: "{mbps} Mbps CBR target" },
+      { mbps: mbps(status.bitrate) },
+    ));
+  }
+  if (status.framesDropped) {
+    parts.push(intl.formatMessage(
+      {
+        id: "screenShareQualityDialog.native.dropped",
+        defaultMessage: "{count, plural, one {# frame dropped at encoder input} other {# frames dropped at encoder input}}",
+      },
+      { count: status.framesDropped },
+    ));
+  }
+  return parts.join("; ");
 }
 
 function qualityForAvailableCodecs(
@@ -82,6 +198,7 @@ export function ScreenShareQualityDialog({
   onOpenChange,
   onConfirm,
 }: ScreenShareQualityDialogProps) {
+  const intl = useIntl();
   const [quality, setQuality] = useState<ScreenShareQuality>(() => getScreenShareQuality());
   const [bitrate, setBitrate] = useState(() => bitrateText(quality));
   const [senderStats, setSenderStats] = useState<ScreenShareSenderStats | null>(null);
@@ -166,7 +283,7 @@ export function ScreenShareQualityDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <ChromeDialogContent
-        title="Screen share quality"
+        title={intl.formatMessage({ id: "screenShareQualityDialog.title", defaultMessage: "Screen share quality" })}
         className="sm:max-w-lg"
         portalContainer={portalContainer}
       >
@@ -175,12 +292,14 @@ export function ScreenShareQualityDialog({
             <MonitorUp className="size-6" />
           </div>
           <h2 className="chrome-dialog-title font-mono font-bold lowercase tracking-tight text-foreground">
-            screen share quality
+            <FormattedMessage id="screenShareQualityDialog.heading" defaultMessage="screen share quality" />
           </h2>
           {/* DialogDescription wires aria-describedby, which the sr-only title doesn't. */}
           <DialogDescription className="text-sm text-muted-foreground">
-            Choose capture and encoder limits. Full quality prevents viewers from being assigned a
-            smaller spatial layer.
+            <FormattedMessage
+              id="screenShareQualityDialog.description"
+              defaultMessage="Choose capture and encoder limits. Full quality prevents viewers from being assigned a smaller spatial layer."
+            />
           </DialogDescription>
         </div>
 
@@ -194,7 +313,9 @@ export function ScreenShareQualityDialog({
         >
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-2">
-              <Label htmlFor="screen-share-resolution">Resolution</Label>
+              <Label htmlFor="screen-share-resolution">
+                <FormattedMessage id="screenShareQualityDialog.label.resolution" defaultMessage="Resolution" />
+              </Label>
               <Select
                 value={quality.resolution}
                 onValueChange={(resolution: ScreenShareResolutionId) =>
@@ -215,7 +336,9 @@ export function ScreenShareQualityDialog({
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="screen-share-frame-rate">Frame rate</Label>
+              <Label htmlFor="screen-share-frame-rate">
+                <FormattedMessage id="screenShareQualityDialog.label.frameRate" defaultMessage="Frame rate" />
+              </Label>
               <Select
                 value={String(quality.frameRate)}
                 onValueChange={(value) =>
@@ -231,7 +354,11 @@ export function ScreenShareQualityDialog({
                 <SelectContent portalContainer={portalContainer}>
                   {SCREEN_SHARE_FRAME_RATES.map((frameRate) => (
                     <SelectItem key={frameRate} value={String(frameRate)}>
-                      {frameRate} FPS
+                      <FormattedMessage
+                        id="screenShareQualityDialog.fps"
+                        defaultMessage="{fps} FPS"
+                        values={{ fps: frameRate }}
+                      />
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -239,7 +366,9 @@ export function ScreenShareQualityDialog({
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="screen-share-codec">Encoder codec</Label>
+              <Label htmlFor="screen-share-codec">
+                <FormattedMessage id="screenShareQualityDialog.label.codec" defaultMessage="Encoder codec" />
+              </Label>
               <Select
                 value={quality.codec}
                 onValueChange={(codec: ScreenShareCodec) =>
@@ -256,11 +385,19 @@ export function ScreenShareQualityDialog({
                       value={codec.id}
                       disabled={!supportedCodecs.has(codec.id)}
                     >
-                      {codec.label}: {codec.description}
-                      {!supportedCodecs.has(codec.id) &&
-                        ` (unavailable: ${screenShareCodecUnavailableReason(codec.id, {
-                          endToEndEncrypted,
-                        })})`}
+                      {supportedCodecs.has(codec.id)
+                        ? `${codec.label}: ${codec.description}`
+                        : intl.formatMessage(
+                          {
+                            id: "screenShareQualityDialog.codecUnavailable",
+                            defaultMessage: "{codec}: {description} (unavailable: {reason})",
+                          },
+                          {
+                            codec: codec.label,
+                            description: codec.description,
+                            reason: screenShareCodecUnavailableReason(codec.id, { endToEndEncrypted }),
+                          },
+                        )}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -268,21 +405,24 @@ export function ScreenShareQualityDialog({
               {quality.codec === "h265" && (
                 <p className="text-xs text-muted-foreground">
                   {customHevcAvailable
-                    ? "The Linux desktop uses FFmpeg with VA-API and publishes one end-to-end encrypted HEVC layer. Every viewer still needs H.265 decoding and an updated Armada client."
-                    : "HEVC requires hardware encoding here and H.265 decoding on every viewer. Concord calls cannot provide a VP8 fallback for an end-to-end encrypted HEVC track."}
+                    ? intl.formatMessage({ id: "screenShareQualityDialog.hevcCustom", defaultMessage: "The Linux desktop uses FFmpeg with VA-API and publishes one end-to-end encrypted HEVC layer. Every viewer still needs H.265 decoding and an updated Armada client." })
+                    : intl.formatMessage({ id: "screenShareQualityDialog.hevcHardware", defaultMessage: "HEVC requires hardware encoding here and H.265 decoding on every viewer. Concord calls cannot provide a VP8 fallback for an end-to-end encrypted HEVC track." })}
                 </p>
               )}
               {quality.codec === "h264" && (
                 <p className="text-xs text-muted-foreground">
-                  Encrypted H.264 uses fragmentable packetization on every desktop. On Linux,
-                  software compatibility mode avoids Mesa drivers that produced undecodable
-                  encrypted keyframes.
+                  <FormattedMessage
+                    id="screenShareQualityDialog.h264Note"
+                    defaultMessage="Encrypted H.264 uses fragmentable packetization on every desktop. On Linux, software compatibility mode avoids Mesa drivers that produced undecodable encrypted keyframes."
+                  />
                 </p>
               )}
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="screen-share-delivery">Delivery mode</Label>
+              <Label htmlFor="screen-share-delivery">
+                <FormattedMessage id="screenShareQualityDialog.label.delivery" defaultMessage="Delivery mode" />
+              </Label>
               <Select
                 value={quality.delivery}
                 onValueChange={(delivery: ScreenShareDeliveryMode) =>
@@ -305,7 +445,9 @@ export function ScreenShareQualityDialog({
 
           {encoderState?.available && (
             <div className="space-y-2">
-              <Label htmlFor="screen-share-encoder-mode">Linux WebRTC encoder</Label>
+              <Label htmlFor="screen-share-encoder-mode">
+                <FormattedMessage id="screenShareQualityDialog.label.encoderMode" defaultMessage="Linux WebRTC encoder" />
+              </Label>
               <Select
                 value={encoderMode}
                 onValueChange={(mode: DesktopVideoEncoderMode) => chooseEncoderMode(mode)}
@@ -315,28 +457,41 @@ export function ScreenShareQualityDialog({
                 </SelectTrigger>
                 <SelectContent portalContainer={portalContainer}>
                   <SelectItem value="compatibility">
-                    Software compatibility: reliable encrypted H.264
+                    <FormattedMessage id="screenShareQualityDialog.encoder.compatibility" defaultMessage="Software compatibility: reliable encrypted H.264" />
                   </SelectItem>
                   <SelectItem value="hardware">
-                    Hardware acceleration: best with working VP8/VP9 drivers
+                    <FormattedMessage id="screenShareQualityDialog.encoder.hardware" defaultMessage="Hardware acceleration: best with working VP8/VP9 drivers" />
                   </SelectItem>
                 </SelectContent>
               </Select>
               <p className="text-xs text-muted-foreground">
-                This is process-wide and takes effect after restarting Armada.
-                {restartRequired && " Restart required for the selected mode."}
+                {restartRequired ? (
+                  <FormattedMessage
+                    id="screenShareQualityDialog.encoderNoteRestart"
+                    defaultMessage="This is process-wide and takes effect after restarting Armada. Restart required for the selected mode."
+                  />
+                ) : (
+                  <FormattedMessage
+                    id="screenShareQualityDialog.encoderNote"
+                    defaultMessage="This is process-wide and takes effect after restarting Armada."
+                  />
+                )}
               </p>
               {h264BlockedByHardware && (
                 <p className="text-xs text-destructive">
-                  H.264 is blocked while hardware mode is active because this driver sent black
-                  encrypted frames. Select software compatibility and restart Armada first.
+                  <FormattedMessage
+                    id="screenShareQualityDialog.h264Blocked"
+                    defaultMessage="H.264 is blocked while hardware mode is active because this driver sent black encrypted frames. Select software compatibility and restart Armada first."
+                  />
                 </p>
               )}
             </div>
           )}
 
           <div className="space-y-2">
-            <Label htmlFor="screen-share-bitrate">Maximum bitrate (Mbps)</Label>
+            <Label htmlFor="screen-share-bitrate">
+              <FormattedMessage id="screenShareQualityDialog.label.bitrate" defaultMessage="Maximum bitrate (Mbps)" />
+            </Label>
             <Input
               id="screen-share-bitrate"
               type="number"
@@ -348,17 +503,24 @@ export function ScreenShareQualityDialog({
               onChange={(event) => setBitrate(event.target.value)}
             />
             <p className="text-xs text-muted-foreground">
-              Estimated maximum encoder output: {estimatedCeiling.toFixed(2)} Mbps.
-              This is a ceiling; static content usually needs less.
+              <FormattedMessage
+                id="screenShareQualityDialog.estimate"
+                defaultMessage="Estimated maximum encoder output: {mbps} Mbps. This is a ceiling; static content usually needs less."
+                values={{ mbps: estimatedCeiling.toFixed(2) }}
+              />
             </p>
           </div>
 
           <div className="flex items-start justify-between gap-4">
             <div className="space-y-1">
-              <Label htmlFor="screen-share-audio">Share audio</Label>
+              <Label htmlFor="screen-share-audio">
+                <FormattedMessage id="screenShareQualityDialog.label.audio" defaultMessage="Share audio" />
+              </Label>
               <p className="text-xs text-muted-foreground">
-                Capture sound from the shared screen or window. If a share fails with
-                &ldquo;Could not start audio source,&rdquo; turn this off and try again.
+                <FormattedMessage
+                  id="screenShareQualityDialog.audioNote"
+                  defaultMessage="Capture sound from the shared screen or window. If a share fails with “Could not start audio source,” turn this off and try again."
+                />
               </p>
             </div>
             <Switch
@@ -372,57 +534,33 @@ export function ScreenShareQualityDialog({
 
           {active && senderStats && (
             <div className="clip-corner-lg bg-background/40 p-3 text-xs">
-              <p className="font-medium text-foreground">Active sender</p>
+              <p className="font-medium text-foreground">
+                <FormattedMessage id="screenShareQualityDialog.activeSender" defaultMessage="Active sender" />
+              </p>
               <p className="mt-1 text-muted-foreground">
-                Capture {senderStats.captureWidth ?? "?"}×{senderStats.captureHeight ?? "?"}
-                {senderStats.captureFrameRate ? ` at ${Math.round(senderStats.captureFrameRate)} FPS` : ""}
-                {senderStats.encodedWidth && senderStats.encodedHeight
-                  ? `; encoded ${senderStats.encodedWidth}×${senderStats.encodedHeight}`
-                  : ""}
-                {senderStats.encodedFrameRate
-                  ? ` at ${Math.round(senderStats.encodedFrameRate)} FPS`
-                  : ""}
-                {senderStats.codec ? `; ${senderStats.codec.toUpperCase()}` : ""}
-                {senderStats.encoderImplementation
-                  ? ` via ${senderStats.encoderImplementation}`
-                  : ""}
-                {senderStats.actualBitrate !== undefined
-                  ? `; ${(senderStats.actualBitrate / 1_000_000).toFixed(2)} Mbps media sent`
-                  : ""}
-                {senderStats.targetBitrate !== undefined
-                  ? `; ${(senderStats.targetBitrate / 1_000_000).toFixed(2)} Mbps WebRTC target`
-                  : ""}
-                {senderStats.configuredMaxBitrate !== undefined
-                  ? `; ${(senderStats.configuredMaxBitrate / 1_000_000).toFixed(2)} Mbps ceiling`
-                  : ""}
-                {senderStats.qualityLimitationReason && senderStats.qualityLimitationReason !== "none"
-                  ? `; limited by ${senderStats.qualityLimitationReason}`
-                  : ""}
+                {senderSummary(intl, senderStats)}
               </p>
             </div>
           )}
 
           {active && nativeHevcStatus?.active && (
             <div className="clip-corner-lg bg-background/40 p-3 text-xs">
-              <p className="font-medium text-foreground">Active native sender</p>
+              <p className="font-medium text-foreground">
+                <FormattedMessage id="screenShareQualityDialog.activeNativeSender" defaultMessage="Active native sender" />
+              </p>
               <p className="mt-1 text-muted-foreground">
-                {nativeHevcStatus.width ?? "?"}×{nativeHevcStatus.height ?? "?"}
-                {nativeHevcStatus.frameRate ? ` at ${nativeHevcStatus.frameRate} FPS` : ""}
-                {`; H.265 via ${nativeHevcStatus.backend ?? "FFmpeg/VA-API"}`}
-                {nativeHevcStatus.device ? ` on ${nativeHevcStatus.device}` : ""}
-                {nativeHevcStatus.bitrate
-                  ? `; ${(nativeHevcStatus.bitrate / 1_000_000).toFixed(2)} Mbps CBR target`
-                  : ""}
-                {nativeHevcStatus.framesDropped
-                  ? `; ${nativeHevcStatus.framesDropped} frames dropped at encoder input`
-                  : ""}
+                {nativeSummary(intl, nativeHevcStatus)}
               </p>
             </div>
           )}
 
           {nativeHevcStatus?.state === "error" && nativeHevcStatus.error && (
             <p className="text-xs text-destructive" role="alert">
-              H.265 publisher: {nativeHevcStatus.error}
+              <FormattedMessage
+                id="screenShareQualityDialog.publisherError"
+                defaultMessage="H.265 publisher: {error}"
+                values={{ error: nativeHevcStatus.error }}
+              />
             </p>
           )}
 
@@ -433,7 +571,7 @@ export function ScreenShareQualityDialog({
               className="flex-1 clip-corner-lg"
               onClick={reset}
             >
-              Reset defaults
+              <FormattedMessage id="screenShareQualityDialog.resetDefaults" defaultMessage="Reset defaults" />
             </Button>
             <Button
               type="button"
@@ -441,14 +579,14 @@ export function ScreenShareQualityDialog({
               className="flex-1 clip-corner-lg"
               onClick={() => onOpenChange(false)}
             >
-              Cancel
+              <FormattedMessage {...common.cancel} />
             </Button>
             <Button
               type="submit"
               className="flex-1 clip-corner-lg"
               disabled={h264BlockedByHardware}
             >
-              {active ? "Apply" : "Share screen"}
+              {active ? intl.formatMessage({ id: "screenShareQualityDialog.apply", defaultMessage: "Apply" }) : intl.formatMessage({ id: "screenShareQualityDialog.shareScreen", defaultMessage: "Share screen" })}
             </Button>
           </div>
         </form>

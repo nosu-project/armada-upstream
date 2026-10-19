@@ -3,6 +3,7 @@ import { BrandMark } from "@/components/brand/BrandMark";
 import { SignalStatic } from "@/components/brand/SignalStatic";
 import { TerminalProgress } from "@/components/brand/TerminalProgress";
 import { useAccountExit } from "@/components/accountExitState";
+import { useIntl } from "@/i18n";
 
 /**
  * Full-screen account-exit overlay: the {@link SyncGate} login sequence in
@@ -10,11 +11,15 @@ import { useAccountExit } from "@/components/accountExitState";
  * outlives the login being cleared before the reload; never takes itself down.
  */
 export function AccountExitGate() {
+  const intl = useIntl();
   const exit = useAccountExit();
   if (!exit) return null;
 
   const { kind, seed, log } = exit;
-  const tagline = kind === "logout" ? "jacking out" : "switching identities";
+  const tagline =
+    kind === "logout"
+      ? intl.formatMessage({ id: "accountExitGate.logout", defaultMessage: "jacking out" })
+      : intl.formatMessage({ id: "accountExitGate.switch", defaultMessage: "switching identities" });
   // 1ch is one mono glyph, so the caret lands flush for either wording.
   const len = tagline.length;
 

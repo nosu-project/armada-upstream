@@ -8,6 +8,7 @@ import { ChromeDialogContent, Dialog } from "@/components/ui/dialog";
 import type { BanPhase } from "@/concord/hooks/useModeration";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
+import { common, FormattedMessage, t, useIntl } from "@/i18n";
 
 interface BanMemberDialogProps {
   /** The pubkeys queued for banning; null keeps the dialog closed. */
@@ -30,6 +31,7 @@ const PHASE_ORDER: Record<BanPhase, number> = { silence: 0, roles: 1, rekey: 2 }
  * strips, and in Private mode a Refounding), so the dialog stays up until all land.
  */
 export function BanMemberDialog({ targets, ineligible, willRotate, onClose, onConfirm }: BanMemberDialogProps) {
+  const intl = useIntl();
   const [phase, setPhase] = useState<BanPhase | null>(null);
   const [strip, setStrip] = useState<{ done: number; total: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -51,20 +53,30 @@ export function BanMemberDialog({ targets, ineligible, willRotate, onClose, onCo
       setStuck(false);
       return;
     }
-    const t = setTimeout(() => setStuck(true), 30_000);
-    return () => clearTimeout(t);
+    const timer = setTimeout(() => setStuck(true), 30_000);
+    return () => clearTimeout(timer);
   }, [busy]);
 
   const steps: Array<{ key: BanPhase; label: string }> = [
-    { key: "silence", label: count > 1 ? "Blocking members" : "Blocking member" },
+    {
+      key: "silence",
+      label: count > 1
+        ? intl.formatMessage({ id: "banMemberDialog.step.blockingMembers", defaultMessage: "Blocking members" })
+        : intl.formatMessage({ id: "banMemberDialog.step.blockingMember", defaultMessage: "Blocking member" }),
+    },
     {
       key: "roles",
       label:
         strip && strip.total > 1
-          ? `Removing their roles (${strip.done}/${strip.total})`
-          : "Removing their roles",
+          ? intl.formatMessage(
+            { id: "banMemberDialog.step.removingRolesProgress", defaultMessage: "Removing their roles ({done}/{total})" },
+            { done: strip.done, total: strip.total },
+          )
+          : intl.formatMessage({ id: "banMemberDialog.step.removingRoles", defaultMessage: "Removing their roles" }),
     },
-    ...(willRotate ? [{ key: "rekey" as BanPhase, label: "Locking them out" }] : []),
+    ...(willRotate
+      ? [{ key: "rekey" as BanPhase, label: intl.formatMessage({ id: "banMemberDialog.step.lockingOut", defaultMessage: "Locking them out" }) }]
+      : []),
   ];
 
   const run = async () => {
@@ -76,7 +88,7 @@ export function BanMemberDialog({ targets, ineligible, willRotate, onClose, onCo
       setPhase(null);
       onClose();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Couldn't ban.");
+      setError(e instanceof Error ? e.message : t({ id: "banMemberDialog.error", defaultMessage: "Couldn't ban." }));
       setPhase(null);
     }
   };
@@ -93,7 +105,9 @@ export function BanMemberDialog({ targets, ineligible, willRotate, onClose, onCo
   return (
     <Dialog open={targets !== null && targets.length > 0} onOpenChange={(open) => !open && close()}>
       <ChromeDialogContent
-        title={count > 1 ? "Ban members" : "Ban member"}
+        title={count > 1
+          ? intl.formatMessage({ id: "banMemberDialog.titleMany", defaultMessage: "Ban members" })
+          : intl.formatMessage({ id: "banMemberDialog.titleOne", defaultMessage: "Ban member" })}
         className="sm:max-w-sm focus:outline-none"
         onOpenAutoFocus={(e) => {
           // Keep initial focus off Cancel (paints a ring on open); focus stays trapped.
@@ -106,10 +120,15 @@ export function BanMemberDialog({ targets, ineligible, willRotate, onClose, onCo
             <Ban className="size-6" />
           </div>
           <h2 className="chrome-dialog-title font-mono font-bold lowercase tracking-tight text-foreground">
-            {count > 1 ? `ban ${count} members?` : "ban member?"}
+            {count > 1
+              ? <FormattedMessage id="banMemberDialog.headingMany" defaultMessage="ban {count} members?" values={{ count }} />
+              : <FormattedMessage id="banMemberDialog.headingOne" defaultMessage="ban member?" />}
           </h2>
           <p className="text-sm text-muted-foreground">
-            They will be removed and silenced for everyone in this community.
+            <FormattedMessage
+              id="banMemberDialog.description"
+              defaultMessage="They will be removed and silenced for everyone in this community."
+            />
           </p>
         </div>
 
@@ -122,8 +141,11 @@ export function BanMemberDialog({ targets, ineligible, willRotate, onClose, onCo
         )}
         {ineligible && ineligible.length > 0 && (
           <p className="mt-2 text-center text-xs text-muted-foreground">
-            {ineligible.length} selected member{ineligible.length === 1 ? " is" : "s are"} skipped. You
-            don't outrank them.
+            <FormattedMessage
+              id="banMemberDialog.skipped"
+              defaultMessage="{count, plural, one {# selected member is} other {# selected members are}} skipped. You don't outrank them."
+              values={{ count: ineligible.length }}
+            />
           </p>
         )}
 
@@ -157,8 +179,10 @@ export function BanMemberDialog({ targets, ineligible, willRotate, onClose, onCo
         {error && <p className="mt-4 text-center text-sm text-destructive">{error}</p>}
         {stuck && busy && (
           <p className="mt-4 text-sm text-muted-foreground">
-            This is taking longer than expected. Your signer may be slow or offline. You can close this
-            and try again; anything already sent will finish on its own.
+            <FormattedMessage
+              id="banMemberDialog.stuck"
+              defaultMessage="This is taking longer than expected. Your signer may be slow or offline. You can close this and try again; anything already sent will finish on its own."
+            />
           </p>
         )}
 
@@ -170,11 +194,15 @@ export function BanMemberDialog({ targets, ineligible, willRotate, onClose, onCo
             onClick={close}
             disabled={busy && !stuck}
           >
-            {busy && stuck ? "Close" : "Cancel"}
+            {busy && stuck ? <FormattedMessage {...common.close} /> : <FormattedMessage {...common.cancel} />}
           </Button>
           <Button type="button" variant="destructive" className="flex-1 clip-corner-lg" onClick={run} disabled={busy}>
             {busy ? <Loader2 className="size-4 animate-spin" /> : <Ban className="size-4" />}
-            {busy ? "Banning" : count > 1 ? `Ban ${count} members` : "Ban member"}
+            {busy
+              ? <FormattedMessage id="banMemberDialog.banning" defaultMessage="Banning" />
+              : count > 1
+                ? <FormattedMessage id="banMemberDialog.confirmMany" defaultMessage="Ban {count} members" values={{ count }} />
+                : <FormattedMessage id="banMemberDialog.titleOne" defaultMessage="Ban member" />}
           </Button>
         </div>
       </ChromeDialogContent>

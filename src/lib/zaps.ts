@@ -12,6 +12,7 @@ import { verifyEvent } from "nostr-tools/pure";
 
 import type { NostrEvent } from "@nostrify/nostrify";
 import type { Event as NostrToolsEvent } from "nostr-tools/pure";
+import { getLocale, t } from "@/i18n";
 import type { NostrRumor } from "@/lib/nostrRumor";
 
 /** Bounded insertion-order cache (entries are immutable; the cap only bounds memory). */
@@ -51,14 +52,13 @@ export interface ZapTally {
 
 /** "1234567" → "1.2m", "21000" → "21k", "950" → "950". */
 export function formatSats(sats: number): string {
-  if (sats >= 1_000_000) return `${trimmed(sats / 1_000_000)}m`;
-  if (sats >= 1_000) return `${trimmed(sats / 1_000)}k`;
+  if (sats >= 1_000_000) return t({ id: "zaps.millions", defaultMessage: "{value}m" }, { value: trimmed(sats / 1_000_000) });
+  if (sats >= 1_000) return t({ id: "zaps.thousands", defaultMessage: "{value}k" }, { value: trimmed(sats / 1_000) });
   return String(sats);
 }
 
 function trimmed(n: number): string {
-  const rounded = Math.round(n * 10) / 10;
-  return rounded % 1 === 0 ? String(Math.round(rounded)) : rounded.toFixed(1);
+  return new Intl.NumberFormat(getLocale(), { maximumFractionDigits: 1, useGrouping: false }).format(Math.round(n * 10) / 10);
 }
 
 interface Bolt11Info {

@@ -8,6 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { useGitAttachmentUploads } from "@/hooks/useGitAttachmentUploads";
 import { toast } from "@/hooks/useToast";
+import { FormattedMessage, t, useIntl } from "@/i18n";
 import { MAX_GIT_LABELS, MAX_GIT_LABEL_LENGTH, normalizeGitLabels } from "@/lib/gitActivity";
 import { cn } from "@/lib/utils";
 
@@ -19,6 +20,7 @@ export function NewIssueDialog({ repos, items, onCreate }: {
   items: ProjectWorkItem[];
   onCreate: (repoCoord: string, subject: string, body: string, media?: readonly string[][], labels?: readonly string[]) => Promise<unknown>;
 }) {
+  const intl = useIntl();
   const [open, setOpen] = useState(false);
   const [repoCoord, setRepoCoord] = useState<string | undefined>(undefined);
   const [subject, setSubject] = useState("");
@@ -60,7 +62,7 @@ export function NewIssueDialog({ repos, items, onCreate }: {
     const finalLabels = normalizeGitLabels([...labels, labelDraft]);
     onCreate(selected, subject.trim(), trimmedBody, mediaFor(trimmedBody), finalLabels)
       .then(() => {
-        toast({ title: "Issue opened" });
+        toast({ title: t({ id: "newIssueDialog.issueOpened", defaultMessage: "Issue opened" }) });
         setOpen(false);
         setRepoCoord(undefined);
         setSubject("");
@@ -69,7 +71,11 @@ export function NewIssueDialog({ repos, items, onCreate }: {
         setLabelDraft("");
         setAddingLabel(false);
       })
-      .catch((error) => toast({ title: "Couldn't open issue", description: error instanceof Error ? error.message : undefined, variant: "destructive" }))
+      .catch((error) => toast({
+        title: t({ id: "newIssueDialog.openFailed", defaultMessage: "Couldn't open issue" }),
+        description: error instanceof Error ? error.message : undefined,
+        variant: "destructive",
+      }))
       .finally(() => setSending(false));
   };
 
@@ -78,23 +84,23 @@ export function NewIssueDialog({ repos, items, onCreate }: {
       <DialogTrigger asChild>
         <Button size="sm" className="h-8 shrink-0 clip-corner-lg">
           <Plus className="mr-1.5 size-3.5" />
-          New issue
+          <FormattedMessage id="newIssueDialog.newIssueButton" defaultMessage="New issue" />
         </Button>
       </DialogTrigger>
       <ChromeDialogContent
-        title="New issue"
+        title={intl.formatMessage({ id: "newIssueDialog.title", defaultMessage: "New issue" })}
         onEscapeKeyDown={(event) => {
           if (!addingLabel) return;
           event.preventDefault();
           cancelLabelDraft();
         }}
       >
-        <ChromeDialogHeader icon={CircleDot} title="new issue" />
+        <ChromeDialogHeader icon={CircleDot} title={intl.formatMessage({ id: "newIssueDialog.heading", defaultMessage: "new issue" })} />
         <div className="mt-6 space-y-3">
           {repos.length > 1 && (
             <Select value={selected} onValueChange={setRepoCoord}>
-              <SelectTrigger aria-label="Repository">
-                <SelectValue placeholder="Repository" />
+              <SelectTrigger aria-label={intl.formatMessage({ id: "newIssueDialog.repository", defaultMessage: "Repository" })}>
+                <SelectValue placeholder={intl.formatMessage({ id: "newIssueDialog.repository", defaultMessage: "Repository" })} />
               </SelectTrigger>
               <SelectContent>
                 {repos.map((repo) => (
@@ -106,13 +112,13 @@ export function NewIssueDialog({ repos, items, onCreate }: {
           <Input
             value={subject}
             onChange={(e) => setSubject(e.target.value)}
-            placeholder="Title"
+            placeholder={intl.formatMessage({ id: "newIssueDialog.titlePlaceholder", defaultMessage: "Title" })}
             autoFocus
           />
           <Textarea
             value={body}
             onChange={(e) => setBody(e.target.value)}
-            placeholder="Describe the issue (optional)"
+            placeholder={intl.formatMessage({ id: "newIssueDialog.bodyPlaceholder", defaultMessage: "Describe the issue (optional)" })}
             rows={5}
             className="resize-none text-sm"
           />
@@ -159,8 +165,8 @@ export function NewIssueDialog({ repos, items, onCreate }: {
                   value={labelDraft}
                   size={Math.max(labelDraft.length + 1, 10)}
                   maxLength={MAX_GIT_LABEL_LENGTH}
-                  aria-label="New label"
-                  placeholder="new label"
+                  aria-label={intl.formatMessage({ id: "newIssueDialog.newLabel", defaultMessage: "New label" })}
+                  placeholder={intl.formatMessage({ id: "newIssueDialog.newLabelPlaceholder", defaultMessage: "new label" })}
                   disabled={sending}
                   onChange={(e) => setLabelDraft(e.target.value)}
                   onKeyDown={(e) => {
@@ -182,7 +188,7 @@ export function NewIssueDialog({ repos, items, onCreate }: {
               ) : labels.length < MAX_GIT_LABELS && (
                 <button
                   type="button"
-                  aria-label="Add a label"
+                  aria-label={intl.formatMessage({ id: "newIssueDialog.addLabel", defaultMessage: "Add a label" })}
                   disabled={sending}
                   onClick={() => setAddingLabel(true)}
                   className="flex items-center clip-corner bg-secondary px-2 py-0.5 text-muted-foreground transition-colors hover:text-foreground disabled:opacity-40"
@@ -193,7 +199,9 @@ export function NewIssueDialog({ repos, items, onCreate }: {
             </div>
           </div>
           <div className="flex items-center justify-between gap-1.5">
-            <p className="min-w-0 truncate text-3xs text-muted-foreground">Public: issues are visible outside this community.</p>
+            <p className="min-w-0 truncate text-3xs text-muted-foreground">
+              <FormattedMessage id="newIssueDialog.publicNotice" defaultMessage="Public: issues are visible outside this community." />
+            </p>
             <div className="flex shrink-0 items-center gap-1.5">
             <input
               ref={fileInput}
@@ -209,14 +217,14 @@ export function NewIssueDialog({ repos, items, onCreate }: {
               variant="ghost"
               size="icon"
               className="size-8 touch:size-11 text-muted-foreground"
-              aria-label="Attach files"
+              aria-label={intl.formatMessage({ id: "newIssueDialog.attachFiles", defaultMessage: "Attach files" })}
               disabled={isUploading}
               onClick={() => fileInput.current?.click()}
             >
               {isUploading ? <Loader2 className="size-4 animate-spin" /> : <Paperclip className="size-4" />}
             </Button>
             <Button size="sm" className="clip-corner-lg" disabled={sending || isUploading || !subject.trim()} onClick={submit}>
-              {sending ? <Loader2 className="size-4 animate-spin" /> : "Open issue"}
+              {sending ? <Loader2 className="size-4 animate-spin" /> : <FormattedMessage id="newIssueDialog.openIssue" defaultMessage="Open issue" />}
             </Button>
             </div>
           </div>

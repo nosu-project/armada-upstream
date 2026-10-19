@@ -10,20 +10,40 @@ import { SIGNAL_PAUSE } from "@/concord/lib/kinds";
 import { isAuthorized, Permissions } from "@/concord/lib/roles";
 import type { Community } from "@/concord/lib/types";
 import { toast } from "@/hooks/useToast";
+import { t } from "@/i18n";
 
 /** `setTimeout`'s ceiling — anything larger fires immediately, so long waits re-arm. */
 const MAX_TIMEOUT_MS = 2_147_483_647;
 
 /**
- * Pause durations offered. Bounded by default: CORD-04 §8's `until` lets a raid
+ * Pause durations offered; each `label` is formatted when read, in the current language. Bounded by default: CORD-04 §8's `until` lets a raid
  * response survive the pauser going offline, and a full freeze leaves everyone
  * without chat until lifted. `undefined` is the explicit open-ended choice.
  */
 export const PAUSE_DURATIONS: ReadonlyArray<{ label: string; secs?: number }> = [
-  { label: "15 minutes", secs: 15 * 60 },
-  { label: "1 hour", secs: 60 * 60 },
-  { label: "8 hours", secs: 8 * 60 * 60 },
-  { label: "Until I resume it" },
+  {
+    get label() {
+      return t({ id: "usePause.duration.minutes15", defaultMessage: "15 minutes" });
+    },
+    secs: 15 * 60,
+  },
+  {
+    get label() {
+      return t({ id: "usePause.duration.hour1", defaultMessage: "1 hour" });
+    },
+    secs: 60 * 60,
+  },
+  {
+    get label() {
+      return t({ id: "usePause.duration.hours8", defaultMessage: "8 hours" });
+    },
+    secs: 8 * 60 * 60,
+  },
+  {
+    get label() {
+      return t({ id: "usePause.duration.untilResumed", defaultMessage: "Until I resume it" });
+    },
+  },
 ];
 
 /**
@@ -78,9 +98,9 @@ export function useCommunityPause(community: Community | undefined): {
   const pause = useActivePause(community);
 
   const publishPause = async (content: Record<string, unknown>): Promise<void> => {
-    if (!user || !community) throw new Error("Not ready.");
+    if (!user || !community) throw new Error(t({ id: "usePause.notReady", defaultMessage: "Not ready." }));
     if (!folded || !isAuthorized(folded.roster, user.pubkey, folded.ownerHex, Permissions.MANAGE_CHANNELS)) {
-      throw new Error("You don't have permission to pause this community.");
+      throw new Error(t({ id: "usePause.noPermission", defaultMessage: "You don't have permission to pause this community." }));
     }
     const head = folded.heads.get(bytesToHex(signalLocator(community.id, SIGNAL_PAUSE)));
     await publishEdition(
@@ -100,11 +120,11 @@ export function useCommunityPause(community: Community | undefined): {
   const setPaused = useMutation<void, Error, { untilSecs?: number }>({
     mutationFn: ({ untilSecs }) =>
       publishPause({ paused: true, ...(untilSecs !== undefined ? { until: untilSecs } : {}) }),
-    onError: (e) => toast({ title: "Couldn't pause the community", description: e.message }),
+    onError: (e) => toast({ title: t({ id: "usePause.pauseFailed", defaultMessage: "Couldn't pause the community" }), description: e.message }),
   });
   const clearPause = useMutation<void, Error, void>({
     mutationFn: () => publishPause({ paused: false }),
-    onError: (e) => toast({ title: "Couldn't resume the community", description: e.message }),
+    onError: (e) => toast({ title: t({ id: "usePause.resumeFailed", defaultMessage: "Couldn't resume the community" }), description: e.message }),
   });
 
   return { canPause, pause, isPaused: Boolean(pause), setPaused, clearPause };

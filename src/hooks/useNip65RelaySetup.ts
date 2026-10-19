@@ -32,6 +32,7 @@ import { KIND_INVITE_LIST } from "@/concord/lib/kinds";
 
 import type { RelayMetadata } from "@/contexts/AppContext";
 import type { NostrEvent } from "@nostrify/nostrify";
+import { t } from "@/i18n";
 
 export function relayPointerChangedDuringPreseed(
   metadata: RelayMetadata,
@@ -52,7 +53,7 @@ export function relayPointerChangedDuringPreseed(
 /** No local NIP-65 list but one exists on the wire: adopt `discovery` instead of shadowing it. */
 export class ExistingRelayListError extends Error {
   constructor(readonly discovery: RelayListDiscovery) {
-    super("Your account already has a NIP-65 relay list; review it instead of creating a new one");
+    super(t({ id: "useNip65RelaySetup.existingList", defaultMessage: "Your account already has a NIP-65 relay list; review it instead of creating a new one" }));
     this.name = "ExistingRelayListError";
   }
 }
@@ -60,7 +61,7 @@ export class ExistingRelayListError extends Error {
 /** No local list and too few relays answered to rule one out. */
 export class RelayListAbsenceUnconfirmedError extends Error {
   constructor() {
-    super("Couldn't reach enough relays to confirm your account has no saved relay list yet; nothing was published");
+    super(t({ id: "useNip65RelaySetup.absenceUnconfirmed", defaultMessage: "Couldn't reach enough relays to confirm your account has no saved relay list yet; nothing was published" }));
     this.name = "RelayListAbsenceUnconfirmedError";
   }
 }
@@ -127,7 +128,7 @@ export function useNip65RelaySetup() {
   }, [queryClient, updateConfig, user?.pubkey]);
 
   const discover = useCallback(async (bootstrapRelays: string[] = []) => {
-    if (!user) throw new Error("User is not logged in");
+    if (!user) throw new Error(t({ id: "useNip65RelaySetup.notLoggedIn", defaultMessage: "User is not logged in" }));
     return discoverRelayList(
       nostr,
       user.pubkey,
@@ -138,7 +139,7 @@ export function useNip65RelaySetup() {
 
   /** Also reports which relays reached EOSE. */
   const discoverWithStatus = useCallback(async (bootstrapRelays: string[] = []) => {
-    if (!user) throw new Error("User is not logged in");
+    if (!user) throw new Error(t({ id: "useNip65RelaySetup.notLoggedIn", defaultMessage: "User is not logged in" }));
     return discoverRelayListWithStatus(
       nostr,
       user.pubkey,
@@ -148,9 +149,9 @@ export function useNip65RelaySetup() {
   }, [discoveryRelays, nostr, user]);
 
   const publish = useCallback(async (relays: RelayPreference[]): Promise<RelayListPublishResult> => {
-    if (!user) throw new Error("User is not logged in");
+    if (!user) throw new Error(t({ id: "useNip65RelaySetup.notLoggedIn", defaultMessage: "User is not logged in" }));
     const tags = buildRelayListTags(relays);
-    if (tags.length === 0) throw new Error("Add at least one valid relay");
+    if (tags.length === 0) throw new Error(t({ id: "useNip65RelaySetup.noValidRelay", defaultMessage: "Add at least one valid relay" }));
 
     const declared = tags.map((tag) => tag[1]).filter((url): url is string => Boolean(url));
     const proposedWrites = tags
@@ -158,7 +159,7 @@ export function useNip65RelaySetup() {
       .map((tag) => tag[1])
       .filter((url): url is string => Boolean(url));
     if (proposedWrites.length === 0) {
-      throw new Error("Keep at least one write relay for portable account state");
+      throw new Error(t({ id: "useNip65RelaySetup.keepWriteRelay", defaultMessage: "Keep at least one write relay for portable account state" }));
     }
     const oldSelfRelays = selfStateRelays(config, user.pubkey);
     const targets = uniqueRelayUrls([
@@ -258,7 +259,7 @@ export function useNip65RelaySetup() {
         const complete = sourceComplete
           && proposedWrites.every((url) => answered.has(url));
         if (!complete || !discovery) {
-          throw new Error("Could not refresh the current NIP-65 relay list after copying setup; retry without changing relays");
+          throw new Error(t({ id: "useNip65RelaySetup.refreshFailed", defaultMessage: "Could not refresh the current NIP-65 relay list after copying setup; retry without changing relays" }));
         }
         const baselineId = config.relayMetadata.eventId;
         const isKnownBaseline = baselineId !== undefined
@@ -269,14 +270,14 @@ export function useNip65RelaySetup() {
           user.pubkey,
           discovery.event,
         )) {
-          throw new Error("Could not confirm the current NIP-65 relay-list version; retry without changing relays");
+          throw new Error(t({ id: "useNip65RelaySetup.versionUnconfirmed", defaultMessage: "Could not confirm the current NIP-65 relay-list version; retry without changing relays" }));
         }
         if (relayPointerChangedDuringPreseed(
           config.relayMetadata,
           user.pubkey,
           discovery.event,
         )) {
-          throw new Error("Your NIP-65 relay list changed on another device; review it and retry");
+          throw new Error(t({ id: "useNip65RelaySetup.changedElsewhere", defaultMessage: "Your NIP-65 relay list changed on another device; review it and retry" }));
         }
         return discovery;
       };
@@ -303,7 +304,7 @@ export function useNip65RelaySetup() {
         mirrored = next;
       }
       if (!portableStable) {
-        throw new Error("Portable account state kept changing during relay migration; retry after the other device finishes syncing");
+        throw new Error(t({ id: "useNip65RelaySetup.stateKeptChanging", defaultMessage: "Portable account state kept changing during relay migration; retry after the other device finishes syncing" }));
       }
     }
     const createdAt = Math.max(
@@ -318,20 +319,20 @@ export function useNip65RelaySetup() {
       created_at: createdAt,
     });
     if (event.pubkey !== user.pubkey) {
-      throw new Error("The signer returned a different account");
+      throw new Error(t({ id: "useNip65RelaySetup.wrongAccount", defaultMessage: "The signer returned a different account" }));
     }
     // Must be durably queued first, or a partial delivery could strand old devices.
     await queueSignedEvent(event, undefined, targets, { inheritPendingTargets: false });
     const result = await publishSignedEventToRelays(nostr, event, targets, timeout);
     await recordQueuedPublishAttempt(event.id, targets, result.rejected).catch(() => undefined);
     if (result.accepted.length === 0) {
-      throw new Error("No relay accepted your signed relay list");
+      throw new Error(t({ id: "useNip65RelaySetup.noRelayAccepted", defaultMessage: "No relay accepted your signed relay list" }));
     }
     const rejected = new Set(result.rejected);
     // Only the previous pointer's write relays are authoritative; app/discovery relays are
     // best-effort.
     if (oldDeclaredWrites.some((url) => rejected.has(url))) {
-      throw new Error("An existing account-state relay missed the new relay list; retry before switching");
+      throw new Error(t({ id: "useNip65RelaySetup.relayMissed", defaultMessage: "An existing account-state relay missed the new relay list; retry before switching" }));
     }
 
     // An ACK doesn't mean we're still the NIP-01 winner; re-read and adopt only if we are.
@@ -347,10 +348,10 @@ export function useNip65RelaySetup() {
       ...proposedWrites,
     ]);
     if (!authoritativeTargets.every((url) => answeredAfterPublish.has(url))) {
-      throw new Error("Could not confirm the new NIP-65 relay list on every account-state relay; it remains queued for retry");
+      throw new Error(t({ id: "useNip65RelaySetup.queuedForRetry", defaultMessage: "Could not confirm the new NIP-65 relay list on every account-state relay; it remains queued for retry" }));
     }
     if (confirmed.discovery?.event.id !== event.id) {
-      throw new Error("A newer NIP-65 relay list won while this change was publishing; local relay settings were not switched");
+      throw new Error(t({ id: "useNip65RelaySetup.newerWon", defaultMessage: "A newer NIP-65 relay list won while this change was publishing; local relay settings were not switched" }));
     }
     const perRelay = await Promise.all(authoritativeTargets.map(async (url) => ({
       url,
@@ -367,7 +368,10 @@ export function useNip65RelaySetup() {
       );
       if (!read.answered.includes(url) || winner?.id !== event.id) {
         throw new Error(
-          `Account-state relay ${url} did not retain the new NIP-65 winner; local relay settings were not switched`,
+          t(
+            { id: "useNip65RelaySetup.winnerNotRetained", defaultMessage: "Account-state relay {url} did not retain the new NIP-65 winner; local relay settings were not switched" },
+            { url },
+          ),
         );
       }
     }

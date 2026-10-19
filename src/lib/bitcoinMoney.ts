@@ -3,6 +3,7 @@
  * initial-load components can format money. Re-exported by `@/lib/bitcoin`.
  */
 import { esploraFetch } from './esplora';
+import { getLocale } from '@/i18n';
 
 import type { CurrencyDisplay } from '@/contexts/AppContext';
 
@@ -21,7 +22,7 @@ export function formatBTC(sats: number): string {
 
 /** Format a satoshi amount with locale-aware thousand separators. */
 export function formatSats(sats: number): string {
-  return sats.toLocaleString();
+  return sats.toLocaleString(getLocale());
 }
 
 /**

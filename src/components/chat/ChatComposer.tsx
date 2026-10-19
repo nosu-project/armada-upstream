@@ -63,6 +63,7 @@ import { useIsMobile, useIsTouch } from "@/hooks/useIsMobile";
 import { useMountedTransition } from "@/hooks/useMountedTransition";
 import { useNostrPublish } from "@/hooks/useNostrPublish";
 import { useToast } from "@/hooks/useToast";
+import { common, defineMessages, FormattedMessage, t, useIntl } from "@/i18n";
 import { useUploadFile, useUploadPreflight } from "@/hooks/useUploadFile";
 import { useVoiceRecorder } from "@/hooks/useVoiceRecorder";
 import { getImageMeta } from "@/lib/imageProbe";
@@ -381,6 +382,16 @@ function GifGlyph({ className }: { className?: string }) {
   );
 }
 
+const msg = defineMessages({
+  messageNotSent: { id: "chatComposer.messageNotSent", defaultMessage: "Message not sent" },
+  commandFailed: { id: "chatComposer.commandFailed", defaultMessage: "Command failed" },
+  publishPoll: { id: "chatComposer.publishPoll", defaultMessage: "Publish poll" },
+  voiceMessage: { id: "chatComposer.voiceMessage", defaultMessage: "Voice message" },
+  emoji: { id: "chatComposer.emoji", defaultMessage: "Emoji" },
+  gifs: { id: "chatComposer.gifs", defaultMessage: "GIFs" },
+  file: { id: "chatComposer.file", defaultMessage: "File" },
+});
+
 const plusButtonClass = "p-2 shrink-0 clip-corner-lg transition-colors flex items-center justify-center size-9 touch:size-11";
 const preventCloseAutoFocus = (e: Event) => e.preventDefault();
 
@@ -401,13 +412,14 @@ const DesktopPlusMenu = memo(function DesktopPlusMenu({
   actions: AttachAction[];
   onDoubleClick: () => void;
 }) {
+  const intl = useIntl();
   return (
     // Non-modal: a modal menu blocks pointer events on the trigger, eating the double-click.
     <DropdownMenu open={open} onOpenChange={onOpenChange} modal={false}>
       <DropdownMenuTrigger asChild>
         <button
           type="button"
-          aria-label="More options"
+          aria-label={intl.formatMessage({ id: "chatComposer.moreOptions", defaultMessage: "More options" })}
           onDoubleClick={onDoubleClick}
           className={cn(plusButtonClass, highlighted
             ? "text-primary bg-primary/10"
@@ -481,7 +493,7 @@ const PickerToggleButton = memo(function PickerToggleButton({
  * voice, NIP-88 polls, replies, NIP-18 quotes, drafts. With `sendOverride` it
  * doubles as a generic composer (DMs, Concord).
  */
-export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelReply, onJumpToReply, sealed = false, onSent, shareLabel, shareIconUrl, sendOverride, canSend, mentionPubkeys, canMentionEveryone = false, placeholder, draftScope, shareRoute, onOptimisticInsert, onOptimisticSent, onOptimisticFailed, canModerate = false, autoFocus = false, onTyping, onSlashAction, encryptAttachments = false, disappearingTimer, botCommands = false, botDmPeer, recentAuthors, conversationRelays, pollsEnabled = true, onPollSubmit, messageKind = KIND_GROUP_CHAT, onEditLast, layout = "bar", documentEnterSends = false, submitLabel = "Post", onCancel }: ChatComposerProps) {
+export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelReply, onJumpToReply, sealed = false, onSent, shareLabel, shareIconUrl, sendOverride, canSend, mentionPubkeys, canMentionEveryone = false, placeholder, draftScope, shareRoute, onOptimisticInsert, onOptimisticSent, onOptimisticFailed, canModerate = false, autoFocus = false, onTyping, onSlashAction, encryptAttachments = false, disappearingTimer, botCommands = false, botDmPeer, recentAuthors, conversationRelays, pollsEnabled = true, onPollSubmit, messageKind = KIND_GROUP_CHAT, onEditLast, layout = "bar", documentEnterSends = false, submitLabel, onCancel }: ChatComposerProps) {
   const isDocument = layout === "document";
   // Forum posts and comments (the document layout) have no length cap.
   const maxChars = isDocument ? Infinity : MAX_CHARS;
@@ -492,6 +504,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
   const preflightUpload = useUploadPreflight();
   const { emojis: customEmojis } = useCustomEmojis();
   const { toast } = useToast();
+  const intl = useIntl();
   const { config } = useAppContext();
   const isMobile = useIsMobile();
   const isTouch = useIsTouch();
@@ -1047,12 +1060,18 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
 
   const handleFileUpload = useCallback(async (source: File | DeferredFile, options: { spoiler?: boolean } = {}) => {
     const tooLarge = (description: string) =>
-      toast({ title: "File too large", description, variant: "destructive" });
+      toast({ title: t({ id: "chatComposer.fileTooLarge", defaultMessage: "File too large" }), description, variant: "destructive" });
     const refused = (refusal: { status: number; reason?: string }) =>
-      toast({ title: "Can't upload this file", description: describeRefusal(refusal), variant: "destructive" });
+      toast({ title: t({ id: "chatComposer.cantUpload", defaultMessage: "Can't upload this file" }), description: describeRefusal(refusal), variant: "destructive" });
     const limitMb = (bytes: number) => Math.round(bytes / (1024 * 1024));
     const encryptedLimitMessage = (bytes: number) =>
-      `Encrypted attachments are limited to ${limitMb(bytes)} MB on this device, since they are sealed and opened in memory.`;
+      t(
+        {
+          id: "chatComposer.encryptedLimit",
+          defaultMessage: "Encrypted attachments are limited to {size} MB on this device, since they are sealed and opened in memory.",
+        },
+        { size: limitMb(bytes) },
+      );
 
     // Refuse oversize before reading (content:// reads buffer the whole file).
     // Only the device limit applies; the server decides upload size.
@@ -1323,9 +1342,9 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     } catch (error) {
       if (!abort.signal.aborted) {
         toast({
-          title: "Upload failed",
+          title: t({ id: "chatComposer.uploadFailed", defaultMessage: "Upload failed" }),
           // The server's X-Reason, when given.
-          description: uploadFailureReason(error) ?? "Could not upload file.",
+          description: uploadFailureReason(error) ?? t({ id: "chatComposer.uploadFailedDescription", defaultMessage: "Could not upload file." }),
           variant: "destructive",
         });
       }
@@ -1584,7 +1603,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     // Refused before anything is built or cleared, so the draft survives.
     const refusal = canSend?.();
     if (refusal) {
-      toast({ title: "Message not sent", description: refusal, variant: "destructive" });
+      toast({ title: t(msg.messageNotSent), description: refusal, variant: "destructive" });
       return;
     }
 
@@ -1605,9 +1624,9 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
             err instanceof AggregateError ||
             (err instanceof Error && /timed? ?out|abort/i.test(err.message));
           toast({
-            title: "Message not sent",
+            title: t(msg.messageNotSent),
             description: signerDown
-              ? "Couldn't reach your signer. Check your remote signer connection and try again."
+              ? t({ id: "chatComposer.signerDown", defaultMessage: "Couldn't reach your signer. Check your remote signer connection and try again." })
               : relayRejectionMessage(err),
             variant: "destructive",
           });
@@ -1636,7 +1655,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
             if (signedId) onOptimisticFailed?.(signedId);
             else
               toast({
-                title: "Message not sent",
+                title: t(msg.messageNotSent),
                 description: relayRejectionMessage(err),
                 variant: "destructive",
               });
@@ -1655,7 +1674,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
       }
     } catch (err) {
       toast({
-        title: "Message not sent",
+        title: t(msg.messageNotSent),
         description: relayRejectionMessage(err),
         variant: "destructive",
       });
@@ -1686,7 +1705,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
         },
         clearDraft: resetComposeState,
         onError: (message) =>
-          toast({ title: "Command failed", description: message, variant: "destructive" }),
+          toast({ title: t(msg.commandFailed), description: message, variant: "destructive" }),
         onAction: async (action) => {
           if (action.kind === "openPoll") {
             setContent("");
@@ -1698,7 +1717,11 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
             await onSlashAction?.(action);
             resetComposeState();
           } catch {
-            toast({ title: "Command failed", description: "The action could not be completed.", variant: "destructive" });
+            toast({
+              title: t(msg.commandFailed),
+              description: t({ id: "chatComposer.actionFailed", defaultMessage: "The action could not be completed." }),
+              variant: "destructive",
+            });
           }
         },
       },
@@ -1821,9 +1844,9 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
   // Touch bar while there's something to send: the GIF button folds into the picker's tabs.
   const compact = isTouch && layout === "bar" && hasContent;
   const pickerTabs: readonly PillTab<PickerTab>[] = [
-    { id: "emoji", label: "Emoji", icon: Smile },
-    ...(customEmojis.length > 0 ? [{ id: "stickers" as const, label: "Stickers", icon: Sticker }] : []),
-    ...(compact ? [{ id: "gif" as const, label: "GIF", icon: GifGlyph }] : []),
+    { id: "emoji", label: intl.formatMessage(msg.emoji), icon: Smile },
+    ...(customEmojis.length > 0 ? [{ id: "stickers" as const, label: intl.formatMessage({ id: "chatComposer.stickers", defaultMessage: "Stickers" }), icon: Sticker }] : []),
+    ...(compact ? [{ id: "gif" as const, label: intl.formatMessage({ id: "chatComposer.gif", defaultMessage: "GIF" }), icon: GifGlyph }] : []),
   ];
   const showPickerTabs = pickerTab !== "games" && (compact || (pickerTab !== "gif" && pickerTabs.length > 1));
 
@@ -1837,7 +1860,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     // Check here so the refusal names the wait.
     const refusal = canSend?.();
     if (refusal) {
-      toast({ title: "Poll not published", description: refusal, variant: "destructive" });
+      toast({ title: t({ id: "chatComposer.pollNotPublished", defaultMessage: "Poll not published" }), description: refusal, variant: "destructive" });
       return;
     }
 
@@ -1856,7 +1879,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
       onSent?.();
       noteSent();
     } catch {
-      toast({ title: "Error", description: "Failed to publish poll.", variant: "destructive" });
+      toast({ title: t(common.error), description: t({ id: "chatComposer.pollFailed", defaultMessage: "Failed to publish poll." }), variant: "destructive" });
     }
   }, [content, pollOptions, user, isSending, isUploading, canSend, canonicalizeLinks, buildMessageTags, pollType, pollDuration, createEvent, relayUrl, resetComposeState, onSent, noteSent, toast, onPollSubmit]);
 
@@ -1866,7 +1889,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     // Before `stopRecording` (which consumes the take) and before uploading.
     const refusal = canSend?.();
     if (refusal) {
-      toast({ title: "Message not sent", description: refusal, variant: "destructive" });
+      toast({ title: t(msg.messageNotSent), description: refusal, variant: "destructive" });
       return;
     }
     setIsPublishingVoice(true);
@@ -1940,7 +1963,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
       onSent?.();
       noteSent();
     } catch {
-      toast({ title: "Error", description: "Failed to send voice message.", variant: "destructive" });
+      toast({ title: t(common.error), description: t({ id: "chatComposer.voiceFailed", defaultMessage: "Failed to send voice message." }), variant: "destructive" });
     } finally {
       setIsPublishingVoice(false);
     }
@@ -1951,8 +1974,8 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
       await voiceRecorder.startRecording();
     } catch {
       toast({
-        title: "Microphone access denied",
-        description: "Please allow microphone access to record voice messages.",
+        title: t({ id: "chatComposer.micDenied", defaultMessage: "Microphone access denied" }),
+        description: t({ id: "chatComposer.micDeniedDescription", defaultMessage: "Please allow microphone access to record voice messages." }),
         variant: "destructive",
       });
     }
@@ -2056,26 +2079,26 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
 
   const extraActions = useMemo<AttachAction[]>(() => {
     const list: AttachAction[] = [];
-    if (pollAvailable) list.push({ id: "poll", label: mode === "poll" ? "Remove poll" : "Poll", icon: BarChart3, onSelect: togglePoll, active: mode === "poll" });
-    list.push({ id: "game", label: "Add game", icon: Blocks, onSelect: openGames });
-    if (appScope) list.push({ id: "watch", label: "Watch together", icon: MonitorPlay, onSelect: () => launchApp(appScope, { type: "youtube" }) });
+    if (pollAvailable) list.push({ id: "poll", label: mode === "poll" ? intl.formatMessage({ id: "chatComposer.removePoll", defaultMessage: "Remove poll" }) : intl.formatMessage({ id: "chatComposer.poll", defaultMessage: "Poll" }), icon: BarChart3, onSelect: togglePoll, active: mode === "poll" });
+    list.push({ id: "game", label: intl.formatMessage({ id: "chatComposer.addGame", defaultMessage: "Add game" }), icon: Blocks, onSelect: openGames });
+    if (appScope) list.push({ id: "watch", label: intl.formatMessage({ id: "chatComposer.watchTogether", defaultMessage: "Watch together" }), icon: MonitorPlay, onSelect: () => launchApp(appScope, { type: "youtube" }) });
     // Hidden mid-draft: the command menu keys off a draft that is just "/".
-    if (botEntries.length > 0) list.push({ id: "commands", label: "Commands", icon: SquareSlash, onSelect: openCommandMenu, disabled: hasContent });
+    if (botEntries.length > 0) list.push({ id: "commands", label: intl.formatMessage({ id: "chatComposer.commands", defaultMessage: "Commands" }), icon: SquareSlash, onSelect: openCommandMenu, disabled: hasContent });
     return list;
-  }, [pollAvailable, mode, togglePoll, openGames, appScope, launchApp, botEntries.length, openCommandMenu, hasContent]);
+  }, [pollAvailable, mode, togglePoll, openGames, appScope, launchApp, botEntries.length, openCommandMenu, hasContent, intl]);
 
   const menuActions = useMemo<AttachAction[]>(() => [
-    { id: "file", label: "Upload a file", icon: Paperclip, onSelect: () => fileInputRef.current?.click() },
+    { id: "file", label: intl.formatMessage({ id: "chatComposer.uploadFile", defaultMessage: "Upload a file" }), icon: Paperclip, onSelect: () => fileInputRef.current?.click() },
     ...extraActions,
-  ], [extraActions]);
+  ], [extraActions, intl]);
 
   const sheetActions = useMemo<AttachAction[]>(() => [
-    { id: "photos", label: hasMediaGallery() ? "Gallery" : "Photos", icon: ImageIcon, onSelect: () => mediaInputRef.current?.click() },
-    { id: "camera", label: "Camera", icon: Camera, onSelect: () => cameraInputRef.current?.click() },
-    { id: "file", label: "File", icon: Paperclip, onSelect: () => fileInputRef.current?.click() },
+    { id: "photos", label: hasMediaGallery() ? intl.formatMessage({ id: "chatComposer.gallery", defaultMessage: "Gallery" }) : intl.formatMessage({ id: "chatComposer.photos", defaultMessage: "Photos" }), icon: ImageIcon, onSelect: () => mediaInputRef.current?.click() },
+    { id: "camera", label: intl.formatMessage({ id: "chatComposer.camera", defaultMessage: "Camera" }), icon: Camera, onSelect: () => cameraInputRef.current?.click() },
+    { id: "file", label: intl.formatMessage(msg.file), icon: Paperclip, onSelect: () => fileInputRef.current?.click() },
     // These sit behind the sheet's "Apps" tile, keeping the row to one line.
     ...extraActions.filter((a) => a.id !== "game" && a.id !== "watch" && a.id !== "commands"),
-  ], [extraActions]);
+  ], [extraActions, intl]);
 
   const sheetApps = useMemo<AttachAction[]>(
     () => extraActions.filter((a) => a.id === "watch" || a.id === "commands"),
@@ -2106,7 +2129,9 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
   const toggleGifPicker = useCallback(() => togglePickerTab("gif"), [togglePickerTab]);
 
   const charCount = content.length;
-  const placeholderText = mode === "poll" ? "Ask a question…" : (placeholder ?? "Message this channel…");
+  const placeholderText = mode === "poll"
+    ? intl.formatMessage({ id: "chatComposer.askQuestion", defaultMessage: "Ask a question…" })
+    : (placeholder ?? intl.formatMessage({ id: "chatComposer.placeholder", defaultMessage: "Message this channel…" }));
 
   return (
     <div
@@ -2123,7 +2148,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
         <div className="absolute inset-0 z-30 m-1 flex items-center justify-center clip-hairline-lg [--edge:var(--primary)/0.6] [--fill:var(--primary)/0.1] [--fill-hover:var(--primary)/0.1] backdrop-blur-sm pointer-events-none animate-in fade-in-0 duration-150">
           <div className="flex items-center gap-2 text-sm font-medium text-primary">
             <Paperclip className="size-4" />
-            Drop files to upload
+            <FormattedMessage id="chatComposer.dropFiles" defaultMessage="Drop files to upload" />
           </div>
         </div>
       )}
@@ -2189,7 +2214,9 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                   <X className="size-[18px]" />
                 </button>
               </TooltipTrigger>
-              <TooltipContent>Cancel</TooltipContent>
+              <TooltipContent>
+                <FormattedMessage {...common.cancel} />
+              </TooltipContent>
             </Tooltip>
 
             <Button
@@ -2201,7 +2228,11 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
               {isPublishingVoice
                 ? <Loader2 className="size-4 animate-spin mr-1.5" />
                 : <Square className="size-3.5 mr-1.5" fill="currentColor" />}
-              {isPublishingVoice ? "Sending..." : "Send"}
+              {isPublishingVoice ? (
+                <FormattedMessage id="chatComposer.sending" defaultMessage="Sending..." />
+              ) : (
+                <FormattedMessage {...common.send} />
+              )}
             </Button>
           </div>
         ) : (
@@ -2234,7 +2265,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                 <>
                   <button
                     type="button"
-                    aria-label="Attach"
+                    aria-label={intl.formatMessage({ id: "chatComposer.attach", defaultMessage: "Attach" })}
                     aria-haspopup="dialog"
                     onClick={() => setPlusOpen(true)}
                     className={cn(plusButtonClass, plusOpen || mode === "poll"
@@ -2326,8 +2357,8 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
 
               <div ref={pickerToggleGroupRef} className="flex shrink-0 items-center gap-0.5 touch:gap-1.5">
                 <PickerToggleButton
-                  label="Emoji / Stickers"
-                  tooltip={!pickerOpen || pickerTab === "gif" ? "Emoji" : null}
+                  label={intl.formatMessage({ id: "chatComposer.emojiStickers", defaultMessage: "Emoji / Stickers" })}
+                  tooltip={!pickerOpen || pickerTab === "gif" ? intl.formatMessage(msg.emoji) : null}
                   active={pickerOpen && (compact || pickerTab !== "gif")}
                   icon={Smile}
                   onClick={toggleEmojiPicker}
@@ -2346,8 +2377,8 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                   )}
                 >
                   <PickerToggleButton
-                    label="GIFs"
-                    tooltip={!pickerOpen || pickerTab !== "gif" ? "GIFs" : null}
+                    label={intl.formatMessage(msg.gifs)}
+                    tooltip={!pickerOpen || pickerTab !== "gif" ? intl.formatMessage(msg.gifs) : null}
                     active={pickerOpen && pickerTab === "gif"}
                     icon={GifGlyph}
                     onClick={toggleGifPicker}
@@ -2366,7 +2397,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                       onClick={onCancel}
                       className="ml-auto h-9 px-3 text-muted-foreground hover:text-foreground touch:h-11"
                     >
-                      Cancel
+                      <FormattedMessage {...common.cancel} />
                     </Button>
                   )}
                   <Button
@@ -2378,7 +2409,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                     className={cn("clip-corner-lg h-9 px-4 font-semibold touch:h-11", !onCancel && "ml-auto")}
                   >
                     {isUploading || (mode === "poll" && isSending) ? <Loader2 className="size-4 animate-spin" /> : null}
-                    {mode === "poll" ? "Publish poll" : submitLabel}
+                    {mode === "poll" ? intl.formatMessage(msg.publishPoll) : (submitLabel ?? intl.formatMessage({ id: "chatComposer.post", defaultMessage: "Post" }))}
                   </Button>
                 </>
               ) : mode === "post" && !hasContent && !isUploading && voiceRecorder.isSupported ? (
@@ -2387,13 +2418,15 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                     <button
                       type="button"
                       onClick={handleStartRecording}
-                      aria-label="Voice message"
+                      aria-label={intl.formatMessage(msg.voiceMessage)}
                       className="p-2 shrink-0 clip-corner-lg text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors flex items-center justify-center size-9 touch:size-11"
                     >
                       <Mic className="size-5" />
                     </button>
                   </TooltipTrigger>
-                  <TooltipContent>Voice message</TooltipContent>
+                  <TooltipContent>
+                    <FormattedMessage {...msg.voiceMessage} />
+                  </TooltipContent>
                 </Tooltip>
               ) : (
                 <button
@@ -2403,7 +2436,13 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                   onPointerDown={(e) => e.preventDefault()}
                   onClick={mode === "poll" ? handlePollSubmit : handleSend}
                   disabled={isUploading || (mode === "poll" ? !isPollValid || isSending : !hasContent)}
-                  aria-label={isUploading ? "Uploading attachment" : mode === "poll" ? "Publish poll" : "Send message"}
+                  aria-label={
+                    isUploading
+                      ? intl.formatMessage({ id: "chatComposer.uploading", defaultMessage: "Uploading attachment" })
+                      : mode === "poll"
+                        ? intl.formatMessage(msg.publishPoll)
+                        : intl.formatMessage({ id: "chatComposer.sendMessage", defaultMessage: "Send message" })
+                  }
                   className="p-2 shrink-0 clip-corner-lg bg-primary text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-40 disabled:bg-transparent disabled:text-muted-foreground flex items-center justify-center size-9 touch:size-11"
                 >
                   {isUploading || (mode === "poll" && isSending)
@@ -2437,10 +2476,12 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                 <div className="overflow-hidden min-h-0">
                 <div className="space-y-2 pt-2">
                   <div className="flex items-center justify-between">
-                    <span className="text-xs font-medium text-muted-foreground">Poll</span>
+                    <span className="text-xs font-medium text-muted-foreground">
+                      <FormattedMessage id="chatComposer.poll" defaultMessage="Poll" />
+                    </span>
                     <button
                       type="button"
-                      aria-label="Close poll"
+                      aria-label={intl.formatMessage({ id: "chatComposer.closePoll", defaultMessage: "Close poll" })}
                       onClick={() => setMode("post")}
                       className="p-1 touch:p-2.5 clip-corner-lg text-muted-foreground hover:text-foreground transition-colors"
                     >
@@ -2457,13 +2498,13 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                           setPollOptions((prev) =>
                             prev.map((o) => (o.id === opt.id ? { ...o, label: e.target.value } : o)),
                           )}
-                        placeholder={`Option ${idx + 1}`}
+                        placeholder={intl.formatMessage({ id: "chatComposer.optionN", defaultMessage: "Option {number}" }, { number: idx + 1 })}
                         maxLength={100}
                         className="flex-1 bg-secondary/40 clip-corner-lg px-3 py-1.5 text-sm outline-none focus:bg-secondary/70 transition-colors placeholder:text-muted-foreground"
                       />
                       <button
                         type="button"
-                        aria-label="Remove option"
+                        aria-label={intl.formatMessage({ id: "chatComposer.removeOption", defaultMessage: "Remove option" })}
                         onClick={() => {
                           if (pollOptions.length > 2) {
                             setPollOptions((prev) => prev.filter((o) => o.id !== opt.id));
@@ -2484,7 +2525,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                       className="flex items-center gap-1.5 text-xs touch:text-sm text-primary hover:text-primary/80 transition-colors pt-0.5 touch:py-2"
                     >
                       <Plus className="size-3" />
-                      Add option
+                      <FormattedMessage id="chatComposer.addOption" defaultMessage="Add option" />
                     </button>
                   )}
                 </div>
@@ -2502,7 +2543,11 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                           : "bg-secondary text-muted-foreground hover:text-foreground",
                       )}
                     >
-                      {t === "singlechoice" ? "Single choice" : "Multiple choice"}
+                      {t === "singlechoice" ? (
+                        <FormattedMessage id="chatComposer.singleChoice" defaultMessage="Single choice" />
+                      ) : (
+                        <FormattedMessage id="chatComposer.multipleChoice" defaultMessage="Multiple choice" />
+                      )}
                     </button>
                   ))}
                   <div className="w-px bg-border self-stretch mx-0.5" />
@@ -2518,7 +2563,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                           : "bg-secondary text-muted-foreground hover:text-foreground",
                       )}
                     >
-                      {d === 0 ? "∞" : `${d}d`}
+                      {d === 0 ? "∞" : intl.formatMessage({ id: "chatComposer.days", defaultMessage: "{days}d" }, { days: d })}
                     </button>
                   ))}
                 </div>
@@ -2631,6 +2676,7 @@ function ReplyBanner({ event, onCancel, onJump }: { event: NostrRumor; onCancel?
   // A held sender's custom emoji would fetch what their row is holding.
   const revealed = useMessageRevealed(event.id);
   const held = useMediaHeld(event.pubkey) && !revealed;
+  const intl = useIntl();
 
   return (
     <div className="flex items-center gap-2 clip-corner-lg bg-secondary/50 py-2 pl-2.5 pr-1 text-sm animate-in slide-in-from-top-2 fade-in-0 duration-200">
@@ -2645,7 +2691,9 @@ function ReplyBanner({ event, onCancel, onJump }: { event: NostrRumor; onCancel?
         <Reply className="size-4 text-muted-foreground shrink-0" />
         <span className="min-w-0 flex-1 flex items-center gap-1.5 text-muted-foreground">
           {/* Narrow screens: the reply icon says it, and the snippet needs the room. */}
-          <span className="sr-only sm:not-sr-only sm:shrink-0">Replying to</span>
+          <span className="sr-only sm:not-sr-only sm:shrink-0">
+            <FormattedMessage id="chatComposer.replyingTo" defaultMessage="Replying to" />
+          </span>
           <Avatar shape={getAvatarShape(metadata)} className="size-5 shrink-0">
             <AvatarImage src={metadata?.picture} imeta={author.data?.imeta?.picture} alt="" />
             <AvatarFallback className="bg-primary/20 text-primary text-monogram">
@@ -2662,7 +2710,7 @@ function ReplyBanner({ event, onCancel, onJump }: { event: NostrRumor; onCancel?
       </button>
       <button
         type="button"
-        aria-label="Cancel reply"
+        aria-label={intl.formatMessage({ id: "chatComposer.cancelReply", defaultMessage: "Cancel reply" })}
         onClick={onCancel}
         className="-mr-0.5 flex size-8 touch:size-11 items-center justify-center clip-corner-lg text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors shrink-0"
       >
@@ -2683,6 +2731,7 @@ function QuoteBanner({ embed, onRemove }: { embed: DetectedEmbed; onRemove: () =
   const addrQuery = useAddrEvent(isAddr ? embed.addr : undefined);
   const event = isAddr ? addrQuery.data : noteQuery.data;
   const isLoading = isAddr ? addrQuery.isLoading : noteQuery.isLoading;
+  const intl = useIntl();
 
   return (
     <div className="flex items-center gap-2 clip-corner-lg bg-secondary/50 py-2 pl-2.5 pr-1 text-sm animate-in slide-in-from-top-2 fade-in-0 duration-200">
@@ -2691,12 +2740,16 @@ function QuoteBanner({ embed, onRemove }: { embed: DetectedEmbed; onRemove: () =
         <QuoteBannerBody event={event} />
       ) : (
         <span className="min-w-0 flex-1 truncate text-muted-foreground">
-          {isLoading ? "Loading quoted post…" : "Quoted post unavailable"}
+          {isLoading ? (
+            <FormattedMessage id="chatComposer.loadingQuote" defaultMessage="Loading quoted post…" />
+          ) : (
+            <FormattedMessage id="chatComposer.quoteUnavailable" defaultMessage="Quoted post unavailable" />
+          )}
         </span>
       )}
       <button
         type="button"
-        aria-label="Remove quote"
+        aria-label={intl.formatMessage({ id: "chatComposer.removeQuote", defaultMessage: "Remove quote" })}
         onClick={onRemove}
         className="-mr-0.5 flex size-8 touch:size-11 items-center justify-center clip-corner-lg text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors shrink-0"
       >
@@ -2715,7 +2768,9 @@ function QuoteBannerBody({ event }: { event: NostrRumor }) {
 
   return (
     <span className="min-w-0 flex-1 flex items-center gap-1.5 text-muted-foreground">
-      <span className="shrink-0">Quoting</span>
+      <span className="shrink-0">
+        <FormattedMessage id="chatComposer.quoting" defaultMessage="Quoting" />
+      </span>
       <Avatar shape={getAvatarShape(metadata)} className="size-5 shrink-0">
         <AvatarImage src={metadata?.picture} imeta={author.data?.imeta?.picture} alt="" />
         <AvatarFallback className="bg-primary/20 text-primary text-monogram">

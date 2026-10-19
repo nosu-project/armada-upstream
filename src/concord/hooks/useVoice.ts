@@ -36,6 +36,7 @@ import { CONCORD_AV_SERVERS } from "@/lib/platform";
 import { effectiveAvServers } from "@/lib/voiceDevices";
 
 import type { NostrEvent } from "@nostrify/nostrify";
+import { t } from "@/i18n";
 
 /** The stable empty fold (so idle rows keep constant props). */
 const EMPTY_FOLD: VoicePresenceFold = { present: [], claims: new Map() };
@@ -281,7 +282,7 @@ export function useVoiceHeartbeat(
       const delivered = await publish("joined", identity, broker);
       if (identities.length > 0 && !delivered) {
         throw new Error(
-          "Could not announce the H.265 publisher identity to a community relay.",
+          t({ id: "useVoice.h265AnnounceFailed", defaultMessage: "Could not announce the H.265 publisher identity to a community relay." }),
         );
       }
     },

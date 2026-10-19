@@ -68,6 +68,7 @@ import { loadThemeFont } from "@/lib/fontLoader";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { tryNaddrEncode, tryNpubEncode } from "@/lib/safeNip19";
 import { isLocalNetworkUrl, sanitizeImageSrc, sanitizeUrl } from "@/lib/sanitizeUrl";
+import { FormattedMessage, useIntl } from "@/i18n";
 import { cn } from "@/lib/utils";
 import { writeClipboardText } from "@/lib/clipboard";
 import { lazyWithReload } from "@/lib/chunkReload";
@@ -107,6 +108,7 @@ const MENU_PARTS = {
 };
 
 export function ProfileDialog({ pubkey, onClose }: { pubkey: string; onClose: () => void }) {
+  const intl = useIntl();
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
@@ -134,7 +136,7 @@ export function ProfileDialog({ pubkey, onClose }: { pubkey: string; onClose: ()
       <div
         role="dialog"
         aria-modal="false"
-        aria-label="Profile"
+        aria-label={intl.formatMessage({ id: "profileDialog.label", defaultMessage: "Profile" })}
         // Absolute, so the pane's safe-area padding doesn't reach it; add the top inset here.
         className="absolute inset-0 pt-[var(--safe-area-inset-top,env(safe-area-inset-top,0px))] md:pt-0 md:inset-4 md:top-[calc(1rem+var(--safe-area-inset-top,env(safe-area-inset-top,0px)))] md:clip-corner-lg z-30 overflow-hidden bg-background animate-in fade-in-0 zoom-in-95"
       >
@@ -171,12 +173,13 @@ function backgroundStyle(bg: ThemeBackground, src: string): CSSProperties {
       };
 }
 
-const compactFormat = new Intl.NumberFormat(undefined, { notation: "compact" });
-
 /**
  * False for the first render, true from the frame after it paints, so the
  * identity commits before the rest. Queries are NOT gated, so data isn't delayed.
  */
+const countTag = (chunks: React.ReactNode[]) => <span className="font-bold tabular-nums">{chunks}</span>;
+const labelTag = (chunks: React.ReactNode[]) => <span className="text-muted-foreground">{chunks}</span>;
+
 function useAfterPaint(): boolean {
   const [painted, setPainted] = useState(false);
   useEffect(() => {
@@ -187,6 +190,8 @@ function useAfterPaint(): boolean {
 }
 
 function ProfileView({ pubkey, onClose }: { pubkey: string; onClose: () => void }) {
+  const intl = useIntl();
+  const compactFormat = useMemo(() => new Intl.NumberFormat(intl.locale, { notation: "compact" }), [intl.locale]);
   const navigate = useNavigate();
   const { user } = useCurrentUser();
   const { config } = useAppContext();
@@ -293,7 +298,7 @@ function ProfileView({ pubkey, onClose }: { pubkey: string; onClose: () => void 
       <Button
         size="icon"
         variant="ghost"
-        aria-label="Close profile"
+        aria-label={intl.formatMessage({ id: "profileDialog.close", defaultMessage: "Close profile" })}
         className="absolute right-3 top-3 z-10 size-9 touch:size-11 clip-corner-lg bg-background/60 backdrop-blur-sm hover:bg-background/80"
         onClick={onClose}
       >
@@ -336,7 +341,7 @@ function ProfileView({ pubkey, onClose }: { pubkey: string; onClose: () => void 
                         onClick={() => setThemeEditorOpen(true)}
                       >
                         <Palette className="size-4 mr-1.5" />
-                        Edit theme
+                        <FormattedMessage id="profileDialog.editTheme" defaultMessage="Edit theme" />
                       </Button>
                       <Button
                         size="sm"
@@ -345,7 +350,7 @@ function ProfileView({ pubkey, onClose }: { pubkey: string; onClose: () => void 
                         onClick={() => setEditOpen(true)}
                       >
                         <Pencil className="size-4 mr-1.5" />
-                        Edit profile
+                        <FormattedMessage id="profileDialog.editProfile" defaultMessage="Edit profile" />
                       </Button>
                     </>
                   ) : (
@@ -353,7 +358,7 @@ function ProfileView({ pubkey, onClose }: { pubkey: string; onClose: () => void 
                       {user && npub && !config.dmsDisabled && (
                         <Button size="sm" className="clip-corner-lg h-9 touch:h-11" onClick={openDm}>
                           <MessageSquare className="size-4 mr-1.5" />
-                          Message
+                          <FormattedMessage id="profileDialog.message" defaultMessage="Message" />
                         </Button>
                       )}
                       {user && (
@@ -365,8 +370,8 @@ function ProfileView({ pubkey, onClose }: { pubkey: string; onClose: () => void 
                           onClick={() => void toggleFollow()}
                         >
                           {isFollowing
-                            ? <><UserCheck className="size-4 mr-1.5" />Following</>
-                            : <><UserPlus className="size-4 mr-1.5" />Follow</>}
+                            ? <><UserCheck className="size-4 mr-1.5" /><FormattedMessage id="profileDialog.followingButton" defaultMessage="Following" /></>
+                            : <><UserPlus className="size-4 mr-1.5" /><FormattedMessage id="profileDialog.follow" defaultMessage="Follow" /></>}
                         </Button>
                       )}
                       {moderation.actions.length > 0 && (
@@ -375,7 +380,7 @@ function ProfileView({ pubkey, onClose }: { pubkey: string; onClose: () => void 
                             <Button
                               size="icon"
                               variant="secondary"
-                              aria-label="More actions"
+                              aria-label={intl.formatMessage({ id: "profileDialog.moreActions", defaultMessage: "More actions" })}
                               className="size-9 touch:size-11 clip-corner-lg"
                             >
                               <MoreHorizontal className="size-4" />
@@ -396,7 +401,7 @@ function ProfileView({ pubkey, onClose }: { pubkey: string; onClose: () => void 
                       className="size-9 touch:size-11 clip-corner-lg"
                       asChild
                     >
-                      <a href={dittoHref} target="_blank" rel="noopener noreferrer" title="View on Ditto" aria-label="View on Ditto">
+                      <a href={dittoHref} target="_blank" rel="noopener noreferrer" title={intl.formatMessage({ id: "profileDialog.viewOnDitto", defaultMessage: "View on Ditto" })} aria-label={intl.formatMessage({ id: "profileDialog.viewOnDitto", defaultMessage: "View on Ditto" })}>
                         <DittoIcon className="size-4" />
                       </a>
                     </Button>
@@ -412,8 +417,8 @@ function ProfileView({ pubkey, onClose }: { pubkey: string; onClose: () => void 
                         href={nsite.url}
                         target="_blank"
                         rel="noopener noreferrer"
-                        title={nsite.title ?? `${displayName}'s site`}
-                        aria-label="View website"
+                        title={nsite.title ?? intl.formatMessage({ id: "profileDialog.siteTitle", defaultMessage: "{name}'s site" }, { name: displayName })}
+                        aria-label={intl.formatMessage({ id: "profileDialog.viewWebsite", defaultMessage: "View website" })}
                       >
                         <Globe className="size-4" />
                       </a>
@@ -446,7 +451,7 @@ function ProfileView({ pubkey, onClose }: { pubkey: string; onClose: () => void 
                   type="button"
                   onClick={copyNpub}
                   className="mt-0.5 flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
-                  title="Copy npub"
+                  title={intl.formatMessage({ id: "profileDialog.copyNpub", defaultMessage: "Copy npub" })}
                 >
                   <span className="font-mono">{shortNpub}</span>
                   {copied ? <Check className="size-3 text-primary" /> : <Copy className="size-3" />}
@@ -463,14 +468,20 @@ function ProfileView({ pubkey, onClose }: { pubkey: string; onClose: () => void 
                 <div className="mt-2 flex items-center gap-4 text-sm">
                   {followingData && (
                     <a href={dittoHref} target="_blank" rel="noopener noreferrer" className="hover:underline">
-                      <span className="font-bold tabular-nums">{compactFormat.format(followingData.count)}</span>{" "}
-                      <span className="text-muted-foreground">Following</span>
+                      <FormattedMessage
+                        id="profileDialog.followingCount"
+                        defaultMessage="<count>{formatted}</count> <label>Following</label>"
+                        values={{ formatted: compactFormat.format(followingData.count), count: countTag, label: labelTag }}
+                      />
                     </a>
                   )}
                   {followerCount != null && followerCount > 0 && (
                     <a href={dittoHref} target="_blank" rel="noopener noreferrer" className="hover:underline">
-                      <span className="font-bold tabular-nums">{compactFormat.format(followerCount)}</span>{" "}
-                      <span className="text-muted-foreground">Followers</span>
+                      <FormattedMessage
+                        id="profileDialog.followerCount"
+                        defaultMessage="<count>{formatted}</count> <label>{n, plural, one {Followers} other {Followers}}</label>"
+                        values={{ formatted: compactFormat.format(followerCount), n: followerCount, count: countTag, label: labelTag }}
+                      />
                     </a>
                   )}
                 </div>
@@ -517,12 +528,12 @@ function ProfileView({ pubkey, onClose }: { pubkey: string; onClose: () => void 
               {(fields.length > 0 || website || metadata?.lud16) && (
                 <section className={cn("clip-corner-lg p-4 md:p-5", card)}>
                   <h2 className="text-xs font-medium uppercase tracking-wide text-muted-foreground mb-3">
-                    About
+                    <FormattedMessage id="profileDialog.about" defaultMessage="About" />
                   </h2>
                   <div className="space-y-4">
                     {metadata?.lud16 && (
                       <div>
-                        <div className="text-sm font-semibold">Lightning</div>
+                        <div className="text-sm font-semibold"><FormattedMessage id="profileDialog.lightning" defaultMessage="Lightning" /></div>
                         <div className="mt-0.5 flex items-center gap-1.5 text-sm">
                           <Zap className="size-4 shrink-0 text-primary" />
                           <span className="break-all">{metadata.lud16}</span>
@@ -531,7 +542,7 @@ function ProfileView({ pubkey, onClose }: { pubkey: string; onClose: () => void 
                     )}
                     {website && (
                       <div>
-                        <div className="text-sm font-semibold">Website</div>
+                        <div className="text-sm font-semibold"><FormattedMessage id="profileDialog.website" defaultMessage="Website" /></div>
                         <FieldValue value={website} />
                       </div>
                     )}
@@ -561,7 +572,7 @@ function ProfileView({ pubkey, onClose }: { pubkey: string; onClose: () => void 
               {badges.length > 0 && (
                 <section className={cn("clip-corner-lg p-4", card)}>
                   <h2 className="text-xs font-medium uppercase tracking-wide text-muted-foreground mb-3">
-                    Badges
+                    <FormattedMessage id="profileDialog.badges" defaultMessage="Badges" />
                   </h2>
                   <div className="grid grid-cols-3 gap-3">
                     {badges.map((badge) => (
@@ -579,7 +590,7 @@ function ProfileView({ pubkey, onClose }: { pubkey: string; onClose: () => void 
                 <section className={cn("clip-corner-lg p-4", card)}>
                   <h2 className="text-xs font-medium uppercase tracking-wide text-muted-foreground mb-2 flex items-center gap-1.5">
                     <Users className="size-3.5" />
-                    {shared.length} shared {shared.length === 1 ? "community" : "communities"}
+                    <FormattedMessage id="profileDialog.sharedCommunities" defaultMessage="{count, plural, one {# shared community} other {# shared communities}}" values={{ count: shared.length }} />
                   </h2>
                   <ul className="space-y-1">
                     {shared.map((c) => (
@@ -603,7 +614,7 @@ function ProfileView({ pubkey, onClose }: { pubkey: string; onClose: () => void 
       {isSelf && (
         <Dialog open={editOpen} onOpenChange={setEditOpen}>
           <ChromeDialogContent
-            title="Edit profile"
+            title={intl.formatMessage({ id: "profileDialog.editProfile", defaultMessage: "Edit profile" })}
             className="sm:max-w-xl"
             contentClassName="max-h-[85dvh] overflow-y-auto"
           >
@@ -738,7 +749,7 @@ function SharedFollowersCard({
     <section className={cn("clip-corner-lg p-4", cardClass)}>
       <h2 className="text-xs font-medium uppercase tracking-wide text-muted-foreground mb-2 flex items-center gap-1.5">
         <UserCheck className="size-3.5" />
-        {shared.length} shared {shared.length === 1 ? "follower" : "followers"}
+        <FormattedMessage id="profileDialog.sharedFollowers" defaultMessage="{count, plural, one {# shared follower} other {# shared followers}}" values={{ count: shared.length }} />
       </h2>
       <ul className="space-y-1">
         {visible.map((pk) => (
@@ -751,7 +762,7 @@ function SharedFollowersCard({
           onClick={() => setShowAll(true)}
           className="mt-1.5 text-xs text-primary hover:underline"
         >
-          View all {shared.length}
+          <FormattedMessage id="profileDialog.viewAll" defaultMessage="View all {count}" values={{ count: shared.length }} />
         </button>
       ) : dittoHref ? (
         <a
@@ -760,7 +771,7 @@ function SharedFollowersCard({
           rel="noopener noreferrer"
           className="mt-1.5 inline-block text-xs text-primary hover:underline"
         >
-          View more on Ditto
+          <FormattedMessage id="profileDialog.viewMoreOnDitto" defaultMessage="View more on Ditto" />
         </a>
       ) : null}
     </section>

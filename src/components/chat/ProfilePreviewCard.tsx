@@ -44,6 +44,7 @@ import { sanitizeImageSrc } from "@/lib/sanitizeUrl";
 import { cn } from "@/lib/utils";
 import { writeClipboardText } from "@/lib/clipboard";
 import { buildThemeVarStyle } from "@/themes";
+import { FormattedMessage, t, useIntl } from "@/i18n";
 
 const MENU_PARTS = {
   Item: DropdownMenuItem,
@@ -66,6 +67,7 @@ function ProfilePreviewBody({
   onAction?: () => void;
   moderation: UserModeration;
 }) {
+  const intl = useIntl();
   const author = useAuthor(pubkey);
   const navigate = useNavigate();
   const openProfile = useOpenProfile();
@@ -105,7 +107,7 @@ function ProfilePreviewBody({
     if (requestMention(pubkey)) {
       onAction?.();
     } else {
-      toast({ title: "Open a channel to mention someone" });
+      toast({ title: t({ id: "profilePreviewCard.openChannelToMention", defaultMessage: "Open a channel to mention someone" }) });
     }
   };
 
@@ -130,7 +132,7 @@ function ProfilePreviewBody({
               <Button
                 size="icon"
                 variant="ghost"
-                aria-label="More actions"
+                aria-label={intl.formatMessage({ id: "profilePreviewCard.moreActions", defaultMessage: "More actions" })}
                 className="absolute right-1.5 top-1.5 z-10 size-8 touch:size-11 clip-corner-lg text-foreground drop-shadow hover:bg-background/40"
               >
                 <MoreHorizontal className="size-4" />
@@ -140,14 +142,14 @@ function ProfilePreviewBody({
               {!isSelf && isFollowing && (
                 <DropdownMenuItem disabled={followPending} onSelect={() => void toggleFollow()}>
                   <UserMinus className="size-4" />
-                  Unfollow
+                  <FormattedMessage id="profilePreviewCard.unfollow" defaultMessage="Unfollow" />
                 </DropdownMenuItem>
               )}
               {moderation.rolePicker && (
                 <DropdownMenuSub>
                   <DropdownMenuSubTrigger>
                     <UserCog className="size-4" />
-                    Roles
+                    <FormattedMessage id="profilePreviewCard.roles" defaultMessage="Roles" />
                   </DropdownMenuSubTrigger>
                   <DropdownMenuSubContent className="w-56 max-h-72 overflow-y-auto">
                     <RolePickerItems
@@ -269,7 +271,7 @@ function ProfilePreviewBody({
             type="button"
             onClick={copyNpub}
             className="mt-0.5 flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
-            title="Copy npub"
+            title={intl.formatMessage({ id: "profilePreviewCard.copyNpub", defaultMessage: "Copy npub" })}
           >
             <span className="font-mono">{shortNpub}</span>
             {copied ? <Check className="size-3 text-primary" /> : <Copy className="size-3" />}
@@ -289,7 +291,7 @@ function ProfilePreviewBody({
             {!config.dmsDisabled && (
               <Button size="sm" className="flex-1 clip-corner-lg h-8" onClick={message}>
                 <MessageSquare className="size-3.5 mr-1.5" />
-                Message
+                <FormattedMessage id="profilePreviewCard.message" defaultMessage="Message" />
               </Button>
             )}
             <Button
@@ -299,7 +301,7 @@ function ProfilePreviewBody({
               onClick={mention}
             >
               <AtSign className="size-3.5 mr-1.5" />
-              Mention
+              <FormattedMessage id="profilePreviewCard.mention" defaultMessage="Mention" />
             </Button>
           </div>
         )}
@@ -314,7 +316,7 @@ function ProfilePreviewBody({
             onPointerEnter={() => prefetchProfile(pubkey)}
             onFocus={() => prefetchProfile(pubkey)}
           >
-            View profile
+            <FormattedMessage id="profilePreviewCard.viewProfile" defaultMessage="View profile" />
           </Button>
           {dittoProfileHref && (
             <Button size="icon" variant="secondary" className="size-8 touch:size-11 clip-corner-lg shrink-0" asChild>
@@ -323,8 +325,8 @@ function ProfilePreviewBody({
                 target="_blank"
                 rel="noopener noreferrer"
                 onClick={() => onAction?.()}
-                title="View on Ditto"
-                aria-label="View on Ditto"
+                title={intl.formatMessage({ id: "profilePreviewCard.viewOnDitto", defaultMessage: "View on Ditto" })}
+                aria-label={intl.formatMessage({ id: "profilePreviewCard.viewOnDitto", defaultMessage: "View on Ditto" })}
               >
                 <DittoIcon className="size-3.5" />
               </a>
@@ -337,8 +339,8 @@ function ProfilePreviewBody({
                 target="_blank"
                 rel="noopener noreferrer"
                 onClick={() => onAction?.()}
-                title={nsite.title ?? "View website"}
-                aria-label="View website"
+                title={nsite.title ?? intl.formatMessage({ id: "profilePreviewCard.viewWebsite", defaultMessage: "View website" })}
+                aria-label={intl.formatMessage({ id: "profilePreviewCard.viewWebsite", defaultMessage: "View website" })}
               >
                 <Globe className="size-3.5" />
               </a>

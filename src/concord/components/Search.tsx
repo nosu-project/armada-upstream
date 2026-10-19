@@ -28,16 +28,17 @@ import {
   type SearchTokenKey,
 } from "@/concord/lib/search";
 import { cn } from "@/lib/utils";
+import { defineMessage, defineMessages, FormattedMessage, useIntl, type IntlShape, type MessageDescriptor } from "@/i18n";
 
 import type { ChatMsg } from "@/components/chat/transport";
 import type { Channel } from "@/concord/lib/types";
 
-const MEDIA_OPTIONS: Array<{ value: SearchMedia; label: string; icon?: typeof ImageIcon }> = [
-  { value: "all", label: "All" },
-  { value: "images", label: "Images", icon: ImageIcon },
-  { value: "videos", label: "Videos", icon: Video },
-  { value: "links", label: "Links", icon: LinkIcon },
-  { value: "none", label: "Text", icon: FileText },
+const MEDIA_OPTIONS: Array<{ value: SearchMedia; label: MessageDescriptor; icon?: typeof ImageIcon }> = [
+  { value: "all", label: defineMessage({ id: "search.media.all", defaultMessage: "All" }) },
+  { value: "images", label: defineMessage({ id: "search.media.images", defaultMessage: "Images" }), icon: ImageIcon },
+  { value: "videos", label: defineMessage({ id: "search.media.videos", defaultMessage: "Videos" }), icon: Video },
+  { value: "links", label: defineMessage({ id: "search.media.links", defaultMessage: "Links" }), icon: LinkIcon },
+  { value: "none", label: defineMessage({ id: "search.media.text", defaultMessage: "Text" }), icon: FileText },
 ];
 
 function MediaToggle({ media, onChange }: { media: SearchMedia; onChange: (m: SearchMedia) => void }) {
@@ -55,7 +56,7 @@ function MediaToggle({ media, onChange }: { media: SearchMedia; onChange: (m: Se
           className="gap-1.5 h-auto px-3 py-1.5 touch:py-2.5 text-sm font-normal clip-corner-lg text-muted-foreground hover:bg-foreground/5 hover:text-foreground data-[state=on]:bg-primary data-[state=on]:font-medium data-[state=on]:text-primary-foreground"
         >
           {o.icon && <o.icon className="size-3.5" />}
-          {o.label}
+          <FormattedMessage {...o.label} />
         </ToggleGroupItem>
       ))}
     </ToggleGroup>
@@ -65,6 +66,7 @@ function MediaToggle({ media, onChange }: { media: SearchMedia; onChange: (m: Se
 function AuthorChip({ pubkey, onRemove }: { pubkey: string; onRemove: () => void }) {
   const author = useAuthor(pubkey);
   const name = useScopedDisplayName(pubkey, author.data?.metadata);
+  const intl = useIntl();
   return (
     <span className="inline-flex items-center gap-1 rounded-full bg-primary/15 py-0.5 pl-1 pr-1.5 text-xs text-foreground">
       <Avatar className="size-4">
@@ -74,7 +76,10 @@ function AuthorChip({ pubkey, onRemove }: { pubkey: string; onRemove: () => void
       <span className="max-w-28 truncate">
         {name ? <DisplayName pubkey={pubkey} name={name} /> : pubkey.slice(0, 8)}
       </span>
-      <button type="button" aria-label={`Remove ${name}`} onClick={onRemove} className="text-muted-foreground hover:text-foreground">
+      <button
+        type="button"
+        aria-label={intl.formatMessage({ id: "search.removeChip", defaultMessage: "Remove {label}" }, { label: name })}
+        onClick={onRemove} className="text-muted-foreground hover:text-foreground">
         <X className="size-3" />
       </button>
     </span>
@@ -125,6 +130,7 @@ function AuthorFacet({
   selected: string[];
   onToggle: (pubkey: string) => void;
 }) {
+  const intl = useIntl();
   const [q, setQ] = useState("");
   const query = q.trim().toLowerCase();
   return (
@@ -139,7 +145,7 @@ function AuthorFacet({
       <Input
         value={q}
         onChange={(e) => setQ(e.target.value)}
-        placeholder="Filter people…"
+        placeholder={intl.formatMessage({ id: "search.filterPeople", defaultMessage: "Filter people…" })}
         className="h-8"
       />
       <div className="-mx-1 max-h-40 space-y-0.5 overflow-y-auto px-1">
@@ -171,14 +177,16 @@ function ChannelFacet({
   return (
     <div className="space-y-1">
       <div className="flex items-center justify-between">
-        <Label>Channels</Label>
+        <Label>
+          <FormattedMessage id="search.channels" defaultMessage="Channels" />
+        </Label>
         {selected.length > 0 && (
           <button
             type="button"
             onClick={onClear}
             className="text-xs text-muted-foreground hover:text-foreground"
           >
-            All
+            <FormattedMessage id="search.allChannels" defaultMessage="All" />
           </button>
         )}
       </div>
@@ -199,7 +207,11 @@ function ChannelFacet({
         ))}
       </div>
       <p className="text-2xs text-muted-foreground">
-        {selected.length === 0 ? "Searching all channels" : `${selected.length} selected`}
+        {selected.length === 0 ? (
+          <FormattedMessage id="search.searchingAllChannels" defaultMessage="Searching all channels" />
+        ) : (
+          <FormattedMessage id="search.selectedCount" defaultMessage="{count} selected" values={{ count: selected.length }} />
+        )}
       </p>
     </div>
   );
@@ -218,20 +230,24 @@ function DateFacet({
   return (
     <div className="space-y-1.5">
       <div className="flex items-center justify-between">
-        <Label>Date</Label>
+        <Label>
+          <FormattedMessage id="search.date" defaultMessage="Date" />
+        </Label>
         {(from || to) && (
           <button
             type="button"
             onClick={() => onChange({ dateFrom: "", dateTo: "" })}
             className="text-xs text-muted-foreground hover:text-foreground"
           >
-            Any time
+            <FormattedMessage id="search.anyTime" defaultMessage="Any time" />
           </button>
         )}
       </div>
       <div className="grid grid-cols-2 gap-2">
         <label className="space-y-1">
-          <span className="text-2xs text-muted-foreground">From</span>
+          <span className="text-2xs text-muted-foreground">
+            <FormattedMessage id="search.dateFrom" defaultMessage="From" />
+          </span>
           <Input
             type="date"
             value={from}
@@ -241,7 +257,9 @@ function DateFacet({
           />
         </label>
         <label className="space-y-1">
-          <span className="text-2xs text-muted-foreground">To</span>
+          <span className="text-2xs text-muted-foreground">
+            <FormattedMessage id="search.dateTo" defaultMessage="To" />
+          </span>
           <Input
             type="date"
             value={to}
@@ -268,6 +286,7 @@ export function SearchFiltersPopover({
   filters: SearchFilters;
   onChange: (filters: SearchFilters) => void;
 }) {
+  const intl = useIntl();
   const count = activeFacetCount(filters);
   const set = (patch: Partial<SearchFilters>) => onChange({ ...filters, ...patch });
   const toggleAuthor = (pk: string) =>
@@ -289,7 +308,7 @@ export function SearchFiltersPopover({
         <Button
           variant="ghost"
           size="icon"
-          aria-label="Search filters"
+          aria-label={intl.formatMessage({ id: "search.filters", defaultMessage: "Search filters" })}
           className={cn(
             "relative size-8 touch:size-10 shrink-0 text-muted-foreground",
             count > 0 && "text-foreground",
@@ -301,11 +320,15 @@ export function SearchFiltersPopover({
       </PopoverTrigger>
       <PopoverContent align="end" className="w-80 space-y-4 p-3">
         <div className="space-y-1.5">
-          <Label>Media</Label>
+          <Label>
+            <FormattedMessage id="search.mediaLabel" defaultMessage="Media" />
+          </Label>
           <MediaToggle media={filters.media} onChange={(m) => set({ media: m })} />
         </div>
         <div className="space-y-1.5">
-          <Label>From</Label>
+          <Label>
+            <FormattedMessage id="search.fromLabel" defaultMessage="From" />
+          </Label>
           <AuthorFacet members={members} selected={filters.authors} onToggle={toggleAuthor} />
         </div>
         <DateFacet from={filters.dateFrom} to={filters.dateTo} onChange={set} />
@@ -321,14 +344,14 @@ export function SearchFiltersPopover({
 }
 
 const NO_MEMBERS: string[] = [];
-const TOKEN_LABEL: Record<SearchTokenKey, string> = {
-  from: "From user",
-  in: "In channel",
-  has: "Message contains",
-  before: "Before date",
-  after: "After date",
-  during: "On date",
-};
+const TOKEN_LABEL = defineMessages({
+  from: { id: "search.token.from", defaultMessage: "From user" },
+  in: { id: "search.token.in", defaultMessage: "In channel" },
+  has: { id: "search.token.has", defaultMessage: "Message contains" },
+  before: { id: "search.token.before", defaultMessage: "Before date" },
+  after: { id: "search.token.after", defaultMessage: "After date" },
+  during: { id: "search.token.during", defaultMessage: "On date" },
+}) satisfies Record<SearchTokenKey, MessageDescriptor>;
 
 interface Suggestion {
   id: string;
@@ -369,6 +392,7 @@ export function SearchTokenSuggest({
   members: string[];
   channels: Channel[];
 }) {
+  const intl = useIntl();
   /** null while the input is unfocused. */
   const [caret, setCaret] = useState<number | null>(null);
   const [rect, setRect] = useState<DOMRect | null>(null);
@@ -431,10 +455,10 @@ export function SearchTokenSuggest({
   };
 
   const items: Suggestion[] = [];
-  let heading = "Search options";
+  let heading = intl.formatMessage({ id: "search.options", defaultMessage: "Search options" });
   let hint: string | undefined;
   if (tok?.key) {
-    heading = TOKEN_LABEL[tok.key];
+    heading = intl.formatMessage(TOKEN_LABEL[tok.key]);
     const v = tok.value.toLowerCase();
     if (tok.key === "from") {
       for (const p of profiles) {
@@ -471,7 +495,7 @@ export function SearchTokenSuggest({
       }
     } else {
       const key = tok.key;
-      hint = "YYYY-MM-DD, today or yesterday";
+      hint = intl.formatMessage({ id: "search.dateHint", defaultMessage: "YYYY-MM-DD, today or yesterday" });
       const exact = parseSearchDate(tok.value);
       const words = exact ? [tok.value] : ["today", "yesterday"].filter((w) => w.startsWith(v));
       for (const word of words) {
@@ -574,19 +598,32 @@ export function SearchTokenSuggest({
 }
 
 function FilterChip({ children, onRemove, label }: { children: ReactNode; onRemove: () => void; label: string }) {
+  const intl = useIntl();
   return (
     <span className="inline-flex items-center gap-1 rounded-full bg-primary/15 py-0.5 pl-2 pr-1.5 text-xs text-foreground">
       <span className="max-w-40 truncate">{children}</span>
-      <button type="button" aria-label={`Remove ${label}`} onClick={onRemove} className="text-muted-foreground hover:text-foreground">
+      <button
+        type="button"
+        aria-label={intl.formatMessage({ id: "search.removeChip", defaultMessage: "Remove {label}" }, { label })}
+        onClick={onRemove} className="text-muted-foreground hover:text-foreground">
         <X className="size-3" />
       </button>
     </span>
   );
 }
 
-function dateRangeLabel(from: string, to: string): string {
-  if (from && to) return from === to ? `On ${formatSearchDate(from)}` : `${formatSearchDate(from)} – ${formatSearchDate(to)}`;
-  return from ? `From ${formatSearchDate(from)}` : `Until ${formatSearchDate(to)}`;
+function dateRangeLabel(intl: IntlShape, from: string, to: string): string {
+  if (from && to) {
+    return from === to
+      ? intl.formatMessage({ id: "search.dateOn", defaultMessage: "On {date}" }, { date: formatSearchDate(from) })
+      : intl.formatMessage(
+          { id: "search.dateRange", defaultMessage: "{from} – {to}" },
+          { from: formatSearchDate(from), to: formatSearchDate(to) },
+        );
+  }
+  return from
+    ? intl.formatMessage({ id: "search.dateSince", defaultMessage: "From {date}" }, { date: formatSearchDate(from) })
+    : intl.formatMessage({ id: "search.dateUntil", defaultMessage: "Until {date}" }, { date: formatSearchDate(to) });
 }
 
 /** The active facets as removable chips above the results. */
@@ -599,6 +636,7 @@ function SearchFilterChips({
   onChange: (filters: SearchFilters) => void;
   channels: Channel[];
 }) {
+  const intl = useIntl();
   const set = (patch: Partial<SearchFilters>) => onChange({ ...filters, ...patch });
   const media = MEDIA_OPTIONS.find((o) => o.value === filters.media);
   if (activeFacetCount(filters) === 0) return null;
@@ -610,19 +648,34 @@ function SearchFilterChips({
       {filters.channelIds.map((id) => {
         const c = channels.find((ch) => ch.idHex === id);
         return (
-          <FilterChip key={id} label={c?.name ?? "channel"} onRemove={() => set({ channelIds: filters.channelIds.filter((x) => x !== id) })}>
-            #{c?.name ?? "unknown"}
+          <FilterChip
+            key={id}
+            label={c?.name ?? intl.formatMessage({ id: "search.chipChannel", defaultMessage: "channel" })}
+            onRemove={() => set({ channelIds: filters.channelIds.filter((x) => x !== id) })}
+          >
+            #{c?.name ?? intl.formatMessage({ id: "search.chipUnknown", defaultMessage: "unknown" })}
           </FilterChip>
         );
       })}
       {filters.media !== "all" && media && (
-        <FilterChip label={media.label} onRemove={() => set({ media: "all" })}>
-          {filters.media === "none" ? "Text only" : `Has ${media.label.toLowerCase()}`}
+        <FilterChip label={intl.formatMessage(media.label)} onRemove={() => set({ media: "all" })}>
+          {filters.media === "none" ? (
+            <FormattedMessage id="search.chipTextOnly" defaultMessage="Text only" />
+          ) : (
+            <FormattedMessage
+              id="search.chipHas"
+              defaultMessage="{media, select, images {Has images} videos {Has videos} links {Has links} other {Has media}}"
+              values={{ media: filters.media }}
+            />
+          )}
         </FilterChip>
       )}
       {(filters.dateFrom || filters.dateTo) && (
-        <FilterChip label="date" onRemove={() => set({ dateFrom: "", dateTo: "" })}>
-          {dateRangeLabel(filters.dateFrom, filters.dateTo)}
+        <FilterChip
+          label={intl.formatMessage({ id: "search.chipDate", defaultMessage: "date" })}
+          onRemove={() => set({ dateFrom: "", dateTo: "" })}
+        >
+          {dateRangeLabel(intl, filters.dateFrom, filters.dateTo)}
         </FilterChip>
       )}
     </div>
@@ -642,6 +695,7 @@ const SearchRow = memo(function SearchRow({
   channelIdHex?: string;
   onJumpTo: (channelIdHex: string, message: ChatMsg) => void;
 }) {
+  const intl = useIntl();
   // `ChatMsg` is already signature-less, so the message IS the rumor.
   const rumor = event;
   // Bound here rather than by the list so the row's props keep their identity.
@@ -679,7 +733,7 @@ const SearchRow = memo(function SearchRow({
         onJump &&
           "cursor-pointer before:absolute before:inset-0 before:-z-10 before:clip-corner-lg before:transition-colors before:content-[''] hover:before:bg-foreground/5",
       )}
-      aria-label={onJump ? "Jump to this message" : undefined}
+      aria-label={onJump ? intl.formatMessage({ id: "search.jumpToMessage", defaultMessage: "Jump to this message" }) : undefined}
     >
       <ChatMessage
         event={event}
@@ -724,7 +778,10 @@ export function SearchResultsView({
   const coverage = historyIncomplete ? (
     <p className="flex items-center gap-1.5 px-3 pb-1 text-xs text-muted-foreground">
       <Loader2 className="size-3 shrink-0 animate-spin" aria-hidden />
-      Older messages are still downloading, so some may not show up yet.
+      <FormattedMessage
+        id="search.historyIncomplete"
+        defaultMessage="Older messages are still downloading, so some may not show up yet."
+      />
     </p>
   ) : null;
   if (isLoading) {
@@ -744,7 +801,9 @@ export function SearchResultsView({
         {coverage}
         <div className="flex flex-col items-center justify-center py-16 text-center">
           <Search className="mb-3 size-9 text-muted-foreground/40" />
-          <p className="text-sm text-muted-foreground">No messages found</p>
+          <p className="text-sm text-muted-foreground">
+            <FormattedMessage id="search.noResults" defaultMessage="No messages found" />
+          </p>
         </div>
       </div>
     );
@@ -755,7 +814,11 @@ export function SearchResultsView({
       {chips}
       {coverage}
       <p className="px-3 pb-1 text-2xs uppercase tracking-wide text-muted-foreground/80">
-        {results.length} result{results.length === 1 ? "" : "s"}
+        <FormattedMessage
+          id="search.resultCount"
+          defaultMessage="{count, plural, one {# result} other {# results}}"
+          values={{ count: results.length }}
+        />
       </p>
       {results.map((msg) => {
         const channelIdHex = msg.tags.find((t) => t[0] === "channel")?.[1] ?? "";
@@ -764,7 +827,9 @@ export function SearchResultsView({
           <div key={msg.id} className="pb-1">
             <div className="flex items-center gap-1 px-3 pt-2 pb-0.5 text-xs font-medium text-muted-foreground">
               {ch?.isPrivate ? <Lock className="size-3 shrink-0" /> : <Hash className="size-3 shrink-0" />}
-              <span className="truncate">{ch?.name ?? "unknown channel"}</span>
+              <span className="truncate">
+                {ch?.name ?? <FormattedMessage id="search.unknownChannel" defaultMessage="unknown channel" />}
+              </span>
             </div>
             <SearchRow
               event={msg}

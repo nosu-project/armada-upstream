@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { FormattedMessage, common, useIntl } from "@/i18n";
 import { useRelayGroups } from "@/hooks/useRelayGroups";
 import { useServerActions } from "@/hooks/useServerActions";
 import { useIsBuzzRelay } from "@/buzz/detect";
@@ -27,6 +28,7 @@ import { activateScope, nip29Scope } from "@/wire/activation";
 
 /** Server home (drill-down level 1); the info pane is desktop-only. */
 export function ServerPage() {
+  const intl = useIntl();
   const { server } = useParams<{ server: string }>();
   const navigate = useNavigate();
   const { user } = useCurrentUser();
@@ -78,9 +80,15 @@ export function ServerPage() {
               <div className="mt-2 flex flex-wrap gap-1.5">
                 {relayInfo?.limitation?.auth_required && <Badge variant="secondary">NIP-42 AUTH</Badge>}
                 {isBuzz ? (
-                  <Badge variant="secondary">Buzz workspace</Badge>
+                  <Badge variant="secondary">
+                    <FormattedMessage id="serverPage.buzzWorkspace" defaultMessage="Buzz workspace" />
+                  </Badge>
                 ) : (
-                  relayInfo?.supported_nips?.includes(29) && <Badge variant="secondary">NIP-29 groups</Badge>
+                  relayInfo?.supported_nips?.includes(29) && (
+                    <Badge variant="secondary">
+                      <FormattedMessage id="serverPage.nip29Groups" defaultMessage="NIP-29 groups" />
+                    </Badge>
+                  )
                 )}
                 {relayInfo?.software && (
                   <Badge variant="outline" className="max-w-48 truncate">
@@ -91,7 +99,7 @@ export function ServerPage() {
             </div>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="icon" aria-label="Server actions" className="size-8 text-muted-foreground hover:text-foreground shrink-0">
+                <Button variant="ghost" size="icon" aria-label={intl.formatMessage({ id: "serverPage.serverActions", defaultMessage: "Server actions" })} className="size-8 text-muted-foreground hover:text-foreground shrink-0">
                   <MoreVertical className="size-4" />
                 </Button>
               </DropdownMenuTrigger>
@@ -99,7 +107,7 @@ export function ServerPage() {
                 {user && (
                   <DropdownMenuItem onClick={() => setProfileOpen(true)}>
                     <IdCard className="size-4" />
-                    Server identity
+                    <FormattedMessage id="serverPage.serverIdentity" defaultMessage="Server identity" />
                   </DropdownMenuItem>
                 )}
                 {user && (
@@ -108,12 +116,14 @@ export function ServerPage() {
                     onClick={toggleMute}
                   >
                     {serverMuted ? <Bell className="size-4" /> : <BellOff className="size-4" />}
-                    {serverMuted ? "Unmute server" : "Mute server"}
+                    {serverMuted
+                      ? <FormattedMessage id="serverPage.unmuteServer" defaultMessage="Unmute server" />
+                      : <FormattedMessage id="serverPage.muteServer" defaultMessage="Mute server" />}
                   </DropdownMenuItem>
                 )}
                 <DropdownMenuItem onClick={copyLink}>
                   <Link2 className="size-4" />
-                  Copy link
+                  <FormattedMessage {...common.copyLink} />
                 </DropdownMenuItem>
                 {isRemovable && (
                   <DropdownMenuItem
@@ -121,7 +131,7 @@ export function ServerPage() {
                     onClick={removeServer}
                   >
                     <Trash2 className="size-4" />
-                    Remove server
+                    <FormattedMessage id="serverPage.removeServer" defaultMessage="Remove server" />
                   </DropdownMenuItem>
                 )}
               </DropdownMenuContent>
@@ -130,7 +140,7 @@ export function ServerPage() {
 
           <section>
             <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-3">
-              Channels
+              <FormattedMessage id="serverPage.channels" defaultMessage="Channels" />
             </h2>
             {isLoading ? (
               <div className="grid sm:grid-cols-2 gap-3">
@@ -169,9 +179,9 @@ export function ServerPage() {
                       )}
                     </CardHeader>
                     <CardContent className="pt-0 flex flex-wrap gap-1.5">
-                      {group.isPrivate && <Badge variant="outline" className="text-3xs">Members-only</Badge>}
-                      {group.isClosed && !isBuzz && <Badge variant="outline" className="text-3xs">Invite-only</Badge>}
-                      {group.hasLivekit && <Badge variant="outline" className="text-3xs">Voice</Badge>}
+                      {group.isPrivate && <Badge variant="outline" className="text-3xs"><FormattedMessage id="serverPage.membersOnly" defaultMessage="Members-only" /></Badge>}
+                      {group.isClosed && !isBuzz && <Badge variant="outline" className="text-3xs"><FormattedMessage id="serverPage.inviteOnly" defaultMessage="Invite-only" /></Badge>}
+                      {group.hasLivekit && <Badge variant="outline" className="text-3xs"><FormattedMessage id="serverPage.voice" defaultMessage="Voice" /></Badge>}
                     </CardContent>
                   </Card>
                 ))}
@@ -180,7 +190,10 @@ export function ServerPage() {
               <Card className="border-dashed">
                 <CardContent className="py-12 px-8 text-center">
                   <p className="text-muted-foreground max-w-sm mx-auto">
-                    Couldn&rsquo;t reach this server. It may be offline or unreachable.
+                    <FormattedMessage
+                      id="serverPage.unreachable"
+                      defaultMessage="Couldn’t reach this server. It may be offline or unreachable."
+                    />
                   </p>
                 </CardContent>
               </Card>
@@ -188,8 +201,10 @@ export function ServerPage() {
               <Card className="border-dashed">
                 <CardContent className="py-12 px-8 text-center">
                   <p className="text-muted-foreground max-w-sm mx-auto">
-                    No channels on this server yet. Create one from the sidebar, or wait a
-                    moment for the relay to respond.
+                    <FormattedMessage
+                      id="serverPage.noChannels"
+                      defaultMessage="No channels on this server yet. Create one from the sidebar, or wait a moment for the relay to respond."
+                    />
                   </p>
                 </CardContent>
               </Card>

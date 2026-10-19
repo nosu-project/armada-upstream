@@ -3,6 +3,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 
 import { useIsDesktop } from "@/hooks/useIsDesktop";
 import { cn } from "@/lib/utils";
+import { FormattedMessage, useIntl } from "@/i18n";
 
 const EDGE_MARGIN = 12;
 const POSITION_KEY = "armada:floating-call:pos";
@@ -123,6 +124,7 @@ export function FloatingCallStage({
   onExpand?: () => void;
   onHide: () => void;
 }) {
+  const intl = useIntl();
   const isDesktop = useIsDesktop();
   const bodyRef = useRef<HTMLDivElement | null>(null);
   const panelRef = useRef<HTMLDivElement | null>(null);
@@ -368,7 +370,7 @@ export function FloatingCallStage({
         <div
           onPointerDown={beginResize}
           role="presentation"
-          aria-label="Resize floating call window"
+          aria-label={intl.formatMessage({ id: "floatingCallStage.resize", defaultMessage: "Resize floating call window" })}
           className={cn(
             "shrink-0 flex items-center justify-center touch-none cursor-nwse-resize",
             "size-6 touch:size-8",
@@ -399,15 +401,17 @@ export function FloatingCallStage({
             gesture === "drag" ? "cursor-grabbing" : "cursor-grab",
           )}
           role="presentation"
-          aria-label="Drag floating call window"
+          aria-label={intl.formatMessage({ id: "floatingCallStage.drag", defaultMessage: "Drag floating call window" })}
         >
           <GripHorizontal className="size-4 shrink-0 text-muted-foreground" aria-hidden />
-          <span className="text-xs font-medium text-muted-foreground truncate">Call</span>
+          <span className="text-xs font-medium text-muted-foreground truncate">
+            <FormattedMessage id="floatingCallStage.call" defaultMessage="Call" />
+          </span>
         </div>
         <button
           type="button"
-          aria-label={atMax ? "Restore window size" : "Expand window"}
-          title={atMax ? "Restore size" : "Expand"}
+          aria-label={atMax ? intl.formatMessage({ id: "floatingCallStage.restoreWindowSize", defaultMessage: "Restore window size" }) : intl.formatMessage({ id: "floatingCallStage.expandWindow", defaultMessage: "Expand window" })}
+          title={atMax ? intl.formatMessage({ id: "floatingCallStage.restoreSize", defaultMessage: "Restore size" }) : intl.formatMessage({ id: "floatingCallStage.expand", defaultMessage: "Expand" })}
           onPointerDown={(e) => e.stopPropagation()}
           onClick={toggleExpand}
           className="shrink-0 rounded-md p-1 text-muted-foreground hover:text-foreground hover:bg-foreground/10"
@@ -417,8 +421,8 @@ export function FloatingCallStage({
         {onExpand && (
           <button
             type="button"
-            aria-label="Return to call"
-            title="Return to call"
+            aria-label={intl.formatMessage({ id: "floatingCallStage.returnToCall", defaultMessage: "Return to call" })}
+            title={intl.formatMessage({ id: "floatingCallStage.returnToCall", defaultMessage: "Return to call" })}
             onPointerDown={(e) => e.stopPropagation()}
             onClick={onExpand}
             className="shrink-0 rounded-md p-1 text-muted-foreground hover:text-foreground hover:bg-foreground/10"
@@ -428,8 +432,8 @@ export function FloatingCallStage({
         )}
         <button
           type="button"
-          aria-label="Hide floating video"
-          title="Hide floating video"
+          aria-label={intl.formatMessage({ id: "floatingCallStage.hide", defaultMessage: "Hide floating video" })}
+          title={intl.formatMessage({ id: "floatingCallStage.hide", defaultMessage: "Hide floating video" })}
           onPointerDown={(e) => e.stopPropagation()}
           onClick={onHide}
           className="shrink-0 rounded-md p-1 text-muted-foreground hover:text-foreground hover:bg-foreground/10"

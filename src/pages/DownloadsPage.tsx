@@ -17,6 +17,7 @@ import { Button } from "@/components/ui/button";
 import { useBackOrHome } from "@/hooks/useBackOrHome";
 import { useReleaseArtifacts, useReleases } from "@/hooks/useReleases";
 import { toast } from "@/hooks/useToast";
+import { common, defineMessages, FormattedMessage, t, useIntl, type IntlShape, type MessageDescriptor } from "@/i18n";
 import { writeClipboardText } from "@/lib/clipboard";
 import {
   ANDROID_STORES,
@@ -78,10 +79,20 @@ function artifactName(artifact: ReleaseArtifact): { title: string; detail?: stri
 }
 
 /** A note the user needs BEFORE the download, not after it fails to open. */
-const OS_CAVEAT: Partial<Record<DownloadOs, string>> = {
-  macos: "First launch: Control-click the app, choose Open, then Open Anyway.",
-  android: "Installing the APK asks Android to allow installs from your browser.",
-};
+const OS_CAVEAT: Partial<Record<DownloadOs, MessageDescriptor>> = defineMessages({
+  macos: {
+    id: "downloadsPage.caveat.macos",
+    defaultMessage: "First launch: Control-click the app, choose Open, then Open Anyway.",
+  },
+  android: {
+    id: "downloadsPage.caveat.android",
+    defaultMessage: "Installing the APK asks Android to allow installs from your browser.",
+  },
+});
+
+const m = defineMessages({
+  addToHomeScreen: { id: "downloadsPage.ios.addToHomeScreen", defaultMessage: "Then add it to your Home Screen" },
+});
 
 /** Earlier releases shown before "show all". */
 const OLDER_PREVIEW = 5;
@@ -99,8 +110,8 @@ function displayVersion(version: string): string {
   return /^\d/.test(version) ? `v${version}` : version;
 }
 
-function displayDate(createdAt: number): string {
-  return new Date(createdAt * 1000).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+function displayDate(createdAt: number, locale: string): string {
+  return new Date(createdAt * 1000).toLocaleDateString(locale, { year: "numeric", month: "short", day: "numeric" });
 }
 
 /** Tab order; unplaceable artifacts sort last. */
@@ -110,9 +121,11 @@ function osOrder(os: DownloadOs | undefined): number {
 }
 
 /** The badge a prerelease wears; undefined for a stable release. */
-function prereleaseBadge(release: Release): string | undefined {
+function prereleaseBadge(release: Release, intl: IntlShape): string | undefined {
   if (isStable(release)) return undefined;
-  return release.channel === "main" ? "prerelease" : release.channel;
+  return release.channel === "main"
+    ? intl.formatMessage({ id: "downloadsPage.prerelease", defaultMessage: "prerelease" })
+    : release.channel;
 }
 
 /**
@@ -134,6 +147,7 @@ function groupByOs(artifacts: readonly ReleaseArtifact[] | undefined): Map<Downl
 
 /** A terminal block holding every line of one install; a single copy takes the lot. */
 function CommandBlock({ commands }: { commands: string[] }) {
+  const intl = useIntl();
   const [copied, setCopied] = useState(false);
   const resetTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
 
@@ -145,8 +159,11 @@ function CommandBlock({ commands }: { commands: string[] }) {
       resetTimer.current = setTimeout(() => setCopied(false), 2000);
     } catch {
       toast({
-        title: "Copy failed",
-        description: "Select the commands and copy them manually.",
+        title: t({ id: "downloadsPage.copyFailed.title", defaultMessage: "Copy failed" }),
+        description: t({
+          id: "downloadsPage.copyFailed.description",
+          defaultMessage: "Select the commands and copy them manually.",
+        }),
         variant: "destructive",
       });
     }
@@ -167,7 +184,9 @@ function CommandBlock({ commands }: { commands: string[] }) {
         size="icon"
         variant="ghost"
         onClick={copy}
-        aria-label={copied ? "Copied" : "Copy commands"}
+        aria-label={copied
+          ? intl.formatMessage(common.copied)
+          : intl.formatMessage({ id: "downloadsPage.copyCommands", defaultMessage: "Copy commands" })}
         className="absolute right-1.5 top-1.5 size-8 touch:size-11 text-muted-foreground hover:text-foreground"
       >
         {copied ? <Check className="size-4 text-success" /> : <Copy className="size-4" />}
@@ -231,8 +250,11 @@ function useArtifactDownload(artifact: ReleaseArtifact | undefined) {
     } catch (error) {
       if (error instanceof HashMismatchError) {
         toast({
-          title: "Download blocked",
-          description: "The file didn't match the hash its release names, so it wasn't saved.",
+          title: t({ id: "downloadsPage.downloadBlocked.title", defaultMessage: "Download blocked" }),
+          description: t({
+            id: "downloadsPage.downloadBlocked.description",
+            defaultMessage: "The file didn't match the hash its release names, so it wasn't saved.",
+          }),
           variant: "destructive",
         });
       } else {
@@ -292,7 +314,13 @@ function Tile({ href, to, icon, title, detail, external, download, primary, onCl
         <span className="truncate text-[0.9375rem] font-semibold leading-tight">{title}</span>
         {(detail || percent !== undefined) && (
           <span className={cn("truncate text-xs leading-tight", primary ? "opacity-80" : "text-muted-foreground")}>
-            {percent !== undefined ? `Downloading… ${percent}%` : detail}
+{percent !== undefined ? (
+              <FormattedMessage
+                id="downloadsPage.downloading"
+                defaultMessage="Downloading… {percent}%"
+                values={{ percent }}
+              />
+            ) : detail}
           </span>
         )}
       </span>
@@ -380,16 +408,22 @@ function LinuxPanel({ artifacts }: { artifacts: ReleaseArtifact[] }) {
         <>
           <CommandBlock commands={[...manager.setup, manager.install]} />
           <p className="text-xs text-muted-foreground">
-            Paste into a terminal. Updates then arrive with the rest of your system, from{" "}
-            <a
-              href={`https://${NPKG_HOST}`}
-              target="_blank"
-              rel="noreferrer"
-              className="text-foreground/90 underline decoration-muted-foreground/30 underline-offset-4 transition-colors hover:decoration-current"
-            >
-              {NPKG_HOST}
-            </a>
-            .
+            <FormattedMessage
+              id="downloadsPage.linux.repoHint"
+              defaultMessage="Paste into a terminal. Updates then arrive with the rest of your system, from {host}."
+              values={{
+                host: (
+                  <a
+                    href={`https://${NPKG_HOST}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-foreground/90 underline decoration-muted-foreground/30 underline-offset-4 transition-colors hover:decoration-current"
+                  >
+                    {NPKG_HOST}
+                  </a>
+                ),
+              }}
+            />
           </p>
         </>
       ) : appImage ? (
@@ -422,17 +456,34 @@ function AndroidPanel({ artifacts }: { artifacts: ReleaseArtifact[] }) {
         ))}
         {artifacts.map((artifact) => <ArtifactTile key={artifact.id} artifact={artifact} icon={AndroidMark} />)}
       </div>
-      {artifacts.length > 0 && <Caveat>{OS_CAVEAT.android}</Caveat>}
+      {artifacts.length > 0 && OS_CAVEAT.android && (
+        <Caveat>
+          <FormattedMessage {...OS_CAVEAT.android} />
+        </Caveat>
+      )}
     </div>
   );
 }
 
 /** iOS: no App Store build yet; the web app (Add to Home Screen) is presented as a real install. */
+const strong = (chunks: ReactNode[]) => <strong className="font-medium text-foreground">{chunks}</strong>;
+
 function IosPanel() {
+  const intl = useIntl();
   const steps = [
-    <>Open {APP_NAME} in <strong className="font-medium text-foreground">Safari</strong></>,
-    <>Tap <strong className="font-medium text-foreground">Share</strong></>,
-    <>Choose <strong className="font-medium text-foreground">Add to Home Screen</strong></>,
+    <FormattedMessage
+      key="open"
+      id="downloadsPage.ios.stepOpen"
+      defaultMessage="Open {app} in <b>Safari</b>"
+      values={{ app: APP_NAME, b: strong }}
+    />,
+    <FormattedMessage key="share" id="downloadsPage.ios.stepShare" defaultMessage="Tap <b>Share</b>" values={{ b: strong }} />,
+    <FormattedMessage
+      key="add"
+      id="downloadsPage.ios.stepAdd"
+      defaultMessage="Choose <b>Add to Home Screen</b>"
+      values={{ b: strong }}
+    />,
   ];
 
   return (
@@ -447,8 +498,18 @@ function IosPanel() {
           </li>
         ))}
       </ol>
-      <Tile to="/" icon={<Globe className="size-5" />} title={`Open ${APP_NAME} in this browser`} detail="Then add it to your Home Screen" />
-      <p className="text-xs text-muted-foreground">A native iPhone app is on its way.</p>
+      <Tile
+        to="/"
+        icon={<Globe className="size-5" />}
+        title={intl.formatMessage(
+          { id: "downloadsPage.ios.openInBrowser", defaultMessage: "Open {app} in this browser" },
+          { app: APP_NAME },
+        )}
+        detail={intl.formatMessage(m.addToHomeScreen)}
+      />
+      <p className="text-xs text-muted-foreground">
+        <FormattedMessage id="downloadsPage.ios.nativeSoon" defaultMessage="A native iPhone app is on its way." />
+      </p>
     </div>
   );
 }
@@ -460,7 +521,11 @@ function PlatformPanel({ os, artifacts }: { os: DownloadOs; artifacts: ReleaseAr
 
   const caveat = OS_CAVEAT[os];
   if (artifacts.length === 0) {
-    return <p className="text-sm text-muted-foreground">This release has no build for this platform.</p>;
+    return (
+      <p className="text-sm text-muted-foreground">
+        <FormattedMessage id="downloadsPage.noBuild" defaultMessage="This release has no build for this platform." />
+      </p>
+    );
   }
   return (
     <div className="space-y-4">
@@ -469,15 +534,22 @@ function PlatformPanel({ os, artifacts }: { os: DownloadOs; artifacts: ReleaseAr
           <ArtifactTile key={artifact.id} artifact={artifact} icon={OS_ICON[os]} primary={i === 0} />
         ))}
       </div>
-      {caveat && <Caveat>{caveat}</Caveat>}
+      {caveat && (
+        <Caveat>
+          <FormattedMessage {...caveat} />
+        </Caveat>
+      )}
     </div>
   );
 }
 
 /** The platform chooser: a row of large, always-labelled logo tiles. */
 function PlatformPicker({ value, onChange }: { value: DownloadOs; onChange: (os: DownloadOs) => void }) {
+  const intl = useIntl();
   return (
-    <div role="radiogroup" aria-label="Platform" className="grid grid-cols-5 gap-1.5 sm:gap-2">
+    <div
+      role="radiogroup"
+      aria-label={intl.formatMessage({ id: "downloadsPage.platform", defaultMessage: "Platform" })} className="grid grid-cols-5 gap-1.5 sm:gap-2">
       {DOWNLOAD_PLATFORMS.map((platform) => {
         const Mark = OS_ICON[platform.os];
         const active = platform.os === value;
@@ -516,9 +588,10 @@ function PanelSkeleton() {
 
 /** One past version, collapsed. Its artifacts are fetched on first expand. */
 function OlderRelease({ release }: { release: Release }) {
+  const intl = useIntl();
   const [opened, setOpened] = useState(false);
   const artifacts = useReleaseArtifacts(opened ? release : undefined);
-  const badge = prereleaseBadge(release);
+  const badge = prereleaseBadge(release, intl);
 
   return (
     <details
@@ -529,7 +602,7 @@ function OlderRelease({ release }: { release: Release }) {
         <ChevronDown className="size-4 shrink-0 -rotate-90 transition-transform group-open/release:rotate-0 motion-reduce:transition-none" />
         <span className="text-foreground/90">{displayVersion(release.version)}</span>
         {badge && <span className="text-3xs lowercase tracking-wide text-primary/80">{badge}</span>}
-        <span className="ml-auto text-xs opacity-70">{displayDate(release.createdAt)}</span>
+        <span className="ml-auto text-xs opacity-70">{displayDate(release.createdAt, intl.locale)}</span>
       </summary>
       <div className="grid gap-2 pb-3 pt-1 sm:grid-cols-2">
         {artifacts.isPending ? (
@@ -556,7 +629,7 @@ function OlderReleases({ releases }: { releases: Release[] }) {
   return (
     <details className="group/older">
       <summary className="mx-auto flex w-fit cursor-pointer list-none items-center gap-1.5 px-3 py-2 font-mono text-xs lowercase tracking-wide text-muted-foreground transition-colors marker:content-none hover:text-foreground [&::-webkit-details-marker]:hidden">
-        earlier releases
+        <FormattedMessage id="downloadsPage.earlierReleases" defaultMessage="earlier releases" />
         <ChevronDown className="size-3.5 transition-transform group-open/older:rotate-180 motion-reduce:transition-none" />
       </summary>
       <div className="vessel-lift mt-3">
@@ -571,11 +644,19 @@ function OlderReleases({ releases }: { releases: Release[] }) {
                 onClick={() => setShowAll((value) => !value)}
                 className="py-2 transition-colors hover:text-foreground"
               >
-                {showAll ? "show fewer" : `show all ${releases.length}`}
+                {showAll ? (
+                  <FormattedMessage id="downloadsPage.showFewer" defaultMessage="show fewer" />
+                ) : (
+                  <FormattedMessage
+                    id="downloadsPage.showAll"
+                    defaultMessage="show all {count}"
+                    values={{ count: releases.length }}
+                  />
+                )}
               </button>
             ) : <span />}
             <Link to="/changelog" className="py-2 transition-colors hover:text-foreground">
-              changelog →
+              <FormattedMessage id="downloadsPage.changelogLink" defaultMessage="changelog →" />
             </Link>
           </div>
         </section>
@@ -603,7 +684,13 @@ function HeroButton({ href, to, download, icon: Mark, title, detail, onClick, pe
       <span className="flex min-w-0 flex-1 flex-col items-start gap-1 text-left">
         <span className="text-lg font-semibold leading-tight">{title}</span>
         <span className="truncate text-xs leading-tight opacity-80">
-          {percent !== undefined ? `Downloading… ${percent}%` : detail}
+          {percent !== undefined ? (
+            <FormattedMessage
+              id="downloadsPage.downloading"
+              defaultMessage="Downloading… {percent}%"
+              values={{ percent }}
+            />
+          ) : detail}
         </span>
       </span>
       {to ? (
@@ -631,6 +718,7 @@ function HeroButton({ href, to, download, icon: Mark, title, detail, onClick, pe
 }
 
 export function DownloadsPage() {
+  const intl = useIntl();
   const back = useBackOrHome();
   // The sea reads scrollTop imperatively, so a ref, never state.
   const scrollRef = useRef<HTMLElement>(null);
@@ -653,7 +741,7 @@ export function DownloadsPage() {
   const heroArtifact = featured ? byOs.get(featured.os)?.[0] : undefined;
   const heroDownload = useArtifactDownload(heroArtifact);
   // Only shown when nothing stable was ever tagged (`featuredRelease` prefers stable).
-  const channel = latest ? prereleaseBadge(latest) : undefined;
+  const channel = latest ? prereleaseBadge(latest, intl) : undefined;
 
   const scrollToTargets = () => {
     targetsRef.current?.scrollIntoView({
@@ -672,7 +760,7 @@ export function DownloadsPage() {
       <Button
         variant="ghost"
         size="icon"
-        aria-label="Back"
+        aria-label={intl.formatMessage(common.back)}
         onClick={back}
         className="absolute left-2 top-2 z-20 size-9 touch:size-11 text-muted-foreground hover:text-foreground safe-area-top"
       >
@@ -684,10 +772,14 @@ export function DownloadsPage() {
           <ArmadaCrest size={130} />
           <div className="space-y-3">
             <h1 className="font-mono text-3xl font-bold lowercase tracking-tight text-foreground sm:text-4xl">
-              get {APP_NAME.toLowerCase()}
+              <FormattedMessage
+                id="downloadsPage.title"
+                defaultMessage="get {app}"
+                values={{ app: APP_NAME.toLowerCase() }}
+              />
             </h1>
             <p className="text-pretty text-sm text-muted-foreground sm:text-base">
-              Desktop, phone or browser.
+              <FormattedMessage id="downloadsPage.tagline" defaultMessage="Desktop, phone or browser." />
             </p>
           </div>
 
@@ -699,7 +791,10 @@ export function DownloadsPage() {
                 percent={heroDownload.percent}
                 download={heroArtifact.filename}
                 icon={OS_ICON[featured.os]}
-                title={`Download for ${featured.name}`}
+                title={intl.formatMessage(
+                  { id: "downloadsPage.downloadFor", defaultMessage: "Download for {platform}" },
+                  { platform: featured.name },
+                )}
                 detail={[
                   artifactName(heroArtifact).title,
                   latest && `${displayVersion(latest.version)}${channel ? ` ${channel}` : ""}`,
@@ -707,7 +802,12 @@ export function DownloadsPage() {
                 ].filter(Boolean).join(" · ")}
               />
             ) : featured?.os === "ios" ? (
-              <HeroButton to="/" icon={AppleMark} title={`Open ${APP_NAME}`} detail="Then add it to your Home Screen" />
+              <HeroButton
+                to="/"
+                icon={AppleMark}
+                title={intl.formatMessage({ id: "downloadsPage.openApp", defaultMessage: "Open {app}" }, { app: APP_NAME })}
+                detail={intl.formatMessage(m.addToHomeScreen)}
+              />
             ) : pending ? (
               <div className="h-[4.5rem] w-full animate-pulse clip-corner-lg bg-muted-foreground/15" />
             ) : null}
@@ -716,7 +816,11 @@ export function DownloadsPage() {
               onClick={scrollToTargets}
               className="group mt-6 flex w-full flex-col items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
             >
-              {heroArtifact ? "Other platforms" : "All platforms"}
+              {heroArtifact ? (
+                <FormattedMessage id="downloadsPage.otherPlatforms" defaultMessage="Other platforms" />
+              ) : (
+                <FormattedMessage id="downloadsPage.allPlatforms" defaultMessage="All platforms" />
+              )}
               {/* U+2193: WGL4 core, so every system font has a glyph. */}
               <span
                 aria-hidden="true"
@@ -740,10 +844,15 @@ export function DownloadsPage() {
               ) : (
                 // No compiled-in fallback list; explain rather than render an empty page.
                 <div className="space-y-3 py-4 text-center">
-                  <p className="font-mono text-sm lowercase tracking-tight text-foreground">no releases found</p>
+                  <p className="font-mono text-sm lowercase tracking-tight text-foreground">
+                    <FormattedMessage id="downloadsPage.noReleases" defaultMessage="no releases found" />
+                  </p>
                   <p className="mx-auto max-w-md text-sm leading-relaxed text-muted-foreground">
-                    The relays that carry {APP_NAME}'s releases didn't answer. This is
-                    almost always a connection problem.
+                    <FormattedMessage
+                      id="downloadsPage.noReleasesDescription"
+                      defaultMessage="The relays that carry {app}'s releases didn't answer. This is almost always a connection problem."
+                      values={{ app: APP_NAME }}
+                    />
                   </p>
                   <Button
                     variant="secondary"
@@ -752,7 +861,7 @@ export function DownloadsPage() {
                     className="clip-corner-lg"
                   >
                     <RefreshCw className={cn("size-4", releases.isFetching && "animate-spin")} />
-                    Try again
+                    <FormattedMessage {...common.tryAgain} />
                   </Button>
                 </div>
               )}
@@ -766,13 +875,15 @@ export function DownloadsPage() {
         <section className="mx-auto flex min-h-[40svh] max-w-xl flex-col items-center justify-center gap-8 px-6 py-16 text-center safe-area-bottom">
           <p className="font-mono text-xl text-[hsl(var(--primary))] sm:text-2xl">
             <span className="text-[hsl(var(--accent2,180_90%_55%))]">$ </span>
-            anchors aweigh
+            <FormattedMessage id="downloadsPage.signOff" defaultMessage="anchors aweigh" />
             <span className="animate-[armada-caret_1s_step-end_infinite]">_</span>
           </p>
 
           <div className="w-full max-w-sm">
             <Button size="lg" asChild className="h-12 w-full clip-corner-lg text-base font-medium">
-              <Link to="/">Return home</Link>
+              <Link to="/">
+                <FormattedMessage id="downloadsPage.returnHome" defaultMessage="Return home" />
+              </Link>
             </Button>
           </div>
         </section>

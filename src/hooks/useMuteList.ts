@@ -18,6 +18,7 @@ import { queryExplicitRelaysWithStatus, uniqueRelayUrls } from "@/lib/nip65";
 
 import type { NostrEvent } from "@nostrify/nostrify";
 import type { NUser } from "@nostrify/react/login";
+import { t, useIntl } from "@/i18n";
 
 /**
  * NIP-51 mute list. Items may be public (`tags`) and/or private (NIP-44 to self in `.content`).
@@ -374,13 +375,13 @@ async function editMuteList(
     // Read persisted state directly: the memo may be stale from another tab's write.
     const cached = parseMuteSeed(await readFolded<unknown>(muteFoldKey(user.pubkey)));
     if (cached.pubkeys.length > 0) {
-      throw new Error("Couldn't load your existing block list. Not saving, to avoid losing it.");
+      throw new Error(t({ id: "useMuteList.loadFailed", defaultMessage: "Couldn't load your existing block list. Not saving, to avoid losing it." }));
     }
   }
 
   const { publicTags, privateTags, privateReadable } = await readMuteTags(prev, user.signer);
   if (!privateReadable) {
-    throw new Error("Couldn't read your existing block list. Not saving, to avoid losing it.");
+    throw new Error(t({ id: "useMuteList.readFailed", defaultMessage: "Couldn't read your existing block list. Not saving, to avoid losing it." }));
   }
 
   const next = edit({ publicTags, privateTags });
@@ -390,7 +391,7 @@ async function editMuteList(
   let content = "";
   if (next.privateTags.length > 0 || prev?.content) {
     if (!user.signer.nip44) {
-      throw new Error("Your signer can't encrypt the block list (NIP-44 required).");
+      throw new Error(t({ id: "useMuteList.noNip44", defaultMessage: "Your signer can't encrypt the block list (NIP-44 required)." }));
     }
     content = await user.signer.nip44.encrypt(
       user.pubkey,
@@ -459,9 +460,9 @@ export function useMuteUser(): UseMutationResult<void, Error, string> {
       return { previous };
     },
     mutationFn: (pubkey: string) => serializeMuteListWrite(async () => {
-      if (!user) throw new Error("You must be logged in to block someone.");
+      if (!user) throw new Error(t({ id: "useMuteList.loginToBlock", defaultMessage: "You must be logged in to block someone." }));
       if (!user.signer.nip44) {
-        throw new Error("Your signer can't encrypt the block list (NIP-44 required).");
+        throw new Error(t({ id: "useMuteList.noNip44", defaultMessage: "Your signer can't encrypt the block list (NIP-44 required)." }));
       }
 
       const next = await editMuteList(
@@ -525,7 +526,7 @@ export function useUnmuteUser(): UseMutationResult<void, Error, string> {
       return { previous };
     },
     mutationFn: (pubkey: string) => serializeMuteListWrite(async () => {
-      if (!user) throw new Error("You must be logged in to unblock someone.");
+      if (!user) throw new Error(t({ id: "useMuteList.loginToUnblock", defaultMessage: "You must be logged in to unblock someone." }));
 
       const isTarget = ([name, value]: string[]) => name === "p" && value === pubkey;
       const next = await editMuteList(
@@ -576,6 +577,7 @@ export function useMuteToggle(pubkey: string | undefined): MuteToggle {
   const muteUser = useMuteUser();
   const unmuteUser = useUnmuteUser();
 
+  const intl = useIntl();
   const muted = !!pubkey && mutedPubkeys.has(pubkey);
   const canMute = !!pubkey && !!user && pubkey !== user.pubkey;
   const pending = muteUser.isPending || unmuteUser.isPending;
@@ -588,19 +590,32 @@ export function useMuteToggle(pubkey: string | undefined): MuteToggle {
     try {
       if (muted) {
         await unmute(pubkey);
-        toast({ title: "Unblocked", description: "You'll see this person again." });
+        toast({
+          title: t({ id: "useMuteList.unblocked.title", defaultMessage: "Unblocked" }),
+          description: t({ id: "useMuteList.unblocked.description", defaultMessage: "You'll see this person again." }),
+        });
       } else {
         await mute(pubkey);
-        toast({ title: "Blocked", description: "You won't see this person anymore." });
+        toast({
+          title: t({ id: "useMuteList.blocked.title", defaultMessage: "Blocked" }),
+          description: t({ id: "useMuteList.blocked.description", defaultMessage: "You won't see this person anymore." }),
+        });
       }
     } catch (e) {
       toast({
-        title: muted ? "Couldn't unblock" : "Couldn't block",
-        description: e instanceof Error ? e.message : "Failed to update your block list.",
+        title: muted
+          ? t({ id: "useMuteList.unblockFailed", defaultMessage: "Couldn't unblock" })
+          : t({ id: "useMuteList.blockFailed", defaultMessage: "Couldn't block" }),
+        description: e instanceof Error
+          ? e.message
+          : t({ id: "useMuteList.updateFailed", defaultMessage: "Failed to update your block list." }),
         variant: "destructive",
       });
     }
   }, [pubkey, canMute, muted, mute, unmute]);
 
-  return { muted, canMute, pending, label: muted ? "Unblock" : "Block", toggle };
+  const label = muted
+    ? intl.formatMessage({ id: "useMuteList.unblock", defaultMessage: "Unblock" })
+    : intl.formatMessage({ id: "useMuteList.block", defaultMessage: "Block" });
+  return { muted, canMute, pending, label, toggle };
 }

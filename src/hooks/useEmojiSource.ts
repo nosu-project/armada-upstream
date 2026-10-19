@@ -18,6 +18,7 @@ import { KIND_USER_EMOJIS } from "@/lib/selfSyncKinds";
 
 import type { NostrEvent } from "@nostrify/nostrify";
 import type { NostrRumor } from "@/lib/nostrRumor";
+import { useIntl } from "@/i18n";
 
 export interface EmojiSource {
   /** `30030:pubkey:dtag`. */
@@ -241,6 +242,7 @@ export function useEmojiSource(
   const eventStore = useEventStore();
   const { emojis } = useCustomEmojis();
   const { data: index, isPending: indexPending } = usePackIndex();
+  const intl = useIntl();
 
   const local = useMemo(() => {
     if (!url) return undefined;
@@ -251,7 +253,7 @@ export function useEmojiSource(
       if (addr) {
         return {
           coord: own.packCoord,
-          name: own.packName || addr.identifier || "Emoji pack",
+          name: own.packName || addr.identifier || intl.formatMessage({ id: "useEmojiSource.fallbackName", defaultMessage: "Emoji pack" }),
           pubkey: addr.pubkey,
           identifier: addr.identifier,
         };
@@ -259,7 +261,7 @@ export function useEmojiSource(
     }
 
     return index?.get(url);
-  }, [url, emojis, index]);
+  }, [url, emojis, index, intl]);
 
   // Wait for the local index to settle, or a cold index would fire the network needlessly.
   const remoteEnabled = !!url && !!authorPubkey && !indexPending && !local;

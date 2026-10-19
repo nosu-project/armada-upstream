@@ -1,6 +1,7 @@
 import { Bot } from 'lucide-react';
 
 import { useAuthor } from '@/hooks/useAuthor';
+import { FormattedMessage, useIntl } from '@/i18n';
 import { cn } from '@/lib/utils';
 
 import type { NostrMetadata } from '@nostrify/nostrify';
@@ -28,18 +29,19 @@ function ResolvedBotPill({ pubkey, className }: { pubkey: string; className?: st
 }
 
 function BotPillView({ metadata, className }: { metadata?: NostrMetadata; className?: string }) {
+  const intl = useIntl();
   if (metadata?.bot !== true) return null;
 
   return (
     <span
-      title="Bot account"
+      title={intl.formatMessage({ id: 'botPill.title', defaultMessage: 'Bot account' })}
       className={cn(
         'shrink-0 inline-flex items-center gap-1 rounded-full bg-sky-500/15 px-1.5 py-0.5 text-3xs font-medium text-sky-500',
         className,
       )}
     >
       <Bot className="size-3" aria-hidden />
-      Bot
+      <FormattedMessage id="botPill.label" defaultMessage="Bot" />
     </span>
   );
 }

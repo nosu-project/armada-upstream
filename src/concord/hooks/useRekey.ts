@@ -52,6 +52,7 @@ import type { CommunityMetadata, Community, HeldRoot, PrivateChannelKey } from "
 
 import type { NostrEvent } from "@nostrify/nostrify";
 import type { NUser } from "@nostrify/react/login";
+import { t } from "@/i18n";
 
 /**
  * Re-post this user's live invite bundles for `rotated` at the CURRENT keys
@@ -723,15 +724,15 @@ export function useChannelRekey(community: Community | undefined) {
   >({
     scope: { id: `concord-chrekey:${community?.idHex}` },
     mutationFn: async ({ channelIdHex, keepRecipients, removedTargets }) => {
-      if (!user || !community) throw new Error("Not ready.");
-      if (dissolved) throw new Error("This community was dissolved.");
+      if (!user || !community) throw new Error(t({ id: "useRekey.notReady", defaultMessage: "Not ready." }));
+      if (dissolved) throw new Error(t({ id: "useRekey.dissolved", defaultMessage: "This community was dissolved." }));
       const nip44 = user.signer.nip44;
-      if (!nip44) throw new Error("This signer can't rotate keys (NIP-44 unsupported).");
+      if (!nip44) throw new Error(t({ id: "useRekey.signerCantRotate", defaultMessage: "This signer can't rotate keys (NIP-44 unsupported)." }));
       const ch = community.privateChannels.find((c) => bytesToHex(c.id) === channelIdHex);
-      if (!ch) throw new Error("You don't hold this channel's key.");
+      if (!ch) throw new Error(t({ id: "useRekey.noChannelKey", defaultMessage: "You don't hold this channel's key." }));
       const ownerHex = folded?.ownerHex ?? community.owner;
       if (user.pubkey !== ownerHex && !(folded && hasPermission(folded.roster, user.pubkey, Permissions.MANAGE_CHANNELS))) {
-        throw new Error("Rotating a channel key needs the Manage-channels permission.");
+        throw new Error(t({ id: "useRekey.channelRotateNeedsPermission", defaultMessage: "Rotating a channel key needs the Manage-channels permission." }));
       }
       // CORD-06 §Authority: the Rotator must also strictly outrank every removed
       // target; receivers check this, so an un-outranked cut silently fails.
@@ -741,9 +742,14 @@ export function useChannelRekey(community: Community | undefined) {
         );
         if (unrankable.length > 0) {
           throw new Error(
-            unrankable.length === 1
-              ? "You don't outrank one of the members this would cut, so they would ignore the rotation."
-              : `You don't outrank ${unrankable.length} of the members this would cut, so they would ignore the rotation.`,
+            t(
+              {
+                id: "useRekey.dontOutrankCut",
+                defaultMessage:
+                  "{count, plural, one {You don't outrank one of the members this would cut, so they would ignore the rotation.} other {You don't outrank # of the members this would cut, so they would ignore the rotation.}}",
+              },
+              { count: unrankable.length },
+            ),
           );
         }
       }
@@ -780,7 +786,7 @@ export function useChannelRekey(community: Community | undefined) {
           community.relays.map((url) => nostr.relay(url).event(wrap, { signal: AbortSignal.timeout(8000) })),
         );
         if (!results.some((r) => r.status === "fulfilled")) {
-          throw new Error(`No relay accepted the #${ch.name} channel key rotation.`);
+          throw new Error(t({ id: "useRekey.noRelayAcceptedChannelRotation", defaultMessage: "No relay accepted the #{channel} channel key rotation." }, { channel: ch.name }));
         }
       }
 
@@ -848,13 +854,13 @@ export function useRefound(community: Community | undefined) {
     mutationKey: ["concord-refound", community?.idHex],
     scope: { id: `concord-refound:${community?.idHex}` },
     mutationFn: async ({ keep, exclude }) => {
-      if (!user || !community) throw new Error("Not ready.");
-      if (dissolved) throw new Error("This community was dissolved; no epoch advance past the tombstone is honored.");
+      if (!user || !community) throw new Error(t({ id: "useRekey.notReady", defaultMessage: "Not ready." }));
+      if (dissolved) throw new Error(t({ id: "useRekey.dissolvedNoAdvance", defaultMessage: "This community was dissolved; no epoch advance past the tombstone is honored." }));
       const nip44 = user.signer.nip44;
-      if (!nip44) throw new Error("This signer can't rotate keys (NIP-44 unsupported).");
+      if (!nip44) throw new Error(t({ id: "useRekey.signerCantRotate", defaultMessage: "This signer can't rotate keys (NIP-44 unsupported)." }));
       const rendered = control.data;
       if (!rendered || control.isLoading || control.isFetching) {
-        throw new Error("Still syncing the community's control plane; try again shortly.");
+        throw new Error(t({ id: "useRekey.stillSyncing", defaultMessage: "Still syncing the community's control plane; try again shortly." }));
       }
 
       // Fold-all-or-abort (CORD-06 §3): one forced whole-plane sweep, then a
@@ -876,20 +882,27 @@ export function useRefound(community: Community | undefined) {
           },
         });
       } catch {
-        throw new Error("Couldn't re-fetch the community's control plane; check your connection and try again.");
+        throw new Error(t({ id: "useRekey.refetchFailed", defaultMessage: "Couldn't re-fetch the community's control plane; check your connection and try again." }));
       }
       // A MAJORITY of relays must have answered (all would let a dead relay block
       // rotation forever; too few would drop state for everyone).
       const total = community.relays.length;
       if (reached < Math.floor(total / 2) + 1) {
         throw new Error(
-          `Only ${reached} of this community's ${total} relays responded; rotation aborted so nothing is lost. Try again, or remove relays that are no longer running.`,
+          t(
+            {
+              id: "useRekey.tooFewRelays",
+              defaultMessage:
+                "Only {reached} of this community's {total} relays responded; rotation aborted so nothing is lost. Try again, or remove relays that are no longer running.",
+            },
+            { reached, total },
+          ),
         );
       }
       // With no budget this means the plane is stuffed at one timestamp, which a
       // cursor can't page through; compaction would erase what's behind it.
       if (short) {
-        throw new Error("This community's history is being flooded and couldn't be read in full; rotation aborted so nothing is lost.");
+        throw new Error(t({ id: "useRekey.flooded", defaultMessage: "This community's history is being flooded and couldn't be read in full; rotation aborted so nothing is lost." }));
       }
       const stored = await queryPlane(community.idHex, "control");
       const verifySnap =
@@ -898,11 +911,11 @@ export function useRefound(community: Community | undefined) {
           : undefined;
       const folded = foldControlState(openControlEditions(stored), community.id, community.owner, rendered.heads, verifySnap);
       if (folded.incomplete.length > 0) {
-        throw new Error("Part of the community's state isn't reachable right now; rotation aborted so nothing is lost.");
+        throw new Error(t({ id: "useRekey.stateUnreachable", defaultMessage: "Part of the community's state isn't reachable right now; rotation aborted so nothing is lost." }));
       }
 
       const authorized = user.pubkey === folded.ownerHex || hasPermission(folded.roster, user.pubkey, Permissions.BAN);
-      if (!authorized) throw new Error("You don't have permission to rotate this community's keys.");
+      if (!authorized) throw new Error(t({ id: "useRekey.noPermission", defaultMessage: "You don't have permission to rotate this community's keys." }));
       // CORD-06 §Authority: BAN alone doesn't suffice — strictly outrank every
       // removed target, judged against the fresh roster.
       if (user.pubkey !== folded.ownerHex) {
@@ -911,7 +924,7 @@ export function useRefound(community: Community | undefined) {
         );
         if (unrankable.length > 0) {
           throw new Error(
-            "You don't outrank every member this would remove, so they would ignore the rotation.",
+            t({ id: "useRekey.dontOutrankEvery", defaultMessage: "You don't outrank every member this would remove, so they would ignore the rotation." }),
           );
         }
       }
@@ -919,7 +932,7 @@ export function useRefound(community: Community | undefined) {
       // Abort if the entry advanced past the captured epoch, rather than mint a
       // sibling epoch off a stale root.
       if (entry && BigInt(entry.current.root_epoch) !== community.rootEpoch) {
-        throw new Error("The community rotated since this action began; reopen it and try again.");
+        throw new Error(t({ id: "useRekey.rotatedMeanwhile", defaultMessage: "The community rotated since this action began; reopen it and try again." }));
       }
 
       const excluded = new Set(exclude);
@@ -967,7 +980,7 @@ export function useRefound(community: Community | undefined) {
           community.relays.map((url) => nostr.relay(url).event(wrap, { signal: AbortSignal.timeout(8000) })),
         );
         if (!results.some((r) => r.status === "fulfilled")) {
-          throw new Error("No relay accepted the key rotation.");
+          throw new Error(t({ id: "useRekey.noRelayAcceptedRotation", defaultMessage: "No relay accepted the key rotation." }));
         }
       }
 
@@ -1018,7 +1031,7 @@ export function useRefound(community: Community | undefined) {
         const seal =
           head.opened.seal ?? (await readStoredSeal(community.idHex, head.opened.rumorId));
         if (!seal) {
-          throw new Error("Missing the signed history needed to carry this community's state into the new epoch; nothing was lost, try again after a resync.");
+          throw new Error(t({ id: "useRekey.missingHistory", defaultMessage: "Missing the signed history needed to carry this community's state into the new epoch; nothing was lost, try again after a resync." }));
         }
         let rewrapped: NostrEvent;
         try {
@@ -1032,7 +1045,7 @@ export function useRefound(community: Community | undefined) {
         );
         // A head that fails to land is unrecoverable; abort while the epoch is unannounced.
         if (!results.some((r) => r.status === "fulfilled")) {
-          throw new Error("No relay accepted the community's state during rotation; nothing was lost, try again.");
+          throw new Error(t({ id: "useRekey.noRelayAcceptedState", defaultMessage: "No relay accepted the community's state during rotation; nothing was lost, try again." }));
         }
       }
 
@@ -1083,7 +1096,7 @@ export function useRefound(community: Community | undefined) {
           if (!results.some((r) => r.status === "fulfilled")) {
             // Gating like the root roll: an unrotated channel leaves the removed member
             // reading it. Resumable, not atomic.
-            throw new Error(`No relay accepted the #${ch.name} channel key rotation.`);
+            throw new Error(t({ id: "useRekey.noRelayAcceptedChannelRotation", defaultMessage: "No relay accepted the #{channel} channel key rotation." }, { channel: ch.name }));
           }
         }
         // Retain the stepped-off key (CORD-03 §3), or every ban truncates private history.
@@ -1120,9 +1133,9 @@ export function useRefound(community: Community | undefined) {
       // Armada allows the refounder's own links, so leaving them dead is the safe half.
       if (exclude.length > 0) {
         toast({
-          title: "Your invite links no longer work",
+          title: t({ id: "useRekey.linksDead.title", defaultMessage: "Your invite links no longer work" }),
           description:
-            "The keys rotated to cut off the removed member. Your links stay on the old keys, because refreshing them would give the new keys to anyone holding the URL. Revoke them and make new ones.",
+            t({ id: "useRekey.linksDead.description", defaultMessage: "The keys rotated to cut off the removed member. Your links stay on the old keys, because refreshing them would give the new keys to anyone holding the URL. Revoke them and make new ones." }),
         });
       } else {
         const fresh = {
@@ -1145,9 +1158,9 @@ export function useRefound(community: Community | undefined) {
         }
         if (!refreshed) {
           toast({
-            title: "Live invite links may serve the old keys",
+            title: t({ id: "useRekey.linksStale.title", defaultMessage: "Live invite links may serve the old keys" }),
             description:
-              "Key rotation succeeded, but refreshing your invite links failed. Reopen the community to retry, or new joiners on those links could land on the previous epoch.",
+              t({ id: "useRekey.linksStale.description", defaultMessage: "Key rotation succeeded, but refreshing your invite links failed. Reopen the community to retry, or new joiners on those links could land on the previous epoch." }),
             variant: "destructive",
           });
         }

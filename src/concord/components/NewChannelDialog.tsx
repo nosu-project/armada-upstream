@@ -9,13 +9,14 @@ import { ChromeDialogContent, Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { toast } from "@/hooks/useToast";
 import { cn } from "@/lib/utils";
+import { common, defineMessage, FormattedMessage, t, useIntl, type MessageDescriptor } from "@/i18n";
 
 import type { ChannelView } from "@/concord/lib/types";
 
 /** What a new channel opens to (CORD-03 §2 `view`); changeable later. */
-const VIEW_OPTIONS: ReadonlyArray<{ view: ChannelView; label: string; icon: typeof Hash }> = [
-  { view: "chat", label: "Text", icon: Hash },
-  { view: "forum", label: "Forum", icon: MessageSquareText },
+const VIEW_OPTIONS: ReadonlyArray<{ view: ChannelView; label: MessageDescriptor; icon: typeof Hash }> = [
+  { view: "chat", label: defineMessage({ id: "newChannelDialog.viewText", defaultMessage: "Text" }), icon: Hash },
+  { view: "forum", label: defineMessage({ id: "newChannelDialog.viewForum", defaultMessage: "Forum" }), icon: MessageSquareText },
 ];
 
 export interface NewTextChannelOptions {
@@ -45,6 +46,7 @@ export function NewChannelDialog({ open, onOpenChange, connectedCoordinates, onC
   onCreateText: (name: string, opts?: NewTextChannelOptions) => Promise<unknown>;
   onCreateRepository: (name: string, repository: PickedRepository) => Promise<unknown>;
 }) {
+  const intl = useIntl();
   const [step, setStep] = useState<Step>("text");
   const [name, setName] = useState("");
   const [selected, setSelected] = useState<PickedRepository | null>(null);
@@ -84,7 +86,10 @@ export function NewChannelDialog({ open, onOpenChange, connectedCoordinates, onC
     try {
       if (step === "confirm" && selected) {
         await onCreateRepository(channelName, selected);
-        toast({ title: "Repository channel created", description: `#${channelName} · ${selected.displayName}` });
+        toast({
+          title: t({ id: "newChannelDialog.repoCreated", defaultMessage: "Repository channel created" }),
+          description: `#${channelName} · ${selected.displayName}`,
+        });
       } else {
         // `chat` rides as an ABSENT field.
         const opts: NewTextChannelOptions = {
@@ -93,19 +98,34 @@ export function NewChannelDialog({ open, onOpenChange, connectedCoordinates, onC
         };
         await onCreateText(channelName, Object.keys(opts).length > 0 ? opts : undefined);
         // A newborn private channel's access role has no holders; point at granting it.
-        const noun = view === "forum" ? "Forum" : "Channel";
         toast(
           isPrivate
             ? {
-                title: `Private ${noun.toLowerCase()} created`,
-                description: `Only you can read #${channelName} so far. Use Add members in the channel menu to let others in.`,
+                title:
+                  view === "forum"
+                    ? t({ id: "newChannelDialog.privateForumCreated", defaultMessage: "Private forum created" })
+                    : t({ id: "newChannelDialog.privateChannelCreated", defaultMessage: "Private channel created" }),
+                description: t(
+                  {
+                    id: "newChannelDialog.privateCreatedDescription",
+                    defaultMessage:
+                      "Only you can read #{name} so far. Use Add members in the channel menu to let others in.",
+                  },
+                  { name: channelName },
+                ),
               }
-            : { title: `${noun} created`, description: `#${channelName}` },
+            : {
+                title:
+                  view === "forum"
+                    ? t({ id: "newChannelDialog.forumCreated", defaultMessage: "Forum created" })
+                    : t({ id: "newChannelDialog.channelCreated", defaultMessage: "Channel created" }),
+                description: `#${channelName}`,
+              },
         );
       }
       onOpenChange(false);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Couldn't create the channel.");
+      setError(e instanceof Error ? e.message : t({ id: "newChannelDialog.createFailed", defaultMessage: "Couldn't create the channel." }));
     } finally {
       setCreating(false);
     }
@@ -119,13 +139,13 @@ export function NewChannelDialog({ open, onOpenChange, connectedCoordinates, onC
 
   return (
     <Dialog open={open} onOpenChange={(next) => !creating && onOpenChange(next)}>
-      <ChromeDialogContent title="Create a channel">
+      <ChromeDialogContent title={intl.formatMessage({ id: "newChannelDialog.title", defaultMessage: "Create a channel" })}>
         {back && (
           <Button
             variant="ghost"
             size="icon"
             className="absolute left-2 top-2 size-9 touch:size-11 text-muted-foreground hover:text-foreground"
-            aria-label="Back"
+            aria-label={intl.formatMessage(common.back)}
             disabled={creating}
             onClick={back}
           >
@@ -141,16 +161,38 @@ export function NewChannelDialog({ open, onOpenChange, connectedCoordinates, onC
 
           <div className="space-y-1.5">
             <h2 className="chrome-dialog-title font-mono font-bold lowercase tracking-tight text-foreground">
-              {step === "text" ? "new channel" : step === "repo" ? "choose a repository" : "name the channel"}
+              {step === "text" ? (
+                <FormattedMessage id="newChannelDialog.headingText" defaultMessage="new channel" />
+              ) : step === "repo" ? (
+                <FormattedMessage id="newChannelDialog.headingRepo" defaultMessage="choose a repository" />
+              ) : (
+                <FormattedMessage id="newChannelDialog.headingConfirm" defaultMessage="name the channel" />
+              )}
             </h2>
             <p className="text-sm text-muted-foreground">
-              {step === "text"
-                ? view === "forum"
-                  ? "Titled posts with comments. Discussions that stay findable."
-                  : "A live conversation for your community."
-                : step === "repo"
-                  ? "Search the public directory, or paste an address from your git client."
-                  : "Its activity appears in the channel and in Projects."}
+              {step === "text" ? (
+                view === "forum" ? (
+                  <FormattedMessage
+                    id="newChannelDialog.forumDescription"
+                    defaultMessage="Titled posts with comments. Discussions that stay findable."
+                  />
+                ) : (
+                  <FormattedMessage
+                    id="newChannelDialog.chatDescription"
+                    defaultMessage="A live conversation for your community."
+                  />
+                )
+              ) : step === "repo" ? (
+                <FormattedMessage
+                  id="newChannelDialog.repoDescription"
+                  defaultMessage="Search the public directory, or paste an address from your git client."
+                />
+              ) : (
+                <FormattedMessage
+                  id="newChannelDialog.confirmDescription"
+                  defaultMessage="Its activity appears in the channel and in Projects."
+                />
+              )}
             </p>
           </div>
 
@@ -165,14 +207,17 @@ export function NewChannelDialog({ open, onOpenChange, connectedCoordinates, onC
               <Input
                 value={name}
                 onChange={(event) => setName(event.target.value)}
-                placeholder="e.g. general, memes, dev-talk"
-                aria-label="Channel name"
+                placeholder={intl.formatMessage({
+                  id: "newChannelDialog.namePlaceholder",
+                  defaultMessage: "e.g. general, memes, dev-talk",
+                })}
+                aria-label={intl.formatMessage({ id: "newChannelDialog.channelName", defaultMessage: "Channel name" })}
                 autoFocus
                 disabled={creating}
                 className="h-12 text-base"
               />
 
-              <div className="flex rounded-md bg-secondary/50 p-0.5" role="radiogroup" aria-label="Channel type">
+              <div className="flex rounded-md bg-secondary/50 p-0.5" role="radiogroup" aria-label={intl.formatMessage({ id: "newChannelDialog.channelType", defaultMessage: "Channel type" })}>
                 {VIEW_OPTIONS.map((option) => {
                   const selectedView = option.view === view;
                   const Icon = option.icon;
@@ -190,7 +235,7 @@ export function NewChannelDialog({ open, onOpenChange, connectedCoordinates, onC
                       )}
                     >
                       <Icon className="size-3.5" />
-                      {option.label}
+                      {intl.formatMessage(option.label)}
                     </button>
                   );
                 })}
@@ -204,8 +249,16 @@ export function NewChannelDialog({ open, onOpenChange, connectedCoordinates, onC
                     className="flex w-full items-center gap-2 px-3 py-2.5 text-sm touch:py-3"
                   >
                     {isPrivate ? <Lock className="size-3.5 text-muted-foreground" /> : <Hash className="size-3.5 text-muted-foreground" />}
-                    <span className="font-medium">Access</span>
-                    <span className="ml-auto text-xs text-muted-foreground">{isPrivate ? "Private" : "Public"}</span>
+                    <span className="font-medium">
+                      <FormattedMessage id="newChannelDialog.access" defaultMessage="Access" />
+                    </span>
+                    <span className="ml-auto text-xs text-muted-foreground">
+                      {isPrivate ? (
+                        <FormattedMessage id="newChannelDialog.private" defaultMessage="Private" />
+                      ) : (
+                        <FormattedMessage id="newChannelDialog.public" defaultMessage="Public" />
+                      )}
+                    </span>
                     <ChevronDown className={cn("size-4 text-muted-foreground transition-transform", accessOpen && "rotate-180")} />
                   </button>
                 </CollapsibleTrigger>
@@ -219,9 +272,14 @@ export function NewChannelDialog({ open, onOpenChange, connectedCoordinates, onC
                       className="mt-0.5"
                     />
                     <span className="min-w-0">
-                      <span className="block text-sm font-medium">Private channel</span>
+                      <span className="block text-sm font-medium">
+                        <FormattedMessage id="newChannelDialog.privateChannel" defaultMessage="Private channel" />
+                      </span>
                       <span className="block text-xs text-muted-foreground">
-                        Its own key, and a role that decides who can read it.
+                        <FormattedMessage
+                          id="newChannelDialog.privateChannelDescription"
+                          defaultMessage="Its own key, and a role that decides who can read it."
+                        />
                       </span>
                     </span>
                   </label>
@@ -230,13 +288,26 @@ export function NewChannelDialog({ open, onOpenChange, connectedCoordinates, onC
                       <Input
                         value={roleName}
                         onChange={(event) => setRoleName(event.target.value)}
-                        placeholder={name.trim() ? `Role name (default: ${name.trim()})` : "Role name (default: channel name)"}
-                        aria-label="Access role name"
+                        placeholder={
+                          name.trim()
+                            ? intl.formatMessage(
+                                { id: "newChannelDialog.rolePlaceholderNamed", defaultMessage: "Role name (default: {name})" },
+                                { name: name.trim() },
+                              )
+                            : intl.formatMessage({
+                                id: "newChannelDialog.rolePlaceholder",
+                                defaultMessage: "Role name (default: channel name)",
+                              })
+                        }
+                        aria-label={intl.formatMessage({ id: "newChannelDialog.roleName", defaultMessage: "Access role name" })}
                         disabled={creating}
                         maxLength={64}
                       />
                       <p className="text-xs text-muted-foreground">
-                        Holders of this role can read the channel. More roles can be added later.
+                        <FormattedMessage
+                          id="newChannelDialog.roleHint"
+                          defaultMessage="Holders of this role can read the channel. More roles can be added later."
+                        />
                       </p>
                     </div>
                   )}
@@ -251,12 +322,16 @@ export function NewChannelDialog({ open, onOpenChange, connectedCoordinates, onC
                 disabled={creating || !name.trim()}
                 className="h-12 w-full clip-corner-lg text-base font-medium"
               >
-                {creating ? <Loader2 className="size-4 animate-spin" /> : "Create channel"}
+                {creating ? <Loader2 className="size-4 animate-spin" /> : (
+                  <FormattedMessage id="newChannelDialog.createChannel" defaultMessage="Create channel" />
+                )}
               </Button>
 
               <div className="flex items-center gap-3 pt-1">
                 <span className="h-px flex-1 bg-border" />
-                <span className="text-2xs uppercase tracking-wider text-muted-foreground">or</span>
+                <span className="text-2xs uppercase tracking-wider text-muted-foreground">
+                  <FormattedMessage id="newChannelDialog.or" defaultMessage="or" />
+                </span>
                 <span className="h-px flex-1 bg-border" />
               </div>
               <Button
@@ -267,7 +342,7 @@ export function NewChannelDialog({ open, onOpenChange, connectedCoordinates, onC
                 className="w-full text-muted-foreground hover:text-foreground"
               >
                 <FolderGit2 className="size-4" />
-                Connect a git repository
+                <FormattedMessage id="newChannelDialog.connectRepo" defaultMessage="Connect a git repository" />
               </Button>
             </form>
           )}
@@ -295,8 +370,8 @@ export function NewChannelDialog({ open, onOpenChange, connectedCoordinates, onC
               <Input
                 value={name}
                 onChange={(event) => setName(event.target.value)}
-                placeholder="Channel name"
-                aria-label="Channel name"
+                placeholder={intl.formatMessage({ id: "newChannelDialog.channelName", defaultMessage: "Channel name" })}
+                aria-label={intl.formatMessage({ id: "newChannelDialog.channelName", defaultMessage: "Channel name" })}
                 autoFocus
                 disabled={creating}
                 className="h-12 text-base"
@@ -308,7 +383,9 @@ export function NewChannelDialog({ open, onOpenChange, connectedCoordinates, onC
                 disabled={creating || !name.trim()}
                 className="h-12 w-full clip-corner-lg text-base font-medium"
               >
-                {creating ? <Loader2 className="size-4 animate-spin" /> : "Create repository channel"}
+                {creating ? <Loader2 className="size-4 animate-spin" /> : (
+                  <FormattedMessage id="newChannelDialog.createRepoChannel" defaultMessage="Create repository channel" />
+                )}
               </Button>
             </form>
           )}

@@ -6,6 +6,7 @@ import { Dialog, ChromeDialogContent } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { NAME_MAX_BYTES } from "@/concord/lib/types";
+import { common, FormattedMessage, useIntl } from "@/i18n";
 
 /**
  * Name a channel category (create or rename). Categories have no id — they're
@@ -24,6 +25,7 @@ export function CategoryNameDialog({
   onOpenChange: (open: boolean) => void;
   onSubmit: (name: string) => void;
 }) {
+  const intl = useIntl();
   const [value, setValue] = useState(initial);
   useEffect(() => {
     if (open) setValue(initial);
@@ -34,20 +36,24 @@ export function CategoryNameDialog({
   const renaming = Boolean(initial);
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <ChromeDialogContent title={renaming ? "Rename category" : "New category"}>
+      <ChromeDialogContent title={renaming
+        ? intl.formatMessage({ id: "categoryNameDialog.renameTitle", defaultMessage: "Rename category" })
+        : intl.formatMessage({ id: "categoryNameDialog.newTitle", defaultMessage: "New category" })}>
         <div className="flex flex-col items-center gap-2 text-center">
           <div className="flex size-12 items-center justify-center clip-corner-lg bg-primary/15 text-primary">
             <Folder className="size-6" />
           </div>
           <h2 className="chrome-dialog-title font-mono font-bold lowercase tracking-tight text-foreground">
-            {renaming ? "rename category" : "new category"}
+            {renaming
+              ? <FormattedMessage id="categoryNameDialog.renameHeading" defaultMessage="rename category" />
+              : <FormattedMessage id="categoryNameDialog.newHeading" defaultMessage="new category" />}
           </h2>
           <p className="text-sm text-muted-foreground">
             {renaming
               ? count > 1
-                ? `Renames the category for all ${count} channels in it.`
-                : "A category is only ever the channels naming it, so renaming re-files the channel in it."
-              : "A heading to group channels under in the sidebar. It exists for as long as a channel is in it."}
+                ? <FormattedMessage id="categoryNameDialog.renameMany" defaultMessage="Renames the category for all {count} channels in it." values={{ count }} />
+                : <FormattedMessage id="categoryNameDialog.renameOne" defaultMessage="A category is only ever the channels naming it, so renaming re-files the channel in it." />
+              : <FormattedMessage id="categoryNameDialog.newDescription" defaultMessage="A heading to group channels under in the sidebar. It exists for as long as a channel is in it." />}
           </p>
         </div>
 
@@ -68,13 +74,13 @@ export function CategoryNameDialog({
               htmlFor="channel-category-name"
               className="text-xs font-medium uppercase tracking-wide text-muted-foreground"
             >
-              Category name
+              <FormattedMessage id="categoryNameDialog.nameLabel" defaultMessage="Category name" />
             </Label>
             <Input
               id="channel-category-name"
               value={value}
               onChange={(e) => setValue(e.target.value)}
-              placeholder="e.g. Voice"
+              placeholder={intl.formatMessage({ id: "categoryNameDialog.namePlaceholder", defaultMessage: "e.g. Voice" })}
               autoComplete="off"
               autoFocus
               maxLength={NAME_MAX_BYTES}
@@ -89,10 +95,12 @@ export function CategoryNameDialog({
               className="flex-1 clip-corner-lg"
               onClick={() => onOpenChange(false)}
             >
-              Cancel
+              <FormattedMessage {...common.cancel} />
             </Button>
             <Button type="submit" className="flex-1 clip-corner-lg" disabled={!trimmed || unchanged}>
-              {renaming ? "Rename" : "Create"}
+              {renaming
+                ? <FormattedMessage id="categoryNameDialog.rename" defaultMessage="Rename" />
+                : <FormattedMessage {...common.create} />}
             </Button>
           </div>
         </form>

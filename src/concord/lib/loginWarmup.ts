@@ -17,6 +17,7 @@ import { pruneControlSnapshots, queryPlane, writeRumors } from "@/concord/lib/ru
 import { registerStreamKeys } from "@/concord/lib/streamAuth";
 import { writeFolded } from "@/lib/foldedCache";
 import { beginSyncTask } from "@/lib/syncActivity";
+import { t } from "@/i18n/intl";
 import { logSync } from "@/lib/syncLog";
 import { emitWireScopes } from "@/wire/bus";
 
@@ -76,7 +77,7 @@ export async function warmupCommunities(
   if (communities.length === 0) return result;
 
   // Also report on the sync-activity signal, so the in-chat bar carries on past the gate's budget.
-  const task = beginSyncTask("message history");
+  const task = beginSyncTask(t({ id: "loginWarmup.messageHistory", defaultMessage: "message history" }));
   try {
     // Keys must register BEFORE the sweeps so NIP-42 challenges cover them.
     for (const c of communities) {
@@ -188,7 +189,12 @@ export async function warmupCommunities(
             } finally {
               done += chunk.length;
               opts.onProgress?.(done, totalChannels);
-              task.update({ detail: `${done}/${totalChannels} channels` });
+              task.update({
+                detail: t(
+                  { id: "loginWarmup.channelProgress", defaultMessage: "{done}/{total} channels" },
+                  { done, total: totalChannels },
+                ),
+              });
             }
           })(),
         );

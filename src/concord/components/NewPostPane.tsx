@@ -8,6 +8,7 @@ import { PaneCoveredContext } from "@/contexts/PaneCoveredContext";
 import { useAndroidBack } from "@/hooks/useAndroidBack";
 import { SUBJECT_MAX_BYTES, subjectBytes } from "@/concord/lib/forum";
 import { cn } from "@/lib/utils";
+import { FormattedMessage, t, useIntl } from "@/i18n";
 
 /** Write a forum post (CORD-03 §3) in-pane: ONE kind-9 message with a `subject` tag. */
 export function NewPostPane({
@@ -34,6 +35,7 @@ export function NewPostPane({
   onCancel: () => void;
   className?: string;
 }) {
+  const intl = useIntl();
   const [title, setTitle] = useState("");
   const [error, setError] = useState<string | null>(null);
   const composerBoundsRef = useRef<HTMLElement | null>(null);
@@ -53,8 +55,13 @@ export function NewPostPane({
 
   // Block send on a missing title, or the feed would never list it.
   const gate = useCallback((): string | null => {
-    if (!title.trim()) return "Give your post a title first.";
-    if (over) return `Titles are limited to ${SUBJECT_MAX_BYTES} bytes.`;
+    if (!title.trim()) return t({ id: "newPostPane.titleRequired", defaultMessage: "Give your post a title first." });
+    if (over) {
+      return t(
+        { id: "newPostPane.titleTooLong", defaultMessage: "Titles are limited to {max} bytes." },
+        { max: SUBJECT_MAX_BYTES },
+      );
+    }
     return canSend?.() ?? null;
   }, [title, over, canSend]);
 
@@ -65,7 +72,7 @@ export function NewPostPane({
         // The handler's `subjectTags` is the single canonical fold/validate step.
         await onSubmit(title, content, tags);
       } catch (e) {
-        setError(e instanceof Error ? e.message : "Couldn't publish the post.");
+        setError(e instanceof Error ? e.message : t({ id: "newPostPane.publishFailed", defaultMessage: "Couldn't publish the post." }));
         throw e; // the composer keeps the draft
       }
     },
@@ -83,15 +90,21 @@ export function NewPostPane({
             onClick={onCancel}
           >
             <ArrowLeft className="size-4" />
-            All posts
+            <FormattedMessage id="newPostPane.allPosts" defaultMessage="All posts" />
           </Button>
 
-          <p className="mb-1 text-xs font-medium text-muted-foreground">New post in #{channelName}</p>
+          <p className="mb-1 text-xs font-medium text-muted-foreground">
+            <FormattedMessage
+              id="newPostPane.heading"
+              defaultMessage="New post in #{channel}"
+              values={{ channel: channelName }}
+            />
+          </p>
           <input
             value={title}
             onChange={(event) => setTitle(event.target.value)}
-            placeholder="Title"
-            aria-label="Post title"
+            placeholder={intl.formatMessage({ id: "newPostPane.titlePlaceholder", defaultMessage: "Title" })}
+            aria-label={intl.formatMessage({ id: "newPostPane.titleLabel", defaultMessage: "Post title" })}
             aria-invalid={over || undefined}
             autoFocus
             className={cn(
@@ -107,7 +120,7 @@ export function NewPostPane({
           />
           {(over || remaining < 40) && (
             <p className={cn("mt-1 text-xs tabular-nums text-muted-foreground", over && "text-destructive")}>
-              {remaining} left
+              <FormattedMessage id="newPostPane.remaining" defaultMessage="{count} left" values={{ count: remaining }} />
             </p>
           )}
 
@@ -118,11 +131,11 @@ export function NewPostPane({
                 groupId={groupId}
                 messages={[]}
                 layout="document"
-                submitLabel="Post"
+                submitLabel={intl.formatMessage({ id: "newPostPane.submit", defaultMessage: "Post" })}
                 mentionPubkeys={mentionPubkeys}
                 canMentionEveryone={canMentionEveryone}
                 conversationRelays={conversationRelays}
-                placeholder="Write your post"
+                placeholder={intl.formatMessage({ id: "newPostPane.bodyPlaceholder", defaultMessage: "Write your post" })}
                 draftScope={`post:${groupId}`}
                 encryptAttachments
                 disappearingTimer={disappearingTimer}

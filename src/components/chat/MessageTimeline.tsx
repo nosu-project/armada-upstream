@@ -25,6 +25,7 @@ import { useMutedPubkeys } from "@/hooks/useMuteList";
 import { useMutedWordFilter } from "@/hooks/useMutedWords";
 import { usePerfMilestone } from "@/hooks/usePerfMilestone";
 import { cn } from "@/lib/utils";
+import { FormattedMessage, useIntl, type IntlShape } from "@/i18n";
 
 import { isGitContinuation, timelineEntryAuthor, type ChannelTimelineEntry } from "@/components/chat/channelTimeline";
 import type { ChatMsg, ChatTransport } from "@/components/chat/transport";
@@ -75,27 +76,32 @@ export function isSameDay(a: number, b: number): boolean {
   );
 }
 
-function formatDayLabel(ts: number): string {
+function formatDayLabel(ts: number, intl: IntlShape): string {
   const date = new Date(ts * 1000);
   const now = new Date();
-  if (isSameDay(ts, Math.floor(now.getTime() / 1000))) return "Today";
+  if (isSameDay(ts, Math.floor(now.getTime() / 1000))) {
+    return intl.formatMessage({ id: "messageTimeline.today", defaultMessage: "Today" });
+  }
   const yesterday = new Date(now);
   yesterday.setDate(now.getDate() - 1);
-  if (isSameDay(ts, Math.floor(yesterday.getTime() / 1000))) return "Yesterday";
-  return (date.getFullYear() === now.getFullYear() ? DAY_FORMAT : DAY_YEAR_FORMAT).format(date);
+  if (isSameDay(ts, Math.floor(yesterday.getTime() / 1000))) {
+    return intl.formatMessage({ id: "messageTimeline.yesterday", defaultMessage: "Yesterday" });
+  }
+  // intl memoizes its formatters, so this doesn't build an Intl.DateTimeFormat per call.
+  return intl.formatDate(date, date.getFullYear() === now.getFullYear() ? DAY_FORMAT : DAY_YEAR_FORMAT);
 }
 
-// Built once: `toLocaleDateString` with options builds a new Intl.DateTimeFormat per call.
-const DAY_FORMAT = new Intl.DateTimeFormat(undefined, { month: "long", day: "numeric" });
-const DAY_YEAR_FORMAT = new Intl.DateTimeFormat(undefined, { month: "long", day: "numeric", year: "numeric" });
+const DAY_FORMAT: Intl.DateTimeFormatOptions = { month: "long", day: "numeric" };
+const DAY_YEAR_FORMAT: Intl.DateTimeFormatOptions = { month: "long", day: "numeric", year: "numeric" };
 
 /** Discord-style day separator. Memoized: the list re-renders on most page renders. */
 export const DateSeparator = memo(function DateSeparator({ ts }: { ts: number }) {
+  const intl = useIntl();
   return (
     <div className="flex items-center gap-3 px-2 pt-3 pb-1 select-none" aria-hidden>
       <div className="h-px flex-1 bg-border/60" />
       <span className="text-2xs font-medium uppercase tracking-wide text-muted-foreground/80">
-        {formatDayLabel(ts)}
+        {formatDayLabel(ts, intl)}
       </span>
       <div className="h-px flex-1 bg-border/60" />
     </div>
@@ -103,11 +109,16 @@ export const DateSeparator = memo(function DateSeparator({ ts }: { ts: number })
 });
 
 function NewMessagesDivider() {
+  const intl = useIntl();
   return (
-    <div className="flex items-center px-2 py-1 select-none" role="separator" aria-label="New messages">
+    <div
+      className="flex items-center px-2 py-1 select-none"
+      role="separator"
+      aria-label={intl.formatMessage({ id: "messageTimeline.newMessages", defaultMessage: "New messages" })}
+    >
       <div className="h-px flex-1 bg-destructive/70" />
       <span className="pl-1.5 text-3xs font-semibold uppercase tracking-wider text-destructive">
-        New
+        <FormattedMessage id="messageTimeline.new" defaultMessage="New" />
       </span>
     </div>
   );
@@ -118,19 +129,26 @@ function NewMessagesDivider() {
  * key. The warning tone is deliberate.
  */
 function KeyRotationDivider() {
+  const intl = useIntl();
   return (
     <div
       className="flex items-center gap-3 px-2 py-1 select-none"
       role="separator"
-      aria-label="Key rotated. Earlier messages use a previous key"
+      aria-label={intl.formatMessage({
+        id: "messageTimeline.keyRotatedLabel",
+        defaultMessage: "Key rotated. Earlier messages use a previous key",
+      })}
     >
       <div className="h-px flex-1 bg-warning/50" />
       <span
         className="flex items-center gap-1.5 text-3xs font-semibold uppercase tracking-wider text-warning"
-        title="The community's encryption key was rotated here. Messages above were sealed under a previous key."
+        title={intl.formatMessage({
+          id: "messageTimeline.keyRotatedTitle",
+          defaultMessage: "The community's encryption key was rotated here. Messages above were sealed under a previous key.",
+        })}
       >
         <KeyRound className="size-3" aria-hidden />
-        Key rotated
+        <FormattedMessage id="messageTimeline.keyRotated" defaultMessage="Key rotated" />
       </span>
       <div className="h-px flex-1 bg-warning/50" />
     </div>
@@ -156,13 +174,26 @@ function FloodNotice({
   expanded: boolean;
   onToggle: () => void;
 }) {
+  const intl = useIntl();
   const label = expanded
     ? paused
-      ? "Hide messages sent while paused"
-      : "Hide similar messages"
+      ? intl.formatMessage({ id: "messageTimeline.flood.hidePaused", defaultMessage: "Hide messages sent while paused" })
+      : intl.formatMessage({ id: "messageTimeline.flood.hideSimilar", defaultMessage: "Hide similar messages" })
     : paused
-      ? `${count} ${count === 1 ? "message" : "messages"} sent while the community was paused`
-      : `${count} similar ${count === 1 ? "message" : "messages"} from ${authors} ${authors === 1 ? "account" : "accounts"}`;
+      ? intl.formatMessage(
+        {
+          id: "messageTimeline.flood.paused",
+          defaultMessage: "{count, plural, one {# message} other {# messages}} sent while the community was paused",
+        },
+        { count },
+      )
+      : intl.formatMessage(
+        {
+          id: "messageTimeline.flood.similar",
+          defaultMessage: "{count, plural, one {# similar message} other {# similar messages}} from {authors, plural, one {# account} other {# accounts}}",
+        },
+        { count, authors },
+      );
   return (
     <div className="flex items-center gap-3 px-2 py-1 select-none">
       <div className="h-px flex-1 bg-muted-foreground/25" />
@@ -173,10 +204,16 @@ function FloodNotice({
         className="flex items-center gap-1.5 rounded px-1.5 py-1 text-3xs font-medium uppercase tracking-wider text-muted-foreground transition-colors hover:text-foreground touch:py-1.5 touch:text-xs"
         title={
           expanded
-            ? "Fold these back up"
+            ? intl.formatMessage({ id: "messageTimeline.flood.foldTitle", defaultMessage: "Fold these back up" })
             : paused
-              ? "Posted after a moderator paused the community. Nothing was removed."
-              : "Several accounts posted near-identical messages at once. Nothing was removed."
+              ? intl.formatMessage({
+                id: "messageTimeline.flood.pausedTitle",
+                defaultMessage: "Posted after a moderator paused the community. Nothing was removed.",
+              })
+              : intl.formatMessage({
+                id: "messageTimeline.flood.similarTitle",
+                defaultMessage: "Several accounts posted near-identical messages at once. Nothing was removed.",
+              })
         }
       >
         {paused ? <Pause className="size-3 shrink-0" aria-hidden /> : <MessagesSquare className="size-3 shrink-0" aria-hidden />}
@@ -347,6 +384,7 @@ export function MessageTimeline({
   syncFailed = false,
   className,
 }: MessageTimelineProps) {
+  const intl = useIntl();
   const { messages, isLoading, loadOlder, hasMore, isLoadingOlder, rotationDividerIds, quarantinedIds, pausedIds } =
     transport;
 
@@ -928,12 +966,15 @@ export function MessageTimeline({
           {syncFailed ? (
             <p className="flex items-center justify-center gap-2 px-2 py-8 text-center text-sm text-muted-foreground">
               <MessagesSquare className="size-4 shrink-0" aria-hidden />
-              No messages loaded yet. We’ll keep checking the relays for history in the background…
+              <FormattedMessage
+                id="messageTimeline.noMessagesYet"
+                defaultMessage="No messages loaded yet. We’ll keep checking the relays for history in the background…"
+              />
             </p>
           ) : syncing ? (
             <p className="flex items-center justify-center gap-2 px-2 py-8 text-sm text-muted-foreground">
               <Loader2 className="size-4 animate-spin shrink-0" />
-              Catching up…
+              <FormattedMessage id="messageTimeline.catchingUp" defaultMessage="Catching up…" />
             </p>
           ) : (
             emptyState ?? null
@@ -997,10 +1038,13 @@ export function MessageTimeline({
                   pinToBottomNow();
                 }}
                 className="pointer-events-auto inline-flex items-center gap-2 clip-corner-lg bg-secondary/90 backdrop-blur px-5 py-2.5 text-sm font-medium text-foreground shadow-lg hover:bg-secondary transition-colors"
-                aria-label="Jump to the latest messages"
+                aria-label={intl.formatMessage({
+                  id: "messageTimeline.jumpToLatest",
+                  defaultMessage: "Jump to the latest messages",
+                })}
               >
                 <ChevronDown className="size-4" />
-                Jump to present
+                <FormattedMessage id="messageTimeline.jumpToPresent" defaultMessage="Jump to present" />
               </button>
             </div>
           )}

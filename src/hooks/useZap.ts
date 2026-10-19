@@ -3,6 +3,7 @@ import { useCallback, useState } from "react";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useWallet } from "@/hooks/useWallet";
+import { t } from "@/i18n";
 import { notify } from "@/lib/haptics";
 import { fetchLnurlInvoice, resolveLnurlPay } from "@/lib/lnurl";
 import { bolt11Info } from "@/lib/zaps";
@@ -58,12 +59,12 @@ export function useZap(opts: {
 
   const zap = useCallback(
     async (amountSats: number, comment: string) => {
-      if (!user) throw new Error("Sign in to zap.");
-      if (!Number.isFinite(amountSats) || amountSats < 1) throw new Error("Enter an amount in sats.");
+      if (!user) throw new Error(t({ id: "useZap.signIn", defaultMessage: "Sign in to zap." }));
+      if (!Number.isFinite(amountSats) || amountSats < 1) throw new Error(t({ id: "useZap.enterAmount", defaultMessage: "Enter an amount in sats." }));
       const isPrivate = Boolean(sendZap);
       // CORD.md's proof is the preimage, which the manual QR path can't return.
       if (isPrivate && !activeConnection && !webln) {
-        throw new Error("Private zaps need a connected wallet (Settings → Wallet).");
+        throw new Error(t({ id: "useZap.privateNeedsWallet", defaultMessage: "Private zaps need a connected wallet (Settings → Wallet)." }));
       }
 
       setStatus("resolving");
@@ -77,7 +78,10 @@ export function useZap(opts: {
         const amountMsats = amountSats * 1000;
         if (amountMsats < params.minSendable || amountMsats > params.maxSendable) {
           throw new Error(
-            `Amount must be between ${Math.ceil(params.minSendable / 1000)} and ${Math.floor(params.maxSendable / 1000)} sats for this recipient.`,
+            t(
+              { id: "useZap.amountOutOfRange", defaultMessage: "Amount must be between {min} and {max} sats for this recipient." },
+              { min: Math.ceil(params.minSendable / 1000), max: Math.floor(params.maxSendable / 1000) },
+            ),
           );
         }
         const trimmedComment = comment.trim();
@@ -87,7 +91,7 @@ export function useZap(opts: {
         let zapRequest: string | undefined;
         if (!isPrivate) {
           if (!params.allowsNostr) {
-            throw new Error("Recipient's wallet service doesn't support zaps.");
+            throw new Error(t({ id: "useZap.noZapSupport", defaultMessage: "Recipient's wallet service doesn't support zaps." }));
           }
           const signed = await user.signer.signEvent({
             kind: 9734,
@@ -113,7 +117,7 @@ export function useZap(opts: {
         // Never pay an invoice that doesn't encode what we asked for.
         const info = bolt11Info(bolt11);
         if (info.amountMsats !== amountMsats) {
-          throw new Error("The wallet service returned a mismatched invoice.");
+          throw new Error(t({ id: "useZap.mismatchedInvoice", defaultMessage: "The wallet service returned a mismatched invoice." }));
         }
 
         setStatus("paying");
@@ -126,7 +130,7 @@ export function useZap(opts: {
             const result = await webln.sendPayment(bolt11);
             preimage = result?.preimage;
           } catch (e) {
-            throw new Error(e instanceof Error ? e.message : "Browser wallet payment failed.");
+            throw new Error(e instanceof Error ? e.message : t({ id: "useZap.browserWalletFailed", defaultMessage: "Browser wallet payment failed." }));
           }
         } else if (!isPrivate) {
           // Manual fallback; the provider's receipt confirms it once paid.
@@ -135,7 +139,7 @@ export function useZap(opts: {
           return "manual";
         } else {
           // Unreachable (guarded above); an external wallet can't return a preimage.
-          throw new Error("Private zaps need a connected wallet (Settings → Wallet).");
+          throw new Error(t({ id: "useZap.privateNeedsWallet", defaultMessage: "Private zaps need a connected wallet (Settings → Wallet)." }));
         }
 
         if (isPrivate) {

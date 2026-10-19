@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "@/hooks/useToast";
+import { common, FormattedMessage, t, useIntl } from "@/i18n";
 import {
   type CalendarEvent,
   type CalendarEventInput,
@@ -51,6 +52,7 @@ function fromLocalInput(value: string): number | undefined {
 
 /** Create or edit a NIP-52 calendar event (31923 time / 31922 date) in a NIP-29 group. Relay enforces admin-only. */
 export function CreateEventDialog({ calendar, open, onOpenChange, editing }: CreateEventDialogProps) {
+  const intl = useIntl();
   const { save, isSaving } = calendar;
 
   const [mode, setMode] = useState<Mode>("time");
@@ -146,12 +148,12 @@ export function CreateEventDialog({ calendar, open, onOpenChange, editing }: Cre
     if (mode === "time") {
       const startSec = fromLocalInput(startAt);
       if (!startSec) {
-        toast({ title: "Pick a start time", variant: "destructive" });
+        toast({ title: t({ id: "createEventDialog.pickStartTime", defaultMessage: "Pick a start time" }), variant: "destructive" });
         return;
       }
       const endSec = fromLocalInput(endAt);
       if (endSec !== undefined && endSec < startSec) {
-        toast({ title: "End must be after start", variant: "destructive" });
+        toast({ title: t({ id: "createEventDialog.endAfterStart", defaultMessage: "End must be after start" }), variant: "destructive" });
         return;
       }
       input = {
@@ -167,7 +169,7 @@ export function CreateEventDialog({ calendar, open, onOpenChange, editing }: Cre
       };
     } else {
       if (endDate && endDate < startDate) {
-        toast({ title: "End must be after start", variant: "destructive" });
+        toast({ title: t({ id: "createEventDialog.endAfterStart", defaultMessage: "End must be after start" }), variant: "destructive" });
         return;
       }
       input = {
@@ -184,7 +186,12 @@ export function CreateEventDialog({ calendar, open, onOpenChange, editing }: Cre
 
     try {
       await save(input, editing?.event);
-      toast({ title: editing ? "Event updated" : "Event created", description: title.trim() });
+      toast({
+        title: editing
+          ? t({ id: "createEventDialog.eventUpdated", defaultMessage: "Event updated" })
+          : t({ id: "createEventDialog.eventCreated", defaultMessage: "Event created" }),
+        description: title.trim(),
+      });
       onOpenChange(false);
     } catch {
       // useCalendarEvents toasts the relay error.
@@ -193,16 +200,23 @@ export function CreateEventDialog({ calendar, open, onOpenChange, editing }: Cre
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <ChromeDialogContent title={editing ? "Edit event" : "Create an event"} hideClose={pickerOpen}>
+      <ChromeDialogContent
+        title={
+          editing
+            ? intl.formatMessage({ id: "createEventDialog.editTitle", defaultMessage: "Edit event" })
+            : intl.formatMessage({ id: "createEventDialog.createTitle", defaultMessage: "Create an event" })
+        }
+        hideClose={pickerOpen}
+      >
         <div className="flex flex-col items-center gap-2 text-center">
           <div className="flex size-12 items-center justify-center clip-corner-lg bg-primary/15 text-primary">
             <CalendarDays className="size-6" />
           </div>
           <h2 className="chrome-dialog-title font-mono font-bold lowercase tracking-tight text-foreground">
-            {editing ? "edit event" : "create an event"}
+            {editing ? <FormattedMessage id="createEventDialog.editHeading" defaultMessage="edit event" /> : <FormattedMessage id="createEventDialog.createHeading" defaultMessage="create an event" />}
           </h2>
           <p className="text-sm text-muted-foreground">
-            Schedule something for this channel. Members can RSVP.
+            <FormattedMessage id="createEventDialog.intro" defaultMessage="Schedule something for this channel. Members can RSVP." />
           </p>
         </div>
 
@@ -215,13 +229,13 @@ export function CreateEventDialog({ calendar, open, onOpenChange, editing }: Cre
         >
           <div className="space-y-1.5">
             <Label htmlFor="event-title" className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-              What
+              <FormattedMessage id="createEventDialog.what" defaultMessage="What" />
             </Label>
             <Input
               id="event-title"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
-              placeholder="Community call"
+              placeholder={intl.formatMessage({ id: "createEventDialog.titlePlaceholder", defaultMessage: "Community call" })}
               maxLength={120}
               autoComplete="off"
               autoFocus
@@ -234,10 +248,10 @@ export function CreateEventDialog({ calendar, open, onOpenChange, editing }: Cre
                 htmlFor={mode === "time" ? "event-start" : "event-start-date"}
                 className="text-xs font-medium uppercase tracking-wide text-muted-foreground"
               >
-                When
+                <FormattedMessage id="createEventDialog.when" defaultMessage="When" />
               </Label>
               <label className="flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground">
-                All day
+                <FormattedMessage id="createEventDialog.allDay" defaultMessage="All day" />
                 <Switch checked={mode === "date"} onCheckedChange={(c) => setMode(c ? "date" : "time")} />
               </label>
             </div>
@@ -254,8 +268,10 @@ export function CreateEventDialog({ calendar, open, onOpenChange, editing }: Cre
             className="flex w-full items-center gap-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
           >
             <ChevronDown className={cn("size-3.5 transition-transform", detailsOpen && "rotate-180")} />
-            {detailsOpen ? "Fewer details" : "Add details"}
-            <span className="normal-case font-normal text-muted-foreground/70">(optional)</span>
+            {detailsOpen ? <FormattedMessage id="createEventDialog.fewerDetails" defaultMessage="Fewer details" /> : <FormattedMessage id="createEventDialog.addDetails" defaultMessage="Add details" />}
+            <span className="normal-case font-normal text-muted-foreground/70">
+              <FormattedMessage id="createEventDialog.optional" defaultMessage="(optional)" />
+            </span>
           </button>
 
           {detailsOpen && (
@@ -265,7 +281,7 @@ export function CreateEventDialog({ calendar, open, onOpenChange, editing }: Cre
                   htmlFor={mode === "time" ? "event-end" : "event-end-date"}
                   className="text-xs font-medium uppercase tracking-wide text-muted-foreground"
                 >
-                  Ends
+                  <FormattedMessage id="createEventDialog.ends" defaultMessage="Ends" />
                 </Label>
                 {mode === "time" ? (
                   <DateTimePicker id="event-end" mode="datetime" value={endAt} onChange={setEndAt} onOpenChange={setPickerOpen} />
@@ -276,7 +292,7 @@ export function CreateEventDialog({ calendar, open, onOpenChange, editing }: Cre
 
               <div className="space-y-1.5">
                 <Label htmlFor="event-location" className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                  Location
+                  <FormattedMessage id="createEventDialog.location" defaultMessage="Location" />
                 </Label>
                 <div className="relative">
                   <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground pointer-events-none" />
@@ -284,7 +300,7 @@ export function CreateEventDialog({ calendar, open, onOpenChange, editing }: Cre
                     id="event-location"
                     value={location}
                     onChange={(e) => setLocation(e.target.value)}
-                    placeholder="Voice channel, or a link / address"
+                    placeholder={intl.formatMessage({ id: "createEventDialog.locationPlaceholder", defaultMessage: "Voice channel, or a link / address" })}
                     maxLength={200}
                     className="pl-9"
                   />
@@ -293,13 +309,13 @@ export function CreateEventDialog({ calendar, open, onOpenChange, editing }: Cre
 
               <div className="space-y-1.5">
                 <Label htmlFor="event-desc" className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                  Description
+                  <FormattedMessage id="createEventDialog.description" defaultMessage="Description" />
                 </Label>
                 <Textarea
                   id="event-desc"
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
-                  placeholder="What's happening?"
+                  placeholder={intl.formatMessage({ id: "createEventDialog.descriptionPlaceholder", defaultMessage: "What's happening?" })}
                   maxLength={2000}
                   rows={3}
                 />
@@ -307,13 +323,13 @@ export function CreateEventDialog({ calendar, open, onOpenChange, editing }: Cre
 
               <div className="space-y-1.5">
                 <Label htmlFor="event-tags" className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                  Tags
+                  <FormattedMessage id="createEventDialog.tags" defaultMessage="Tags" />
                 </Label>
                 <Input
                   id="event-tags"
                   value={hashtags}
                   onChange={(e) => setHashtags(e.target.value)}
-                  placeholder="weekly standup"
+                  placeholder={intl.formatMessage({ id: "createEventDialog.tagsPlaceholder", defaultMessage: "weekly standup" })}
                   autoComplete="off"
                 />
               </div>
@@ -322,13 +338,16 @@ export function CreateEventDialog({ calendar, open, onOpenChange, editing }: Cre
 
           <div className="flex gap-2 pt-1">
             <Button type="button" variant="ghost" className="flex-1 clip-corner-lg" onClick={() => onOpenChange(false)}>
-              Cancel
+              <FormattedMessage {...common.cancel} />
             </Button>
             <Button type="submit" className="flex-1 clip-corner-lg" disabled={isSaving || !canSave}>
               {isSaving ? (
-                <><Loader2 className="size-4 mr-2 animate-spin" /> {editing ? "Saving…" : "Creating…"}</>
+                <>
+                  <Loader2 className="size-4 mr-2 animate-spin" />{" "}
+                  {editing ? <FormattedMessage {...common.saving} /> : <FormattedMessage id="createEventDialog.creating" defaultMessage="Creating…" />}
+                </>
               ) : (
-                editing ? "Save changes" : "Create event"
+                editing ? <FormattedMessage id="createEventDialog.saveChanges" defaultMessage="Save changes" /> : <FormattedMessage id="createEventDialog.createEvent" defaultMessage="Create event" />
               )}
             </Button>
           </div>

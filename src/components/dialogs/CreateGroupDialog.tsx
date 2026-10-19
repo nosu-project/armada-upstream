@@ -18,6 +18,7 @@ import { useCreateGroup, useGroupModeration } from "@/hooks/useGroupModeration";
 import { useRelayInfo } from "@/hooks/useRelayInfo";
 import { useUpdateUserGroupList } from "@/hooks/useUserGroupList";
 import { toast } from "@/hooks/useToast";
+import { common, FormattedMessage, t, useIntl } from "@/i18n";
 import { relayDeniesNip29 } from "@/lib/nip29";
 import { relayToRouteParam } from "@/lib/platform";
 import { cn } from "@/lib/utils";
@@ -52,6 +53,7 @@ function toChannelSlug(name: string): string {
  * Buzz relays take everything in ONE 9007 (requires a `name` tag) and need a UUID id.
  */
 export function CreateGroupDialog({ relayUrl, open, onOpenChange }: CreateGroupDialogProps) {
+  const intl = useIntl();
   const { user } = useCurrentUser();
   const navigate = useNavigate();
   const { isBuzz } = useIsBuzzRelay(relayUrl);
@@ -101,11 +103,11 @@ export function CreateGroupDialog({ relayUrl, open, onOpenChange }: CreateGroupD
       // Best-effort; the list entry is what gives the new channel a rail icon.
       updateList({ type: "add-group", ref: { id: effectiveId, relay: relayUrl } }).catch(() => undefined);
 
-      toast({ title: "Channel created", description: name.trim() });
+      toast({ title: t({ id: "createGroupDialog.channelCreated", defaultMessage: "Channel created" }), description: name.trim() });
       onOpenChange(false);
       navigate(`/s/${relayToRouteParam(relayUrl)}/${encodeURIComponent(effectiveId)}`);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to create the channel.");
+      setError(e instanceof Error ? e.message : t({ id: "createGroupDialog.createFailed", defaultMessage: "Failed to create the channel." }));
     } finally {
       setPending(false);
     }
@@ -115,16 +117,16 @@ export function CreateGroupDialog({ relayUrl, open, onOpenChange }: CreateGroupD
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <ChromeDialogContent title="Create a channel">
+      <ChromeDialogContent title={intl.formatMessage({ id: "createGroupDialog.title", defaultMessage: "Create a channel" })}>
         <div className="flex flex-col items-center gap-2 text-center">
           <div className="flex size-12 items-center justify-center clip-corner-lg bg-primary/15 text-primary">
             <Hash className="size-6" />
           </div>
           <h2 className="chrome-dialog-title font-mono font-bold lowercase tracking-tight text-foreground">
-            create a channel
+            <FormattedMessage id="createGroupDialog.heading" defaultMessage="create a channel" />
           </h2>
           <p className="text-sm text-muted-foreground">
-            Channels are where your community talks. You&apos;ll be its first admin.
+            <FormattedMessage id="createGroupDialog.intro" defaultMessage="Channels are where your community talks. You'll be its first admin." />
           </p>
         </div>
 
@@ -137,7 +139,7 @@ export function CreateGroupDialog({ relayUrl, open, onOpenChange }: CreateGroupD
         >
           <div className="space-y-1.5">
             <Label htmlFor="group-name" className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-              Channel name
+              <FormattedMessage id="createGroupDialog.channelName" defaultMessage="Channel name" />
             </Label>
             <div className="relative">
               <Hash className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground pointer-events-none" />
@@ -145,7 +147,7 @@ export function CreateGroupDialog({ relayUrl, open, onOpenChange }: CreateGroupD
                 id="group-name"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                placeholder="general"
+                placeholder={intl.formatMessage({ id: "createGroupDialog.namePlaceholder", defaultMessage: "general" })}
                 maxLength={64}
                 autoComplete="off"
                 autoFocus
@@ -154,20 +156,31 @@ export function CreateGroupDialog({ relayUrl, open, onOpenChange }: CreateGroupD
             </div>
             {slug && (
               <p className="text-xs text-muted-foreground">
-                Members will see <span className="font-medium text-foreground">#{slug}</span>
+                <FormattedMessage
+                  id="createGroupDialog.membersWillSee"
+                  defaultMessage="Members will see <name>#{slug}</name>"
+                  values={{
+                    slug,
+                    name: (chunks) => <span className="font-medium text-foreground">{chunks}</span>,
+                  }}
+                />
               </p>
             )}
           </div>
 
           <div className="space-y-1.5">
             <Label htmlFor="group-about" className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-              Topic <span className="normal-case font-normal">(optional)</span>
+              <FormattedMessage
+                id="createGroupDialog.topicOptional"
+                defaultMessage="Topic <optional>(optional)</optional>"
+                values={{ optional: (chunks) => <span className="normal-case font-normal">{chunks}</span> }}
+              />
             </Label>
             <Textarea
               id="group-about"
               value={about}
               onChange={(e) => setAbout(e.target.value)}
-              placeholder="What's this channel about?"
+              placeholder={intl.formatMessage({ id: "createGroupDialog.topicPlaceholder", defaultMessage: "What's this channel about?" })}
               maxLength={300}
               rows={2}
               className="bg-background/40 border-transparent focus-visible:ring-0 focus-visible:ring-offset-0"
@@ -178,8 +191,8 @@ export function CreateGroupDialog({ relayUrl, open, onOpenChange }: CreateGroupD
             <PrivacyToggle
               id="group-private"
               icon={isPrivate ? <Lock className="size-4" /> : <Globe className="size-4" />}
-              title="Private"
-              description="Only members can read messages."
+              title={intl.formatMessage({ id: "createGroupDialog.private", defaultMessage: "Private" })}
+              description={intl.formatMessage({ id: "createGroupDialog.privateDescription", defaultMessage: "Only members can read messages." })}
               checked={isPrivate}
               onCheckedChange={setIsPrivate}
             />
@@ -187,8 +200,8 @@ export function CreateGroupDialog({ relayUrl, open, onOpenChange }: CreateGroupD
               <PrivacyToggle
                 id="group-forum"
                 icon={<MessagesSquare className="size-4" />}
-                title="Forum"
-                description="Threaded posts with votes instead of a chat stream."
+                title={intl.formatMessage({ id: "createGroupDialog.forum", defaultMessage: "Forum" })}
+                description={intl.formatMessage({ id: "createGroupDialog.forumDescription", defaultMessage: "Threaded posts with votes instead of a chat stream." })}
                 checked={isForum}
                 onCheckedChange={setIsForum}
               />
@@ -196,8 +209,8 @@ export function CreateGroupDialog({ relayUrl, open, onOpenChange }: CreateGroupD
               <PrivacyToggle
                 id="group-closed"
                 icon={<Mail className="size-4" />}
-                title="Invite only"
-                description="People need an invite code to join."
+                title={intl.formatMessage({ id: "createGroupDialog.inviteOnly", defaultMessage: "Invite only" })}
+                description={intl.formatMessage({ id: "createGroupDialog.inviteOnlyDescription", defaultMessage: "People need an invite code to join." })}
                 checked={isClosed}
                 onCheckedChange={setIsClosed}
               />
@@ -207,7 +220,7 @@ export function CreateGroupDialog({ relayUrl, open, onOpenChange }: CreateGroupD
           {noNip29 && !error && (
             <Alert>
               <AlertDescription>
-                This server doesn&apos;t list support for NIP-29 groups, so it probably can&apos;t host channels.
+                <FormattedMessage id="createGroupDialog.noNip29" defaultMessage="This server doesn't list support for NIP-29 groups, so it probably can't host channels." />
               </AlertDescription>
             </Alert>
           )}
@@ -220,10 +233,16 @@ export function CreateGroupDialog({ relayUrl, open, onOpenChange }: CreateGroupD
 
           <div className="flex gap-2 pt-1">
             <Button type="button" variant="ghost" className="flex-1 clip-corner-lg" onClick={() => onOpenChange(false)}>
-              Cancel
+              <FormattedMessage {...common.cancel} />
             </Button>
             <Button type="submit" className="flex-1 clip-corner-lg" disabled={pending || !name.trim()}>
-              {pending ? <><Loader2 className="size-4 mr-2 animate-spin" /> Creating…</> : "Create channel"}
+              {pending ? (
+                <>
+                  <Loader2 className="size-4 mr-2 animate-spin" /> <FormattedMessage id="createGroupDialog.creating" defaultMessage="Creating…" />
+                </>
+              ) : (
+                <FormattedMessage id="createGroupDialog.createChannel" defaultMessage="Create channel" />
+              )}
             </Button>
           </div>
         </form>

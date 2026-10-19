@@ -13,6 +13,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { PillTabs, type PillTab } from "@/components/ui/pill-tabs";
 import { useAuthor } from "@/hooks/useAuthor";
+import { FormattedMessage, defineMessages, useIntl } from "@/i18n";
 import { useNip29Servers } from "@/hooks/useNip29Servers";
 import {
   channelReadKey,
@@ -54,10 +55,11 @@ type CenterItem =
 
 type SourceReporter = (source: string, items: CenterItem[] | null) => void;
 
-const FILTERS: PillTab<"all" | "unread">[] = [
-  { id: "all", label: "All", icon: Bell },
-  { id: "unread", label: "Unread", icon: AtSign },
-];
+const messages = defineMessages({
+  all: { id: "notificationsPage.filter.all", defaultMessage: "All" },
+  unread: { id: "notificationsPage.unread", defaultMessage: "Unread" },
+  mentionedYou: { id: "notificationsPage.mentionedYou", defaultMessage: "Mentioned you" },
+});
 
 function relayName(url: string): string {
   try {
@@ -93,6 +95,7 @@ function RelayNotificationSource({ relayUrl, report }: { relayUrl: string; repor
   );
   const { items } = useRelayInbox(relayUrl, groupIds);
   const sourceName = info?.name || relayName(relayUrl);
+  const intl = useIntl();
 
   const reported = useMemo<CenterItem[]>(
     () => items.map(({ event, groupId, unread }) => ({
@@ -103,10 +106,10 @@ function RelayNotificationSource({ relayUrl, report }: { relayUrl: string; repor
       readKey: channelReadKey(relayUrl, groupId),
       route: focusedRoute({ kind: "nip29", relayUrl, groupId }, event.id, event.tags),
       author: event.pubkey,
-      body: messagePreview(event.content, "Mentioned you"),
+      body: messagePreview(event.content, intl.formatMessage(messages.mentionedYou)),
       source: `${sourceName} · #${nameById.get(groupId) ?? groupId}`,
     })),
-    [items, relayUrl, sourceName, nameById],
+    [items, relayUrl, sourceName, nameById, intl],
   );
 
   useEffect(() => {
@@ -137,6 +140,7 @@ function ConcordNotificationSource({
   const readKey = community ? concordMentionReadKey(community.idHex) : undefined;
   const readAt = readKey ? getLastRead(readKey) : 0;
   const communityName = folded?.metadata?.name || entry.current.name;
+  const intl = useIntl();
 
   const reported = useMemo<CenterItem[]>(() => {
     if (!readKey) return [];
@@ -155,11 +159,14 @@ function ConcordNotificationSource({
           message.tags,
         ),
         author: message.pubkey,
-        body: messagePreview(message.content, "Mentioned you"),
-        source: `${communityName} · #${nameById.get(channelId) ?? "unknown channel"}`,
+        body: messagePreview(message.content, intl.formatMessage(messages.mentionedYou)),
+        source: `${communityName} · #${nameById.get(channelId) ?? intl.formatMessage({
+          id: "notificationsPage.unknownChannel",
+          defaultMessage: "unknown channel",
+        })}`,
       }];
     });
-  }, [mentions, readKey, readAt, entry.community_id, communityName, nameById]);
+  }, [mentions, readKey, readAt, entry.community_id, communityName, nameById, intl]);
 
   useEffect(() => {
     const source = `concord:${entry.community_id}`;
@@ -170,10 +177,14 @@ function ConcordNotificationSource({
 }
 
 function NotificationRow({ item, onOpen }: { item: CenterItem; onOpen: (item: CenterItem) => void }) {
+  const intl = useIntl();
   const author = useAuthor(item.author);
   const metadata = author.data?.metadata;
-  const authorName = metadata?.display_name || metadata?.name || "Anonymous";
-  const title = item.kind === "invite" ? `Invite from ${authorName}` : authorName;
+  const authorName = metadata?.display_name || metadata?.name
+    || intl.formatMessage({ id: "notificationsPage.anonymous", defaultMessage: "Anonymous" });
+  const title = item.kind === "invite"
+    ? intl.formatMessage({ id: "notificationsPage.inviteFrom", defaultMessage: "Invite from {name}" }, { name: authorName })
+    : authorName;
   const Icon = item.kind === "invite" ? MailPlus : AtSign;
 
   return (
@@ -209,7 +220,7 @@ function NotificationRow({ item, onOpen }: { item: CenterItem; onOpen: (item: Ce
         </p>
       </div>
       {item.unread && (
-        <span className="mt-2 size-2 shrink-0 rounded-full bg-primary" aria-label="Unread" />
+        <span className="mt-2 size-2 shrink-0 rounded-full bg-primary" aria-label={intl.formatMessage(messages.unread)} />
       )}
     </button>
   );
@@ -221,6 +232,7 @@ function NotificationRow({ item, onOpen }: { item: CenterItem; onOpen: (item: Ce
  * keys so badges stay in sync.
  */
 export function NotificationsPage() {
+  const intl = useIntl();
   const navigate = useNavigate();
   const { markRead } = useReadState();
   const servers = useNip29Servers();
@@ -228,6 +240,10 @@ export function NotificationsPage() {
   const { items: invites } = useInviteInbox();
   const [filter, setFilter] = useState<"all" | "unread">("all");
   const [sources, setSources] = useState<Record<string, CenterItem[]>>({});
+  const filters = useMemo<PillTab<"all" | "unread">[]>(() => [
+    { id: "all", label: intl.formatMessage(messages.all), icon: Bell },
+    { id: "unread", label: intl.formatMessage(messages.unread), icon: AtSign },
+  ], [intl]);
 
   const report = useCallback<SourceReporter>((source, items) => {
     setSources((current) => {
@@ -252,14 +268,20 @@ export function NotificationsPage() {
       route: "/invites",
       author: invite.sender,
       body: invite.catchUp
-        ? `Sent updated keys for ${invite.name}`
-        : `Invited you to ${invite.name}`,
-      source: "Concord invite",
+        ? intl.formatMessage(
+          { id: "notificationsPage.sentUpdatedKeys", defaultMessage: "Sent updated keys for {name}" },
+          { name: invite.name },
+        )
+        : intl.formatMessage(
+          { id: "notificationsPage.invitedYou", defaultMessage: "Invited you to {name}" },
+          { name: invite.name },
+        ),
+      source: intl.formatMessage({ id: "notificationsPage.concordInvite", defaultMessage: "Concord invite" }),
     }));
     return [...pendingInvites, ...Object.values(sources).flat()]
       .sort((a, b) => b.createdAt - a.createdAt || a.id.localeCompare(b.id))
       .slice(0, 300);
-  }, [invites, sources]);
+  }, [invites, sources, intl]);
 
   const unreadCount = activity.reduce((count, item) => count + Number(item.unread), 0);
   const visible = filter === "unread" ? activity.filter((item) => item.unread) : activity;
@@ -288,7 +310,9 @@ export function NotificationsPage() {
         <div className="mx-auto flex w-full max-w-3xl flex-1 min-h-0 flex-col px-2 sm:px-4">
           <header className="relative mt-1 sidebar:mt-3 flex h-12 touch:h-[3.25rem] shrink-0 items-center gap-2 px-3 clip-corner-lg bg-chrome">
             <Bell className="size-5 shrink-0 text-muted-foreground" />
-            <h1 className="min-w-0 truncate font-semibold">Notifications</h1>
+            <h1 className="min-w-0 truncate font-semibold">
+              <FormattedMessage id="notificationsPage.title" defaultMessage="Notifications" />
+            </h1>
             {unreadCount > 0 && (
               <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-primary px-1.5 text-xs font-bold leading-none text-primary-foreground">
                 {unreadCount > 99 ? "99+" : unreadCount}
@@ -302,12 +326,14 @@ export function NotificationsPage() {
               onClick={markAllRead}
             >
               <CheckCheck className="size-4" />
-              <span className="hidden sm:inline">Mark all read</span>
+              <span className="hidden sm:inline">
+                <FormattedMessage id="notificationsPage.markAllRead" defaultMessage="Mark all read" />
+              </span>
             </Button>
           </header>
 
           <div className="mt-3 shrink-0">
-            <PillTabs<"all" | "unread"> tabs={FILTERS} value={filter} onChange={setFilter} />
+            <PillTabs<"all" | "unread"> tabs={filters} value={filter} onChange={setFilter} />
           </div>
 
           <div className="mt-3 flex-1 min-h-0 overflow-y-auto pb-safe">
@@ -320,8 +346,13 @@ export function NotificationsPage() {
                 <Bell className="size-10 opacity-40" />
                 <p className="max-w-sm text-sm">
                   {filter === "unread"
-                    ? "You're all caught up."
-                    : "No notifications yet. Mentions and Concord invites will appear here."}
+                    ? <FormattedMessage id="notificationsPage.allCaughtUp" defaultMessage="You're all caught up." />
+                    : (
+                      <FormattedMessage
+                        id="notificationsPage.empty"
+                        defaultMessage="No notifications yet. Mentions and Concord invites will appear here."
+                      />
+                    )}
                 </p>
               </div>
             )}

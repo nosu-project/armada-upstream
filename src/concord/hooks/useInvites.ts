@@ -57,6 +57,7 @@ import type { Community } from "@/concord/lib/types";
 
 import type { NostrEvent } from "@nostrify/nostrify";
 import type { NUser } from "@nostrify/react/login";
+import { t } from "@/i18n";
 
 /**
  * The creator's Invite List (kind 13303, CORD-05 §4): private bookkeeping for
@@ -88,14 +89,14 @@ export async function publishInviteListEvent(
   relayUrls: Iterable<string>,
 ): Promise<{ accepted: string[]; rejected: string[] }> {
   const targets = uniqueRelayUrls(relayUrls);
-  if (targets.length === 0) throw new Error("No relay is available for creator invite recovery");
+  if (targets.length === 0) throw new Error(t({ id: "useInvites.noRelayForRecovery", defaultMessage: "No relay is available for creator invite recovery" }));
   // This changes revocation authority: never start a partial fan-out before the
   // exact event and every target are durable.
   await queueSignedEvent(event, undefined, targets, { inheritPendingTargets: false });
   const result = await publishSignedEventToRelays(nostr, event, targets, 8_000);
   await recordQueuedPublishAttempt(event.id, targets, result.rejected).catch(() => undefined);
   if (result.accepted.length === 0) {
-    throw new Error("No relay accepted your creator invite list update");
+    throw new Error(t({ id: "useInvites.noRelayAcceptedList", defaultMessage: "No relay accepted your creator invite list update" }));
   }
   return result;
 }
@@ -331,7 +332,7 @@ export async function updateInviteList(
   canonicalRelays: string[],
   patch: InviteList,
 ): Promise<InviteList> {
-  if (!user.signer.nip44) throw new Error("NIP-44 unsupported.");
+  if (!user.signer.nip44) throw new Error(t({ id: "useInvites.nip44Unsupported", defaultMessage: "NIP-44 unsupported." }));
   const canonical = uniqueRelayUrls(canonicalRelays);
   const relays = inviteListRelays(canonical);
   const persisted = await readPersistedInviteList(user.pubkey);
@@ -348,20 +349,20 @@ export async function updateInviteList(
   } satisfies PersistedInviteList);
   const verified = await readPersistedInviteList(user.pubkey);
   if (!verified || JSON.stringify(verified.list) !== JSON.stringify(optimistic)) {
-    throw new Error("Creator invite recovery state could not be saved locally");
+    throw new Error(t({ id: "useInvites.recoveryNotSaved", defaultMessage: "Creator invite recovery state could not be saved locally" }));
   }
   queryClient.setQueryData(inviteListKey(user.pubkey), optimistic);
 
   const read = await fetchInviteList(nostr, user, undefined, relays);
   if (read.unreadable) {
     throw new Error(
-      "Couldn't decrypt the current creator invite list; not saving to avoid losing revocation secrets.",
+      t({ id: "useInvites.listUndecryptable", defaultMessage: "Couldn't decrypt the current creator invite list; not saving to avoid losing revocation secrets." }),
     );
   }
   const requiredFloor = canonical.length > 0 ? canonical : uniqueRelayUrls(RESCUE_RELAYS);
   if (!read.answered.some((url) => requiredFloor.includes(url))) {
     throw new Error(
-      "Couldn't confirm your creator invite list on an account-state relay; not saving to avoid overwriting it.",
+      t({ id: "useInvites.listUnconfirmed", defaultMessage: "Couldn't confirm your creator invite list on an account-state relay; not saving to avoid overwriting it." }),
     );
   }
   const next = mergeInviteLists(
@@ -404,7 +405,7 @@ function useUpdateInviteList() {
   return useMutation({
     scope: { id: "concord-invite-list" },
     mutationFn: async (patch: InviteList) => {
-      if (!user?.signer.nip44) throw new Error("NIP-44 unsupported.");
+      if (!user?.signer.nip44) throw new Error(t({ id: "useInvites.nip44Unsupported", defaultMessage: "NIP-44 unsupported." }));
       // Fold into the local cache before anything can fail: for a mint it holds the
       // ONLY copy of `signer_sk`. Merge is idempotent by token.
       return updateInviteList(
@@ -464,9 +465,9 @@ export function useInviteActions(community: Community | undefined) {
       onlyChannelIdHexes?: ReadonlySet<string>;
     },
   ): InviteBundle => {
-    if (!user) throw new Error("Not ready.");
+    if (!user) throw new Error(t({ id: "useInvites.notReady", defaultMessage: "Not ready." }));
     const src = bundleSource();
-    if (!src) throw new Error("Not ready.");
+    if (!src) throw new Error(t({ id: "useInvites.notReady", defaultMessage: "Not ready." }));
     const vendable = vendableChannels(src.privateChannels, audience, {
       only: opts?.onlyChannelIdHexes,
     });
@@ -547,8 +548,8 @@ export function useInviteActions(community: Community | undefined) {
     }
   >({
     mutationFn: async ({ expiresAtMs, label, listPublicly }) => {
-      if (!user || !community) throw new Error("Not ready.");
-      if (!user.signer.nip44) throw new Error("This signer can't mint invite links (NIP-44 unsupported).");
+      if (!user || !community) throw new Error(t({ id: "useInvites.notReady", defaultMessage: "Not ready." }));
+      if (!user.signer.nip44) throw new Error(t({ id: "useInvites.signerCantMint", defaultMessage: "This signer can't mint invite links (NIP-44 unsupported)." }));
 
       // Warn (not refuse; LAN quickstarts are supported): Android/desktop run on a
       // secure origin where ws:// is blocked as mixed content.
@@ -556,11 +557,26 @@ export function useInviteActions(community: Community | undefined) {
       if (insecure.length > 0) {
         const fatal = insecure.length === community.relays.length;
         toast({
-          title: fatal ? "This invite won't work on mobile" : "Some relays won't work on mobile",
-          description:
-            `${insecure.join(", ")} ${insecure.length === 1 ? "is" : "are"} not wss:// — ` +
-            `mobile and desktop apps can't connect to insecure relays` +
-            (fatal ? ", so members joining from them won't be able to participate at all." : "."),
+          title: fatal
+            ? t({ id: "useInvites.insecure.fatalTitle", defaultMessage: "This invite won't work on mobile" })
+            : t({ id: "useInvites.insecure.partialTitle", defaultMessage: "Some relays won't work on mobile" }),
+          description: fatal
+            ? t(
+                {
+                  id: "useInvites.insecure.fatalDescription",
+                  defaultMessage:
+                    "{relays} {count, plural, one {is} other {are}} not wss:// — mobile and desktop apps can't connect to insecure relays, so members joining from them won't be able to participate at all.",
+                },
+                { relays: insecure.join(", "), count: insecure.length },
+              )
+            : t(
+                {
+                  id: "useInvites.insecure.partialDescription",
+                  defaultMessage:
+                    "{relays} {count, plural, one {is} other {are}} not wss:// — mobile and desktop apps can't connect to insecure relays.",
+                },
+                { relays: insecure.join(", "), count: insecure.length },
+              ),
           variant: fatal ? "destructive" : undefined,
         });
       }
@@ -584,7 +600,7 @@ export function useInviteActions(community: Community | undefined) {
       const announcement = listPublicly ? buildCommunityAnnouncement({ inviteUrl: url }) : null;
 
       // The bundle is the only write that makes the link joinable, so the only one awaited.
-      await publishToAnyRelay(nostr, community.relays, bundleEvent, "No relay accepted the invite bundle.");
+      await publishToAnyRelay(nostr, community.relays, bundleEvent, t({ id: "useInvites.noRelayAcceptedBundle", defaultMessage: "No relay accepted the invite bundle." }));
 
       // Not awaited: `signer_sk` is optimistically cached before publishing, and
       // reporting a failure here for an already-live link invites a duplicate mint.
@@ -604,9 +620,9 @@ export function useInviteActions(community: Community | undefined) {
         tombstones: [],
       }).catch(() => {
         toast({
-          title: "Invite link created, but not synced",
+          title: t({ id: "useInvites.notSynced.title", defaultMessage: "Invite link created, but not synced" }),
           description:
-            "Its revocation secret didn't reach your relays, so your other devices won't be able to revoke this link.",
+            t({ id: "useInvites.notSynced.description", defaultMessage: "Its revocation secret didn't reach your relays, so your other devices won't be able to revoke this link." }),
           variant: "destructive",
         });
       });
@@ -621,18 +637,18 @@ export function useInviteActions(community: Community | undefined) {
 
   const revokeLink = useMutation<void, Error, { url: string }>({
     mutationFn: async ({ url }) => {
-      if (!user || !community) throw new Error("Not ready.");
+      if (!user || !community) throw new Error(t({ id: "useInvites.notReady", defaultMessage: "Not ready." }));
       const parsed = parseInviteLink(url);
-      if (!parsed) throw new Error("Not a recognizable invite link.");
+      if (!parsed) throw new Error(t({ id: "useInvites.notInviteLink", defaultMessage: "Not a recognizable invite link." }));
 
       // Only the creator holds the signer secret (Invite List).
       const entry = inviteList.data?.entries.find(
         (e) => e.community_id === community.idHex && parseInviteLink(e.url)?.linkSigner === parsed.linkSigner,
       );
-      if (!entry) throw new Error("This device doesn't hold that link's signing secret.");
+      if (!entry) throw new Error(t({ id: "useInvites.noSigningSecret", defaultMessage: "This device doesn't hold that link's signing secret." }));
 
       const tomb = buildRevocationEvent(hexToBytes(entry.signer_sk));
-      await publishToAnyRelay(nostr, community.relays, tomb, "No relay accepted the revocation.");
+      await publishToAnyRelay(nostr, community.relays, tomb, t({ id: "useInvites.noRelayAcceptedRevocation", defaultMessage: "No relay accepted the revocation." }));
 
       await updateInviteList({
         entries: [],
@@ -663,7 +679,7 @@ export function useInviteActions(community: Community | undefined) {
     { skipRegistry?: boolean } | void
   >({
     mutationFn: async (opts) => {
-      if (!user || !community) throw new Error("Not ready.");
+      if (!user || !community) throw new Error(t({ id: "useInvites.notReady", defaultMessage: "Not ready." }));
       const entries = (inviteList.data?.entries ?? []).filter(
         (e) => e.community_id === community.idHex,
       );
@@ -674,7 +690,7 @@ export function useInviteActions(community: Community | undefined) {
             nostr,
             community.relays,
             buildRevocationEvent(hexToBytes(entry.signer_sk)),
-            "No relay accepted the revocation.",
+            t({ id: "useInvites.noRelayAcceptedRevocation", defaultMessage: "No relay accepted the revocation." }),
           ),
         ),
       );
@@ -732,8 +748,8 @@ export function useInviteActions(community: Community | undefined) {
     }
   >({
     mutationFn: async ({ recipientPubkey, expiresAtMs, onlyChannelIdHexes, entitlementOverlay }) => {
-      if (!user || !community) throw new Error("Not ready.");
-      if (!user.signer.nip44) throw new Error("This signer can't send direct invites (NIP-44 unsupported).");
+      if (!user || !community) throw new Error(t({ id: "useInvites.notReady", defaultMessage: "Not ready." }));
+      if (!user.signer.nip44) throw new Error(t({ id: "useInvites.signerCantSendDirect", defaultMessage: "This signer can't send direct invites (NIP-44 unsupported)." }));
 
       // Exactly the Private Channels the recipient's roles grant (CORD-03 §1).
       const bundle = buildBundle(
@@ -754,9 +770,9 @@ export function useInviteActions(community: Community | undefined) {
       // scanner resolves (CORD-05 §6).
       const inbox = await recipientInboxRelays(nostr, recipientPubkey);
       // A FAILED lookup isn't "no list"; falling back to stock could misdeliver.
-      if (inbox === null) throw new Error("Couldn't reach the network to send the invite. Please try again.");
+      if (inbox === null) throw new Error(t({ id: "useInvites.networkUnreachable", defaultMessage: "Couldn't reach the network to send the invite. Please try again." }));
       const relays = inviteDeliveryRelays(inbox);
-      await publishToAnyRelay(nostr, relays, wrap, "No relay accepted the invite.");
+      await publishToAnyRelay(nostr, relays, wrap, t({ id: "useInvites.noRelayAcceptedInvite", defaultMessage: "No relay accepted the invite." }));
     },
   });
 
@@ -811,7 +827,7 @@ export function useInviteActions(community: Community | undefined) {
       }),
     );
     // Total rejection must surface, or coordinates vend stale bundles forever.
-    if (attempted > 0 && accepted === 0) throw new Error("No relay accepted the refreshed invite bundle.");
+    if (attempted > 0 && accepted === 0) throw new Error(t({ id: "useInvites.noRelayAcceptedRefresh", defaultMessage: "No relay accepted the refreshed invite bundle." }));
   };
 
   /**
@@ -914,7 +930,7 @@ export function useRetireCommunityLinks(community: Community | undefined) {
       revokeAllMyLinks({ skipRegistry: true }),
       signers.size > 0 ? unlistLinks(signers) : Promise.resolve(0),
     ]);
-    // A wholesale rejection ("Not ready.") revoked nothing: owe every link.
+    // A wholesale rejection (t({ id: "useInvites.notReady", defaultMessage: "Not ready." })) revoked nothing: owe every link.
     const unrevoked = revoke.status === "fulfilled" ? revoke.value.failedSignerSks : myLinks.map((e) => e.signer_sk);
     const unlistFailed = unlist.status === "rejected";
 
@@ -929,7 +945,7 @@ export function useRetireCommunityLinks(community: Community | undefined) {
               const [revocations, unlistAgain] = await Promise.all([
                 Promise.allSettled(
                   sks.map((sk) =>
-                    publishToAnyRelay(nostr, relays, buildRevocationEvent(hexToBytes(sk)), "No relay accepted the revocation."),
+                    publishToAnyRelay(nostr, relays, buildRevocationEvent(hexToBytes(sk)), t({ id: "useInvites.noRelayAcceptedRevocation", defaultMessage: "No relay accepted the revocation." })),
                   ),
                 ),
                 unlistOwed.length > 0 ? unlistLinks(unlistOwed).then((n) => n, () => undefined) : Promise.resolve(0),

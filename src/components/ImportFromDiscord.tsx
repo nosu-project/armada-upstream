@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { bridgePortalUrl } from "@/lib/platform";
 import { cn } from "@/lib/utils";
+import { FormattedMessage } from "@/i18n";
 
 /**
  * Entry points into the Discord bridge portal (`armada-discord-bridge`), a
@@ -53,7 +54,7 @@ export function ImportFromDiscordButton({
       }}
     >
       <DiscordMark className="size-4 shrink-0" />
-      Import a Discord server
+      <FormattedMessage id="importFromDiscord.button" defaultMessage="Import a Discord server" />
     </Button>
   );
 }
@@ -66,22 +67,25 @@ export function DiscordBridgeSection({ canManage }: { canManage: boolean }) {
   return (
     <div className="space-y-1.5">
       <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-        Discord bridge
+        <FormattedMessage id="importFromDiscord.bridgeTitle" defaultMessage="Discord bridge" />
       </span>
       <div className="space-y-2.5 rounded-lg bg-secondary/40 p-3">
         <p className="text-xs text-muted-foreground">
-          Mirror a channel to a Discord server, or import one into Armada. Set up
-          and managed in the bridge portal with your Discord account.
+          <FormattedMessage
+            id="importFromDiscord.bridgeDescription"
+            defaultMessage="Mirror a channel to a Discord server, or import one into Armada. Set up and managed in the bridge portal with your Discord account."
+          />
         </p>
         <p className="text-xs text-muted-foreground">
-          A bridged channel leaves end-to-end encryption: everything posted in it
-          is readable in plaintext on Discord's servers. Unbridged channels are
-          unaffected.
+          <FormattedMessage
+            id="importFromDiscord.bridgeWarning"
+            defaultMessage="A bridged channel leaves end-to-end encryption: everything posted in it is readable in plaintext on Discord's servers. Unbridged channels are unaffected."
+          />
         </p>
         <Button asChild size="sm" className="clip-corner-lg">
           <a href={href} target="_blank" rel="noopener noreferrer">
             <DiscordMark className="size-4 shrink-0" />
-            Open bridge portal
+            <FormattedMessage id="importFromDiscord.openPortal" defaultMessage="Open bridge portal" />
             <ExternalLink className="size-3.5 shrink-0 opacity-60" />
           </a>
         </Button>

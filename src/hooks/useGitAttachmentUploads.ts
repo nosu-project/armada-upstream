@@ -2,6 +2,7 @@ import { useCallback, useRef, useState } from "react";
 
 import { useUploadFile } from "@/hooks/useUploadFile";
 import { toast } from "@/hooks/useToast";
+import { t } from "@/i18n";
 
 /** One NIP-92 imeta tag from the NIP-94-style tags an upload returns. */
 export function imetaTagFromNip94(fileTags: string[][]): string[] {
@@ -27,7 +28,7 @@ export function useGitAttachmentUploads(appendText: (url: string) => void) {
         appendText(url);
       } catch (error) {
         toast({
-          title: "Couldn't upload attachment",
+          title: t({ id: "useGitAttachmentUploads.failed", defaultMessage: "Couldn't upload attachment" }),
           description: error instanceof Error ? error.message : undefined,
           variant: "destructive",
         });

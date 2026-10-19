@@ -12,6 +12,7 @@ import type { ChannelTimelineEntry } from "@/components/chat/channelTimeline";
 import type { ChatMsg, ChatTransport, MessageReactions, ReactInput, ReactionTally, SendStatus } from "@/components/chat/transport";
 import type { DecryptedDM } from "@/hooks/useDirectMessages";
 import type { OpenedDm } from "@/lib/nip17/protocol";
+import { t } from "@/i18n";
 
 const EMPTY_TALLIES: ReactionTally[] = [];
 
@@ -62,7 +63,7 @@ export function mergeDmPlanes<M extends { id: string; created_at: number }>(
 
 export class LegacyFallbackRequired extends Error {
   constructor() {
-    super("This person can't receive private (NIP-17) messages yet.");
+    super(t({ id: "useDmTransport.legacyFallbackRequired", defaultMessage: "This person can't receive private (NIP-17) messages yet." }));
     this.name = "LegacyFallbackRequired";
   }
 }
@@ -339,7 +340,7 @@ export function useDmTransport(
 
   const editMessage = useCallback(async (original: ChatMsg, content: string) => {
     if (!dm17IdsRef.current.has(original.id) || original.kind !== KIND_DM_CHAT) {
-      throw new Error("Only NIP-17 chat messages can be edited");
+      throw new Error(t({ id: "useDmTransport.onlyNip17Editable", defaultMessage: "Only NIP-17 chat messages can be edited" }));
     }
     await dm17WritersRef.current.editMessage(original.id, content);
   }, []);

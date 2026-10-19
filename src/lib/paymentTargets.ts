@@ -8,6 +8,7 @@
  */
 import type { NostrEvent } from '@nostrify/nostrify';
 
+import { t } from '@/i18n';
 import { validateBitcoinAddress } from '@/lib/bitcoinAddress';
 import { isSilentPaymentAddress, validateSilentPaymentAddress } from '@/lib/silentPaymentsCore';
 
@@ -122,7 +123,9 @@ export const PAYMENT_METHODS: Record<PaymentTargetType, PaymentMethodDef> = {
     kind: 'generic',
     validate: isMoneroAuthority,
     uri: (a) => `monero:${a.trim()}`,
-    placeholder: '4… (Monero address)',
+    get placeholder() {
+      return t({ id: "paymentTargets.placeholder.monero", defaultMessage: "4… (Monero address)" });
+    },
   },
   ethereum: {
     type: 'ethereum',
@@ -132,7 +135,9 @@ export const PAYMENT_METHODS: Record<PaymentTargetType, PaymentMethodDef> = {
     kind: 'generic',
     validate: isEthereumAuthority,
     uri: (a) => `ethereum:${a.trim()}`,
-    placeholder: '0x… (Ethereum address)',
+    get placeholder() {
+      return t({ id: "paymentTargets.placeholder.ethereum", defaultMessage: "0x… (Ethereum address)" });
+    },
   },
   nano: {
     type: 'nano',
@@ -142,7 +147,9 @@ export const PAYMENT_METHODS: Record<PaymentTargetType, PaymentMethodDef> = {
     kind: 'generic',
     validate: isNanoAuthority,
     uri: (a) => `nano:${a.trim()}`,
-    placeholder: 'nano_… (Nano address)',
+    get placeholder() {
+      return t({ id: "paymentTargets.placeholder.nano", defaultMessage: "nano_… (Nano address)" });
+    },
   },
   cashme: {
     type: 'cashme',

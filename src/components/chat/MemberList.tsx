@@ -47,6 +47,7 @@ import { getAvatarShape } from "@/lib/avatarShape";
 import { tryNpubEncode } from "@/lib/safeNip19";
 import { cn } from "@/lib/utils";
 import { writeClipboardText } from "@/lib/clipboard";
+import { FormattedMessage, t, useIntl } from "@/i18n";
 
 import type { Nip29Admin } from "@/lib/nip29";
 import type { ComponentType, ReactNode } from "react";
@@ -110,6 +111,7 @@ const MemberRow = memo(function MemberRow({
   onMessage,
   customBadge,
 }: MemberRowProps) {
+  const intl = useIntl();
   const author = useAuthor(pubkey);
   const metadata = author.data?.metadata;
   const { displayName, color } = useScopedIdentity(pubkey, metadata);
@@ -131,8 +133,8 @@ const MemberRow = memo(function MemberRow({
     const npub = tryNpubEncode(pubkey);
     if (!npub) return;
     writeClipboardText(npub).then(
-      () => toast({ title: "Copied npub" }),
-      () => toast({ title: "Copy failed", variant: "destructive" }),
+      () => toast({ title: t({ id: "memberList.copiedNpub", defaultMessage: "Copied npub" }) }),
+      () => toast({ title: t({ id: "memberList.copyFailed", defaultMessage: "Copy failed" }), variant: "destructive" }),
     );
   };
 
@@ -142,30 +144,30 @@ const MemberRow = memo(function MemberRow({
     <>
       <Item onSelect={() => requestMention(pubkey)}>
         <AtSign className="size-4" />
-        Mention
+        <FormattedMessage id="memberList.mention" defaultMessage="Mention" />
       </Item>
       {onMessage && !isSelf && (
         <Item onSelect={() => onMessage(pubkey)}>
           <MessageSquareText className="size-4" />
-          Message
+          <FormattedMessage id="memberList.message" defaultMessage="Message" />
         </Item>
       )}
       <Item onSelect={copyNpub}>
         <Copy className="size-4" />
-        Copy npub
+        <FormattedMessage id="memberList.copyNpub" defaultMessage="Copy npub" />
       </Item>
 
       {isSelf && (
         <Item onSelect={() => setStatusOpen(true)}>
           <Smile className="size-4" />
-          Set status
+          <FormattedMessage id="memberList.setStatus" defaultMessage="Set status" />
         </Item>
       )}
 
       {isSelf && onEditProfile && (
         <Item onSelect={onEditProfile}>
           <IdCard className="size-4" />
-          Server identity
+          <FormattedMessage id="memberList.serverIdentity" defaultMessage="Server identity" />
         </Item>
       )}
 
@@ -175,7 +177,7 @@ const MemberRow = memo(function MemberRow({
           <Sub>
             <SubTrigger>
               <UserCog className="size-4" />
-              Roles
+              <FormattedMessage id="memberList.roles" defaultMessage="Roles" />
             </SubTrigger>
             <SubContent className="w-56 max-h-72 overflow-y-auto">
               <RolePickerItems
@@ -215,7 +217,9 @@ const MemberRow = memo(function MemberRow({
           </Avatar>
           {presence && (
             <span
-              aria-label={presence === "online" ? "Online" : "Away"}
+              aria-label={presence === "online"
+                ? intl.formatMessage({ id: "memberList.online", defaultMessage: "Online" })
+                : intl.formatMessage({ id: "memberList.away", defaultMessage: "Away" })}
               className={cn(
                 "absolute -bottom-0.5 -right-0.5 size-2.5 rounded-full ring-2 ring-[hsl(var(--chrome))]",
                 presence === "online" ? "bg-success" : "bg-warning",
@@ -255,27 +259,27 @@ const MemberRow = memo(function MemberRow({
       </ProfilePreviewCard>
       {isOwner ? (
         <span
-          title="Owner"
+          title={intl.formatMessage({ id: "memberList.role.owner", defaultMessage: "Owner" })}
           className="shrink-0 inline-flex items-center gap-1 rounded-full bg-amber-500/15 px-1.5 py-0.5 text-3xs font-medium text-amber-500"
         >
           <Crown className="size-3" aria-hidden />
-          Owner
+          <FormattedMessage id="memberList.role.owner" defaultMessage="Owner" />
         </span>
       ) : isAdmin ? (
         <span
-          title="Admin"
+          title={intl.formatMessage({ id: "memberList.role.admin", defaultMessage: "Admin" })}
           className="shrink-0 inline-flex items-center gap-1 rounded-full bg-primary/15 px-1.5 py-0.5 text-3xs font-medium text-primary"
         >
           <Shield className="size-3" aria-hidden />
-          Admin
+          <FormattedMessage id="memberList.role.admin" defaultMessage="Admin" />
         </span>
       ) : isModerator ? (
         <span
-          title="Moderator"
+          title={intl.formatMessage({ id: "memberList.role.moderator", defaultMessage: "Moderator" })}
           className="shrink-0 inline-flex items-center gap-1 rounded-full bg-muted px-1.5 py-0.5 text-3xs font-medium text-muted-foreground"
         >
           <Shield className="size-3" aria-hidden />
-          Mod
+          <FormattedMessage id="memberList.role.mod" defaultMessage="Mod" />
         </span>
       ) : customBadge ? (
         <span
@@ -290,18 +294,18 @@ const MemberRow = memo(function MemberRow({
         </span>
       ) : roleSet.has(ROLE_BOT) ? (
         <span
-          title="Agent"
+          title={intl.formatMessage({ id: "memberList.role.agent", defaultMessage: "Agent" })}
           className="shrink-0 inline-flex items-center gap-1 rounded-full bg-primary/15 px-1.5 py-0.5 text-3xs font-medium text-primary"
         >
           <Bot className="size-3" aria-hidden />
-          Agent
+          <FormattedMessage id="memberList.role.agent" defaultMessage="Agent" />
         </span>
       ) : roleSet.has(ROLE_GUEST) ? (
         <span
-          title="Guest"
+          title={intl.formatMessage({ id: "memberList.role.guest", defaultMessage: "Guest" })}
           className="shrink-0 inline-flex items-center gap-1 rounded-full bg-muted px-1.5 py-0.5 text-3xs font-medium text-muted-foreground"
         >
-          Guest
+          <FormattedMessage id="memberList.role.guest" defaultMessage="Guest" />
         </span>
       ) : null}
       <BotPill metadata={metadata} />
@@ -310,7 +314,7 @@ const MemberRow = memo(function MemberRow({
           <Button
             variant="ghost"
             size="icon"
-            aria-label={`Manage ${displayName}`}
+            aria-label={intl.formatMessage({ id: "memberList.manage", defaultMessage: "Manage {name}" }, { name: displayName })}
             className="size-6 touch:size-10 opacity-0 group-hover:opacity-100 touch:opacity-100 data-[state=open]:opacity-100 text-muted-foreground hover:text-foreground"
           >
             <MoreVertical className="size-3.5" />
@@ -386,6 +390,7 @@ export const MemberList = memo(function MemberList({
   onAddMembers,
   className,
 }: MemberListProps) {
+  const intl = useIntl();
   const { mutedPubkeys } = useMutedPubkeys();
   const [query, setQuery] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -459,8 +464,10 @@ export const MemberList = memo(function MemberList({
     >
       {onClose && (
         <div className="flex items-center justify-between px-2 py-1 shrink-0 sidebar:hidden">
-          <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Members</h3>
-          <Button variant="ghost" size="icon" aria-label="Close members" className="size-6 touch:size-10" onClick={onClose}>
+          <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+            <FormattedMessage id="memberList.members" defaultMessage="Members" />
+          </h3>
+          <Button variant="ghost" size="icon" aria-label={intl.formatMessage({ id: "memberList.close", defaultMessage: "Close members" })} className="size-6 touch:size-10" onClick={onClose}>
             <X className="size-4" />
           </Button>
         </div>
@@ -474,7 +481,7 @@ export const MemberList = memo(function MemberList({
           <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
             <UserPlus className="size-4" aria-hidden />
           </span>
-          Add members
+          <FormattedMessage id="memberList.addMembers" defaultMessage="Add members" />
         </button>
       )}
 
@@ -485,7 +492,7 @@ export const MemberList = memo(function MemberList({
             type="text"
             value={query}
             onChange={setQuery}
-            placeholder="Search members"
+            placeholder={intl.formatMessage({ id: "memberList.search", defaultMessage: "Search members" })}
             className="text-sm"
           />
         </div>
@@ -494,7 +501,11 @@ export const MemberList = memo(function MemberList({
       <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto">
       {noMatches && (
         <p className="px-2 py-3 text-xs text-muted-foreground">
-          No members match “{query.trim()}”.
+          <FormattedMessage
+            id="memberList.noMatches"
+            defaultMessage="No members match “{query}”."
+            values={{ query: query.trim() }}
+          />
         </p>
       )}
       {/* Every section opens with the same 40px heading band: under the search, the
@@ -503,7 +514,11 @@ export const MemberList = memo(function MemberList({
         <>
           <div className="flex h-10 items-center gap-1 px-3">
             <h3 className="flex-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-              Admins · {visibleAdmins.length}
+              <FormattedMessage
+                id="memberList.adminsHeading"
+                defaultMessage="Admins · {count}"
+                values={{ count: visibleAdmins.length }}
+              />
             </h3>
           </div>
           {visibleAdmins.map((admin) => (
@@ -552,14 +567,21 @@ export const MemberList = memo(function MemberList({
       {(!searching || regulars.length > 0) && (
         <div className="flex h-10 items-center gap-1 px-3">
           <h3 className="flex-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-            Members · {regulars.length}
+            <FormattedMessage
+              id="memberList.membersHeading"
+              defaultMessage="Members · {count}"
+              values={{ count: regulars.length }}
+            />
           </h3>
         </div>
       )}
       {regulars.length === 0 ? (
         !searching && (
           <p className="px-2 py-2 text-xs text-muted-foreground">
-            No visible members. The relay may hide the member list.
+            <FormattedMessage
+              id="memberList.noneVisible"
+              defaultMessage="No visible members. The relay may hide the member list."
+            />
           </p>
         )
       ) : (

@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useRelayInfo } from "@/hooks/useRelayInfo";
 import { toast } from "@/hooks/useToast";
+import { common, FormattedMessage, t, useIntl } from "@/i18n";
 import { normalizeRelayUrl } from "@/lib/platform";
 
 function relayHost(url: string): string {
@@ -30,6 +31,7 @@ function RelayCapability({ label, title }: { label: string; title: string }) {
 
 /** Relay row with NIP-11 identity and NIP-42/50 capabilities (adapted from Ditto). */
 function RelayIdentity({ url }: { url: string }) {
+  const intl = useIntl();
   const { data: info } = useRelayInfo(url);
   const host = relayHost(url);
   const name = info?.name || host;
@@ -51,8 +53,8 @@ function RelayIdentity({ url }: { url: string }) {
         </div>
       </div>
       <div className="flex items-center gap-1 ml-auto shrink-0">
-        {nips.includes(50) && <RelayCapability label="search" title="Supports search (NIP-50)" />}
-        {nips.includes(42) && <RelayCapability label="auth" title="Supports auth (NIP-42)" />}
+        {nips.includes(50) && <RelayCapability label="search" title={intl.formatMessage({ id: "relayListEditor.supportsSearch", defaultMessage: "Supports search (NIP-50)" })} />}
+        {nips.includes(42) && <RelayCapability label="auth" title={intl.formatMessage({ id: "relayListEditor.supportsAuth", defaultMessage: "Supports auth (NIP-42)" })} />}
       </div>
     </div>
   );
@@ -83,9 +85,9 @@ export function RelayListEditor({
   relays,
   onChange,
   pinned = [],
-  pinnedLabel = "Default",
+  pinnedLabel,
   onReset,
-  emptyText = "No relays configured.",
+  emptyText,
   placeholder = "wss://relay.example.com",
   readOnly = false,
   disabled = false,
@@ -93,16 +95,21 @@ export function RelayListEditor({
   max = Infinity,
   maxText,
 }: RelayListEditorProps) {
+  const intl = useIntl();
   const [newUrl, setNewUrl] = useState("");
 
   const handleAdd = () => {
     const normalized = normalizeRelayUrl(newUrl);
     if (!normalized) {
-      toast({ title: "Invalid relay URL", description: "Enter a ws:// or wss:// URL.", variant: "destructive" });
+      toast({
+        title: t({ id: "relayListEditor.invalidUrl.title", defaultMessage: "Invalid relay URL" }),
+        description: t({ id: "relayListEditor.invalidUrl.description", defaultMessage: "Enter a ws:// or wss:// URL." }),
+        variant: "destructive",
+      });
       return;
     }
     if (pinned.includes(normalized) || relays.includes(normalized)) {
-      toast({ title: "Already in the list", description: normalized });
+      toast({ title: t({ id: "relayListEditor.alreadyInList", defaultMessage: "Already in the list" }), description: normalized });
       return;
     }
     if (relays.length >= max) return;
@@ -117,7 +124,7 @@ export function RelayListEditor({
           <div className="flex-1 min-w-0">
             <RelayIdentity url={url} />
           </div>
-          <span className="text-xs text-muted-foreground shrink-0 ml-1">{pinnedLabel}</span>
+          <span className="text-xs text-muted-foreground shrink-0 ml-1">{pinnedLabel ?? <FormattedMessage id="relayListEditor.pinnedDefault" defaultMessage="Default" />}</span>
         </div>
       ))}
 
@@ -130,7 +137,7 @@ export function RelayListEditor({
             <Button
               variant="ghost"
               size="icon"
-              aria-label={`Remove ${url}`}
+              aria-label={intl.formatMessage({ id: "relayListEditor.remove", defaultMessage: "Remove {url}" }, { url })}
               className="size-7 touch:size-11 text-muted-foreground hover:text-destructive shrink-0"
               disabled={disabled || relays.length <= min}
               onClick={() => onChange?.(relays.filter((u) => u !== url))}
@@ -142,7 +149,7 @@ export function RelayListEditor({
       ))}
 
       {relays.length === 0 && pinned.length === 0 && (
-        <p className="text-sm text-muted-foreground py-1">{emptyText}</p>
+        <p className="text-sm text-muted-foreground py-1">{emptyText ?? <FormattedMessage id="relayListEditor.empty" defaultMessage="No relays configured." />}</p>
       )}
 
       {!readOnly && relays.length >= max && maxText && (
@@ -161,20 +168,20 @@ export function RelayListEditor({
             value={newUrl}
             onChange={(e) => setNewUrl(e.target.value)}
             placeholder={placeholder}
-            aria-label="Add relay"
+            aria-label={intl.formatMessage({ id: "relayListEditor.addRelay", defaultMessage: "Add relay" })}
             autoComplete="off"
             disabled={disabled}
             className="text-base md:text-sm bg-background/40 border-transparent"
           />
           <Button type="submit" disabled={disabled || !newUrl.trim()} className="clip-corner-lg shrink-0">
-            <Plus className="size-4 mr-1.5" /> Add
+            <Plus className="size-4 mr-1.5" /> <FormattedMessage {...common.add} />
           </Button>
         </form>
       )}
 
       {!readOnly && onReset && (
         <Button type="button" variant="ghost" size="sm" className="text-muted-foreground -ml-2" disabled={disabled} onClick={onReset}>
-          <RotateCcw className="size-3.5 mr-1.5" /> Reset to defaults
+          <RotateCcw className="size-3.5 mr-1.5" /> <FormattedMessage id="relayListEditor.resetToDefaults" defaultMessage="Reset to defaults" />
         </Button>
       )}
     </div>

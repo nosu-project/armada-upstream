@@ -5,6 +5,7 @@ import { SHEET_NO_DRAG_ATTR, SHEET_SCROLL_ATTR, SnapSheet } from "@/components/c
 import { Button } from "@/components/ui/button";
 import { Drawer, DrawerContent, DrawerTitle } from "@/components/ui/drawer";
 import { useOverlayBack } from "@/hooks/useAndroidBack";
+import { common, defineMessage, FormattedMessage, useIntl } from "@/i18n";
 import { useLongPress } from "@/hooks/useLongPress";
 import { formatTime } from "@/lib/formatTime";
 import {
@@ -44,6 +45,10 @@ const LIST_TIMEOUT_MS = 8000;
 /** How far outside the grid's viewport a tile starts loading its thumbnail. */
 const THUMB_PRELOAD_PX = 400;
 
+const appsLabel = defineMessage({ id: "attachSheet.apps", defaultMessage: "Apps" });
+const selectLabel = defineMessage({ id: "attachSheet.select", defaultMessage: "Select" });
+const attachTitle = defineMessage({ id: "attachSheet.title", defaultMessage: "Attach" });
+
 interface AttachSheetProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -66,9 +71,10 @@ export const AttachSheet = memo(function AttachSheet(props: AttachSheetProps) {
 });
 
 function useTiles(actions: AttachAction[], apps: AttachAction[], gamePicker: ReactNode, openApps: () => void) {
+  const intl = useIntl();
   const hasApps = apps.length > 0 || gamePicker !== undefined;
   return hasApps
-    ? [...actions, { id: "apps", label: "Apps", icon: LayoutGrid, onSelect: openApps }]
+    ? [...actions, { id: "apps", label: intl.formatMessage(appsLabel), icon: LayoutGrid, onSelect: openApps }]
     : actions;
 }
 
@@ -78,6 +84,7 @@ function GallerySheet({ open, onOpenChange, actions, apps = [], gamePicker, onPi
   const [selected, setSelected] = useState<GalleryItem[]>([]);
   const [preview, setPreview] = useState<GalleryItem | null>(null);
   const [spoiler, setSpoiler] = useState(false);
+  const intl = useIntl();
 
   const openApps = useCallback(() => {
     setPage("apps");
@@ -149,10 +156,10 @@ function GallerySheet({ open, onOpenChange, actions, apps = [], gamePicker, onPi
       onOpenChange={onOpenChange}
       expanded={expanded}
       onExpandedChange={onExpandedChange}
-      title="Attach"
+      title={intl.formatMessage(attachTitle)}
     >
       <SheetHeader
-        title={page === "apps" ? "Apps" : undefined}
+        title={page === "apps" ? intl.formatMessage(appsLabel) : undefined}
         onBack={page === "apps" ? () => { setPage("main"); setExpanded(false); } : undefined}
       />
       {page === "apps" ? (
@@ -180,12 +187,12 @@ function GallerySheet({ open, onOpenChange, actions, apps = [], gamePicker, onPi
                   onClick={() => setSelected([])}
                   className="h-11 clip-corner-lg bg-secondary px-4 text-sm font-medium"
                 >
-                  Clear
+                  <FormattedMessage id="attachSheet.clear" defaultMessage="Clear" />
                 </button>
                 <button
                   type="button"
                   aria-pressed={spoiler}
-                  aria-label="Mark as spoiler"
+                  aria-label={intl.formatMessage({ id: "attachSheet.markSpoiler", defaultMessage: "Mark as spoiler" })}
                   onClick={() => setSpoiler((s) => !s)}
                   className={cn(
                     "flex h-11 items-center gap-1.5 clip-corner-lg px-3 text-sm font-medium",
@@ -193,10 +200,14 @@ function GallerySheet({ open, onOpenChange, actions, apps = [], gamePicker, onPi
                   )}
                 >
                   <EyeOff className="size-4" />
-                  Spoiler
+                  <FormattedMessage id="attachSheet.spoiler" defaultMessage="Spoiler" />
                 </button>
                 <Button className="h-11 flex-1 clip-corner-lg font-semibold" onClick={pick}>
-                  Add {selected.length} {selected.length === 1 ? "item" : "items"}
+                  <FormattedMessage
+                    id="attachSheet.addItems"
+                    defaultMessage="Add {count} {count, plural, one {item} other {items}}"
+                    values={{ count: selected.length }}
+                  />
                 </Button>
               </div>
             )}
@@ -248,6 +259,7 @@ function orderOf(selected: GalleryItem[], item: GalleryItem): number | undefined
 
 /** Grab handle (drag or Android back collapses), plus a back button on the Apps page. */
 function SheetHeader({ title, onBack }: { title?: string; onBack?: () => void }) {
+  const intl = useIntl();
   return (
     <div className="shrink-0">
       <div className="mx-auto mt-2.5 mb-2 h-1 w-9 shrink-0 rounded-full bg-muted-foreground/30" />
@@ -255,7 +267,7 @@ function SheetHeader({ title, onBack }: { title?: string; onBack?: () => void })
         <div className="flex items-center gap-1 px-2">
           <button
             type="button"
-            aria-label="Back"
+            aria-label={intl.formatMessage(common.back)}
             onClick={onBack}
             className="flex size-11 items-center justify-center clip-corner-lg text-muted-foreground active:bg-secondary"
           >
@@ -342,7 +354,9 @@ function AppsPage({ apps, gamePicker, onOpenChange, scrollable }: {
       )}
       {gamePicker && (
         <>
-          <p className="px-5 pt-2 pb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Games</p>
+          <p className="px-5 pt-2 pb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            <FormattedMessage id="attachSheet.games" defaultMessage="Games" />
+          </p>
           <div className="shrink-0 px-1">{gamePicker}</div>
         </>
       )}
@@ -353,6 +367,7 @@ function AppsPage({ apps, gamePicker, onOpenChange, scrollable }: {
 /** Without the camera roll (iOS, touch web): the tiles, in a plain sheet. */
 function TilesSheet({ open, onOpenChange, actions, apps = [], gamePicker }: AttachSheetProps) {
   const [page, setPage] = useState<"main" | "apps">("main");
+  const intl = useIntl();
   const tiles = useTiles(actions, apps, gamePicker, () => setPage("apps"));
 
   useOverlayBack(() => {
@@ -379,19 +394,19 @@ function TilesSheet({ open, onOpenChange, actions, apps = [], gamePicker }: Atta
           if (Date.now() - openedAt.current < OPEN_GUARD_MS) e.preventDefault();
         }}
       >
-        <DrawerTitle className="sr-only">Attach</DrawerTitle>
+        <DrawerTitle className="sr-only"><FormattedMessage {...attachTitle} /></DrawerTitle>
         {page === "apps" ? (
           <div className="flex min-h-0 flex-1 flex-col pt-1">
             <div className="flex shrink-0 items-center gap-1 px-2 pb-1">
               <button
                 type="button"
-                aria-label="Back"
+                aria-label={intl.formatMessage(common.back)}
                 onClick={() => setPage("main")}
                 className="flex size-11 items-center justify-center clip-corner-lg text-muted-foreground active:bg-secondary"
               >
                 <ChevronLeft className="size-5" />
               </button>
-              <span className="text-base font-semibold">Apps</span>
+              <span className="text-base font-semibold"><FormattedMessage {...appsLabel} /></span>
             </div>
             <AppsPage apps={apps} gamePicker={gamePicker} onOpenChange={onOpenChange} />
           </div>
@@ -546,18 +561,29 @@ function RecentMediaGrid({ expanded, selected, onToggle, onPreview, onResetSelec
         <span className="flex size-12 items-center justify-center clip-corner-lg bg-secondary">
           <ImageIcon className="size-6 text-muted-foreground" />
         </span>
-        <p className="text-chat font-semibold">Share photos and videos</p>
+        <p className="text-chat font-semibold">
+          <FormattedMessage id="attachSheet.sharePhotos" defaultMessage="Share photos and videos" />
+        </p>
         <p className="text-sm leading-snug text-muted-foreground">
-          {access === "denied"
-            ? "Photo access is turned off for Armada. Turn it on in settings to see your recent photos here."
-            : "Let Armada show your recent photos and videos here."}
+          {access === "denied" ? (
+            <FormattedMessage
+              id="attachSheet.accessDenied"
+              defaultMessage="Photo access is turned off for Armada. Turn it on in settings to see your recent photos here."
+            />
+          ) : (
+            <FormattedMessage id="attachSheet.accessPrompt" defaultMessage="Let Armada show your recent photos and videos here." />
+          )}
         </p>
         <Button
           size="sm"
           className="mt-2 clip-corner-lg px-5 touch:h-11"
           onClick={() => void (access === "denied" ? openMediaSettings().catch(() => undefined) : ask())}
         >
-          {access === "denied" ? "Open settings" : "Allow access"}
+          {access === "denied" ? (
+            <FormattedMessage id="attachSheet.openSettings" defaultMessage="Open settings" />
+          ) : (
+            <FormattedMessage id="attachSheet.allowAccess" defaultMessage="Allow access" />
+          )}
         </Button>
       </div>
     );
@@ -568,10 +594,10 @@ function RecentMediaGrid({ expanded, selected, onToggle, onPreview, onResetSelec
       {access === "limited" && (
         <div className="flex shrink-0 items-center gap-3 px-4 pb-2">
           <p className="flex-1 text-[13px] leading-snug text-muted-foreground">
-            Armada can only see the photos and videos you chose.
+            <FormattedMessage id="attachSheet.limitedAccess" defaultMessage="Armada can only see the photos and videos you chose." />
           </p>
           <Button size="sm" variant="secondary" className="h-8 shrink-0 clip-corner-lg px-4 touch:h-11" onClick={() => void ask()}>
-            Manage
+            <FormattedMessage id="attachSheet.manage" defaultMessage="Manage" />
           </Button>
         </div>
       )}
@@ -591,11 +617,13 @@ function RecentMediaGrid({ expanded, selected, onToggle, onPreview, onResetSelec
               <Loader2 className="size-5 animate-spin" />
             ) : failed ? (
               <span className="flex flex-col items-center gap-2">
-                Couldn't load your gallery.
-                <Button size="sm" variant="secondary" className="clip-corner-lg px-4 touch:h-11" onClick={() => void load(0)}>Retry</Button>
+                <FormattedMessage id="attachSheet.loadFailed" defaultMessage="Couldn't load your gallery." />
+                <Button size="sm" variant="secondary" className="clip-corner-lg px-4 touch:h-11" onClick={() => void load(0)}>
+                  <FormattedMessage {...common.retry} />
+                </Button>
               </span>
             ) : (
-              "No photos or videos yet."
+              <FormattedMessage id="attachSheet.empty" defaultMessage="No photos or videos yet." />
             )}
           </div>
         ) : (
@@ -654,6 +682,7 @@ const GalleryTile = memo(function GalleryTile({ item, order, onToggle, onPreview
   const src = thumb?.src;
 
   const press = useLongPress(() => onPreview(item), { allowInteractive: true });
+  const intl = useIntl();
 
   const picked = order !== undefined;
   return (
@@ -661,7 +690,17 @@ const GalleryTile = memo(function GalleryTile({ item, order, onToggle, onPreview
       ref={ref}
       type="button"
       aria-pressed={picked}
-      aria-label={`${item.video ? "Video" : "Photo"}${item.name ? ` ${item.name}` : ""}`}
+      aria-label={
+        item.name
+          ? intl.formatMessage(
+            { id: "attachSheet.tileLabelNamed", defaultMessage: "{video, select, true {Video {name}} other {Photo {name}}}" },
+            { video: String(item.video), name: item.name },
+          )
+          : intl.formatMessage(
+            { id: "attachSheet.tileLabel", defaultMessage: "{video, select, true {Video} other {Photo}}" },
+            { video: String(item.video) },
+          )
+      }
       {...press}
       onClick={(e) => {
         press.onClick(e);
@@ -713,12 +752,13 @@ function GalleryPreview({ item, order, onToggle, onClose }: {
 }) {
   const src = galleryItemSrc(item);
   const picked = order !== undefined;
+  const intl = useIntl();
   return (
     <div className="absolute inset-0 z-10 flex flex-col bg-black text-white animate-in fade-in-0 duration-150" {...{ [SHEET_NO_DRAG_ATTR]: "" }}>
       <div className="flex shrink-0 items-center justify-between px-2 pt-2">
         <button
           type="button"
-          aria-label="Close preview"
+          aria-label={intl.formatMessage({ id: "attachSheet.closePreview", defaultMessage: "Close preview" })}
           onClick={onClose}
           className="flex size-11 items-center justify-center clip-corner-lg active:bg-white/10"
         >
@@ -727,7 +767,11 @@ function GalleryPreview({ item, order, onToggle, onClose }: {
         <button
           type="button"
           aria-pressed={picked}
-          aria-label={picked ? "Deselect" : "Select"}
+          aria-label={
+            picked
+              ? intl.formatMessage({ id: "attachSheet.deselect", defaultMessage: "Deselect" })
+              : intl.formatMessage(selectLabel)
+          }
           onClick={() => onToggle(item)}
           className="flex size-11 items-center justify-center clip-corner-lg active:bg-white/10"
         >
@@ -750,7 +794,7 @@ function GalleryPreview({ item, order, onToggle, onClose }: {
             onClose();
           }}
         >
-          {picked ? "Done" : "Select"}
+          {picked ? <FormattedMessage {...common.done} /> : <FormattedMessage {...selectLabel} />}
         </Button>
       </div>
     </div>

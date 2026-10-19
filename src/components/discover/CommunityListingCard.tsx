@@ -37,6 +37,7 @@ import { parseInviteLink } from "@/concord/lib/invite";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { toast } from "@/hooks/useToast";
+import { defineMessage, FormattedMessage, t, useIntl } from "@/i18n";
 import { getAvatarShape } from "@/lib/avatarShape";
 import { writeClipboardText } from "@/lib/clipboard";
 import { shortTimeAgo } from "@/lib/formatTime";
@@ -64,8 +65,11 @@ interface CommunityListingCardProps {
  * "Active" is the newest wrap across derivable stream addresses (guestbook,
  * Control, vended/peeked channels): community activity, not message activity.
  */
-const ACTIVITY_HINT =
-  "Newest activity on the streams this invite can see: channel messages, join requests and admin changes.";
+const ACTIVITY_HINT = defineMessage({
+  id: "communityListingCard.activityHint",
+  defaultMessage:
+    "Newest activity on the streams this invite can see: channel messages, join requests and admin changes.",
+});
 
 export function CommunityListingCardSkeleton({ className }: { className?: string }) {
   return (
@@ -105,6 +109,7 @@ export function CommunityListingCard({
   onActivityTarget,
   lastActiveAt,
 }: CommunityListingCardProps) {
+  const intl = useIntl();
   const navigate = useNavigate();
   const { nostr } = useNostr();
   const parsed = useMemo(() => parseInviteLink(invite.inviteUrl), [invite.inviteUrl]);
@@ -148,7 +153,7 @@ export function CommunityListingCard({
 
   // Attribute to the verified bundle `owner`, not the announcement author (just the sharer).
   const attributedPubkey = bundle?.owner ?? invite.source.pubkey;
-  const attributionLabel = bundle?.owner ? "owned by" : "shared by";
+  const ownedByOwner = !!bundle?.owner;
   const author = useAuthor(attributedPubkey);
   const metadata = author.data?.metadata;
   const displayName = getDisplayName(metadata, attributedPubkey);
@@ -222,7 +227,9 @@ export function CommunityListingCard({
   const iconUrl = useDecryptedImage(icon);
   const bannerUrl = useDecryptedImage(banner);
   const name =
-    folded?.metadata?.name?.trim() || bundle?.name?.trim() || "Encrypted community";
+    folded?.metadata?.name?.trim()
+    || bundle?.name?.trim()
+    || intl.formatMessage({ id: "communityListingCard.fallbackName", defaultMessage: "Encrypted community" });
   const description = folded?.metadata?.description?.trim() || bundle?.description?.trim() || "";
   const initial = name.charAt(0).toUpperCase() || "·";
   // Fold > peek > bundle's vended channels as floor, so a member's count doesn't
@@ -233,10 +240,23 @@ export function CommunityListingCard({
     : (controlPeek?.channelCount ?? bundleChannelCount);
   const stats: Array<{ key: string; text: string; hint?: string }> = [];
   if (channelCount > 0) {
-    stats.push({ key: "channels", text: `${channelCount} channel${channelCount === 1 ? "" : "s"}` });
+    stats.push({
+      key: "channels",
+      text: intl.formatMessage(
+        { id: "communityListingCard.channelCount", defaultMessage: "{count, plural, one {# channel} other {# channels}}" },
+        { count: channelCount },
+      ),
+    });
   }
   if (lastActiveAt != null && lastActiveAt > 0) {
-    stats.push({ key: "active", text: `Active ${shortTimeAgo(lastActiveAt)}`, hint: ACTIVITY_HINT });
+    stats.push({
+      key: "active",
+      text: intl.formatMessage(
+        { id: "communityListingCard.activeAgo", defaultMessage: "Active {time}" },
+        { time: shortTimeAgo(lastActiveAt) },
+      ),
+      hint: intl.formatMessage(ACTIVITY_HINT),
+    });
   }
   const publicChannelIdHexes = useMemo(() => {
     if (folded) {
@@ -294,10 +314,16 @@ export function CommunityListingCard({
     try {
       // Discover keeps the newest copy per link, so unlist every copy.
       await unlistLinks([invite.linkSigner], [invite]);
-      toast({ title: "Removed from Discover", description: `${name} is no longer listed by you.` });
+      toast({
+        title: t({ id: "communityListingCard.removedTitle", defaultMessage: "Removed from Discover" }),
+        description: t(
+          { id: "communityListingCard.removedDescription", defaultMessage: "{name} is no longer listed by you." },
+          { name },
+        ),
+      });
     } catch (e) {
       toast({
-        title: "Couldn't remove the listing",
+        title: t({ id: "communityListingCard.removeFailed", defaultMessage: "Couldn't remove the listing" }),
         description: e instanceof Error ? e.message : undefined,
         variant: "destructive",
       });
@@ -311,7 +337,7 @@ export function CommunityListingCard({
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     } catch {
-      toast({ title: "Copy failed", variant: "destructive" });
+      toast({ title: t({ id: "communityListingCard.copyFailed", defaultMessage: "Copy failed" }), variant: "destructive" });
     }
   };
 
@@ -361,7 +387,7 @@ export function CommunityListingCard({
           <button
             type="button"
             onClick={onOpen}
-            aria-label={`Open ${name}`}
+            aria-label={intl.formatMessage({ id: "communityListingCard.openName", defaultMessage: "Open {name}" }, { name })}
             className="relative aspect-[3/1] w-full shrink-0 overflow-hidden bg-secondary"
           >
             {bannerContent}
@@ -421,7 +447,14 @@ export function CommunityListingCard({
               </AvatarFallback>
             </Avatar>
             <span className="truncate">
-              {attributionLabel} <DisplayName pubkey={attributedPubkey} name={displayName} />
+              <FormattedMessage
+                id="communityListingCard.attribution"
+                defaultMessage="{owned, select, true {owned by {name}} other {shared by {name}}}"
+                values={{
+                  owned: ownedByOwner ? "true" : "false",
+                  name: <DisplayName pubkey={attributedPubkey} name={displayName} />,
+                }}
+              />
             </span>
           </button>
         </ProfilePreviewCard>
@@ -430,16 +463,16 @@ export function CommunityListingCard({
           {husk ? (
             <Button variant="secondary" className="min-w-0 flex-1 clip-corner-lg" disabled>
               <Skull className="size-4" />
-              Dissolved
+              <FormattedMessage id="communityListingCard.dissolved" defaultMessage="Dissolved" />
             </Button>
           ) : isMember ? (
             <Button variant="secondary" className="min-w-0 flex-1 clip-corner-lg" onClick={onOpen}>
               <Check className="size-4" />
-              Open
+              <FormattedMessage id="communityListingCard.open" defaultMessage="Open" />
             </Button>
           ) : (
             <Button className="min-w-0 flex-1 clip-corner-lg" onClick={onJoin}>
-              Join
+              <FormattedMessage id="communityListingCard.join" defaultMessage="Join" />
               <ArrowRight className="size-4" />
             </Button>
           )}
@@ -448,7 +481,7 @@ export function CommunityListingCard({
               variant="ghost"
               size="icon"
               className="shrink-0 clip-corner-lg"
-              aria-label="Copy invite link"
+              aria-label={intl.formatMessage({ id: "communityListingCard.copyInviteLink", defaultMessage: "Copy invite link" })}
               onClick={onCopy}
             >
               {copied ? <Check className="size-4 text-success" /> : <Copy className="size-4" />}
@@ -461,7 +494,7 @@ export function CommunityListingCard({
                   variant="ghost"
                   size="icon"
                   className="shrink-0 clip-corner-lg"
-                  aria-label="Listing options"
+                  aria-label={intl.formatMessage({ id: "communityListingCard.listingOptions", defaultMessage: "Listing options" })}
                   disabled={removing}
                 >
                   {removing ? <Loader2 className="size-4 animate-spin" /> : <MoreHorizontal className="size-4" />}
@@ -473,7 +506,7 @@ export function CommunityListingCard({
                   onSelect={() => void onRemove()}
                 >
                   <Trash2 className="mr-2 size-4" />
-                  Remove from Discover
+                  <FormattedMessage id="communityListingCard.removeFromDiscover" defaultMessage="Remove from Discover" />
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>

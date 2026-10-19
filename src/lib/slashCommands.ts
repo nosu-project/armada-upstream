@@ -1,5 +1,6 @@
 import { nip19 } from "nostr-tools";
 
+import { t } from "@/i18n";
 import type { NostrRumor } from "@/lib/nostrRumor";
 
 /**
@@ -67,11 +68,11 @@ const requireTarget = (
   ctx: SlashCommandContext,
   build: (pubkey: string, rest: string) => SlashRunResult,
 ): SlashRunResult => {
-  if (!ctx.canModerate) return { type: "error", message: "You don't have permission to moderate this channel." };
+  if (!ctx.canModerate) return { type: "error", message: t({ id: "slashCommands.noPermission", defaultMessage: "You don't have permission to moderate this channel." }) };
   const trimmed = arg.trim();
-  if (!trimmed) return { type: "error", message: "Specify a user, e.g. by @mention or npub." };
+  if (!trimmed) return { type: "error", message: t({ id: "slashCommands.specifyUser", defaultMessage: "Specify a user, e.g. by @mention or npub." }) };
   const pubkey = ctx.resolvePubkey(trimmed);
-  if (!pubkey) return { type: "error", message: "Couldn't find that user. Mention them with @ or paste their npub." };
+  if (!pubkey) return { type: "error", message: t({ id: "slashCommands.userNotFound", defaultMessage: "Couldn't find that user. Mention them with @ or paste their npub." }) };
   const rest = trimmed.replace(/^\S+\s*/, "").trim();
   return build(pubkey, rest);
 };
@@ -79,12 +80,14 @@ const requireTarget = (
 export const SLASH_COMMANDS: SlashCommand[] = [
   {
     name: "me",
-    description: "Send a third-person action message",
+    get description() {
+      return t({ id: "slashCommands.me.description", defaultMessage: "Send a third-person action message" });
+    },
     usage: "/me <action>",
     kind: "text",
     run: (arg) => {
       const action = arg.trim();
-      if (!action) return { type: "error", message: "Usage: /me <action>" };
+      if (!action) return { type: "error", message: t({ id: "slashCommands.usage", defaultMessage: "Usage: {usage}" }, { usage: "/me <action>" }) };
       return { type: "send", text: ME_ACTION_PREFIX + action };
     },
   },
@@ -111,7 +114,9 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   },
   {
     name: "poll",
-    description: "Create a poll",
+    get description() {
+      return t({ id: "slashCommands.poll.description", defaultMessage: "Create a poll" });
+    },
     kind: "action",
     requires: ["poll"],
     runsOnSelect: true,
@@ -119,14 +124,18 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   },
   {
     name: "mention",
-    description: "Mention a user (opens the @ picker)",
+    get description() {
+      return t({ id: "slashCommands.mention.description", defaultMessage: "Mention a user (opens the @ picker)" });
+    },
     kind: "action",
     runsOnSelect: true,
     run: () => ({ type: "action", action: { kind: "openMention" } }),
   },
   {
     name: "thread",
-    description: "Start a thread on the latest message",
+    get description() {
+      return t({ id: "slashCommands.thread.description", defaultMessage: "Start a thread on the latest message" });
+    },
     kind: "action",
     requires: ["thread"],
     runsOnSelect: true,
@@ -134,7 +143,9 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   },
   {
     name: "slap",
-    description: "Slap someone around a bit with a large trout",
+    get description() {
+      return t({ id: "slashCommands.slap.description", defaultMessage: "Slap someone around a bit with a large trout" });
+    },
     usage: "/slap <name>",
     kind: "text",
     runsOnSelect: true,
@@ -150,7 +161,9 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   {
     name: "kick",
     aliases: ["remove"],
-    description: "Remove a user from the channel",
+    get description() {
+      return t({ id: "slashCommands.kick.description", defaultMessage: "Remove a user from the channel" });
+    },
     usage: "/kick @user",
     kind: "moderation",
     requires: ["moderation"],
@@ -158,7 +171,9 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   },
   {
     name: "ban",
-    description: "Remove a user (with a reason)",
+    get description() {
+      return t({ id: "slashCommands.ban.description", defaultMessage: "Remove a user (with a reason)" });
+    },
     usage: "/ban @user [reason]",
     kind: "moderation",
     requires: ["moderation"],

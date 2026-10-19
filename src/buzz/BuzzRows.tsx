@@ -17,6 +17,7 @@ import { useAuthor } from "@/hooks/useAuthor";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { shortTimeAgo } from "@/lib/formatTime";
 import { cn } from "@/lib/utils";
+import { defineMessages, FormattedMessage, useIntl } from "@/i18n";
 
 import type { NostrRumor } from "@/lib/nostrRumor";
 
@@ -47,38 +48,64 @@ function SystemLine({ icon, children, createdAt }: {
 export function BuzzSystemRow({ event }: { event: NostrRumor }) {
   const sys = useMemo(() => parseSystemMessage(event), [event]);
   if (!sys) {
-    return <SystemLine createdAt={event.created_at}>System event</SystemLine>;
+    return <SystemLine createdAt={event.created_at}>
+        <FormattedMessage id="buzzRows.systemEvent" defaultMessage="System event" />
+      </SystemLine>;
   }
   const body = (() => {
     switch (sys.type) {
       case "member_joined":
-        return <><Name pubkey={sys.target ?? sys.actor} /> joined the channel</>;
+        return <FormattedMessage id="buzzRows.memberJoined" defaultMessage="{name} joined the channel" values={{ name: <Name pubkey={sys.target ?? sys.actor} /> }} />;
       case "member_left":
-        return <><Name pubkey={sys.target ?? sys.actor} /> left the channel</>;
+        return <FormattedMessage id="buzzRows.memberLeft" defaultMessage="{name} left the channel" values={{ name: <Name pubkey={sys.target ?? sys.actor} /> }} />;
       case "channel_created":
-        return <><Name pubkey={sys.actor} /> created the channel</>;
+        return <FormattedMessage id="buzzRows.channelCreated" defaultMessage="{name} created the channel" values={{ name: <Name pubkey={sys.actor} /> }} />;
       case "channel_deleted":
-        return <><Name pubkey={sys.actor} /> deleted the channel</>;
+        return <FormattedMessage id="buzzRows.channelDeleted" defaultMessage="{name} deleted the channel" values={{ name: <Name pubkey={sys.actor} /> }} />;
       case "channel_archived":
-        return <><Name pubkey={sys.actor} /> archived the channel</>;
+        return <FormattedMessage id="buzzRows.channelArchived" defaultMessage="{name} archived the channel" values={{ name: <Name pubkey={sys.actor} /> }} />;
       case "channel_unarchived":
-        return <><Name pubkey={sys.actor} /> unarchived the channel</>;
+        return <FormattedMessage id="buzzRows.channelUnarchived" defaultMessage="{name} unarchived the channel" values={{ name: <Name pubkey={sys.actor} /> }} />;
       case "channel_auto_archived":
-        return <>Channel auto-archived after inactivity</>;
+        return <FormattedMessage id="buzzRows.autoArchived" defaultMessage="Channel auto-archived after inactivity" />;
       case "topic_changed":
-        return <><Name pubkey={sys.actor} /> set the topic{sys.topic ? <>: “{sys.topic}”</> : null}</>;
+        return sys.topic ? (
+          <FormattedMessage
+            id="buzzRows.topicSet"
+            defaultMessage="{name} set the topic: “{topic}”"
+            values={{ name: <Name pubkey={sys.actor} />, topic: sys.topic }}
+          />
+        ) : (
+          <FormattedMessage
+            id="buzzRows.topicChanged"
+            defaultMessage="{name} set the topic"
+            values={{ name: <Name pubkey={sys.actor} /> }}
+          />
+        );
       case "purpose_changed":
-        return <><Name pubkey={sys.actor} /> updated the channel purpose</>;
+        return <FormattedMessage id="buzzRows.purposeChanged" defaultMessage="{name} updated the channel purpose" values={{ name: <Name pubkey={sys.actor} /> }} />;
       case "visibility_changed":
-        return <><Name pubkey={sys.actor} /> made the channel {sys.visibility === "private" ? "private" : "public"}</>;
+        return (
+          <FormattedMessage
+            id="buzzRows.visibilityChanged"
+            defaultMessage="{name} made the channel {visibility, select, private {private} other {public}}"
+            values={{ name: <Name pubkey={sys.actor} />, visibility: sys.visibility === "private" ? "private" : "public" }}
+          />
+        );
       case "ttl_changed":
         return sys.ttlSeconds
-          ? <><Name pubkey={sys.actor} /> set messages to expire after {formatDuration(sys.ttlSeconds)}</>
-          : <><Name pubkey={sys.actor} /> disabled message expiry</>;
+          ? (
+            <FormattedMessage
+              id="buzzRows.ttlSet"
+              defaultMessage="{name} set messages to expire after {duration}"
+              values={{ name: <Name pubkey={sys.actor} />, duration: formatDuration(sys.ttlSeconds) }}
+            />
+          )
+          : <FormattedMessage id="buzzRows.ttlDisabled" defaultMessage="{name} disabled message expiry" values={{ name: <Name pubkey={sys.actor} /> }} />;
       case "message_deleted":
-        return <><Name pubkey={sys.actor} /> deleted a message</>;
+        return <FormattedMessage id="buzzRows.messageDeleted" defaultMessage="{name} deleted a message" values={{ name: <Name pubkey={sys.actor} /> }} />;
       case "dm_created":
-        return <>Conversation started</>;
+        return <FormattedMessage id="buzzRows.dmCreated" defaultMessage="Conversation started" />;
       default:
         return <>{sys.type.replaceAll("_", " ")}</>;
     }
@@ -149,10 +176,16 @@ export function BuzzDiffRow({ event }: { event: NostrRumor }) {
                 className="text-primary hover:underline"
                 onClick={() => setExpanded(true)}
               >
-                Show {lines.length - DIFF_COLLAPSE_LINES} more lines
+                <FormattedMessage
+                  id="buzzRows.showMoreLines"
+                  defaultMessage="{count, plural, other {Show # more lines}}"
+                  values={{ count: lines.length - DIFF_COLLAPSE_LINES }}
+                />
               </button>
             )}
-            {truncated && <span className="text-muted-foreground/60">diff truncated by the relay</span>}
+            {truncated && <span className="text-muted-foreground/60">
+                <FormattedMessage id="buzzRows.diffTruncated" defaultMessage="diff truncated by the relay" />
+              </span>}
           </div>
         )}
       </div>
@@ -160,21 +193,36 @@ export function BuzzDiffRow({ event }: { event: NostrRumor }) {
   );
 }
 
+const workflowLabels = defineMessages({
+  triggered: { id: "buzzRows.workflow.triggered", defaultMessage: "Workflow triggered" },
+  stepStarted: { id: "buzzRows.workflow.stepStarted", defaultMessage: "Step started" },
+  stepCompleted: { id: "buzzRows.workflow.stepCompleted", defaultMessage: "Step completed" },
+  stepFailed: { id: "buzzRows.workflow.stepFailed", defaultMessage: "Step failed" },
+  completed: { id: "buzzRows.workflow.completed", defaultMessage: "Workflow completed" },
+  failed: { id: "buzzRows.workflow.failed", defaultMessage: "Workflow failed" },
+  cancelled: { id: "buzzRows.workflow.cancelled", defaultMessage: "Workflow cancelled" },
+  approvalRequested: { id: "buzzRows.workflow.approvalRequested", defaultMessage: "Approval requested" },
+  approvalGranted: { id: "buzzRows.workflow.approvalGranted", defaultMessage: "Approval granted" },
+  approvalDenied: { id: "buzzRows.workflow.approvalDenied", defaultMessage: "Approval denied" },
+  trigger: { id: "buzzRows.workflow.trigger", defaultMessage: "Workflow trigger" },
+  event: { id: "buzzRows.workflow.event", defaultMessage: "Workflow event" },
+});
+
 /** Human label for a workflow execution kind (46001–46012, 46020 trigger). */
-function workflowKindLabel(kind: number): string {
+function workflowKindLabel(kind: number) {
   switch (kind) {
-    case 46001: return "Workflow triggered";
-    case 46002: return "Step started";
-    case 46003: return "Step completed";
-    case 46004: return "Step failed";
-    case 46005: return "Workflow completed";
-    case 46006: return "Workflow failed";
-    case 46007: return "Workflow cancelled";
-    case 46010: return "Approval requested";
-    case 46011: return "Approval granted";
-    case 46012: return "Approval denied";
-    case 46020: return "Workflow trigger";
-    default: return "Workflow event";
+    case 46001: return workflowLabels.triggered;
+    case 46002: return workflowLabels.stepStarted;
+    case 46003: return workflowLabels.stepCompleted;
+    case 46004: return workflowLabels.stepFailed;
+    case 46005: return workflowLabels.completed;
+    case 46006: return workflowLabels.failed;
+    case 46007: return workflowLabels.cancelled;
+    case 46010: return workflowLabels.approvalRequested;
+    case 46011: return workflowLabels.approvalGranted;
+    case 46012: return workflowLabels.approvalDenied;
+    case 46020: return workflowLabels.trigger;
+    default: return workflowLabels.event;
   }
 }
 
@@ -183,7 +231,9 @@ export function BuzzWorkflowEventRow({ event }: { event: NostrRumor }) {
   const preview = event.content.replace(/\s+/g, " ").trim();
   return (
     <SystemLine icon={<Workflow className="size-3.5 shrink-0" />} createdAt={event.created_at}>
-      <span className="font-medium text-foreground/80">{workflowKindLabel(event.kind)}</span>
+      <span className="font-medium text-foreground/80">
+        <FormattedMessage {...workflowKindLabel(event.kind)} />
+      </span>
       {preview && <span className="opacity-80">: {preview.length > 160 ? `${preview.slice(0, 159)}…` : preview}</span>}
     </SystemLine>
   );
@@ -191,14 +241,15 @@ export function BuzzWorkflowEventRow({ event }: { event: NostrRumor }) {
 
 /** Kind 30620: a workflow definition card (name + collapsible YAML source). */
 export function BuzzWorkflowDefinitionRow({ event }: { event: NostrRumor }) {
+  const intl = useIntl();
   const [expanded, setExpanded] = useState(false);
   const author = useAuthor(event.pubkey);
   const name = useScopedDisplayName(event.pubkey, author.data?.metadata);
   const label = useMemo(() => {
     const m = event.content.match(/^name:\s*["']?(.+?)["']?\s*$/m);
     if (m) return m[1];
-    return event.tags.find(([n]) => n === "d")?.[1] ?? "Workflow";
-  }, [event.content, event.tags]);
+    return event.tags.find(([n]) => n === "d")?.[1] ?? intl.formatMessage({ id: "buzzRows.workflow.fallbackName", defaultMessage: "Workflow" });
+  }, [event.content, event.tags, intl]);
   return (
     <div className="px-4 py-1.5">
       <div className="clip-hairline-lg [--fill:var(--secondary)/0.4] [--fill-hover:var(--secondary)/0.4] p-px overflow-hidden">
@@ -210,7 +261,13 @@ export function BuzzWorkflowDefinitionRow({ event }: { event: NostrRumor }) {
         >
           <Workflow className="size-4 shrink-0 text-primary/80" />
           <span className="font-medium truncate flex-1">{label}</span>
-          <span className="text-xs text-muted-foreground shrink-0">by <DisplayName pubkey={event.pubkey} name={name} /></span>
+          <span className="text-xs text-muted-foreground shrink-0">
+            <FormattedMessage
+              id="buzzRows.workflow.by"
+              defaultMessage="by {name}"
+              values={{ name: <DisplayName pubkey={event.pubkey} name={name} /> }}
+            />
+          </span>
           <span className="text-3xs text-muted-foreground/60 shrink-0">{shortTimeAgo(event.created_at)}</span>
         </button>
         {expanded && (
@@ -272,15 +329,30 @@ export function BuzzHuddleRow({ event, lifecycle }: {
         <AudioLines className={cn("size-5 shrink-0", ended ? "text-muted-foreground" : "text-success")} />
         <div className="min-w-0 flex-1">
           <div className="text-sm">
-            <span className="font-medium"><DisplayName pubkey={event.pubkey} name={name} /></span>{" "}
-            <span className="text-muted-foreground">{ended ? "held a huddle" : "started a huddle"}</span>
+            <FormattedMessage
+              id="buzzRows.huddle.title"
+              defaultMessage="{name} <muted>{ended, select, yes {held a huddle} other {started a huddle}}</muted>"
+              values={{
+                name: <span className="font-medium"><DisplayName pubkey={event.pubkey} name={name} /></span>,
+                ended: ended ? "yes" : "no",
+                muted: (chunks) => <span className="text-muted-foreground">{chunks}</span>,
+              }}
+            />
           </div>
           {!ended && participants.length > 0 && (
             <div className="text-xs text-muted-foreground">
-              {participants.length} participant{participants.length === 1 ? "" : "s"} in the huddle
+              <FormattedMessage
+                id="buzzRows.huddle.participants"
+                defaultMessage="{count, plural, one {# participant} other {# participants}} in the huddle"
+                values={{ count: participants.length }}
+              />
             </div>
           )}
-          {ended && <div className="text-xs text-muted-foreground/70">Huddle ended</div>}
+          {ended && (
+            <div className="text-xs text-muted-foreground/70">
+              <FormattedMessage id="buzzRows.huddle.ended" defaultMessage="Huddle ended" />
+            </div>
+          )}
         </div>
         <span className="shrink-0 text-3xs text-muted-foreground/60">{shortTimeAgo(event.created_at)}</span>
       </div>

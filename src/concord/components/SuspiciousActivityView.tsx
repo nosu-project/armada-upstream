@@ -14,6 +14,7 @@ import type { Channel, Community } from "@/concord/lib/types";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { toast } from "@/hooks/useToast";
+import { FormattedMessage, useIntl } from "@/i18n";
 
 function ActorRow({
   actor,
@@ -29,15 +30,21 @@ function ActorRow({
   return (
     <li className="clip-corner-lg bg-destructive/10 p-3">
       <p className="text-sm">
-        <span className="font-semibold">
-          <DisplayName pubkey={actor.author} name={name} />
-        </span>{" "}
-        is not an admin here, but has tried to make{" "}
-        <span className="font-semibold">{describeAttempts(actor.attempts)}</span>.
+        <FormattedMessage
+          id="suspiciousActivityView.actor"
+          defaultMessage="<b>{name}</b> is not an admin here, but has tried to make <b>{attempts}</b>."
+          values={{
+            name: <DisplayName pubkey={actor.author} name={name} />,
+            attempts: describeAttempts(actor.attempts),
+            b: (chunks) => <span className="font-semibold">{chunks}</span>,
+          }}
+        />
       </p>
       <p className="mt-1 text-xs text-muted-foreground">
-        None of it worked, so nothing in the community has actually changed. Banning them also
-        changes the community's keys, so they lose access rather than just being silenced.
+        <FormattedMessage
+          id="suspiciousActivityView.actorHint"
+          defaultMessage="None of it worked, so nothing in the community has actually changed. Banning them also changes the community's keys, so they lose access rather than just being silenced."
+        />
       </p>
       <div className="mt-2 flex items-center gap-2">
         <Button
@@ -47,7 +54,11 @@ function ActorRow({
           onClick={() => onBan(actor.author)}
         >
           {busy ? <Loader2 className="mr-1.5 size-3.5 animate-spin" /> : null}
-          {actor.banned ? "Already banned" : "Ban and lock them out"}
+          {actor.banned ? (
+            <FormattedMessage id="suspiciousActivityView.alreadyBanned" defaultMessage="Already banned" />
+          ) : (
+            <FormattedMessage id="suspiciousActivityView.banLockOut" defaultMessage="Ban and lock them out" />
+          )}
         </Button>
       </div>
     </li>
@@ -73,14 +84,18 @@ function TravelerRow({
   const author = useAuthor(traveler.author);
   const name = useScopedDisplayName(traveler.author, author.data?.metadata);
   const picture = author.data?.metadata?.picture;
+  const intl = useIntl();
 
   const copyNpub = () => {
     try {
       const npub = nip19.npubEncode(traveler.author);
       void navigator.clipboard?.writeText(npub);
-      toast({ title: "Copied their npub" });
+      toast({ title: intl.formatMessage({ id: "suspiciousActivityView.copiedNpub", defaultMessage: "Copied their npub" }) });
     } catch {
-      toast({ title: "Couldn't copy", variant: "destructive" });
+      toast({
+        title: intl.formatMessage({ id: "suspiciousActivityView.copyFailed", defaultMessage: "Couldn't copy" }),
+        variant: "destructive",
+      });
     }
   };
 
@@ -103,8 +118,26 @@ function TravelerRow({
             </span>
           </div>
           <p className="mt-0.5 text-sm text-muted-foreground">
-            Broadcasting from <span className="font-semibold text-foreground">{describeAhead(traveler.aheadMs)}</span> ahead of
-            you{traveler.count > 1 ? ` (${traveler.count} messages)` : ""}.
+            {traveler.count > 1 ? (
+              <FormattedMessage
+                id="suspiciousActivityView.aheadMany"
+                defaultMessage="Broadcasting from <b>{ahead}</b> ahead of you ({count} messages)."
+                values={{
+                  ahead: describeAhead(traveler.aheadMs),
+                  count: traveler.count,
+                  b: (chunks) => <span className="font-semibold text-foreground">{chunks}</span>,
+                }}
+              />
+            ) : (
+              <FormattedMessage
+                id="suspiciousActivityView.ahead"
+                defaultMessage="Broadcasting from <b>{ahead}</b> ahead of you."
+                values={{
+                  ahead: describeAhead(traveler.aheadMs),
+                  b: (chunks) => <span className="font-semibold text-foreground">{chunks}</span>,
+                }}
+              />
+            )}
           </p>
           {traveler.sample ? (
             <p className="mt-1 line-clamp-2 rounded bg-background/50 px-2 py-1 text-xs italic text-muted-foreground">
@@ -114,18 +147,18 @@ function TravelerRow({
           <div className="mt-2 flex flex-wrap items-center gap-2">
             <Button size="sm" variant="ghost" disabled={busy} onClick={copyNpub}>
               <Copy className="mr-1.5 size-3.5" />
-              Copy npub
+              <FormattedMessage id="suspiciousActivityView.copyNpub" defaultMessage="Copy npub" />
             </Button>
             {canKick ? (
               <Button size="sm" variant="ghost" disabled={busy} onClick={() => onKick(traveler.author)}>
                 <UserMinus className="mr-1.5 size-3.5" />
-                Kick
+                <FormattedMessage id="suspiciousActivityView.kick" defaultMessage="Kick" />
               </Button>
             ) : null}
             {canBan ? (
               <Button size="sm" variant="destructive" disabled={busy} onClick={() => onBan(traveler.author)}>
                 {busy ? <Loader2 className="mr-1.5 size-3.5 animate-spin" /> : <Ban className="mr-1.5 size-3.5" />}
-                Ban
+                <FormattedMessage id="suspiciousActivityView.ban" defaultMessage="Ban" />
               </Button>
             ) : null}
           </div>
@@ -159,6 +192,7 @@ export function SuspiciousActivityView({
   const { actors, unreadable, flooded, alert, dismiss } = useSuspiciousActivity(community, folded);
   const travelers = useTimeTravelers(community, channels);
   const [busy, setBusy] = useState<string | undefined>(undefined);
+  const intl = useIntl();
 
   const onBan = (target: string) => {
     setBusy(target);
@@ -166,15 +200,21 @@ export function SuspiciousActivityView({
     ban({ target, forceRotate: true })
       .then((r) => {
         toast({
-          title: "Member banned",
+          title: intl.formatMessage({ id: "suspiciousActivityView.banned", defaultMessage: "Member banned" }),
           description: r.rekeyed
-            ? "The community's keys were changed, so they no longer have access."
-            : "They can no longer act in this community.",
+            ? intl.formatMessage({
+                id: "suspiciousActivityView.bannedRekeyed",
+                defaultMessage: "The community's keys were changed, so they no longer have access.",
+              })
+            : intl.formatMessage({
+                id: "suspiciousActivityView.bannedSilenced",
+                defaultMessage: "They can no longer act in this community.",
+              }),
         });
       })
       .catch((e) =>
         toast({
-          title: "Couldn't remove them",
+          title: intl.formatMessage({ id: "suspiciousActivityView.banFailed", defaultMessage: "Couldn't remove them" }),
           description: e instanceof Error ? e.message : undefined,
           variant: "destructive",
         }),
@@ -185,10 +225,12 @@ export function SuspiciousActivityView({
   const onKick = (target: string) => {
     setBusy(target);
     kick(target)
-      .then(() => toast({ title: "Member kicked" }))
+      .then(() =>
+        toast({ title: intl.formatMessage({ id: "suspiciousActivityView.kicked", defaultMessage: "Member kicked" }) }),
+      )
       .catch((e) =>
         toast({
-          title: "Couldn't kick them",
+          title: intl.formatMessage({ id: "suspiciousActivityView.kickFailed", defaultMessage: "Couldn't kick them" }),
           description: e instanceof Error ? e.message : undefined,
           variant: "destructive",
         }),
@@ -202,15 +244,19 @@ export function SuspiciousActivityView({
     <div className="mx-auto w-full max-w-2xl space-y-6 p-4 pb-24">
       <div className="flex items-center gap-2">
         <Shield className="size-5 text-destructive" />
-        <h2 className="text-lg font-semibold">Suspicious activity</h2>
+        <h2 className="text-lg font-semibold">
+          <FormattedMessage id="suspiciousActivityView.title" defaultMessage="Suspicious activity" />
+        </h2>
       </div>
 
       {nothing ? (
         <div className="flex flex-col items-center gap-2 rounded-lg bg-foreground/5 px-4 py-12 text-center text-sm text-muted-foreground">
           <Shield className="size-8 opacity-40" />
           <p className="max-w-sm">
-            All clear. Members acting without permission, or arriving from the future with a badly
-            wrong clock, show up here.
+            <FormattedMessage
+              id="suspiciousActivityView.allClear"
+              defaultMessage="All clear. Members acting without permission, or arriving from the future with a badly wrong clock, show up here."
+            />
           </p>
         </div>
       ) : (
@@ -221,37 +267,41 @@ export function SuspiciousActivityView({
                 // The read hit our own limit with history unread; this also explains why nobody is named.
                 <div className="space-y-2 text-sm text-muted-foreground">
                   <p>
-                    This community's history has grown so large we can no longer read all of it. That
-                    takes deliberate effort, and only a member can do it, so someone here is burying
-                    it on purpose.
+                    <FormattedMessage
+                      id="suspiciousActivityView.flooded1"
+                      defaultMessage="This community's history has grown so large we can no longer read all of it. That takes deliberate effort, and only a member can do it, so someone here is burying it on purpose."
+                    />
                   </p>
                   <p>
-                    Until it is cleared up, roles and bans may be out of date on new devices, and we
-                    cannot say for certain who is responsible. Changing the community's keys is what
-                    stops it, but only once they have been removed, so it is worth closing the
-                    community to new joins and reviewing anyone who joined recently or has never
-                    spoken.
+                    <FormattedMessage
+                      id="suspiciousActivityView.flooded2"
+                      defaultMessage="Until it is cleared up, roles and bans may be out of date on new devices, and we cannot say for certain who is responsible. Changing the community's keys is what stops it, but only once they have been removed, so it is worth closing the community to new joins and reviewing anyone who joined recently or has never spoken."
+                    />
                   </p>
                 </div>
               ) : actors.length === 0 ? (
                 // Junk is signed with the shared key, so it names nobody; hence prune-and-rotate.
                 <div className="space-y-2 text-sm text-muted-foreground">
                   <p>
-                    Someone inside this community is flooding it with junk. They can only do that
-                    because they are a member: the events are signed with a key every member shares,
-                    which is also why there is no way to tell which of them it is.
+                    <FormattedMessage
+                      id="suspiciousActivityView.junk1"
+                      defaultMessage="Someone inside this community is flooding it with junk. They can only do that because they are a member: the events are signed with a key every member shares, which is also why there is no way to tell which of them it is."
+                    />
                   </p>
                   <p>
-                    Changing the community's keys is what stops it, but only once they have been
-                    removed. It is worth closing the community to new joins first, then reviewing
-                    anyone who joined recently, has never spoken, or you already had doubts about.
+                    <FormattedMessage
+                      id="suspiciousActivityView.junk2"
+                      defaultMessage="Changing the community's keys is what stops it, but only once they have been removed. It is worth closing the community to new joins first, then reviewing anyone who joined recently, has never spoken, or you already had doubts about."
+                    />
                   </p>
                 </div>
               ) : (
                 <p className="text-sm text-muted-foreground">
-                  {actors.length === 1 ? "Someone is" : `${actors.length} people are`} trying to
-                  perform admin actions in this community without permission. What should we do about
-                  them?
+                  <FormattedMessage
+                    id="suspiciousActivityView.actorsIntro"
+                    defaultMessage="{count, plural, one {Someone is trying to perform admin actions in this community without permission. What should we do about them?} other {# people are trying to perform admin actions in this community without permission. What should we do about them?}}"
+                    values={{ count: actors.length }}
+                  />
                 </p>
               )}
 
@@ -265,18 +315,29 @@ export function SuspiciousActivityView({
 
               {unreadable > 0 ? (
                 <p className="text-xs text-muted-foreground">
-                  Also seen:{" "}
-                  <span className="font-semibold text-destructive">{unreadable} unreadable events</span>,
-                  slowing everyone's sync.
-                  {actors.length > 0
-                    ? " These can't be traced to anyone, so banning the member above may not stop them. It is worth removing anyone else you don't trust, especially members who joined recently or have never spoken."
-                    : ""}
+                  {actors.length > 0 ? (
+                    <FormattedMessage
+                      id="suspiciousActivityView.unreadableWithActors"
+                      defaultMessage="Also seen: <b>{count} unreadable events</b>, slowing everyone's sync. These can't be traced to anyone, so banning the member above may not stop them. It is worth removing anyone else you don't trust, especially members who joined recently or have never spoken."
+                      values={{ count: unreadable, b: (chunks) => <span className="font-semibold text-destructive">{chunks}</span> }}
+                    />
+                  ) : (
+                    <FormattedMessage
+                      id="suspiciousActivityView.unreadable"
+                      defaultMessage="Also seen: <b>{count} unreadable events</b>, slowing everyone's sync."
+                      values={{ count: unreadable, b: (chunks) => <span className="font-semibold text-destructive">{chunks}</span> }}
+                    />
+                  )}
                 </p>
               ) : null}
 
               <div className="flex justify-end">
                 <Button variant="ghost" size="sm" onClick={dismiss}>
-                  {actors.length === 0 ? "Understood" : "Ignore for now"}
+                  {actors.length === 0 ? (
+                    <FormattedMessage id="suspiciousActivityView.understood" defaultMessage="Understood" />
+                  ) : (
+                    <FormattedMessage id="suspiciousActivityView.ignore" defaultMessage="Ignore for now" />
+                  )}
                 </Button>
               </div>
             </section>
@@ -287,12 +348,18 @@ export function SuspiciousActivityView({
               <div className="flex items-center gap-2">
                 <Clock className="size-4 text-primary" />
                 <h3 className="text-sm font-semibold text-primary">
-                  {travelers.length === 1 ? "Time traveler detected" : `${travelers.length} time travelers detected`}
+                  <FormattedMessage
+                    id="suspiciousActivityView.travelers"
+                    defaultMessage="{count, plural, one {Time traveler detected} other {# time travelers detected}}"
+                    values={{ count: travelers.length }}
+                  />
                 </h3>
               </div>
               <p className="text-xs text-muted-foreground">
-                Messages dated in the future stay hidden until their timestamp comes around. Usually
-                a wrong device clock, but if one is being used to jump the timeline, kick or ban.
+                <FormattedMessage
+                  id="suspiciousActivityView.travelersHint"
+                  defaultMessage="Messages dated in the future stay hidden until their timestamp comes around. Usually a wrong device clock, but if one is being used to jump the timeline, kick or ban."
+                />
               </p>
               <ul className="space-y-2">
                 {travelers.map((t) => (

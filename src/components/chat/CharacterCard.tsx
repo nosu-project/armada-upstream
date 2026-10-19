@@ -10,6 +10,7 @@ import { ChromeDialogContent, ChromeDialogFooter, ChromeDialogHeader, Dialog } f
 import { useBlossomCandidates } from "@/hooks/useBlossomCandidates";
 import { useMediaWithFallback } from "@/hooks/useMediaWithFallback";
 import { toast } from "@/hooks/useToast";
+import { common, defineMessages, FormattedMessage, t, useIntl, type MessageDescriptor } from "@/i18n";
 import type { CharaCard, CharacterCardRef } from "@/lib/characterCard";
 import { writeClipboardText } from "@/lib/clipboard";
 import { downloadBinaryFile, savedDescription } from "@/lib/downloadFile";
@@ -39,6 +40,7 @@ function CharacterCardArt({
   onArtClick?: () => void;
 }) {
   const { resolved, onError, failed } = useMediaWithFallback(image);
+  const intl = useIntl();
   if (failed || resolved.status !== "ready") return <IdCard className={iconClassName} />;
   const img = (
     <img
@@ -59,8 +61,8 @@ function CharacterCardArt({
         e.stopPropagation();
         onArtClick();
       }}
-      aria-label="View artwork full size"
-      title="View full size"
+      aria-label={intl.formatMessage({ id: "characterCard.viewArtwork", defaultMessage: "View artwork full size" })}
+      title={intl.formatMessage({ id: "characterCard.viewFullSize", defaultMessage: "View full size" })}
       className="block max-w-full cursor-zoom-in focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
     >
       {img}
@@ -138,13 +140,14 @@ function CardProse({ text, name }: { text: string; name: string }) {
 /** Copies a field's raw text, macros and comments intact, as a frontend would import it. */
 function CopyFieldButton({ text, label }: { text: string; label: string }) {
   const [copied, setCopied] = useState(false);
+  const intl = useIntl();
   const resetTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   useEffect(() => () => clearTimeout(resetTimer.current), []);
   return (
     <button
       type="button"
-      aria-label={`Copy ${label}`}
-      title="Copy"
+      aria-label={label}
+      title={intl.formatMessage(common.copy)}
       onClick={() => {
         writeClipboardText(text).then(
           () => {
@@ -152,7 +155,7 @@ function CopyFieldButton({ text, label }: { text: string; label: string }) {
             clearTimeout(resetTimer.current);
             resetTimer.current = setTimeout(() => setCopied(false), 1500);
           },
-          () => toast({ title: "Couldn't copy", variant: "destructive" }),
+          () => toast({ title: t({ id: "characterCard.copyFailed", defaultMessage: "Couldn't copy" }), variant: "destructive" }),
         );
       }}
       className="grid size-6 shrink-0 place-items-center clip-corner text-muted-foreground transition-colors hover:bg-secondary hover:text-primary touch:size-9"
@@ -162,16 +165,60 @@ function CopyFieldButton({ text, label }: { text: string; label: string }) {
   );
 }
 
+interface SectionLabels {
+  title: MessageDescriptor;
+  /** The copy button's accessible name. */
+  copy: MessageDescriptor;
+}
+
+const SECTIONS = {
+  description: defineMessages({
+    title: { id: "characterCard.description", defaultMessage: "Description" },
+    copy: { id: "characterCard.copyDescription", defaultMessage: "Copy description" },
+  }),
+  personality: defineMessages({
+    title: { id: "characterCard.personality", defaultMessage: "Personality" },
+    copy: { id: "characterCard.copyPersonality", defaultMessage: "Copy personality" },
+  }),
+  scenario: defineMessages({
+    title: { id: "characterCard.scenario", defaultMessage: "Scenario" },
+    copy: { id: "characterCard.copyScenario", defaultMessage: "Copy scenario" },
+  }),
+  firstMessage: defineMessages({
+    title: { id: "characterCard.firstMessage", defaultMessage: "First message" },
+    copy: { id: "characterCard.copyFirstMessage", defaultMessage: "Copy first message" },
+  }),
+  examples: defineMessages({
+    title: { id: "characterCard.examples", defaultMessage: "Example messages" },
+    copy: { id: "characterCard.copyExamples", defaultMessage: "Copy example messages" },
+  }),
+  systemPrompt: defineMessages({
+    title: { id: "characterCard.systemPrompt", defaultMessage: "System prompt" },
+    copy: { id: "characterCard.copySystemPrompt", defaultMessage: "Copy system prompt" },
+  }),
+  postHistory: defineMessages({
+    title: { id: "characterCard.postHistory", defaultMessage: "Post-history instructions" },
+    copy: { id: "characterCard.copyPostHistory", defaultMessage: "Copy post-history instructions" },
+  }),
+  creatorNotes: defineMessages({
+    title: { id: "characterCard.creatorNotes", defaultMessage: "Creator notes" },
+    copy: { id: "characterCard.copyCreatorNotes", defaultMessage: "Copy creator notes" },
+  }),
+} satisfies Record<string, SectionLabels>;
+
 const PROSE_BOX = "overflow-y-auto break-words clip-corner bg-secondary/30 px-3 py-2 text-sm leading-relaxed text-foreground/90";
 
 /** One titled card field; empty fields don't render. Long bodies scroll inside their box. */
-function CardSection({ title, text, name }: { title: string; text?: string; name: string }) {
+function CardSection({ section, text, name }: { section: SectionLabels; text?: string; name: string }) {
+  const intl = useIntl();
   if (!text || !visibleText(text, name)) return null;
   return (
     <section className="space-y-1">
       <div className="flex items-center justify-between gap-2">
-        <h3 className="text-2xs font-semibold uppercase tracking-wider text-muted-foreground">{title}</h3>
-        <CopyFieldButton text={text} label={title.toLowerCase()} />
+        <h3 className="text-2xs font-semibold uppercase tracking-wider text-muted-foreground">
+          <FormattedMessage {...section.title} />
+        </h3>
+        <CopyFieldButton text={text} label={intl.formatMessage(section.copy)} />
       </div>
       <div className={cn("max-h-44", PROSE_BOX)}>
         <CardProse text={text} name={name} />
@@ -197,9 +244,9 @@ function useCardDownload(card: CharaCard, image: CharacterCardRef) {
         : new Uint8Array(raw);
       if (encryption) await verifyPlaintextHash(bytes, encryption.ox);
       const location = await downloadBinaryFile(`${safeFilename(card.name)}.png`, bytes);
-      if (location) toast({ title: "Saved", description: savedDescription(location) });
+      if (location) toast({ title: t({ id: "characterCard.saved", defaultMessage: "Saved" }), description: savedDescription(location) });
     } catch {
-      toast({ title: "Download failed", description: card.name, variant: "destructive" });
+      toast({ title: t({ id: "characterCard.downloadFailed", defaultMessage: "Download failed" }), description: card.name, variant: "destructive" });
     } finally {
       setBusy(false);
     }
@@ -208,21 +255,24 @@ function useCardDownload(card: CharaCard, image: CharacterCardRef) {
   return { download, busy };
 }
 
-const SPEC_LABELS: Record<CharaCard["spec"], string> = {
-  v1: "Spec v1",
-  v2: "Spec v2",
-  v3: "Spec v3",
-};
+const SPEC_LABELS: Record<CharaCard["spec"], MessageDescriptor> = defineMessages({
+  v1: { id: "characterCard.specV1", defaultMessage: "Spec v1" },
+  v2: { id: "characterCard.specV2", defaultMessage: "Spec v2" },
+  v3: { id: "characterCard.specV3", defaultMessage: "Spec v3" },
+});
 
 const NOOP_NAV = () => { /* single image: nothing to navigate to */ };
 
 function CharacterCardDialog({ card, image, onClose }: { card: CharaCard; image: CharacterCardRef; onClose: () => void }) {
   const { download, busy } = useCardDownload(card, image);
   const creator = card.creator?.trim();
+  const intl = useIntl();
   const description = [
-    SPEC_LABELS[card.spec],
-    creator ? `by ${creator}` : undefined,
-    card.character_version ? `version ${card.character_version}` : undefined,
+    intl.formatMessage(SPEC_LABELS[card.spec]),
+    creator ? intl.formatMessage({ id: "characterCard.byCreator", defaultMessage: "by {creator}" }, { creator }) : undefined,
+    card.character_version
+      ? intl.formatMessage({ id: "characterCard.version", defaultMessage: "version {version}" }, { version: card.character_version })
+      : undefined,
   ].filter(Boolean).join(" · ");
   const book = card.character_book;
 
@@ -239,7 +289,7 @@ function CharacterCardDialog({ card, image, onClose }: { card: CharaCard; image:
 
   return (
     <Dialog open onOpenChange={(open) => { if (!open && !viewArt) onClose(); }}>
-      <ChromeDialogContent title={`Character card: ${card.name}`} className="sm:max-w-xl">
+      <ChromeDialogContent title={intl.formatMessage({ id: "characterCard.dialogTitle", defaultMessage: "Character card: {name}" }, { name: card.name })} className="sm:max-w-xl">
         <ChromeDialogHeader icon={IdCard} title={<span className="normal-case">{card.name}</span>} description={description} />
 
         <div className="mt-4 flex justify-center">
@@ -274,15 +324,19 @@ function CharacterCardDialog({ card, image, onClose }: { card: CharaCard; image:
         )}
 
         <div className="mt-4 space-y-3 min-w-0">
-          <CardSection title="Description" text={card.description} name={card.name} />
-          <CardSection title="Personality" text={card.personality} name={card.name} />
-          <CardSection title="Scenario" text={card.scenario} name={card.name} />
-          <CardSection title="First message" text={card.first_mes} name={card.name} />
+          <CardSection section={SECTIONS.description} text={card.description} name={card.name} />
+          <CardSection section={SECTIONS.personality} text={card.personality} name={card.name} />
+          <CardSection section={SECTIONS.scenario} text={card.scenario} name={card.name} />
+          <CardSection section={SECTIONS.firstMessage} text={card.first_mes} name={card.name} />
 
           {card.alternate_greetings.length > 0 && (
             <section className="space-y-1">
               <h3 className="text-2xs font-semibold uppercase tracking-wider text-muted-foreground">
-                Alternate greetings · {card.alternate_greetings.length}
+                <FormattedMessage
+                  id="characterCard.alternateGreetings"
+                  defaultMessage="Alternate greetings · {count}"
+                  values={{ count: card.alternate_greetings.length }}
+                />
               </h3>
               <ol className="space-y-1.5">
                 {card.alternate_greetings.map((greeting, i) => (
@@ -290,7 +344,10 @@ function CharacterCardDialog({ card, image, onClose }: { card: CharaCard; image:
                     <span className="text-2xs font-semibold text-muted-foreground tabular-nums">#{i + 1}</span>
                     <CardProse text={greeting} name={card.name} />
                     <div className="absolute right-1 top-1">
-                      <CopyFieldButton text={greeting} label={`greeting ${i + 1}`} />
+                      <CopyFieldButton
+                        text={greeting}
+                        label={intl.formatMessage({ id: "characterCard.copyGreeting", defaultMessage: "Copy greeting {number}" }, { number: i + 1 })}
+                      />
                     </div>
                   </li>
                 ))}
@@ -298,22 +355,32 @@ function CharacterCardDialog({ card, image, onClose }: { card: CharaCard; image:
             </section>
           )}
 
-          <CardSection title="Example messages" text={card.mes_example} name={card.name} />
-          <CardSection title="System prompt" text={card.system_prompt} name={card.name} />
-          <CardSection title="Post-history instructions" text={card.post_history_instructions} name={card.name} />
-          <CardSection title="Creator notes" text={card.creator_notes} name={card.name} />
+          <CardSection section={SECTIONS.examples} text={card.mes_example} name={card.name} />
+          <CardSection section={SECTIONS.systemPrompt} text={card.system_prompt} name={card.name} />
+          <CardSection section={SECTIONS.postHistory} text={card.post_history_instructions} name={card.name} />
+          <CardSection section={SECTIONS.creatorNotes} text={card.creator_notes} name={card.name} />
 
           {book && book.entries.length > 0 && (
             <section className="space-y-1">
               <h3 className="text-2xs font-semibold uppercase tracking-wider text-muted-foreground">
-                Character book · {book.entries.length} {book.entries.length === 1 ? "entry" : "entries"}
+                <FormattedMessage
+                  id="characterCard.characterBook"
+                  defaultMessage="Character book · {count} {count, plural, one {entry} other {entries}}"
+                  values={{ count: book.entries.length }}
+                />
               </h3>
               <ul className="space-y-1.5">
                 {book.entries.slice(0, 10).map((entry, i) => (
                   <li key={i} className="clip-corner bg-secondary/30 px-3 py-2">
                     <p className="truncate text-xs font-medium text-foreground">
-                      {entry.name || entry.keys.join(", ") || `Entry ${i + 1}`}
-                      {!entry.enabled && <span className="ml-1.5 text-muted-foreground">(disabled)</span>}
+                      {entry.name ||
+                        entry.keys.join(", ") ||
+                        intl.formatMessage({ id: "characterCard.entryNumber", defaultMessage: "Entry {number}" }, { number: i + 1 })}
+                      {!entry.enabled && (
+                        <span className="ml-1.5 text-muted-foreground">
+                          <FormattedMessage id="characterCard.disabled" defaultMessage="(disabled)" />
+                        </span>
+                      )}
                     </p>
                     <p className="mt-0.5 whitespace-pre-wrap break-words text-xs leading-relaxed text-muted-foreground line-clamp-3">
                       {renderMacros(visibleText(entry.content, card.name))}
@@ -322,7 +389,13 @@ function CharacterCardDialog({ card, image, onClose }: { card: CharaCard; image:
                 ))}
               </ul>
               {book.entries.length > 10 && (
-                <p className="text-xs text-muted-foreground">…and {book.entries.length - 10} more in the download.</p>
+                <p className="text-xs text-muted-foreground">
+                  <FormattedMessage
+                    id="characterCard.moreEntries"
+                    defaultMessage="…and {count} more in the download."
+                    values={{ count: book.entries.length - 10 }}
+                  />
+                </p>
               )}
             </section>
           )}
@@ -331,7 +404,7 @@ function CharacterCardDialog({ card, image, onClose }: { card: CharaCard; image:
         <ChromeDialogFooter className="mt-5">
           <Button type="button" onClick={() => void download()} disabled={busy} className="gap-2">
             {busy ? <Loader2 className="size-4 animate-spin" /> : <Download className="size-4" />}
-            Download card
+            <FormattedMessage id="characterCard.download" defaultMessage="Download card" />
           </Button>
         </ChromeDialogFooter>
       </ChromeDialogContent>
@@ -361,6 +434,7 @@ export function CharacterCardEmbed({
   const open = openProp ?? openState;
   const setOpen = onOpenChange ?? setOpenState;
   const creator = card.creator?.trim();
+  const intl = useIntl();
 
   return (
     <>
@@ -370,7 +444,7 @@ export function CharacterCardEmbed({
           e.stopPropagation();
           setOpen(true);
         }}
-        aria-label={`View character card: ${card.name}`}
+        aria-label={intl.formatMessage({ id: "characterCard.view", defaultMessage: "View character card: {name}" }, { name: card.name })}
         className={cn(
           "group flex w-full items-center gap-2.5 px-3 py-2 text-left",
           "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary",
@@ -381,7 +455,11 @@ export function CharacterCardEmbed({
         <span className="min-w-0 flex-1">
           <span className="block truncate text-sm font-semibold leading-tight">{card.name}</span>
           <span className="mt-0.5 block truncate text-xs text-muted-foreground">
-            Character card{creator ? ` · by ${creator}` : ""}
+            {creator ? (
+              <FormattedMessage id="characterCard.embedByCreator" defaultMessage="Character card · by {creator}" values={{ creator }} />
+            ) : (
+              <FormattedMessage id="characterCard.embed" defaultMessage="Character card" />
+            )}
           </span>
         </span>
         <ChevronRight

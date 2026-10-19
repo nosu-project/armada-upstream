@@ -69,6 +69,7 @@ import { usePinnedMessages } from "@/hooks/usePinnedMessages";
 import { useUpdateUserGroupList, useUserGroupList } from "@/hooks/useUserGroupList";
 import { useRelayGroups } from "@/hooks/useRelayGroups";
 import { toast } from "@/hooks/useToast";
+import { FormattedMessage, t, useIntl } from "@/i18n";
 import { routeParamToRelay } from "@/lib/platform";
 import { chatRoute } from "@/lib/routes";
 import { NIP29_REMOVE_CONFIRM, tierChangeConfirm, type TierChange } from "@/lib/memberTierConfirm";
@@ -78,6 +79,7 @@ import { cn } from "@/lib/utils";
 import { activateScope, nip29Scope } from "@/wire/activation";
 
 function JoinBanner({ relayUrl, groupId, isClosed }: { relayUrl: string; groupId: string; isClosed: boolean }) {
+  const intl = useIntl();
   const join = useJoinGroup(relayUrl, groupId);
   const { mutateAsync: updateList } = useUpdateUserGroupList();
   const [searchParams] = useSearchParams();
@@ -91,10 +93,16 @@ function JoinBanner({ relayUrl, groupId, isClosed }: { relayUrl: string; groupId
       await join.mutateAsync({ code: code.trim() || undefined });
       // Joining is the explicit intent that puts the server in the 10009 list (the rail's source).
       updateList({ type: "add-group", ref: { id: groupId, relay: relayUrl } }).catch(() => undefined);
-      toast({ title: "Join request sent", description: "The relay will admit you automatically or after review." });
+      toast({
+        title: t({ id: "groupPage.join.sent", defaultMessage: "Join request sent" }),
+        description: t({
+          id: "groupPage.join.sentDescription",
+          defaultMessage: "The relay will admit you automatically or after review.",
+        }),
+      });
     } catch (e) {
       toast({
-        title: "Couldn't join",
+        title: t({ id: "groupPage.join.failed", defaultMessage: "Couldn't join" }),
         description: relayRejectionMessage(e),
         variant: "destructive",
       });
@@ -106,21 +114,34 @@ function JoinBanner({ relayUrl, groupId, isClosed }: { relayUrl: string; groupId
       <DoorOpen className="size-4 text-primary shrink-0" />
       <span className="text-sm flex-1 min-w-40">
         {inviteCode ? (
-          <>You've been invited to this channel on <span className="font-medium">{displayHost(relayUrl)}</span>.</>
+          <FormattedMessage
+            id="groupPage.join.invited"
+            defaultMessage="You've been invited to this channel on <b>{host}</b>."
+            values={{ host: displayHost(relayUrl), b: (chunks) => <span className="font-medium">{chunks}</span> }}
+          />
+        ) : isClosed ? (
+          <FormattedMessage
+            id="groupPage.join.notMemberInviteOnly"
+            defaultMessage="You're not a member of this invite-only channel."
+          />
         ) : (
-          <>You're not a member of this {isClosed ? "invite-only " : ""}channel.</>
+          <FormattedMessage id="groupPage.join.notMember" defaultMessage="You're not a member of this channel." />
         )}
       </span>
       {isClosed && (
         <Input
           value={code}
           onChange={(e) => setCode(e.target.value)}
-          placeholder="Invite code"
+          placeholder={intl.formatMessage({ id: "groupPage.join.codePlaceholder", defaultMessage: "Invite code" })}
           className="h-8 w-36 text-sm"
         />
       )}
       <Button size="sm" className="h-8" onClick={handleJoin} disabled={join.isPending}>
-        {join.isPending ? <Loader2 className="size-3.5 animate-spin" /> : "Join channel"}
+        {join.isPending ? (
+          <Loader2 className="size-3.5 animate-spin" />
+        ) : (
+          <FormattedMessage id="groupPage.join.button" defaultMessage="Join channel" />
+        )}
       </Button>
     </div>
   );
@@ -135,6 +156,7 @@ export function GroupPage() {
   const relayUrl = server ? routeParamToRelay(server) : undefined;
   const groupId = rawGroupId ? decodeURIComponent(rawGroupId) : undefined;
 
+  const intl = useIntl();
   const { user } = useCurrentUser();
   const { config, updateConfig } = useAppContext();
   const navigate = useNavigate();
@@ -161,7 +183,7 @@ export function GroupPage() {
         navigate(chatRoute({ kind: "nip29", relayUrl, groupId: dmId }));
       } catch (e) {
         toast({
-          title: "Couldn't start the conversation",
+          title: t({ id: "groupPage.dmFailed", defaultMessage: "Couldn't start the conversation" }),
           description: relayRejectionMessage(e),
           variant: "destructive",
         });
@@ -234,19 +256,19 @@ export function GroupPage() {
         const out: MemberActionItem[] = [];
         const tier = (change: TierChange) => tierChangeConfirm("nip29", change);
         if (!targetAdmin) {
-          out.push({ id: "make-admin", label: "Make admin", icon: Crown, confirm: tier("admin"), onSelect: () => setRoles(["admin"]) });
+          out.push({ id: "make-admin", label: intl.formatMessage({ id: "groupPage.member.makeAdmin", defaultMessage: "Make admin" }), icon: Crown, confirm: tier("admin"), onSelect: () => setRoles(["admin"]) });
         }
         if (targetAdmin) {
-          out.push({ id: "make-moderator", label: "Demote to moderator", icon: Shield, confirm: tier("demote"), onSelect: () => setRoles(["moderator"]) });
+          out.push({ id: "make-moderator", label: intl.formatMessage({ id: "groupPage.member.demote", defaultMessage: "Demote to moderator" }), icon: Shield, confirm: tier("demote"), onSelect: () => setRoles(["moderator"]) });
         } else if (!targetModerator) {
-          out.push({ id: "make-moderator", label: "Make moderator", icon: Shield, confirm: tier("moderator"), onSelect: () => setRoles(["moderator"]) });
+          out.push({ id: "make-moderator", label: intl.formatMessage({ id: "groupPage.member.makeModerator", defaultMessage: "Make moderator" }), icon: Shield, confirm: tier("moderator"), onSelect: () => setRoles(["moderator"]) });
         }
         if (targetAdmin || targetModerator) {
-          out.push({ id: "remove-tier", label: "Remove role", icon: ShieldOff, confirm: tier("remove"), onSelect: () => setRoles([]) });
+          out.push({ id: "remove-tier", label: intl.formatMessage({ id: "groupPage.member.removeRole", defaultMessage: "Remove role" }), icon: ShieldOff, confirm: tier("remove"), onSelect: () => setRoles([]) });
         }
         out.push({
           id: "remove",
-          label: "Remove from channel",
+          label: intl.formatMessage({ id: "groupPage.member.remove", defaultMessage: "Remove from channel" }),
           icon: UserMinus,
           destructive: true,
           confirm: NIP29_REMOVE_CONFIRM,
@@ -255,7 +277,7 @@ export function GroupPage() {
         return out;
       },
     }),
-    [isAdmin, user, mergedAdmins, putMember, removeMember],
+    [isAdmin, user, mergedAdmins, putMember, removeMember, intl],
   );
 
   const { data: relayGroups } = useRelayGroups(relayUrl);
@@ -366,10 +388,10 @@ export function GroupPage() {
     try {
       await leave.mutateAsync({});
       updateList({ type: "remove-group", ref: { id: groupId, relay: relayUrl } }).catch(() => undefined);
-      toast({ title: "Left channel" });
+      toast({ title: t({ id: "groupPage.left", defaultMessage: "Left channel" }) });
     } catch (e) {
       toast({
-        title: "Leave failed",
+        title: t({ id: "groupPage.leaveFailed", defaultMessage: "Leave failed" }),
         description: relayRejectionMessage(e),
         variant: "destructive",
       });
@@ -377,16 +399,22 @@ export function GroupPage() {
   };
 
   const handleDelete = async () => {
-    if (!window.confirm(`Delete "${group?.name ?? groupId}"? This removes the channel for everyone and cannot be undone.`)) {
+    if (!window.confirm(t(
+      {
+        id: "groupPage.deleteConfirm",
+        defaultMessage: "Delete \"{name}\"? This removes the channel for everyone and cannot be undone.",
+      },
+      { name: group?.name ?? groupId },
+    ))) {
       return;
     }
     try {
       await deleteGroup.mutateAsync({});
       updateList({ type: "remove-group", ref: { id: groupId, relay: relayUrl } }).catch(() => undefined);
-      toast({ title: "Channel deleted" });
+      toast({ title: t({ id: "groupPage.deleted", defaultMessage: "Channel deleted" }) });
     } catch (e) {
       toast({
-        title: "Delete failed",
+        title: t({ id: "groupPage.deleteFailed", defaultMessage: "Delete failed" }),
         description: relayRejectionMessage(e),
         variant: "destructive",
       });
@@ -440,7 +468,9 @@ export function GroupPage() {
             {hasVoice && (
               <ChatHeaderAction
                 icon={inThisCall ? Headphones : Phone}
-                label={inThisCall ? "In voice" : "Join voice"}
+                label={inThisCall
+                  ? intl.formatMessage({ id: "groupPage.inVoice", defaultMessage: "In voice" })
+                  : intl.formatMessage({ id: "groupPage.joinVoice", defaultMessage: "Join voice" })}
                 className={cn(inThisCall && "text-success")}
                 disabled={inThisCall}
                 onClick={() => joinCall(relayUrl, groupId)}
@@ -448,7 +478,7 @@ export function GroupPage() {
             )}
             <ChatHeaderAction
               icon={Search}
-              label="Search messages"
+              label={intl.formatMessage({ id: "groupPage.searchMessages", defaultMessage: "Search messages" })}
               pressed={searchOpen}
               className="hidden sidebar:inline-flex"
               onClick={() => setSearchOpen(true)}
@@ -456,7 +486,7 @@ export function GroupPage() {
             {isBuzz && (
               <ChatHeaderAction
                 icon={ScrollText}
-                label="Canvas"
+                label={intl.formatMessage({ id: "groupPage.canvas", defaultMessage: "Canvas" })}
                 pressed={canvasOpen}
                 onClick={() => setCanvasOpen((v) => !v)}
               />
@@ -464,8 +494,10 @@ export function GroupPage() {
             {showPins && !pinsCollapsed && (
               <ChatHeaderAction
                 icon={Pin}
-                label={pinsOpen ? "Hide pinned messages" : "Show pinned messages"}
-                tooltip="Pinned messages"
+                label={pinsOpen
+                  ? intl.formatMessage({ id: "groupPage.hidePins", defaultMessage: "Hide pinned messages" })
+                  : intl.formatMessage({ id: "groupPage.showPins", defaultMessage: "Show pinned messages" })}
+                tooltip={intl.formatMessage({ id: "groupPage.pinnedMessages", defaultMessage: "Pinned messages" })}
                 pressed={pinsOpen}
                 onClick={() => setPinsOpen((v) => !v)}
               />
@@ -473,8 +505,10 @@ export function GroupPage() {
             {showEvents && !eventsCollapsed && (
               <ChatHeaderAction
                 icon={CalendarClock}
-                label={eventsOpen ? "Hide events" : "Show events"}
-                tooltip="Events"
+                label={eventsOpen
+                  ? intl.formatMessage({ id: "groupPage.hideEvents", defaultMessage: "Hide events" })
+                  : intl.formatMessage({ id: "groupPage.showEvents", defaultMessage: "Show events" })}
+                tooltip={intl.formatMessage({ id: "groupPage.events", defaultMessage: "Events" })}
                 pressed={eventsOpen}
                 onClick={() => setEventsOpen((v) => !v)}
               />
@@ -497,7 +531,7 @@ export function GroupPage() {
                         onClick={() => setPinsOpen((v) => !v)}
                       >
                         <Pin className="size-4" />
-                        Pinned messages
+                        <FormattedMessage id="groupPage.pinnedMessages" defaultMessage="Pinned messages" />
                       </DropdownMenuItem>
                     )}
                     {eventsCollapsed && (
@@ -506,7 +540,7 @@ export function GroupPage() {
                         onClick={() => setEventsOpen((v) => !v)}
                       >
                         <CalendarClock className="size-4" />
-                        Events
+                        <FormattedMessage id="groupPage.events" defaultMessage="Events" />
                       </DropdownMenuItem>
                     )}
                     {user && <DropdownMenuSeparator />}
@@ -519,33 +553,41 @@ export function GroupPage() {
                       onClick={() => toggleChannelMute(relayUrl, groupId)}
                     >
                       {channelMuted ? <Bell className="size-4" /> : <BellOff className="size-4" />}
-                      {channelMuted ? "Unmute channel" : "Mute channel"}
+                      {channelMuted ? (
+                        <FormattedMessage id="groupPage.unmuteChannel" defaultMessage="Unmute channel" />
+                      ) : (
+                        <FormattedMessage id="groupPage.muteChannel" defaultMessage="Mute channel" />
+                      )}
                     </DropdownMenuItem>
                     <DropdownMenuItem
                      
                       onClick={() => toggleCommunityMute(relayUrl)}
                     >
                       {serverMuted ? <Bell className="size-4" /> : <BellOff className="size-4" />}
-                      {serverMuted ? "Unmute server" : "Mute server"}
+                      {serverMuted ? (
+                        <FormattedMessage id="groupPage.unmuteServer" defaultMessage="Unmute server" />
+                      ) : (
+                        <FormattedMessage id="groupPage.muteServer" defaultMessage="Mute server" />
+                      )}
                     </DropdownMenuItem>
                   </>
                 )}
                 {user && (
                   <DropdownMenuItem onClick={() => setServerProfileOpen(true)}>
                     <IdCard className="size-4" />
-                    Server identity
+                    <FormattedMessage id="groupPage.serverIdentity" defaultMessage="Server identity" />
                   </DropdownMenuItem>
                 )}
                 {isAdmin && (
                   <DropdownMenuItem onClick={() => setInviteOpen(true)}>
                     <UserPlus className="size-4" />
-                    Invite people
+                    <FormattedMessage id="groupPage.invitePeople" defaultMessage="Invite people" />
                   </DropdownMenuItem>
                 )}
                 {isAdmin && (
                   <DropdownMenuItem onClick={() => setSettingsOpen(true)}>
                     <Settings2 className="size-4" />
-                    Channel settings
+                    <FormattedMessage id="groupPage.channelSettings" defaultMessage="Channel settings" />
                   </DropdownMenuItem>
                 )}
                 {isAdmin && (
@@ -557,7 +599,7 @@ export function GroupPage() {
                       className="text-destructive focus:text-destructive"
                     >
                       <Trash2 className="size-4" />
-                      Delete channel
+                      <FormattedMessage id="groupPage.deleteChannel" defaultMessage="Delete channel" />
                     </DropdownMenuItem>
                   </>
                 )}
@@ -570,7 +612,7 @@ export function GroupPage() {
                       className="text-destructive focus:text-destructive"
                     >
                       <LogOut className="size-4" />
-                      Leave channel
+                      <FormattedMessage id="groupPage.leaveChannel" defaultMessage="Leave channel" />
                     </DropdownMenuItem>
                   </>
                 )}
@@ -583,7 +625,7 @@ export function GroupPage() {
             value={searchQuery}
             onChange={setSearchQuery}
             onClose={closeSearch}
-            placeholder="Search this channel…"
+            placeholder={intl.formatMessage({ id: "groupPage.searchPlaceholder", defaultMessage: "Search this channel…" })}
           />
         </ChatHeader>
 
@@ -638,7 +680,7 @@ export function GroupPage() {
         <div className="relative flex flex-1 min-h-0">
           {!relayModeReady ? (
             <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
-              <Loader2 className="size-4 animate-spin" aria-label="Connecting to server" />
+              <Loader2 className="size-4 animate-spin" aria-label={intl.formatMessage({ id: "groupPage.connecting", defaultMessage: "Connecting to server" })} />
             </div>
           ) : isBuzz ? (
             <BuzzChat

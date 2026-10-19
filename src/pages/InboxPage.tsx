@@ -27,6 +27,7 @@ import { KIND_COMMENT } from "@/lib/nip29";
 import { routeParamToRelay } from "@/lib/platform";
 import { chatRoute } from "@/lib/routes";
 import { cn } from "@/lib/utils";
+import { FormattedMessage, useIntl } from "@/i18n";
 
 import type { ChatMsg, ChatTransport } from "@/components/chat/transport";
 import type { NostrRumor } from "@/lib/nostrRumor";
@@ -43,6 +44,7 @@ function InboxRow({
   selected: boolean;
   onOpen: (item: InboxItem) => void;
 }) {
+  const intl = useIntl();
   const { event, unread } = item;
   const author = useAuthor(event.pubkey);
   const metadata = author.data?.metadata;
@@ -87,7 +89,7 @@ function InboxRow({
           {preview}
         </p>
       </div>
-      {unread && <span className="mt-1.5 size-2 shrink-0 rounded-full bg-primary" aria-label="Unread" />}
+      {unread && <span className="mt-1.5 size-2 shrink-0 rounded-full bg-primary" aria-label={intl.formatMessage({ id: "inboxPage.unread", defaultMessage: "Unread" })} />}
     </button>
   );
 }
@@ -174,6 +176,7 @@ function InboxThreadDetail({
 export function InboxPage() {
   const { server } = useParams<{ server: string }>();
   const relayUrl = server ? routeParamToRelay(server) : undefined;
+  const intl = useIntl();
   const navigate = useNavigate();
   const { user } = useCurrentUser();
   const { markRead } = useReadState();
@@ -253,7 +256,7 @@ export function InboxPage() {
             <Button
               variant="ghost"
               size="icon"
-              aria-label="Back to channels"
+              aria-label={intl.formatMessage({ id: "inboxPage.backToChannels", defaultMessage: "Back to channels" })}
               className="size-9 touch:size-11 shrink-0 sidebar:hidden"
               onClick={() => setChannelsOpen(true)}
             >
@@ -261,7 +264,9 @@ export function InboxPage() {
             </Button>
             <Inbox className="size-5 text-muted-foreground shrink-0" />
             <div className="min-w-0 flex-1">
-              <h1 className="font-semibold truncate leading-tight">Inbox</h1>
+              <h1 className="font-semibold truncate leading-tight">
+                <FormattedMessage id="inboxPage.title" defaultMessage="Inbox" />
+              </h1>
             </div>
             {selected && (
               <Tooltip>
@@ -269,14 +274,16 @@ export function InboxPage() {
                   <Button
                     variant="ghost"
                     size="icon"
-                    aria-label="Open in channel"
+                    aria-label={intl.formatMessage({ id: "inboxPage.openInChannel", defaultMessage: "Open in channel" })}
                     className="size-8 touch:size-11 text-muted-foreground"
                     onClick={() => openInChannel(selected)}
                   >
                     <ExternalLink className="size-4" />
                   </Button>
                 </TooltipTrigger>
-                <TooltipContent>Open in channel</TooltipContent>
+                <TooltipContent>
+                  <FormattedMessage id="inboxPage.openInChannel" defaultMessage="Open in channel" />
+                </TooltipContent>
               </Tooltip>
             )}
             {unreadCount > 0 && (
@@ -287,7 +294,9 @@ export function InboxPage() {
                 onClick={markAllRead}
               >
                 <CheckCheck className="size-4" />
-                <span className="hidden sidebar:inline">Mark all read</span>
+                <span className="hidden sidebar:inline">
+                  <FormattedMessage id="inboxPage.markAllRead" defaultMessage="Mark all read" />
+                </span>
               </Button>
             )}
           </header>
@@ -303,14 +312,16 @@ export function InboxPage() {
             >
               {!user ? (
                 <div className="px-3 py-16 text-center text-sm text-muted-foreground">
-                  Sign in to see messages that mention you.
+                  <FormattedMessage id="inboxPage.signIn" defaultMessage="Sign in to see messages that mention you." />
                 </div>
               ) : items.length === 0 ? (
                 <div className="flex flex-col items-center gap-3 px-3 py-16 text-center text-muted-foreground">
                   <Inbox className="size-10 opacity-40" />
                   <p className="text-sm">
-                    No mentions yet. When someone @-mentions you in a channel
-                    here, it&rsquo;ll show up in your inbox.
+                    <FormattedMessage
+                      id="inboxPage.empty"
+                      defaultMessage="No mentions yet. When someone @-mentions you in a channel here, it’ll show up in your inbox."
+                    />
                   </p>
                 </div>
               ) : (

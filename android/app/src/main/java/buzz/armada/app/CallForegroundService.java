@@ -104,7 +104,9 @@ public class CallForegroundService extends Service {
     /** Whether the microphone type is already part of our foreground state. */
     private boolean micTyped = false;
     private boolean micPollScheduled = false;
-    private String title = "Voice call";
+    /** Null until the WebView names the call; then the localized "Voice call". */
+    @Nullable
+    private String title;
     private String text = "";
     @Nullable
     private Bitmap icon;
@@ -305,8 +307,9 @@ public class CallForegroundService extends Service {
         NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && nm != null) {
             NotificationChannel ch = new NotificationChannel(
-                    CHANNEL_ID, "Ongoing calls", NotificationManager.IMPORTANCE_LOW);
-            ch.setDescription("Shows a persistent notification while you are in a voice call.");
+                    CHANNEL_ID, AppLocale.string(this, R.string.channel_ongoing_call_name),
+                    NotificationManager.IMPORTANCE_LOW);
+            ch.setDescription(AppLocale.string(this, R.string.channel_ongoing_call_description));
             ch.setShowBadge(false);
             ch.setSound(null, null);
             ch.enableVibration(false);
@@ -314,7 +317,7 @@ public class CallForegroundService extends Service {
         }
         // CallStyle is only accepted from a foreground service (or with a full-screen intent).
         Person room = new Person.Builder()
-                .setName(title)
+                .setName(title != null ? title : AppLocale.string(this, R.string.call_voice_call))
                 .setIcon(icon != null
                         ? IconCompat.createWithBitmap(icon)
                         : IconCompat.createWithResource(this, R.mipmap.ic_launcher_round))
@@ -338,7 +341,7 @@ public class CallForegroundService extends Service {
         if (muted != null) {
             b.addAction(new NotificationCompat.Action.Builder(
                     muted ? R.drawable.ic_call_mic_off : R.drawable.ic_call_mic,
-                    muted ? "Unmute" : "Mute",
+                    AppLocale.string(this, muted ? R.string.call_unmute : R.string.call_mute),
                     toggleMuteIntent(micForeground)).build());
         }
         return b.build();

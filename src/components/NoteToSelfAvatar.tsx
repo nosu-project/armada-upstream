@@ -5,6 +5,7 @@
 
 import type { CSSProperties } from "react";
 
+import { useIntl } from "@/i18n";
 import { cn } from "@/lib/utils";
 
 export const NOTE_TO_SELF_NAME = "Note to Self";
@@ -67,13 +68,14 @@ export function NoteToSelfAvatar({
   sizePx: number;
   className?: string;
 }) {
+  const intl = useIntl();
   return (
     <span
       className={cn(
         "flex shrink-0 items-center justify-center rounded-full bg-primary/20 text-primary",
         className,
       )}
-      aria-label={NOTE_TO_SELF_NAME}
+      aria-label={intl.formatMessage({ id: "noteToSelfAvatar.label", defaultMessage: "Note to Self" })}
     >
       <NoteToSelfIcon
         sizePx={sizePx}

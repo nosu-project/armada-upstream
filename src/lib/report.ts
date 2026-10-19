@@ -6,6 +6,7 @@
  */
 
 import type { AppScope } from "@/contexts/AppsContext";
+import { defineMessages, t, type MessageDescriptor } from "@/i18n";
 
 /** NIP-56 report. */
 export const KIND_REPORT = 1984;
@@ -20,16 +21,28 @@ export type ReportReason =
   | "malware"
   | "other";
 
+const REASON_LABELS = defineMessages({
+  spam: { id: "report.reason.spam", defaultMessage: "Spam or scam" },
+  nudity: { id: "report.reason.nudity", defaultMessage: "Nudity or sexual content" },
+  profanity: { id: "report.reason.profanity", defaultMessage: "Harassment or hateful speech" },
+  illegal: { id: "report.reason.illegal", defaultMessage: "Illegal content" },
+  impersonation: { id: "report.reason.impersonation", defaultMessage: "Impersonation" },
+  malware: { id: "report.reason.malware", defaultMessage: "Malware or a dangerous link" },
+  other: { id: "report.reason.other", defaultMessage: "Something else" },
+});
+
+const reasonOf = (value: ReportReason, message: MessageDescriptor): { value: ReportReason; label: string } => ({
+  value,
+  // Display only: the wire carries `value`.
+  get label() {
+    return t(message);
+  },
+});
+
 /** Menu order, plain words. */
-export const REPORT_REASONS: ReadonlyArray<{ value: ReportReason; label: string }> = [
-  { value: "spam", label: "Spam or scam" },
-  { value: "nudity", label: "Nudity or sexual content" },
-  { value: "profanity", label: "Harassment or hateful speech" },
-  { value: "illegal", label: "Illegal content" },
-  { value: "impersonation", label: "Impersonation" },
-  { value: "malware", label: "Malware or a dangerous link" },
-  { value: "other", label: "Something else" },
-];
+export const REPORT_REASONS: ReadonlyArray<{ value: ReportReason; label: string }> = (
+  ["spam", "nudity", "profanity", "illegal", "impersonation", "malware", "other"] as const
+).map((value) => reasonOf(value, REASON_LABELS[value]));
 
 /** What is being reported: a person, or one of their messages. */
 export interface ReportTarget {
@@ -84,12 +97,12 @@ export function reportAudience(destination: ReportDestination): string {
   switch (destination.kind) {
     case "concord":
       // Encrypted to the Control Plane address: a claim about who CAN read it.
-      return "Only this community's moderators can read it.";
+      return t({ id: "report.audience.concord", defaultMessage: "Only this community's moderators can read it." });
     case "nip29":
       // The relay decides who may read it back, so this claims routing only.
-      return "Sent to this server's moderators.";
+      return t({ id: "report.audience.nip29", defaultMessage: "Sent to this server's moderators." });
     case "network":
       // Their own words go out in the clear; say so.
-      return "This report is public. Anyone can read it, including your comment.";
+      return t({ id: "report.audience.network", defaultMessage: "This report is public. Anyone can read it, including your comment." });
   }
 }

@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useMutedPubkeys, useUnmuteUser } from "@/hooks/useMuteList";
 import { toast } from "@/hooks/useToast";
+import { FormattedMessage, t } from "@/i18n";
 import { getAvatarShape } from "@/lib/avatarShape";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { tryNpubEncode } from "@/lib/safeNip19";
@@ -24,11 +25,14 @@ function MutedRow({ pubkey }: { pubkey: string }) {
     setBusy(true);
     try {
       await unmute.mutateAsync(pubkey);
-      toast({ title: "Unblocked", description: `You'll see ${displayName} again.` });
+      toast({
+        title: t({ id: "mutedPeopleSettings.unblocked", defaultMessage: "Unblocked" }),
+        description: t({ id: "mutedPeopleSettings.unblockedDescription", defaultMessage: "You'll see {name} again." }, { name: displayName }),
+      });
     } catch (e) {
       toast({
-        title: "Couldn't unblock",
-        description: e instanceof Error ? e.message : "Failed to update your block list.",
+        title: t({ id: "mutedPeopleSettings.unblockFailed", defaultMessage: "Couldn't unblock" }),
+        description: e instanceof Error ? e.message : t({ id: "mutedPeopleSettings.unblockFailedDescription", defaultMessage: "Failed to update your block list." }),
         variant: "destructive",
       });
       setBusy(false);
@@ -56,7 +60,7 @@ function MutedRow({ pubkey }: { pubkey: string }) {
         onClick={onUnmute}
       >
         {busy ? <Loader2 className="size-3.5 animate-spin" /> : <UserCheck className="size-3.5" />}
-        Unblock
+        <FormattedMessage id="mutedPeopleSettings.unblock" defaultMessage="Unblock" />
       </Button>
     </SettingsRow>
   );
@@ -76,7 +80,7 @@ export function MutedPeopleSettings() {
       <SettingsRow>
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
           <Loader2 className="size-4 animate-spin" />
-          Loading your block list…
+          <FormattedMessage id="mutedPeopleSettings.loading" defaultMessage="Loading your block list…" />
         </div>
       </SettingsRow>
     );
@@ -85,7 +89,9 @@ export function MutedPeopleSettings() {
   if (pubkeys.length === 0) {
     return (
       <SettingsRow>
-        <p className="text-sm text-muted-foreground">You haven't blocked anyone.</p>
+        <p className="text-sm text-muted-foreground">
+          <FormattedMessage id="mutedPeopleSettings.empty" defaultMessage="You haven't blocked anyone." />
+        </p>
       </SettingsRow>
     );
   }

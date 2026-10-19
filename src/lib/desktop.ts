@@ -3,6 +3,8 @@
  * Absent on the web, where every helper no-ops.
  */
 
+import { t } from "@/i18n/intl";
+
 export interface ScreenSource {
   id: string;
   name: string;
@@ -315,7 +317,7 @@ export async function desktopHevcScreenShareCapability(): Promise<DesktopHevcScr
       encoder: null,
       backend: null,
       device: null,
-      reason: "This Armada build does not contain the custom H.265 publisher.",
+      reason: t({ id: "desktop.hevcUnavailable", defaultMessage: "This Armada build does not contain the custom H.265 publisher." }),
     };
   }
   try {
@@ -326,7 +328,7 @@ export async function desktopHevcScreenShareCapability(): Promise<DesktopHevcScr
       encoder: null,
       backend: null,
       device: null,
-      reason: error instanceof Error ? error.message : "The H.265 capability probe failed.",
+      reason: error instanceof Error ? error.message : t({ id: "desktop.hevcProbeFailed", defaultMessage: "The H.265 capability probe failed." }),
     };
   }
 }
@@ -964,7 +966,7 @@ export async function desktopShareAudioSources(): Promise<LinuxShareAudioSources
   try {
     return await bridge.getLinuxShareAudioSources();
   } catch {
-    return { supported: false, reason: "Application audio could not be loaded.", sources: [] };
+    return { supported: false, reason: t({ id: "desktop.appAudioFailed", defaultMessage: "Application audio could not be loaded." }), sources: [] };
   }
 }
 

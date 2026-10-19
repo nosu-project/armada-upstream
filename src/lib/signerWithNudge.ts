@@ -4,6 +4,7 @@ import { createElement } from "react";
 
 import { NudgeToastContent, type SignerAppLink } from "@/components/SignerToastContent";
 import { toast } from "@/hooks/useToast";
+import { defineMessages, t, type MessageDescriptor } from "@/i18n";
 import { type BtcSigner, hasBtcSigning } from "@/lib/bitcoin-signers";
 
 /** Show the nudge once the signer has answered nothing for this long with work pending. */
@@ -21,32 +22,32 @@ const NUDGE_THROTTLE_MS = 8_000;
 
 type OpType = "sign" | "encrypt" | "decrypt";
 
-/** Context-specific subjects for nudge toast titles (Armada's kinds). */
-const NUDGE_OVERRIDES: Record<number, string> = {
-  0: "profile update",
-  1: "post",
-  3: "contact list update",
-  7: "reaction",
-  9: "message",
-  13: "direct message",
-  1059: "direct message",
-  9734: "zap request",
-  9735: "zap",
-  10009: "server list update",
+/** Context-specific nudge toast titles (Armada's kinds). */
+const NUDGE_OVERRIDES: Record<number, MessageDescriptor> = defineMessages({
+  0: { id: "signerWithNudge.approve.profile", defaultMessage: "Approve profile update" },
+  1: { id: "signerWithNudge.approve.post", defaultMessage: "Approve post" },
+  3: { id: "signerWithNudge.approve.contacts", defaultMessage: "Approve contact list update" },
+  7: { id: "signerWithNudge.approve.reaction", defaultMessage: "Approve reaction" },
+  9: { id: "signerWithNudge.approve.message", defaultMessage: "Approve message" },
+  13: { id: "signerWithNudge.approve.directMessage", defaultMessage: "Approve direct message" },
+  1059: { id: "signerWithNudge.approve.directMessage", defaultMessage: "Approve direct message" },
+  9734: { id: "signerWithNudge.approve.zapRequest", defaultMessage: "Approve zap request" },
+  9735: { id: "signerWithNudge.approve.zap", defaultMessage: "Approve zap" },
+  10009: { id: "signerWithNudge.approve.serverList", defaultMessage: "Approve server list update" },
   // Concord: messages, reactions and Joins are all 20013 seals; the template
   // can't tell which (the rumor is encrypted), so name what they share.
-  20013: "community activity",
-  20014: "community update",
-  33302: "community membership",
-  24242: "file upload auth",
-  30078: "app settings",
-};
+  20013: { id: "signerWithNudge.approve.communityActivity", defaultMessage: "Approve community activity" },
+  20014: { id: "signerWithNudge.approve.communityUpdate", defaultMessage: "Approve community update" },
+  33302: { id: "signerWithNudge.approve.communityMembership", defaultMessage: "Approve community membership" },
+  24242: { id: "signerWithNudge.approve.uploadAuth", defaultMessage: "Approve file upload auth" },
+  30078: { id: "signerWithNudge.approve.appSettings", defaultMessage: "Approve app settings" },
+});
 
-function labelForOp(kind: number | undefined, opType: OpType): string {
-  if (kind !== undefined && NUDGE_OVERRIDES[kind]) return NUDGE_OVERRIDES[kind];
-  if (opType === "encrypt") return "encryption";
-  if (opType === "decrypt") return "decryption";
-  return "signing";
+function approveTitle(kind: number | undefined, opType: OpType): string {
+  if (kind !== undefined && NUDGE_OVERRIDES[kind]) return t(NUDGE_OVERRIDES[kind]);
+  if (opType === "encrypt") return t({ id: "signerWithNudge.approve.encryption", defaultMessage: "Approve encryption" });
+  if (opType === "decrypt") return t({ id: "signerWithNudge.approve.decryption", defaultMessage: "Approve decryption" });
+  return t({ id: "signerWithNudge.approve.signing", defaultMessage: "Approve signing" });
 }
 
 /** Sentinels for control flow inside Promise.race. */
@@ -68,8 +69,18 @@ function isAndroid(): boolean {
   return typeof navigator !== "undefined" && /Android/i.test(navigator.userAgent);
 }
 
-const CLAVE: SignerAppLink = { href: "clave://", label: "Open Clave" };
-const AEGIS: SignerAppLink = { href: "aegis://", label: "Open Aegis" };
+const CLAVE: SignerAppLink = {
+  href: "clave://",
+  get label() {
+    return t({ id: "signerWithNudge.openClave", defaultMessage: "Open Clave" });
+  },
+};
+const AEGIS: SignerAppLink = {
+  href: "aegis://",
+  get label() {
+    return t({ id: "signerWithNudge.openAegis", defaultMessage: "Open Aegis" });
+  },
+};
 
 /** The iOS signer app, read off the session's relays: Aegis runs a local relay, Clave uses relay.powr.build. */
 function iosSignerApp(relays: string[]): SignerAppLink | undefined {
@@ -90,7 +101,7 @@ function iosSignerApp(relays: string[]): SignerAppLink | undefined {
  * scheme, so both are offered when the relays don't say which. None on desktop.
  */
 export function signerAppLinks(signerRelays: string[] = []): SignerAppLink[] {
-  if (isAndroid()) return [{ href: "nostrsigner:", label: "Open signer" }];
+  if (isAndroid()) return [{ href: "nostrsigner:", label: t({ id: "signerWithNudge.openSigner", defaultMessage: "Open signer" }) }];
   if (isIos()) {
     const app = iosSignerApp(signerRelays);
     return app ? [app] : [CLAVE, AEGIS];
@@ -109,21 +120,20 @@ function showNudgeToast(opts: {
 }): { dismiss: () => void } {
   const { kind, opType, isBunkerConnected, remote, signerRelays, durationMs, onCancel } = opts;
   const relayOk = isBunkerConnected ? isBunkerConnected() : true;
-  const subject = labelForOp(kind, opType);
 
   let title: string;
   let descriptionText: string;
 
   if (!relayOk) {
-    title = "Signer relay unreachable";
-    descriptionText = "Check your connection and try again.";
+    title = t({ id: "signerWithNudge.relayUnreachable", defaultMessage: "Signer relay unreachable" });
+    descriptionText = t({ id: "signerWithNudge.checkConnection", defaultMessage: "Check your connection and try again." });
   } else if (remote) {
-    title = `Approve ${subject}`;
+    title = approveTitle(kind, opType);
     // An auto-approving push signer (Clave) still needs waking when it falls behind.
-    descriptionText = "Your signer hasn't answered yet. Open it to approve the request, or to wake it if it signs automatically.";
+    descriptionText = t({ id: "signerWithNudge.remoteWaiting", defaultMessage: "Your signer hasn't answered yet. Open it to approve the request, or to wake it if it signs automatically." });
   } else {
-    title = `Approve ${subject}`;
-    descriptionText = "Approve the request in your signer.";
+    title = approveTitle(kind, opType);
+    descriptionText = t({ id: "signerWithNudge.approveInSigner", defaultMessage: "Approve the request in your signer." });
   }
 
   // Mutable ref so the component's onCancel can dismiss its own toast.
@@ -143,8 +153,13 @@ function showNudgeToast(opts: {
 }
 
 function showSuccessToast(opType: OpType): void {
-  const verb = opType === "encrypt" ? "Encryption" : opType === "decrypt" ? "Decryption" : "Signing";
-  toast({ title: `${verb} approved`, duration: 3000, variant: "success" });
+  const title =
+    opType === "encrypt"
+      ? t({ id: "signerWithNudge.approved.encryption", defaultMessage: "Encryption approved" })
+      : opType === "decrypt"
+        ? t({ id: "signerWithNudge.approved.decryption", defaultMessage: "Decryption approved" })
+        : t({ id: "signerWithNudge.approved.signing", defaultMessage: "Signing approved" });
+  toast({ title, duration: 3000, variant: "success" });
 }
 
 interface PendingOp {

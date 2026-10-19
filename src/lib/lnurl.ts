@@ -6,6 +6,7 @@
 
 import { bech32 } from "@scure/base";
 
+import { t } from "@/i18n";
 export interface LnurlPayParams {
   callback: string;
   /** millisats */
@@ -51,20 +52,20 @@ export async function resolveLnurlPay(
   fetchFn: typeof fetch = fetch,
 ): Promise<LnurlPayParams> {
   const url = (metadata.lud16 && lud16Url(metadata.lud16)) || (metadata.lud06 && lud06Url(metadata.lud06));
-  if (!url) throw new Error("Recipient has no lightning address.");
+  if (!url) throw new Error(t({ id: "lnurl.noAddress", defaultMessage: "Recipient has no lightning address." }));
 
   let data: Record<string, unknown>;
   try {
     const response = await fetchFn(url, { signal: AbortSignal.timeout(10_000) });
     data = await response.json();
   } catch {
-    throw new Error("Couldn't reach the recipient's lightning wallet service.");
+    throw new Error(t({ id: "lnurl.unreachable", defaultMessage: "Couldn't reach the recipient's lightning wallet service." }));
   }
   if (data.status === "ERROR") {
-    throw new Error(typeof data.reason === "string" ? data.reason : "Lightning wallet service error.");
+    throw new Error(typeof data.reason === "string" ? data.reason : t({ id: "lnurl.serviceError", defaultMessage: "Lightning wallet service error." }));
   }
   if (data.tag !== "payRequest" || typeof data.callback !== "string" || !httpsOnly(data.callback)) {
-    throw new Error("Recipient's lightning address doesn't accept payments.");
+    throw new Error(t({ id: "lnurl.notPayable", defaultMessage: "Recipient's lightning address doesn't accept payments." }));
   }
   return {
     callback: data.callback,
@@ -96,13 +97,13 @@ export async function fetchLnurlInvoice(
     const response = await fetchFn(url.toString(), { signal: AbortSignal.timeout(15_000) });
     data = await response.json();
   } catch {
-    throw new Error("Couldn't fetch an invoice from the recipient's wallet service.");
+    throw new Error(t({ id: "lnurl.invoiceUnreachable", defaultMessage: "Couldn't fetch an invoice from the recipient's wallet service." }));
   }
   if (data.status === "ERROR") {
-    throw new Error(typeof data.reason === "string" ? data.reason : "Invoice request rejected.");
+    throw new Error(typeof data.reason === "string" ? data.reason : t({ id: "lnurl.invoiceRejected", defaultMessage: "Invoice request rejected." }));
   }
   if (typeof data.pr !== "string" || !data.pr) {
-    throw new Error("The wallet service returned no invoice.");
+    throw new Error(t({ id: "lnurl.noInvoice", defaultMessage: "The wallet service returned no invoice." }));
   }
   return data.pr;
 }

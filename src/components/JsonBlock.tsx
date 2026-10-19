@@ -1,12 +1,17 @@
 import { Check, Copy } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
+import { common, useIntl } from "@/i18n";
 import { writeClipboardText } from "@/lib/clipboard";
 import { cn } from "@/lib/utils";
 
 /** Scrollable JSON with a copy button pinned to its corner (outside the scroll, so it stays put). */
 export function JsonBlock({ json, className }: { json: string; className?: string }) {
+  const intl = useIntl();
   const [copied, setCopied] = useState(false);
+  const copyLabel = copied
+    ? intl.formatMessage(common.copied)
+    : intl.formatMessage({ id: "jsonBlock.copy", defaultMessage: "Copy JSON" });
   const resetTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   useEffect(() => () => clearTimeout(resetTimer.current), []);
 
@@ -17,8 +22,8 @@ export function JsonBlock({ json, className }: { json: string; className?: strin
       </pre>
       <button
         type="button"
-        aria-label={copied ? "Copied" : "Copy JSON"}
-        title={copied ? "Copied" : "Copy JSON"}
+        aria-label={copyLabel}
+        title={copyLabel}
         onClick={() => {
           writeClipboardText(json).then(
             () => {

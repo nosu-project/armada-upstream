@@ -70,6 +70,7 @@ import {
   railDmPubkeys,
   renameFolder,
 } from "@/lib/railLayout";
+import { common, defineMessages, FormattedMessage, t, useIntl } from "@/i18n";
 import { cn } from "@/lib/utils";
 
 import type {
@@ -78,6 +79,17 @@ import type {
   RailLayoutNode,
   RailSlot,
 } from "@/lib/railLayout";
+
+const RAIL_MESSAGES = defineMessages({
+  mentioned: { id: "serverRail.mentioned", defaultMessage: "You were mentioned" },
+  unread: { id: "serverRail.unread", defaultMessage: "Unread messages" },
+  markAsRead: { id: "serverRail.markAsRead", defaultMessage: "Mark as read" },
+  messageNotifications: { id: "serverRail.messageNotifications", defaultMessage: "Message notifications" },
+  unreadCount: {
+    id: "serverRail.unreadCount",
+    defaultMessage: "{count, plural, one {# unread message} other {# unread messages}}",
+  },
+});
 
 function RailTooltipContent({ className, ...props }: React.ComponentProps<typeof TooltipContent>) {
   return <TooltipContent className={cn("rail-tooltip-content", className)} {...props} />;
@@ -131,6 +143,7 @@ function dragAttrs(anchor: string, parent?: string): Record<string, string> {
 }
 
 function MiniUnreadDot({ mention, unread }: { mention: boolean; unread: boolean }) {
+  const intl = useIntl();
   if (!mention && !unread) return null;
   return (
     <span
@@ -138,7 +151,7 @@ function MiniUnreadDot({ mention, unread }: { mention: boolean; unread: boolean 
         "absolute -top-px -right-px z-10 size-1.5 rounded-full ring-1 ring-background",
         mention ? "bg-primary" : "bg-foreground",
       )}
-      aria-label={mention ? "You were mentioned" : "Unread messages"}
+      aria-label={mention ? intl.formatMessage(RAIL_MESSAGES.mentioned) : intl.formatMessage(RAIL_MESSAGES.unread)}
     />
   );
 }
@@ -457,6 +470,7 @@ const ServerButton = memo(function ServerButton({
   selected?: boolean;
   inCall?: boolean;
 } & RailDragProps) {
+  const intl = useIntl();
   const triggerRef = useRef<HTMLElement | null>(null);
   useDragPointerDown(triggerRef, draggable, onDragPointerDown);
 
@@ -521,14 +535,14 @@ const ServerButton = memo(function ServerButton({
         {!isActive && anyMention ? (
           <span
             className="absolute -top-1 -right-1 z-10 flex min-w-4 h-4 px-1 items-center justify-center rounded-full bg-primary text-primary-foreground text-3xs font-bold leading-none ring-2 ring-background"
-            aria-label="You were mentioned"
+            aria-label={intl.formatMessage(RAIL_MESSAGES.mentioned)}
           >
             @
           </span>
         ) : !isActive && anyUnread ? (
           <span
             className="absolute -top-0.5 -right-0.5 z-10 size-3 rounded-full bg-foreground ring-2 ring-background"
-            aria-label="Unread messages"
+            aria-label={intl.formatMessage(RAIL_MESSAGES.unread)}
           />
         ) : null}
       </span>
@@ -599,10 +613,10 @@ const ServerButton = memo(function ServerButton({
       <ContextMenuContent>
         <ContextMenuItem className="gap-2" disabled={!hasUnread} onSelect={markAllRead}>
           <CheckCheck className="size-4" />
-          Mark as read
+          <FormattedMessage {...RAIL_MESSAGES.markAsRead} />
         </ContextMenuItem>
         <NotifLevelMenu
-          label="Server notifications"
+          label={intl.formatMessage({ id: "serverRail.serverNotifications", defaultMessage: "Server notifications" })}
           level={communityLevel(url)}
           onChange={(lvl) => setNotifLevel(communityScopeKey(url), lvl)}
         />
@@ -612,7 +626,7 @@ const ServerButton = memo(function ServerButton({
             onSelect={removeServer}
           >
             <Trash2 className="size-4" />
-            Remove server
+            <FormattedMessage id="serverRail.removeServer" defaultMessage="Remove server" />
           </ContextMenuItem>
         )}
       </ContextMenuContent>
@@ -639,6 +653,7 @@ const Concord2Button = memo(function Concord2Button({
   name: string;
   onNavigate?: () => void;
 } & RailDragProps) {
+  const intl = useIntl();
   const triggerRef = useRef<HTMLAnchorElement | null>(null);
   useDragPointerDown(triggerRef, draggable, onDragPointerDown);
 
@@ -678,7 +693,7 @@ const Concord2Button = memo(function Concord2Button({
       navigate("/");
     } catch (e) {
       toast({
-        title: "Couldn't leave",
+        title: t({ id: "serverRail.leaveFailed", defaultMessage: "Couldn't leave" }),
         description: e instanceof Error ? e.message : undefined,
         variant: "destructive",
       });
@@ -746,7 +761,7 @@ const Concord2Button = memo(function Concord2Button({
                   {excluded ? (
                     <span
                       className="absolute -bottom-1 -right-1 z-10 flex size-4 items-center justify-center rounded-full bg-muted text-muted-foreground ring-2 ring-background"
-                      aria-label="You no longer have access to this community"
+                      aria-label={intl.formatMessage({ id: "serverRail.noAccessLabel", defaultMessage: "You no longer have access to this community" })}
                     >
                       <Lock className="size-2.5" />
                     </span>
@@ -754,14 +769,14 @@ const Concord2Button = memo(function Concord2Button({
                   {!isActive && anyMention ? (
                     <span
                       className="absolute -top-1 -right-1 z-10 flex min-w-4 h-4 px-1 items-center justify-center rounded-full bg-primary text-primary-foreground text-3xs font-bold leading-none ring-2 ring-background"
-                      aria-label="You were mentioned"
+                      aria-label={intl.formatMessage(RAIL_MESSAGES.mentioned)}
                     >
                       @
                     </span>
                   ) : !isActive && anyUnread ? (
                     <span
                       className="absolute -top-0.5 -right-0.5 z-10 size-3 rounded-full bg-foreground ring-2 ring-background"
-                      aria-label="Unread messages"
+                      aria-label={intl.formatMessage(RAIL_MESSAGES.unread)}
                     />
                   ) : null}
                 </span>
@@ -774,16 +789,16 @@ const Concord2Button = memo(function Concord2Button({
         </TooltipTrigger>
         <RailTooltipContent side="right" className="font-medium">
           {displayName}
-          {excluded ? <span className="ml-1 font-normal text-muted-foreground">· no access</span> : null}
+          {excluded ? <span className="ml-1 font-normal text-muted-foreground"><FormattedMessage id="serverRail.noAccess" defaultMessage="· no access" /></span> : null}
         </RailTooltipContent>
       </Tooltip>
       <ContextMenuContent>
         <ContextMenuItem className="gap-2" disabled={!hasUnread} onSelect={markAllRead}>
           <CheckCheck className="size-4" />
-          Mark as read
+          <FormattedMessage {...RAIL_MESSAGES.markAsRead} />
         </ContextMenuItem>
         <NotifLevelMenu
-          label="Community notifications"
+          label={intl.formatMessage({ id: "serverRail.communityNotifications", defaultMessage: "Community notifications" })}
           level={communityLevel(concordKey(communityId))}
           onChange={(lvl) => setNotifLevel(concordKey(communityId), lvl)}
         />
@@ -792,7 +807,7 @@ const Concord2Button = memo(function Concord2Button({
           onSelect={handleLeave}
         >
           <LogOut className="size-4" />
-          {excluded ? "Leave (no access)" : "Leave community"}
+          {excluded ? <FormattedMessage id="serverRail.leaveNoAccess" defaultMessage="Leave (no access)" /> : <FormattedMessage id="serverRail.leaveCommunity" defaultMessage="Leave community" />}
         </ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>
@@ -820,6 +835,7 @@ const DmButton = memo(function DmButton({
   onNavigate?: () => void;
   inCall?: boolean;
 } & RailDragProps) {
+  const intl = useIntl();
   const triggerRef = useRef<HTMLAnchorElement | null>(null);
   useDragPointerDown(triggerRef, draggable, onDragPointerDown);
 
@@ -906,7 +922,7 @@ const DmButton = memo(function DmButton({
                       {!isActive && displayedUnreadCount > 0 ? (
                         <span
                           className="absolute -top-1 -right-1 z-10 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-3xs font-bold leading-none text-primary-foreground ring-2 ring-background"
-                          aria-label={`${displayedUnreadCount} unread ${displayedUnreadCount === 1 ? "message" : "messages"}`}
+                          aria-label={intl.formatMessage(RAIL_MESSAGES.unreadCount, { count: displayedUnreadCount })}
                         >
                           {displayedUnreadCount > 99 ? "99+" : displayedUnreadCount}
                         </span>
@@ -925,14 +941,14 @@ const DmButton = memo(function DmButton({
       </Tooltip>
       <ContextMenuContent>
         <NotifLevelMenu
-          label="Message notifications"
+          label={intl.formatMessage(RAIL_MESSAGES.messageNotifications)}
           level={dmLevel(pubkey)}
           onChange={(lvl) => setNotifLevel(dmScopeKey(pubkey), lvl)}
         />
         {/* Only removes the rail icon; the conversation is untouched. */}
         <ContextMenuItem className="gap-2" onSelect={() => removeFromRail(pubkey)}>
           <PanelLeftDashed className="size-4" />
-          Remove from rail
+          <FormattedMessage id="serverRail.removeFromRail" defaultMessage="Remove from rail" />
         </ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>
@@ -953,6 +969,7 @@ const RecentDmButton = memo(function RecentDmButton({
   pending?: boolean;
   onPressed?: () => void;
 }) {
+  const intl = useIntl();
   const { user } = useCurrentUser();
   const { name } = useDmConversationName(item.peers, user?.pubkey);
   const { dmLevel, setLevel: setNotifLevel } = useNotifLevels();
@@ -1006,7 +1023,7 @@ const RecentDmButton = memo(function RecentDmButton({
                       {!isActive && item.unreadCount > 0 && (
                         <span
                           className="absolute -top-1 -right-1 z-10 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-3xs font-bold leading-none text-primary-foreground ring-2 ring-background"
-                          aria-label={`${item.unreadCount} unread ${item.unreadCount === 1 ? "message" : "messages"}`}
+                          aria-label={intl.formatMessage(RAIL_MESSAGES.unreadCount, { count: item.unreadCount })}
                         >
                           {item.unreadCount > 99 ? "99+" : item.unreadCount}
                         </span>
@@ -1022,7 +1039,7 @@ const RecentDmButton = memo(function RecentDmButton({
       </Tooltip>
       <ContextMenuContent>
         <NotifLevelMenu
-          label="Message notifications"
+          label={intl.formatMessage(RAIL_MESSAGES.messageNotifications)}
           level={dmLevel(item.key)}
           onChange={(level) => setNotifLevel(dmScopeKey(item.key), level)}
         />
@@ -1059,10 +1076,11 @@ function RailFolder({
   onDissolve: () => void;
   children?: React.ReactNode;
 } & RailDragProps) {
+  const intl = useIntl();
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   useDragPointerDown(triggerRef, draggable, onDragPointerDown);
 
-  const label = name.trim() || "Folder";
+  const label = name.trim() || intl.formatMessage({ id: "serverRail.folder", defaultMessage: "Folder" });
 
   // Rollup across ALL members, reported by the per-member probes; shown only while collapsed.
   const [memberUnread, setMemberUnread] = useState<
@@ -1142,14 +1160,14 @@ function RailFolder({
                   {anyMention ? (
                     <span
                       className="absolute -top-1 -right-1 z-10 flex min-w-4 h-4 px-1 items-center justify-center rounded-full bg-primary text-primary-foreground text-3xs font-bold leading-none ring-2 ring-background"
-                      aria-label="You were mentioned"
+                      aria-label={intl.formatMessage(RAIL_MESSAGES.mentioned)}
                     >
                       @
                     </span>
                   ) : anyUnread ? (
                     <span
                       className="absolute -top-0.5 -right-0.5 z-10 size-3 rounded-full bg-foreground ring-2 ring-background"
-                      aria-label="Unread messages"
+                      aria-label={intl.formatMessage(RAIL_MESSAGES.unread)}
                     />
                   ) : null}
                 </span>
@@ -1165,8 +1183,8 @@ function RailFolder({
         </RailTooltipContent>
       </Tooltip>
       <ContextMenuContent>
-        <ContextMenuItem onSelect={onRenameRequest}>Rename folder</ContextMenuItem>
-        <ContextMenuItem onSelect={onDissolve}>Remove folder</ContextMenuItem>
+        <ContextMenuItem onSelect={onRenameRequest}><FormattedMessage id="serverRail.renameFolder" defaultMessage="Rename folder" /></ContextMenuItem>
+        <ContextMenuItem onSelect={onDissolve}><FormattedMessage id="serverRail.removeFolder" defaultMessage="Remove folder" /></ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>
   );
@@ -1273,6 +1291,7 @@ function ServerRailInner({
   selectedServer,
   className,
 }: ServerRailProps) {
+  const intl = useIntl();
   const { config, updateConfig } = useAppContext();
   const navigate = useNavigate();
   const location = useLocation();
@@ -1665,7 +1684,7 @@ function ServerRailInner({
     >
       <nav
         ref={railDrag.attachContainer}
-        aria-label="Servers"
+        aria-label={intl.formatMessage({ id: "serverRail.servers", defaultMessage: "Servers" })}
         // Suppress native HTML5 drag, which hijacks the custom reorder gesture.
         onDragStart={(e) => e.preventDefault()}
         // Entries start their own press.
@@ -1708,7 +1727,7 @@ function ServerRailInner({
             <TooltipTrigger asChild>
               <NavLink
                 to="/mesh"
-                aria-label="Nearby mesh"
+                aria-label={intl.formatMessage({ id: "serverRail.nearbyMesh", defaultMessage: "Nearby mesh" })}
                 onClick={() => {
                   onPressedFor("nav:mesh")();
                   onNavigate?.();
@@ -1744,7 +1763,7 @@ function ServerRailInner({
               </NavLink>
             </TooltipTrigger>
             <RailTooltipContent side="right" className="font-medium">
-              Nearby mesh
+              <FormattedMessage id="serverRail.nearbyMesh" defaultMessage="Nearby mesh" />
             </RailTooltipContent>
           </Tooltip>
         )}
@@ -1754,7 +1773,7 @@ function ServerRailInner({
             <TooltipTrigger asChild>
               <NavLink
                 to="/notifications"
-                aria-label="Notifications"
+                aria-label={intl.formatMessage({ id: "serverRail.notifications", defaultMessage: "Notifications" })}
                 onClick={() => {
                   onPressedFor("nav:notifications")();
                   onNavigate?.();
@@ -1784,14 +1803,14 @@ function ServerRailInner({
                   {hasUnreadNotifications && (
                     <span
                       className="absolute -top-0.5 -right-0.5 z-10 size-3 rounded-full bg-primary ring-2 ring-background group-aria-[current=page]:hidden"
-                      aria-label="Unread notifications"
+                      aria-label={intl.formatMessage({ id: "serverRail.unreadNotifications", defaultMessage: "Unread notifications" })}
                     />
                   )}
                 </span>
               </NavLink>
             </TooltipTrigger>
             <RailTooltipContent side="right" className="font-medium">
-              Notifications
+              <FormattedMessage id="serverRail.notifications" defaultMessage="Notifications" />
             </RailTooltipContent>
           </Tooltip>
         )}
@@ -1801,7 +1820,7 @@ function ServerRailInner({
             <TooltipTrigger asChild>
               <NavLink
                 to="/dm"
-                aria-label="Direct messages"
+                aria-label={intl.formatMessage({ id: "serverRail.directMessages", defaultMessage: "Direct messages" })}
                 onClick={() => {
                   onPressedFor("nav:dm")();
                   onNavigate?.();
@@ -1842,14 +1861,14 @@ function ServerRailInner({
                   {hasUnreadDMs && (
                     <span
                       className="absolute -top-0.5 -right-0.5 z-10 size-3 rounded-full bg-primary ring-2 ring-background group-aria-[current=page]:hidden"
-                      aria-label="Unread direct messages"
+                      aria-label={intl.formatMessage({ id: "serverRail.unreadDirectMessages", defaultMessage: "Unread direct messages" })}
                     />
                   )}
                 </span>
               </NavLink>
             </TooltipTrigger>
             <RailTooltipContent side="right" className="font-medium">
-              Direct messages
+              <FormattedMessage id="serverRail.directMessages" defaultMessage="Direct messages" />
             </RailTooltipContent>
           </Tooltip>
         )}
@@ -1859,7 +1878,7 @@ function ServerRailInner({
             <TooltipTrigger asChild>
               <NavLink
                 to="/invites"
-                aria-label="Invites"
+                aria-label={intl.formatMessage({ id: "serverRail.invites", defaultMessage: "Invites" })}
                 onClick={() => {
                   onPressedFor("nav:invites")();
                   onNavigate?.();
@@ -1894,7 +1913,10 @@ function ServerRailInner({
                   {inviteUnread > 0 && (
                     <span
                       className="absolute -top-1 -right-1 z-10 flex min-w-4 h-4 px-1 items-center justify-center rounded-full bg-primary text-primary-foreground text-3xs font-bold leading-none ring-2 ring-background group-aria-[current=page]:hidden"
-                      aria-label={`${inviteUnread} new invite${inviteUnread === 1 ? "" : "s"}`}
+                      aria-label={intl.formatMessage(
+                        { id: "serverRail.newInvites", defaultMessage: "{count, plural, one {# new invite} other {# new invites}}" },
+                        { count: inviteUnread },
+                      )}
                     >
                       {inviteUnread}
                     </span>
@@ -1903,7 +1925,7 @@ function ServerRailInner({
               </NavLink>
             </TooltipTrigger>
             <RailTooltipContent side="right" className="font-medium">
-              Invites
+              <FormattedMessage id="serverRail.invites" defaultMessage="Invites" />
             </RailTooltipContent>
           </Tooltip>
         )}
@@ -1962,21 +1984,21 @@ function ServerRailInner({
             <Button
               variant="secondary"
               size="icon"
-              aria-label="Add a server or encrypted chat"
+              aria-label={intl.formatMessage({ id: "serverRail.addAria", defaultMessage: "Add a server or encrypted chat" })}
               className="size-12 touch:size-12 shrink-0 clip-corner-lg transition-all text-success hover:bg-success hover:text-success-foreground"
               onClick={() => setAddOpen(true)}
             >
               <Plus className="size-5" />
             </Button>
           </TooltipTrigger>
-          <RailTooltipContent side="right">Add a server or chat</RailTooltipContent>
+          <RailTooltipContent side="right"><FormattedMessage id="serverRail.addTooltip" defaultMessage="Add a server or chat" /></RailTooltipContent>
         </Tooltip>
 
         <Tooltip>
           <TooltipTrigger asChild>
             <NavLink
               to="/discover"
-              aria-label="Discover"
+              aria-label={intl.formatMessage({ id: "serverRail.discover", defaultMessage: "Discover" })}
               onClick={() => {
                 onPressedFor("nav:discover")();
                 onNavigate?.();
@@ -2012,7 +2034,7 @@ function ServerRailInner({
             </NavLink>
           </TooltipTrigger>
           <RailTooltipContent side="right" className="font-medium">
-            Discover
+            <FormattedMessage id="serverRail.discover" defaultMessage="Discover" />
           </RailTooltipContent>
         </Tooltip>
       </nav>
@@ -2030,7 +2052,7 @@ function ServerRailInner({
             <Button
               variant="secondary"
               size="icon"
-              aria-label={inSettings ? "Close settings" : "Settings"}
+              aria-label={inSettings ? intl.formatMessage({ id: "serverRail.closeSettings", defaultMessage: "Close settings" }) : intl.formatMessage(common.settings)}
               aria-pressed={inSettings}
               className={cn(
                 "size-12 touch:size-12 shrink-0 clip-corner-lg transition-all",
@@ -2041,15 +2063,21 @@ function ServerRailInner({
               <Settings className="size-5" />
             </Button>
           </TooltipTrigger>
-          <RailTooltipContent side="right">{inSettings ? "Close settings" : "Settings"}</RailTooltipContent>
+          <RailTooltipContent side="right">
+            {inSettings ? intl.formatMessage({ id: "serverRail.closeSettings", defaultMessage: "Close settings" }) : intl.formatMessage(common.settings)}
+          </RailTooltipContent>
         </Tooltip>
       </div>
 
       <AddDialog open={addOpen} onOpenChange={setAddOpen} />
 
       <Dialog open={renameId !== null} onOpenChange={(open) => !open && setRenameId(null)}>
-        <ChromeDialogContent title="Rename folder" className="sm:max-w-sm">
-          <ChromeDialogHeader icon={Folder} title="rename folder" description="Name this group of communities." />
+        <ChromeDialogContent title={intl.formatMessage({ id: "serverRail.renameFolder", defaultMessage: "Rename folder" })} className="sm:max-w-sm">
+          <ChromeDialogHeader
+            icon={Folder}
+            title={intl.formatMessage({ id: "serverRail.renameFolderHeading", defaultMessage: "rename folder" })}
+            description={intl.formatMessage({ id: "serverRail.renameFolderDescription", defaultMessage: "Name this group of communities." })}
+          />
           <form
             onSubmit={(e) => {
               e.preventDefault();
@@ -2060,17 +2088,19 @@ function ServerRailInner({
             <Input
               value={renameValue}
               onChange={(e) => setRenameValue(e.target.value)}
-              placeholder="Folder name"
-              aria-label="Folder name"
+              placeholder={intl.formatMessage({ id: "serverRail.folderName", defaultMessage: "Folder name" })}
+              aria-label={intl.formatMessage({ id: "serverRail.folderName", defaultMessage: "Folder name" })}
               autoFocus
               maxLength={64}
               className="bg-background/40 border-transparent"
             />
             <ChromeDialogFooter>
               <Button type="button" variant="ghost" onClick={() => setRenameId(null)}>
-                Cancel
+                <FormattedMessage {...common.cancel} />
               </Button>
-              <Button type="submit">Save</Button>
+              <Button type="submit">
+                <FormattedMessage {...common.save} />
+              </Button>
             </ChromeDialogFooter>
           </form>
         </ChromeDialogContent>

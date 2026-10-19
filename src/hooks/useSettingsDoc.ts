@@ -11,6 +11,7 @@ import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useEventStore } from "@/hooks/useEventStore";
 import { useSettingsKeys } from "@/hooks/useSettingsKeys";
+import { t } from "@/i18n";
 import type { NostrRumor } from "@/lib/nostrRumor";
 import { publishSelfStateEvent } from "@/lib/selfStatePublish";
 import {
@@ -328,10 +329,10 @@ export function useSettingsDoc<N extends SettingsDocName>(name: N): UseSettingsD
 
   const mutation = useMutation({
     mutationFn: (patch: Partial<SettingsDocOf<N>>) => serializeSettingsWrite(name, async () => {
-      if (!user?.signer.nip44) throw new Error("NIP-44 encryption not supported by signer");
+      if (!user?.signer.nip44) throw new Error(t({ id: "useSettingsDoc.noNip44", defaultMessage: "NIP-44 encryption not supported by signer" }));
       const relays = selfStateRelays(config, user.pubkey);
       if (relays.length === 0) {
-        throw new Error("Add an account write relay before synchronizing private settings");
+        throw new Error(t({ id: "useSettingsDoc.noWriteRelay", defaultMessage: "Add an account write relay before synchronizing private settings" }));
       }
       const writeKeys = await ensure();
       const keyring = writeKeys.keyring;

@@ -12,6 +12,7 @@ import {
 } from "@/components/onboarding/signupSteps";
 import { SignupTerms } from "@/components/onboarding/SignupTerms";
 import { Button } from "@/components/ui/button";
+import { FormattedMessage } from "@/i18n";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { suppressNextSyncGate } from "@/hooks/useFreshLogin";
@@ -160,13 +161,18 @@ export function SignupWizard({ onExit }: SignupWizardProps) {
           <ArmadaIdentity size={96} />
           <div className="space-y-2.5">
             <h1 className="font-mono text-2xl font-bold lowercase tracking-tight text-foreground">
-              join {join.name ?? host(join.relays[0])}
+              <FormattedMessage
+                id="signupWizard.join.title"
+                defaultMessage="join {name}"
+                values={{ name: join.name ?? host(join.relays[0]) }}
+              />
             </h1>
             <p className="text-sm leading-relaxed text-muted-foreground">
-              You've been invited to create a new Armada account hosted on
-              {join.relays.length === 1 ? " this relay" : " these relays"}. Your account's data
-              will live here so it's ready wherever you sign in. You can change this later in
-              Settings.
+              <FormattedMessage
+                id="signupWizard.join.body"
+                defaultMessage="You've been invited to create a new Armada account hosted on {count, plural, one {this relay} other {these relays}}. Your account's data will live here so it's ready wherever you sign in. You can change this later in Settings."
+                values={{ count: join.relays.length }}
+              />
             </p>
           </div>
           <div className="w-full space-y-1 clip-corner-lg bg-secondary/50 p-3 text-left">
@@ -182,14 +188,14 @@ export function SignupWizard({ onExit }: SignupWizardProps) {
               className="h-12 w-full clip-corner-lg text-base font-medium"
               onClick={() => setStep("create")}
             >
-              Create my account
+              <FormattedMessage id="signupWizard.join.create" defaultMessage="Create my account" />
             </Button>
             <Button
               variant="ghost"
               className="w-full text-muted-foreground"
               onClick={dismissJoin}
             >
-              Not now
+              <FormattedMessage id="signupWizard.join.notNow" defaultMessage="Not now" />
             </Button>
             <SignupTerms />
           </div>

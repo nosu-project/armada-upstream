@@ -66,7 +66,8 @@ public class FullscreenChromeClient extends BridgeWebChromeClient {
         // written code) can go fullscreen too: without one it can pass off a
         // fake of the app or the system as the real thing. A toast is its own
         // window, so nothing the fullscreen view draws can cover it.
-        Toast.makeText(activity, "Press Back to exit full screen", Toast.LENGTH_SHORT).show();
+        Toast.makeText(activity, AppLocale.string(activity, R.string.fullscreen_exit_hint),
+                Toast.LENGTH_SHORT).show();
     }
 
     @Override

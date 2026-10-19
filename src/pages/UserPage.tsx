@@ -11,6 +11,7 @@ import { useAuthor } from "@/hooks/useAuthor";
 import { useBackOrHome } from "@/hooks/useBackOrHome";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useNip05Resolve } from "@/hooks/useNip05Resolve";
+import { FormattedMessage, useIntl } from "@/i18n";
 import { getAvatarShape } from "@/lib/avatarShape";
 import { parseNip05Address } from "@/lib/nip05Address";
 import { resolvePubkey } from "@/lib/resolvePubkey";
@@ -26,6 +27,7 @@ import { NotFound } from "@/pages/NotFound";
  */
 export function UserPage() {
   const { user: identifier = "" } = useParams<{ user: string }>();
+  const intl = useIntl();
   const { user } = useCurrentUser();
   // Closing steps back; a cold load lands home.
   const closeProfile = useBackOrHome();
@@ -56,23 +58,45 @@ export function UserPage() {
 
   if (!pubkey) {
     return (
-      <DetailPage title={address?.display ?? "Profile"} icon={icon}>
+      <DetailPage title={address?.display ?? intl.formatMessage({ id: "userPage.profile", defaultMessage: "Profile" })} icon={icon}>
         {nip05.isPending ? (
           <div className="flex flex-col items-center gap-3 pt-12 text-center">
             <Loader2 className="size-6 animate-spin text-muted-foreground" />
-            <p className="text-sm text-muted-foreground">Looking up {address?.display}…</p>
+            <p className="text-sm text-muted-foreground">
+              <FormattedMessage
+                id="userPage.lookingUp"
+                defaultMessage="Looking up {address}…"
+                values={{ address: address?.display }}
+              />
+            </p>
           </div>
         ) : (
           <div className="flex flex-col items-center gap-4 pt-12 text-center">
             <MessageSquare className="size-10 text-muted-foreground/50" />
-            <h2 className="text-xl font-semibold">No such person</h2>
+            <h2 className="text-xl font-semibold">
+              <FormattedMessage id="userPage.noSuchPerson" defaultMessage="No such person" />
+            </h2>
             <p className="max-w-sm text-sm text-muted-foreground">
               {nip05.isError
-                ? <>Couldn’t reach {address?.domain} to look up {address?.display}.</>
-                : <>{address?.display} isn’t a Nostr account we could find.</>}
+                ? (
+                  <FormattedMessage
+                    id="userPage.unreachable"
+                    defaultMessage="Couldn’t reach {domain} to look up {address}."
+                    values={{ domain: address?.domain, address: address?.display }}
+                  />
+                )
+                : (
+                  <FormattedMessage
+                    id="userPage.notFound"
+                    defaultMessage="{address} isn’t a Nostr account we could find."
+                    values={{ address: address?.display }}
+                  />
+                )}
             </p>
             <Button asChild variant="secondary">
-              <Link to="/">Back to base</Link>
+              <Link to="/">
+                <FormattedMessage id="notFound.backToBase" defaultMessage="Back to base" />
+              </Link>
             </Button>
           </div>
         )}
@@ -95,7 +119,11 @@ export function UserPage() {
             </AvatarFallback>
           </Avatar>
           <h2 className="text-2xl font-bold">
-            Chat with <span className="break-words">{displayName}</span> on Armada
+            <FormattedMessage
+              id="userPage.chatWith"
+              defaultMessage="Chat with <name>{displayName}</name> on Armada"
+              values={{ displayName, name: (chunks) => <span className="break-words">{chunks}</span> }}
+            />
           </h2>
           {metadata?.about && (
             <p className="max-w-md text-sm text-muted-foreground line-clamp-3 whitespace-pre-wrap break-words">
@@ -103,8 +131,10 @@ export function UserPage() {
             </p>
           )}
           <p className="max-w-md text-muted-foreground">
-            Armada is end-to-end encrypted messaging on Nostr. Create an account or sign
-            in and this conversation is waiting for you.
+            <FormattedMessage
+              id="userPage.pitch"
+              defaultMessage="Armada is end-to-end encrypted messaging on Nostr. Create an account or sign in and this conversation is waiting for you."
+            />
           </p>
           <JoinButton size="lg" className="h-12 w-full max-w-xs clip-corner-lg text-base font-medium" />
         </div>

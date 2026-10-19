@@ -1,5 +1,6 @@
 import { parseYouTubeTarget } from "@/lib/linkEmbed";
 import { isLocalNetworkUrl } from "@/lib/sanitizeUrl";
+import { t } from "@/i18n";
 
 /**
  * "Watch together" shared state and rules.
@@ -92,7 +93,8 @@ export type WatchLink =
   | { kind: "video"; url: string }
   | { kind: "invalid"; reason: string };
 
-const NOT_A_VIDEO = "Paste a YouTube link or a direct link to a video file (.mp4, .webm, …)";
+const notAVideo = () =>
+  t({ id: "watchalong.notAVideo", defaultMessage: "Paste a YouTube link or a direct link to a video file (.mp4, .webm, …)" });
 
 /** Classify a pasted link: YouTube embed, direct `<video>` (by extension or Blossom path), or invalid. */
 export function classifyWatchLink(input: string): WatchLink {
@@ -104,14 +106,14 @@ export function classifyWatchLink(input: string): WatchLink {
   try {
     u = new URL(raw);
   } catch {
-    return { kind: "invalid", reason: NOT_A_VIDEO };
+    return { kind: "invalid", reason: notAVideo() };
   }
-  if (u.protocol !== "https:" && u.protocol !== "http:") return { kind: "invalid", reason: NOT_A_VIDEO };
+  if (u.protocol !== "https:" && u.protocol !== "http:") return { kind: "invalid", reason: notAVideo() };
   // The media policy won't load these either; refuse up front.
-  if (isLocalNetworkUrl(u.href)) return { kind: "invalid", reason: "Local network links can't be shared" };
-  if (HLS_EXT.test(u.pathname)) return { kind: "invalid", reason: "Live streams (.m3u8) aren't supported" };
+  if (isLocalNetworkUrl(u.href)) return { kind: "invalid", reason: t({ id: "watchalong.localNetwork", defaultMessage: "Local network links can't be shared" }) };
+  if (HLS_EXT.test(u.pathname)) return { kind: "invalid", reason: t({ id: "watchalong.liveStream", defaultMessage: "Live streams (.m3u8) aren't supported" }) };
   if (DIRECT_VIDEO_EXT.test(u.pathname) || BLOSSOM_PATH.test(u.pathname)) return { kind: "video", url: u.href };
-  return { kind: "invalid", reason: NOT_A_VIDEO };
+  return { kind: "invalid", reason: notAVideo() };
 }
 
 /**
@@ -133,7 +135,7 @@ export function directVideoTitle(url: string): string {
     if (file && !BLOSSOM_PATH.test(`/${file}`)) return file;
     return u.hostname;
   } catch {
-    return "Video";
+    return t({ id: "watchalong.videoFallbackTitle", defaultMessage: "Video" });
   }
 }
 

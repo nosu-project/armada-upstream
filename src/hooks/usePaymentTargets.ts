@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { useCurrentUser } from '@/hooks/useCurrentUser';
 import { useNostrPublish } from '@/hooks/useNostrPublish';
+import { t } from '@/i18n';
 import { fetchFreshEvent } from '@/lib/fetchFreshEvent';
 import {
   PAYMENT_TARGETS_KIND,
@@ -47,7 +48,7 @@ export function useUpdatePaymentTargets() {
 
   return useMutation({
     mutationFn: async (targets: PaymentTarget[]) => {
-      if (!user) throw new Error('You must be logged in.');
+      if (!user) throw new Error(t({ id: 'usePaymentTargets.notLoggedIn', defaultMessage: 'You must be logged in.' }));
 
       const prev = await fetchFreshEvent(nostr, {
         kinds: [PAYMENT_TARGETS_KIND],

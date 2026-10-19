@@ -5,6 +5,7 @@ import { useCallback } from "react";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useNostrPublish } from "@/hooks/useNostrPublish";
 import { profileThemeQueryKey, type ProfileThemeResult } from "@/hooks/useProfileTheme";
+import { t } from "@/i18n";
 import { fetchFreshEvent } from "@/lib/fetchFreshEvent";
 import { isPublishQueuedError } from "@/lib/publishOutbox";
 import {
@@ -58,7 +59,7 @@ export function usePublishProfileTheme() {
 
   const save = useCallback(
     async (input: ProfileThemeInput) => {
-      if (!user) throw new Error("Not signed in");
+      if (!user) throw new Error(t({ id: "usePublishProfileTheme.notSignedIn", defaultMessage: "Not signed in" }));
 
       // Publish resolvable font URLs; title falls back to body (like Ditto's resolveThemeForPublishing).
       const withUrl = (f: ThemeFont | undefined): ThemeFont | undefined =>
@@ -114,7 +115,7 @@ export function usePublishProfileTheme() {
   );
 
   const remove = useCallback(async () => {
-    if (!user) throw new Error("Not signed in");
+    if (!user) throw new Error(t({ id: "usePublishProfileTheme.notSignedIn", defaultMessage: "Not signed in" }));
     const prev = queryClient.getQueryData<ProfileThemeResult>(profileThemeQueryKey(user.pubkey));
     queryClient.setQueryData<ProfileThemeResult>(profileThemeQueryKey(user.pubkey), {});
     try {

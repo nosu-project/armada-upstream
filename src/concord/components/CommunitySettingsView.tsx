@@ -102,6 +102,7 @@ import {
   type ImagePointer,
 } from "@/concord/lib/types";
 import { cn } from "@/lib/utils";
+import { common, defineMessages, FormattedMessage, t, useIntl } from "@/i18n";
 import { ChannelGlyph } from "@/concord/components/ChannelGlyph";
 import { channelGitRepositoryAttachments } from "@/concord/lib/types";
 import type { ChannelView } from "@/concord/lib/types";
@@ -110,12 +111,12 @@ import { parseGitRepositoryAddress } from "@/lib/gitActivity";
 
 type SettingsTab = "overview" | "channels" | "integrations" | "relays";
 
-const SETTINGS_TABS: readonly PillTab<SettingsTab>[] = [
-  { id: "overview", label: "Overview", icon: Info },
-  { id: "channels", label: "Channels", icon: Hash },
-  { id: "integrations", label: "Integrations", icon: Plug },
-  { id: "relays", label: "Network", icon: Radio },
-];
+const tabLabels = defineMessages({
+  overview: { id: "communitySettingsView.tab.overview", defaultMessage: "Overview" },
+  channels: { id: "communitySettingsView.tab.channels", defaultMessage: "Channels" },
+  integrations: { id: "communitySettingsView.tab.integrations", defaultMessage: "Integrations" },
+  relays: { id: "communitySettingsView.tab.network", defaultMessage: "Network" },
+});
 
 /**
  * Community settings page (Overview, Channels, Integrations, Network), shown
@@ -149,8 +150,15 @@ export function CommunitySettingsView({
   onMintAccessRole?: (channelIdHex: string, name: string) => Promise<void>;
   onOpenInvites?: () => void;
 }) {
+  const intl = useIntl();
   const { updateMetadata, isUpdating } = useMetadataActions(community);
   const { mutateAsync: uploadFile } = useUploadFile();
+  const settingsTabs = useMemo<readonly PillTab<SettingsTab>[]>(() => [
+    { id: "overview", label: intl.formatMessage(tabLabels.overview), icon: Info },
+    { id: "channels", label: intl.formatMessage(tabLabels.channels), icon: Hash },
+    { id: "integrations", label: intl.formatMessage(tabLabels.integrations), icon: Plug },
+    { id: "relays", label: intl.formatMessage(tabLabels.relays), icon: Radio },
+  ], [intl]);
 
   const name = metadata?.name || community.name;
   const description = metadata?.description?.trim();
@@ -191,7 +199,9 @@ export function CommunitySettingsView({
       imageSrc: URL.createObjectURL(file),
       aspect: field === "icon" ? 1 : 3,
       field,
-      title: field === "icon" ? "Crop icon" : "Crop banner",
+      title: field === "icon"
+        ? t({ id: "communitySettingsView.cropIcon", defaultMessage: "Crop icon" })
+        : t({ id: "communitySettingsView.cropBanner", defaultMessage: "Crop banner" }),
     });
   };
 
@@ -213,12 +223,16 @@ export function CommunitySettingsView({
         new File([ciphertext], `${field}.enc`, { type: "application/octet-stream" }),
       );
       const url = tags[0]?.[1];
-      if (!url) throw new Error("Upload returned no URL.");
+      if (!url) throw new Error(t({ id: "communitySettingsView.noUploadUrl", defaultMessage: "Upload returned no URL." }));
       const image: ImagePointer = { url, key, nonce, hash };
       await updateMetadata(field === "icon" ? { icon: image } : { banner: image });
-      toast({ title: field === "icon" ? "Icon updated" : "Banner updated" });
+      toast({
+        title: field === "icon"
+          ? t({ id: "communitySettingsView.iconUpdated", defaultMessage: "Icon updated" })
+          : t({ id: "communitySettingsView.bannerUpdated", defaultMessage: "Banner updated" }),
+      });
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Upload failed.");
+      setError(e instanceof Error ? e.message : t({ id: "communitySettingsView.uploadFailed", defaultMessage: "Upload failed." }));
     } finally {
       setUploading(null);
     }
@@ -230,7 +244,7 @@ export function CommunitySettingsView({
       await updateMetadata(field === "name" ? { name: value } : { description: value });
       setEditingField(null);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Couldn't save changes.");
+      setError(e instanceof Error ? e.message : t({ id: "communitySettingsView.saveFailed", defaultMessage: "Couldn't save changes." }));
     }
   };
 
@@ -239,7 +253,7 @@ export function CommunitySettingsView({
   return (
     <div className="mx-auto w-full max-w-2xl px-3 py-4">
       <div className="mb-4 flex">
-        <PillTabs tabs={SETTINGS_TABS} value={tab} onChange={(id) => setTab(id)} />
+        <PillTabs tabs={settingsTabs} value={tab} onChange={(id) => setTab(id)} />
       </div>
 
       {tab === "overview" && (
@@ -250,7 +264,7 @@ export function CommunitySettingsView({
                 <button
                   type="button"
                   className="block h-32 w-full overflow-hidden rounded-lg cursor-zoom-in"
-                  aria-label="View banner"
+                  aria-label={intl.formatMessage({ id: "communitySettingsView.viewBanner", defaultMessage: "View banner" })}
                   onClick={() => setBannerZoom(true)}
                 >
                   <img src={bannerUrl} alt="" className="size-full object-cover" />
@@ -260,7 +274,7 @@ export function CommunitySettingsView({
                   type="button"
                   className="flex h-32 w-full items-center justify-center clip-corner-lg bg-secondary/40 text-muted-foreground transition-colors hover:bg-secondary/60"
                   onClick={() => handlePickImage("banner")}
-                  aria-label="Add banner"
+                  aria-label={intl.formatMessage({ id: "communitySettingsView.addBanner", defaultMessage: "Add banner" })}
                 >
                   <ImagePlus className="size-5" />
                 </button>
@@ -271,7 +285,7 @@ export function CommunitySettingsView({
                   className="absolute bottom-2 right-2 grid size-8 touch:size-11 place-items-center clip-corner-lg bg-background/70 text-foreground backdrop-blur transition-colors hover:bg-background/90"
                   onClick={() => handlePickImage("banner")}
                   disabled={uploading === "banner"}
-                  aria-label="Change banner"
+                  aria-label={intl.formatMessage({ id: "communitySettingsView.changeBanner", defaultMessage: "Change banner" })}
                 >
                   {uploading === "banner" ? (
                     <Loader2 className="size-4 animate-spin" />
@@ -290,7 +304,7 @@ export function CommunitySettingsView({
                   <button
                     type="button"
                     className="cursor-zoom-in rounded-2xl"
-                    aria-label="View icon"
+                    aria-label={intl.formatMessage({ id: "communitySettingsView.viewIcon", defaultMessage: "View icon" })}
                     onClick={() => setIconZoom(true)}
                   >
                     <img src={iconUrl} alt="" className="size-16 rounded-2xl object-cover" />
@@ -300,7 +314,7 @@ export function CommunitySettingsView({
                     type="button"
                     className="grid size-16 place-items-center clip-corner-lg bg-secondary/50 text-muted-foreground transition-colors hover:bg-secondary/70"
                     onClick={() => handlePickImage("icon")}
-                    aria-label="Add icon"
+                    aria-label={intl.formatMessage({ id: "communitySettingsView.addIcon", defaultMessage: "Add icon" })}
                   >
                     <ImagePlus className="size-5" />
                   </button>
@@ -315,7 +329,7 @@ export function CommunitySettingsView({
                     className="absolute -bottom-1 -right-1 grid size-6 touch:size-11 place-items-center clip-corner-lg bg-background text-foreground transition-colors hover:bg-secondary"
                     onClick={() => handlePickImage("icon")}
                     disabled={uploading === "icon"}
-                    aria-label="Change icon"
+                    aria-label={intl.formatMessage({ id: "communitySettingsView.changeIcon", defaultMessage: "Change icon" })}
                   >
                     {uploading === "icon" ? (
                       <Loader2 className="size-3 animate-spin" />
@@ -343,7 +357,7 @@ export function CommunitySettingsView({
                       size="icon"
                       variant="ghost"
                       className="size-6 touch:size-11 shrink-0 text-muted-foreground"
-                      aria-label="Edit name"
+                      aria-label={intl.formatMessage({ id: "communitySettingsView.editName", defaultMessage: "Edit name" })}
                       onClick={() => setEditingField("name")}
                     >
                       <Pencil className="size-3" />
@@ -361,7 +375,7 @@ export function CommunitySettingsView({
                 initial={description ?? ""}
                 saving={isUpdating}
                 multiline
-                placeholder="What's this community about?"
+                placeholder={intl.formatMessage({ id: "communitySettingsView.descriptionPlaceholder", defaultMessage: "What's this community about?" })}
                 onCancel={() => setEditingField(null)}
                 onSave={(v) => saveField("description", v)}
               />
@@ -376,7 +390,7 @@ export function CommunitySettingsView({
                     size="icon"
                     variant="ghost"
                     className="size-6 touch:size-11 shrink-0 text-muted-foreground"
-                    aria-label="Edit description"
+                    aria-label={intl.formatMessage({ id: "communitySettingsView.editDescription", defaultMessage: "Edit description" })}
                     onClick={() => setEditingField("description")}
                   >
                     <Pencil className="size-3" />
@@ -391,7 +405,7 @@ export function CommunitySettingsView({
                   className="w-full justify-start gap-1.5 text-muted-foreground"
                   onClick={() => setEditingField("description")}
                 >
-                  <Plus className="size-3.5" /> Add a description
+                  <Plus className="size-3.5" /> <FormattedMessage id="communitySettingsView.addDescription" defaultMessage="Add a description" />
                 </Button>
               )
             )}
@@ -407,7 +421,11 @@ export function CommunitySettingsView({
               <div className="flex items-center gap-2.5 text-sm">
                 <Users className="size-4 shrink-0 text-muted-foreground" />
                 <span>
-                  {memberCount} {memberCount === 1 ? "member" : "members"}
+                  <FormattedMessage
+                    id="communitySettingsView.memberCount"
+                    defaultMessage="{count, plural, one {# member} other {# members}}"
+                    values={{ count: memberCount }}
+                  />
                 </span>
               </div>
               <VisibilityRow community={community} onOpenInvites={onOpenInvites} />
@@ -477,12 +495,14 @@ function HistorySection({ community }: { community: Community }) {
   return (
     <div className="space-y-1.5">
       <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-        History
+        <FormattedMessage id="communitySettingsView.history.title" defaultMessage="History" />
       </span>
       <div className="space-y-2.5 rounded-lg bg-secondary/40 p-3">
         <p className="text-xs text-muted-foreground">
-          Read every channel across all relays, save it to your local store, and export a
-          self-contained HTML copy that opens as a mini-Armada.
+          <FormattedMessage
+            id="communitySettingsView.history.description"
+            defaultMessage="Read every channel across all relays, save it to your local store, and export a self-contained HTML copy that opens as a mini-Armada."
+          />
         </p>
         <Button
           type="button"
@@ -491,7 +511,7 @@ function HistorySection({ community }: { community: Community }) {
           onClick={() => navigate(`/c/${encodeURIComponent(community.idHex)}/history`)}
         >
           <History className="size-4 shrink-0" />
-          Verify &amp; export history
+          <FormattedMessage id="communitySettingsView.history.button" defaultMessage="Verify & export history" />
         </Button>
       </div>
     </div>
@@ -506,6 +526,7 @@ export function ConnectedRepositoriesSection({
   community: Community;
   canManage: boolean;
 }) {
+  const intl = useIntl();
   const channels = useChannels(community);
   const { data: folded } = useControlFold(community);
   const { attachRepository, detachRepository } = useCommunityManagement(community);
@@ -534,31 +555,45 @@ export function ConnectedRepositoriesSection({
   const connect = async (channelIdHex: string, repository: PickedRepository) => {
     // The announcement is authoritative for relays; pasted hints only add discovery.
     await attachRepository({ channelIdHex, address: repository.coordinate, relayHints: repository.relayHints });
-    toast({ title: "Repository connected", description: repository.displayName });
+    toast({ title: t({ id: "communitySettingsView.repo.connected", defaultMessage: "Repository connected" }), description: repository.displayName });
   };
 
   const detach = async (channel: Channel, address: string, name: string) => {
-    if (!confirm(`Disconnect ${name} from #${channel.name}? Historical activity remains attached to its original interval.`)) return;
+    if (!confirm(t(
+      {
+        id: "communitySettingsView.repo.confirmDisconnect",
+        defaultMessage: "Disconnect {name} from #{channel}? Historical activity remains attached to its original interval.",
+      },
+      { name, channel: channel.name },
+    ))) return;
     try {
       await detachRepository({ channelIdHex: channel.idHex, address });
-      toast({ title: "Repository disconnected", description: name });
+      toast({ title: t({ id: "communitySettingsView.repo.disconnected", defaultMessage: "Repository disconnected" }), description: name });
     } catch (e) {
-      toast({ title: "Couldn't disconnect repository", description: e instanceof Error ? e.message : undefined, variant: "destructive" });
+      toast({
+        title: t({ id: "communitySettingsView.repo.disconnectFailed", defaultMessage: "Couldn't disconnect repository" }),
+        description: e instanceof Error ? e.message : undefined,
+        variant: "destructive",
+      });
     }
   };
 
   return (
     <div className="space-y-1.5">
       <div className="flex items-center justify-between">
-        <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Connected repositories</span>
+        <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+          <FormattedMessage id="communitySettingsView.repo.title" defaultMessage="Connected repositories" />
+        </span>
         {canManage && channels.length > 0 && (
-          <Button type="button" size="icon" variant="ghost" className="size-6 touch:size-11 shrink-0 text-muted-foreground" aria-label="Connect repository" onClick={() => setConnectOpen(true)}>
+          <Button type="button" size="icon" variant="ghost" className="size-6 touch:size-11 shrink-0 text-muted-foreground" aria-label={intl.formatMessage({ id: "communitySettingsView.repo.connect", defaultMessage: "Connect repository" })} onClick={() => setConnectOpen(true)}>
             <Plus className="size-3.5" />
           </Button>
         )}
       </div>
       <div className="space-y-1 rounded-lg bg-secondary/40 p-1">
-        {repositories.length === 0 && <p className="px-2 py-1.5 text-xs text-muted-foreground">No repositories connected.</p>}
+        {repositories.length === 0 && <p className="px-2 py-1.5 text-xs text-muted-foreground">
+            <FormattedMessage id="communitySettingsView.repo.none" defaultMessage="No repositories connected." />
+          </p>}
         {repositories.map(({ channel, attachment }) => (
           <ConnectedRepositoryRow
             key={`${channel.idHex}:${attachment.address.coordinate}`}
@@ -594,6 +629,7 @@ function ConnectRepositoryDialog({ open, onOpenChange, channels, connectedCoordi
   repositoryByChannel: ReadonlyMap<string, { owner: string; name: string }>;
   onConnect: (channelIdHex: string, repository: PickedRepository) => Promise<unknown>;
 }) {
+  const intl = useIntl();
   const [picked, setPicked] = useState<PickedRepository | null>(null);
   // The fold absorbs our attachment before the publish resolves; keep the row pending.
   const [pendingChannelId, setPendingChannelId] = useState<string | null>(null);
@@ -615,7 +651,7 @@ function ConnectRepositoryDialog({ open, onOpenChange, channels, connectedCoordi
       await onConnect(channelIdHex, picked);
       onOpenChange(false);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Couldn't connect repository.");
+      setError(e instanceof Error ? e.message : t({ id: "communitySettingsView.repo.connectFailed", defaultMessage: "Couldn't connect repository." }));
     } finally {
       setPendingChannelId(null);
     }
@@ -623,13 +659,17 @@ function ConnectRepositoryDialog({ open, onOpenChange, channels, connectedCoordi
 
   return (
     <Dialog open={open} onOpenChange={(next) => !connecting && onOpenChange(next)}>
-      <ChromeDialogContent title={picked ? "Choose a channel" : "Connect a repository"} contentClassName="grid gap-4">
+      <ChromeDialogContent title={picked
+        ? intl.formatMessage({ id: "communitySettingsView.repo.chooseChannelTitle", defaultMessage: "Choose a channel" })
+        : intl.formatMessage({ id: "communitySettingsView.repo.connectTitle", defaultMessage: "Connect a repository" })} contentClassName="grid gap-4">
         {picked && (
-          <Button variant="ghost" size="icon" className="absolute left-3 top-3 size-8 touch:size-11" aria-label="Back" disabled={connecting} onClick={() => setPicked(null)}>
+          <Button variant="ghost" size="icon" className="absolute left-3 top-3 size-8 touch:size-11" aria-label={intl.formatMessage(common.back)} disabled={connecting} onClick={() => setPicked(null)}>
             <ArrowLeft className="size-4" />
           </Button>
         )}
-        <ChromeDialogHeader icon={GitBranch} title={picked ? "choose a channel" : "connect a repository"} className="mb-2" />
+        <ChromeDialogHeader icon={GitBranch} title={picked
+          ? <FormattedMessage id="communitySettingsView.repo.chooseChannelHeading" defaultMessage="choose a channel" />
+          : <FormattedMessage id="communitySettingsView.repo.connectHeading" defaultMessage="connect a repository" />} className="mb-2" />
 
         {!picked ? (
           <RepositoryPicker connectedCoordinates={connectedCoordinates} onSelect={setPicked} />
@@ -639,7 +679,9 @@ function ConnectRepositoryDialog({ open, onOpenChange, channels, connectedCoordi
               <OwnerAvatar pubkey={picked.owner} />
               <span className="min-w-0 flex-1">
                 <OwnerSlashRepo owner={picked.owner} name={picked.displayName} />
-                <span className="block truncate text-xs text-muted-foreground">Pick the channel its activity should appear in.</span>
+                <span className="block truncate text-xs text-muted-foreground">
+                  <FormattedMessage id="communitySettingsView.repo.pickChannel" defaultMessage="Pick the channel its activity should appear in." />
+                </span>
               </span>
             </div>
             <div className="max-h-56 space-y-0.5 overflow-y-auto clip-corner-lg bg-background/40 p-1">
@@ -661,8 +703,16 @@ function ConnectRepositoryDialog({ open, onOpenChange, channels, connectedCoordi
                     <span className="min-w-0 flex-1">
                       <span className="block truncate">{channel.name}</span>
                       {pending
-                        ? <span className="block truncate text-xs text-muted-foreground">Connecting…</span>
-                        : taken && <span className="block truncate text-xs text-muted-foreground">Already connected to {taken.name}</span>}
+                        ? <span className="block truncate text-xs text-muted-foreground">
+                          <FormattedMessage id="communitySettingsView.repo.connecting" defaultMessage="Connecting…" />
+                        </span>
+                        : taken && <span className="block truncate text-xs text-muted-foreground">
+                          <FormattedMessage
+                            id="communitySettingsView.repo.alreadyConnected"
+                            defaultMessage="Already connected to {name}"
+                            values={{ name: taken.name }}
+                          />
+                        </span>}
                     </span>
                     {pending && <Loader2 className="size-3.5 shrink-0 animate-spin text-muted-foreground" />}
                   </button>
@@ -672,7 +722,10 @@ function ConnectRepositoryDialog({ open, onOpenChange, channels, connectedCoordi
             {/* Not while connecting: our in-flight attachment would make every channel look taken. */}
             {!connecting && channels.every((channel) => repositoryByChannel.has(channel.idHex)) && (
               <p className="text-xs text-muted-foreground">
-                Every channel already has a repository. Add a channel first, or create a repository channel from the channel list.
+                <FormattedMessage
+                  id="communitySettingsView.repo.allTaken"
+                  defaultMessage="Every channel already has a repository. Add a channel first, or create a repository channel from the channel list."
+                />
               </p>
             )}
             {error && <p role="alert" className="text-xs text-destructive">{error}</p>}
@@ -705,12 +758,13 @@ function ConnectedRepositoryRow({ channel, address, owner, relayHints, fallbackN
     },
     staleTime: 60_000,
   });
+  const intl = useIntl();
   const name = data?.announcement.name || fallbackName;
   return <div className="flex min-w-0 items-center gap-2 rounded-md px-2 py-1.5">
     <OwnerAvatar pubkey={owner} className="size-6" />
     <span className="min-w-0 flex-1"><OwnerSlashRepo owner={owner} name={name} /></span>
     <span className="shrink-0 text-2xs text-muted-foreground">#{channel.name}</span>
-    {canManage && <Button type="button" size="icon" variant="ghost" className="size-6 touch:size-11 shrink-0 text-muted-foreground hover:text-destructive" aria-label={`Disconnect ${name}`} title={address} onClick={onDetach}><Trash2 className="size-3.5" /></Button>}
+    {canManage && <Button type="button" size="icon" variant="ghost" className="size-6 touch:size-11 shrink-0 text-muted-foreground hover:text-destructive" aria-label={intl.formatMessage({ id: "communitySettingsView.repo.disconnect", defaultMessage: "Disconnect {name}" }, { name })} title={address} onClick={onDetach}><Trash2 className="size-3.5" /></Button>}
   </div>;
 }
 
@@ -729,6 +783,7 @@ function InlineEdit({
   onSave: (value: string) => void;
   onCancel: () => void;
 }) {
+  const intl = useIntl();
   const [value, setValue] = useState(initial);
 
   return (
@@ -764,7 +819,7 @@ function InlineEdit({
         variant="ghost"
         className="size-8 touch:size-11 shrink-0"
         disabled={saving || (!multiline && !value.trim())}
-        aria-label="Save"
+        aria-label={intl.formatMessage(common.save)}
       >
         {saving ? <Loader2 className="size-4 animate-spin" /> : <Check className="size-4" />}
       </Button>
@@ -775,7 +830,7 @@ function InlineEdit({
         className="size-8 touch:size-11 shrink-0 text-muted-foreground"
         onClick={onCancel}
         disabled={saving}
-        aria-label="Cancel"
+        aria-label={intl.formatMessage(common.cancel)}
       >
         <X className="size-4" />
       </Button>
@@ -801,14 +856,14 @@ function VisibilityRow({ community, onOpenInvites }: { community: Community; onO
       )}
       <span className="min-w-0 flex-1">
         {listed
-          ? "Public · listed on Discover"
+          ? <FormattedMessage id="communitySettingsView.visibility.listed" defaultMessage="Public · listed on Discover" />
           : isPublic
-            ? "Public · anyone with an invite link can join"
-            : "Private · join by direct invite only"}
+            ? <FormattedMessage id="communitySettingsView.visibility.public" defaultMessage="Public · anyone with an invite link can join" />
+            : <FormattedMessage id="communitySettingsView.visibility.private" defaultMessage="Private · join by direct invite only" />}
       </span>
       {onOpenInvites && (
         <Button type="button" size="sm" variant="ghost" className="shrink-0" onClick={onOpenInvites}>
-          Manage
+          <FormattedMessage id="communitySettingsView.visibility.manage" defaultMessage="Manage" />
         </Button>
       )}
     </div>
@@ -831,7 +886,7 @@ function OwnerRow({ pubkey }: { pubkey: string }) {
       </span>
       <span className="inline-flex items-center gap-1 rounded-full bg-primary/15 px-2 py-0.5 text-2xs font-medium text-primary">
         <Shield className="size-3" />
-        Owner
+        <FormattedMessage id="communitySettingsView.owner" defaultMessage="Owner" />
       </span>
     </div>
   );
@@ -856,6 +911,7 @@ function ChannelsSection({
   onRotateChannelKey?: (channelIdHex: string) => Promise<void>;
   onMintAccessRole?: (channelIdHex: string, name: string) => Promise<void>;
 }) {
+  const intl = useIntl();
   const channels = useChannels(community);
   const { renameChannel, isRenaming, setChannelCategory, isFiling, setChannelView, deleteChannel, createChannel, isAddingChannel, arrangeChannels } =
     useCommunityManagement(community);
@@ -918,7 +974,12 @@ function ChannelsSection({
         }
       } catch (e) {
         toast({
-          title: moved > 0 ? `Only moved ${moved} of ${members.length} channels` : "Couldn't move the channels",
+          title: moved > 0
+            ? t(
+              { id: "communitySettingsView.channels.partialMove", defaultMessage: "Only moved {moved} of {total} channels" },
+              { moved, total: members.length },
+            )
+            : t({ id: "communitySettingsView.channels.moveFailed", defaultMessage: "Couldn't move the channels" }),
           description: e instanceof Error ? e.message : undefined,
           variant: "destructive",
         });
@@ -939,7 +1000,7 @@ function ChannelsSection({
       setCreating(false);
     } catch (e) {
       toast({
-        title: "Couldn't create channel",
+        title: t({ id: "communitySettingsView.channels.createFailed", defaultMessage: "Couldn't create channel" }),
         description: e instanceof Error ? e.message : undefined,
         variant: "destructive",
       });
@@ -995,7 +1056,7 @@ function ChannelsSection({
         // Nothing published; drop the optimistic order.
         setPendingArrangement(null);
         toast({
-          title: "Couldn't rearrange the channels",
+          title: t({ id: "communitySettingsView.channels.rearrangeFailed", defaultMessage: "Couldn't rearrange the channels" }),
           description: e instanceof Error ? e.message : undefined,
           variant: "destructive",
         });
@@ -1046,13 +1107,16 @@ function ChannelsSection({
             onDelete={
               canManage && channels.length > 1
                 ? async () => {
-                    if (!confirm(`Delete #${ch.name}? Its id is never reused.`)) return;
+                    if (!confirm(t(
+                      { id: "communitySettingsView.channels.confirmDelete", defaultMessage: "Delete #{name}? Its id is never reused." },
+                      { name: ch.name },
+                    ))) return;
                     try {
                       await deleteChannel({ channelIdHex: ch.idHex });
-                      toast({ title: "Channel deleted" });
+                      toast({ title: t({ id: "communitySettingsView.channels.deleted", defaultMessage: "Channel deleted" }) });
                     } catch (e) {
                       toast({
-                        title: "Couldn't delete",
+                        title: t({ id: "communitySettingsView.channels.deleteFailed", defaultMessage: "Couldn't delete" }),
                         description: e instanceof Error ? e.message : undefined,
                         variant: "destructive",
                       });
@@ -1073,7 +1137,7 @@ function ChannelsSection({
     <div className="space-y-1.5">
       <div className="flex items-center justify-between">
         <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-          Channels
+          <FormattedMessage id="communitySettingsView.channels.title" defaultMessage="Channels" />
         </span>
         {canManage && !creating && (
           <Button
@@ -1081,7 +1145,7 @@ function ChannelsSection({
             size="icon"
             variant="ghost"
             className="size-6 touch:size-11 shrink-0 text-muted-foreground"
-            aria-label="Add channel"
+            aria-label={intl.formatMessage({ id: "communitySettingsView.channels.add", defaultMessage: "Add channel" })}
             onClick={() => setCreating(true)}
           >
             <Plus className="size-3.5" />
@@ -1131,7 +1195,7 @@ function ChannelsSection({
             )}
           >
             <Plus className="size-3.5" />
-            New category
+            <FormattedMessage id="communitySettingsView.channels.newCategory" defaultMessage="New category" />
           </div>
         )}
         {creating && (
@@ -1146,7 +1210,7 @@ function ChannelsSection({
             <Input
               value={newName}
               onChange={(e) => setNewName(e.target.value)}
-              placeholder="new-channel"
+              placeholder={intl.formatMessage({ id: "communitySettingsView.channels.newPlaceholder", defaultMessage: "new-channel" })}
               autoFocus
               className="h-7 text-sm"
               onKeyDown={(e) => {
@@ -1162,7 +1226,7 @@ function ChannelsSection({
               variant="ghost"
               className="size-7 touch:size-11 shrink-0"
               disabled={isAddingChannel || !newName.trim()}
-              aria-label="Create channel"
+              aria-label={intl.formatMessage({ id: "communitySettingsView.channels.create", defaultMessage: "Create channel" })}
             >
               {isAddingChannel ? <Loader2 className="size-3.5 animate-spin" /> : <Check className="size-3.5" />}
             </Button>
@@ -1239,6 +1303,7 @@ function ChannelRow({
   onRotateKey?: () => Promise<void>;
   onMintAccessRole?: (name: string) => Promise<void>;
 }) {
+  const intl = useIntl();
   const [editing, setEditing] = useState(false);
   const [value, setValue] = useState(channel.name);
   const [accessOpen, setAccessOpen] = useState(false);
@@ -1249,10 +1314,14 @@ function ChannelRow({
   const file = async (name: string | undefined) => {
     try {
       await onSetCategory(name);
-      toast({ title: name ? `Moved to ${name}` : "Removed from category" });
+      toast({
+        title: name
+          ? t({ id: "communitySettingsView.channel.movedTo", defaultMessage: "Moved to {name}" }, { name })
+          : t({ id: "communitySettingsView.channel.removedFromCategory", defaultMessage: "Removed from category" }),
+      });
     } catch (e) {
       toast({
-        title: "Couldn't move channel",
+        title: t({ id: "communitySettingsView.channel.moveFailed", defaultMessage: "Couldn't move channel" }),
         description: e instanceof Error ? e.message : undefined,
         variant: "destructive",
       });
@@ -1287,7 +1356,7 @@ function ChannelRow({
         await onRename(trimmed);
       } catch (e) {
         toast({
-          title: "Rename failed",
+          title: t({ id: "communitySettingsView.channel.renameFailed", defaultMessage: "Rename failed" }),
           description: e instanceof Error ? e.message : undefined,
           variant: "destructive",
         });
@@ -1330,7 +1399,7 @@ function ChannelRow({
             variant="ghost"
             className="size-7 touch:size-11 shrink-0"
             disabled={disabled}
-            aria-label="Save name"
+            aria-label={intl.formatMessage({ id: "communitySettingsView.channel.saveName", defaultMessage: "Save name" })}
           >
             <Check className="size-3.5" />
           </Button>
@@ -1351,7 +1420,7 @@ function ChannelRow({
                   size="icon"
                   variant="ghost"
                   className="size-7 shrink-0 text-muted-foreground touch:size-11"
-                  aria-label={`Actions for ${channel.name}`}
+                  aria-label={intl.formatMessage({ id: "communitySettingsView.channel.actions", defaultMessage: "Actions for {name}" }, { name: channel.name })}
                   disabled={disabled}
                 >
                   <MoreVertical className="size-3.5" />
@@ -1360,7 +1429,7 @@ function ChannelRow({
               <DropdownMenuContent align="end" className="w-56">
                 <DropdownMenuItem onSelect={() => setEditing(true)}>
                   <Pencil className="size-3.5" />
-                  Rename
+                  <FormattedMessage id="communitySettingsView.channel.rename" defaultMessage="Rename" />
                 </DropdownMenuItem>
                 {onSetView && (
                   // Same channel id: history stays valid either way.
@@ -1370,28 +1439,43 @@ function ChannelRow({
                       void run(async () => {
                         await onSetView(isForum ? "chat" : "forum");
                         toast({
-                          title: isForum ? "Opens as chat now" : "Opens as a forum now",
+                          title: isForum
+                            ? t({ id: "communitySettingsView.channel.opensAsChat", defaultMessage: "Opens as chat now" })
+                            : t({ id: "communitySettingsView.channel.opensAsForum", defaultMessage: "Opens as a forum now" }),
                           description: isForum
-                            ? `#${channel.name} shows the live timeline first.`
-                            : `#${channel.name} lists titled posts first; live chat stays a tap away.`,
+                            ? t(
+                              { id: "communitySettingsView.channel.opensAsChatDescription", defaultMessage: "#{name} shows the live timeline first." },
+                              { name: channel.name },
+                            )
+                            : t(
+                              {
+                                id: "communitySettingsView.channel.opensAsForumDescription",
+                                defaultMessage: "#{name} lists titled posts first; live chat stays a tap away.",
+                              },
+                              { name: channel.name },
+                            ),
                         });
-                      }, "Couldn't change how the channel opens")
+                      }, t({ id: "communitySettingsView.channel.setViewFailed", defaultMessage: "Couldn't change how the channel opens" }))
                     }
                   >
                     {isForum ? <Hash className="size-3.5" /> : <MessageSquareText className="size-3.5" />}
-                    {isForum ? "Open as chat" : "Open as forum"}
+                    {isForum
+                      ? <FormattedMessage id="communitySettingsView.channel.openAsChat" defaultMessage="Open as chat" />
+                      : <FormattedMessage id="communitySettingsView.channel.openAsForum" defaultMessage="Open as forum" />}
                   </DropdownMenuItem>
                 )}
                 {showAccessButton && (
                   <DropdownMenuItem onSelect={() => setAccessOpen((v) => !v)}>
                     <Shield className="size-3.5" />
-                    {channel.isPrivate ? "Channel access" : "Make private…"}
+                    {channel.isPrivate
+                      ? <FormattedMessage id="communitySettingsView.channel.access" defaultMessage="Channel access" />
+                      : <FormattedMessage id="communitySettingsView.channel.makePrivateMenu" defaultMessage="Make private…" />}
                   </DropdownMenuItem>
                 )}
                 <DropdownMenuSub>
                   <DropdownMenuSubTrigger className="gap-2">
                     <Folder className="size-3.5" />
-                    Category
+                    <FormattedMessage id="communitySettingsView.channel.category" defaultMessage="Category" />
                     {channel.category && (
                       <span className="ml-auto max-w-24 truncate text-xs text-muted-foreground">
                         {channel.category}
@@ -1399,7 +1483,9 @@ function ChannelRow({
                     )}
                   </DropdownMenuSubTrigger>
                   <DropdownMenuSubContent className="w-52">
-                    <DropdownMenuLabel className="text-xs text-muted-foreground">Category</DropdownMenuLabel>
+                    <DropdownMenuLabel className="text-xs text-muted-foreground">
+                      <FormattedMessage id="communitySettingsView.channel.category" defaultMessage="Category" />
+                    </DropdownMenuLabel>
                     {categories.map((name) => (
                       <DropdownMenuItem
                         key={name}
@@ -1413,12 +1499,12 @@ function ChannelRow({
                     {categories.length > 0 && <DropdownMenuSeparator />}
                     <DropdownMenuItem onSelect={onNewCategory}>
                       <Plus className="size-3.5" />
-                      New category…
+                      <FormattedMessage id="communitySettingsView.channel.newCategory" defaultMessage="New category…" />
                     </DropdownMenuItem>
                     {channel.category && (
                       <DropdownMenuItem onSelect={() => void file(undefined)}>
                         <X className="size-3.5" />
-                        Remove from category
+                        <FormattedMessage id="communitySettingsView.channel.removeFromCategory" defaultMessage="Remove from category" />
                       </DropdownMenuItem>
                     )}
                   </DropdownMenuSubContent>
@@ -1431,7 +1517,7 @@ function ChannelRow({
                       className="text-destructive focus:text-destructive"
                     >
                       <Trash2 className="size-3.5" />
-                      Delete channel
+                      <FormattedMessage id="communitySettingsView.channel.delete" defaultMessage="Delete channel" />
                     </DropdownMenuItem>
                   </>
                 )}
@@ -1448,7 +1534,9 @@ function ChannelRow({
           <>
             {/* CORD-03/04 §2: access is edited by granting channel-scoped Roles, not here. */}
             <p className="text-xs text-muted-foreground">
-              Readable by holders of {accessRoles?.length ? "these roles" : "no role yet"}:
+              {accessRoles?.length
+                ? <FormattedMessage id="communitySettingsView.access.readableByRoles" defaultMessage="Readable by holders of these roles:" />
+                : <FormattedMessage id="communitySettingsView.access.readableByNoRole" defaultMessage="Readable by holders of no role yet:" />}
             </p>
             {accessRoles?.length ? (
               <ul className="space-y-0.5">
@@ -1461,12 +1549,13 @@ function ChannelRow({
               </ul>
             ) : (
               <p className="text-xs text-muted-foreground">
-                No role is scoped to this channel, so only the owner and existing key holders can
-                read it. Create one below{onMintAccessRole ? "" : " in Roles, scoped to this channel"}.
+                {onMintAccessRole
+                  ? <FormattedMessage id="communitySettingsView.access.noRoleCreateBelow" defaultMessage="No role is scoped to this channel, so only the owner and existing key holders can read it. Create one below." />
+                  : <FormattedMessage id="communitySettingsView.access.noRoleCreateInRoles" defaultMessage="No role is scoped to this channel, so only the owner and existing key holders can read it. Create one below in Roles, scoped to this channel." />}
               </p>
             )}
             <p className="text-xs text-muted-foreground">
-              Grant one of these roles to give a member access; revoking it rotates the key away.
+              <FormattedMessage id="communitySettingsView.access.grantHint" defaultMessage="Grant one of these roles to give a member access; revoking it rotates the key away." />
             </p>
             {onMintAccessRole && addingRole && (
               <form
@@ -1479,15 +1568,15 @@ function ChannelRow({
                     await onMintAccessRole(trimmed);
                     setRoleDraft("");
                     setAddingRole(false);
-                  }, "Couldn't create the role");
+                  }, t({ id: "communitySettingsView.access.createRoleFailed", defaultMessage: "Couldn't create the role" }));
                 }}
               >
                 <Shield className="size-3 shrink-0 text-muted-foreground" aria-hidden />
                 <Input
                   value={roleDraft}
                   onChange={(e) => setRoleDraft(e.target.value)}
-                  placeholder="Role name"
-                  aria-label="New access role name"
+                  placeholder={intl.formatMessage({ id: "communitySettingsView.access.roleName", defaultMessage: "Role name" })}
+                  aria-label={intl.formatMessage({ id: "communitySettingsView.access.newRoleName", defaultMessage: "New access role name" })}
                   autoFocus
                   maxLength={64}
                   disabled={busy}
@@ -1505,7 +1594,7 @@ function ChannelRow({
                   variant="ghost"
                   className="size-7 touch:size-11 shrink-0"
                   disabled={busy || !roleDraft.trim()}
-                  aria-label="Create access role"
+                  aria-label={intl.formatMessage({ id: "communitySettingsView.access.createRole", defaultMessage: "Create access role" })}
                 >
                   {busy ? <Loader2 className="size-3.5 animate-spin" /> : <Check className="size-3.5" />}
                 </Button>
@@ -1515,14 +1604,17 @@ function ChannelRow({
         ) : (
           <>
             <p className="text-xs text-muted-foreground">
-              Readable by every member. A public channel's key comes from the community root.
+              <FormattedMessage id="communitySettingsView.access.public" defaultMessage="Readable by every member. A public channel's key comes from the community root." />
             </p>
             {onPrivatise && (
               <Input
                 value={roleDraft}
                 onChange={(e) => setRoleDraft(e.target.value)}
-                placeholder={`Access role name (default: ${channel.name})`}
-                aria-label="Access role name"
+                placeholder={intl.formatMessage(
+                  { id: "communitySettingsView.access.roleNamePlaceholder", defaultMessage: "Access role name (default: {name})" },
+                  { name: channel.name },
+                )}
+                aria-label={intl.formatMessage({ id: "communitySettingsView.access.roleNameLabel", defaultMessage: "Access role name" })}
                 maxLength={64}
                 disabled={busy}
                 className="h-7 text-sm"
@@ -1542,9 +1634,9 @@ function ChannelRow({
                 await onPrivatise(roleDraft.trim() || undefined);
                 setRoleDraft("");
                 setAccessOpen(false);
-              }, "Couldn't make the channel private")}
+              }, t({ id: "communitySettingsView.access.makePrivateFailed", defaultMessage: "Couldn't make the channel private" }))}
             >
-              {busy ? <Loader2 className="size-3.5 animate-spin" /> : "Make private"}
+              {busy ? <Loader2 className="size-3.5 animate-spin" /> : <FormattedMessage id="communitySettingsView.access.makePrivate" defaultMessage="Make private" />}
             </Button>
           )}
           {channel.isPrivate && onMintAccessRole && !addingRole && (
@@ -1554,10 +1646,13 @@ function ChannelRow({
               variant="ghost"
               className="mr-auto text-muted-foreground"
               disabled={busy}
-              title="Mint another role scoped to this channel. Holding any of its roles grants access."
+              title={intl.formatMessage({
+                id: "communitySettingsView.access.newRoleHint",
+                defaultMessage: "Mint another role scoped to this channel. Holding any of its roles grants access.",
+              })}
               onClick={() => setAddingRole(true)}
             >
-              New role
+              <FormattedMessage id="communitySettingsView.access.newRole" defaultMessage="New role" />
             </Button>
           )}
           {channel.isPrivate && onRotateKey && (
@@ -1567,24 +1662,30 @@ function ChannelRow({
               variant="ghost"
               className={cn("text-muted-foreground", !onMintAccessRole && "mr-auto")}
               disabled={busy}
-              title="Mint a fresh key for exactly the members entitled today. Anyone else loses access from here on."
+              title={intl.formatMessage({
+                id: "communitySettingsView.access.rotateHint",
+                defaultMessage: "Mint a fresh key for exactly the members entitled today. Anyone else loses access from here on.",
+              })}
               onClick={() => {
-                if (!confirm(
-                  `Rotate #${channel.name}'s key?\n\n` +
-                  "It gets a fresh key delivered only to members who hold one of its roles right now. " +
-                  "Anyone else, including someone who kept a key from an earlier setting, loses access to what's said next.",
-                )) return;
+                if (!confirm(t(
+                  {
+                    id: "communitySettingsView.access.confirmRotate",
+                    defaultMessage:
+                      "Rotate #{name}'s key?\n\nIt gets a fresh key delivered only to members who hold one of its roles right now. Anyone else, including someone who kept a key from an earlier setting, loses access to what's said next.",
+                  },
+                  { name: channel.name },
+                ))) return;
                 void run(async () => {
                   await onRotateKey();
-                  toast({ title: "Channel key rotated" });
-                }, "Couldn't rotate the key");
+                  toast({ title: t({ id: "communitySettingsView.access.rotated", defaultMessage: "Channel key rotated" }) });
+                }, t({ id: "communitySettingsView.access.rotateFailed", defaultMessage: "Couldn't rotate the key" }));
               }}
             >
-              Rotate key
+              <FormattedMessage id="communitySettingsView.access.rotate" defaultMessage="Rotate key" />
             </Button>
           )}
           <Button type="button" size="sm" variant="ghost" disabled={busy} onClick={() => setAccessOpen(false)}>
-            Close
+            <FormattedMessage {...common.close} />
           </Button>
         </div>
       </div>
@@ -1608,6 +1709,7 @@ function DisappearingSection({
   metadata: CommunityMetadata | undefined;
   canManage: boolean;
 }) {
+  const intl = useIntl();
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
   const { updateMetadata } = useMetadataActions(community);
@@ -1628,12 +1730,15 @@ function DisappearingSection({
       toast({
         title:
           seconds > 0
-            ? `Disappearing messages: ${formatCommunityTimer(seconds)}`
-            : "Disappearing messages turned off",
+            ? t(
+              { id: "communitySettingsView.disappearing.set", defaultMessage: "Disappearing messages: {duration}" },
+              { duration: formatCommunityTimer(seconds) },
+            )
+            : t({ id: "communitySettingsView.disappearing.off", defaultMessage: "Disappearing messages turned off" }),
       });
     } catch (e) {
       toast({
-        title: "Couldn't update disappearing messages",
+        title: t({ id: "communitySettingsView.disappearing.failed", defaultMessage: "Couldn't update disappearing messages" }),
         description: e instanceof Error ? e.message : undefined,
         variant: "destructive",
       });
@@ -1645,7 +1750,7 @@ function DisappearingSection({
   return (
     <div className="space-y-1.5">
       <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-        Disappearing messages
+        <FormattedMessage id="communitySettingsView.disappearing.title" defaultMessage="Disappearing messages" />
       </span>
       <div className="flex items-center gap-2.5 text-sm">
         <Timer className="size-4 shrink-0 text-muted-foreground" />
@@ -1656,7 +1761,10 @@ function DisappearingSection({
               disabled={saving}
               onValueChange={(v) => void handleChange(Number(v))}
             >
-              <SelectTrigger className="h-8 w-36" aria-label="Disappearing messages timer">
+              <SelectTrigger
+                className="h-8 w-36"
+                aria-label={intl.formatMessage({ id: "communitySettingsView.disappearing.timer", defaultMessage: "Disappearing messages timer" })}
+              >
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -1673,13 +1781,21 @@ function DisappearingSection({
             {saving && <Loader2 className="size-4 animate-spin text-muted-foreground" />}
           </>
         ) : (
-          <span>{current > 0 ? `New messages disappear after ${formatCommunityTimer(current)}` : "Off"}</span>
+          <span>
+            {current > 0
+              ? <FormattedMessage
+                id="communitySettingsView.disappearing.after"
+                defaultMessage="New messages disappear after {duration}"
+                values={{ duration: formatCommunityTimer(current) }}
+              />
+              : <FormattedMessage id="communitySettingsView.disappearing.offShort" defaultMessage="Off" />}
+          </span>
         )}
       </div>
       <p className="text-xs text-muted-foreground">
         {current > 0
-          ? "Messages in every channel are deleted for everyone after this long. Changes apply to new messages only."
-          : "Messages are kept forever. When set, messages in every channel delete for everyone after the chosen time."}
+          ? <FormattedMessage id="communitySettingsView.disappearing.onHint" defaultMessage="Messages in every channel are deleted for everyone after this long. Changes apply to new messages only." />
+          : <FormattedMessage id="communitySettingsView.disappearing.offHint" defaultMessage="Messages are kept forever. When set, messages in every channel delete for everyone after the chosen time." />}
       </p>
     </div>
   );
@@ -1699,6 +1815,7 @@ function VoiceServersSection({
   brokers: string[];
   canManage: boolean;
 }) {
+  const intl = useIntl();
   const { updateMetadata } = useMetadataActions(community);
 
   const [editing, setEditing] = useState(false);
@@ -1726,7 +1843,7 @@ function VoiceServersSection({
     // Non-https refused: the token grant is a bearer credential (CORD-07 §2).
     const origin = canonicalOrigin(/^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : `https://${raw}`);
     if (!origin) {
-      setError("Enter an https address, like https://voice.example.com");
+      setError(t({ id: "communitySettingsView.voice.invalid", defaultMessage: "Enter an https address, like https://voice.example.com" }));
       return;
     }
     if (draft.includes(origin)) {
@@ -1741,7 +1858,13 @@ function VoiceServersSection({
     setDraft([...draft, origin]);
     setAddValue("");
     if (!reachable) {
-      setWarning(`${origin.replace(/^https:\/\//, "")} didn't answer the voice-server probe. It stays in the list, but members will skip past it until it does.`);
+      setWarning(t(
+        {
+          id: "communitySettingsView.voice.unreachable",
+          defaultMessage: "{host} didn't answer the voice-server probe. It stays in the list, but members will skip past it until it does.",
+        },
+        { host: origin.replace(/^https:\/\//, "") },
+      ));
     }
   };
 
@@ -1755,14 +1878,16 @@ function VoiceServersSection({
       setSaving(true);
       await updateMetadata({ av_brokers: draft });
       toast({
-        title: draft.length > 0 ? "Voice servers updated" : "Voice servers cleared",
+        title: draft.length > 0
+          ? t({ id: "communitySettingsView.voice.updated", defaultMessage: "Voice servers updated" })
+          : t({ id: "communitySettingsView.voice.cleared", defaultMessage: "Voice servers cleared" }),
         ...(draft.length === 0
-          ? { description: "Members will use their own configured voice server." }
+          ? { description: t({ id: "communitySettingsView.voice.clearedDescription", defaultMessage: "Members will use their own configured voice server." }) }
           : {}),
       });
       setEditing(false);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Couldn't update the voice servers.");
+      setError(e instanceof Error ? e.message : t({ id: "communitySettingsView.voice.failed", defaultMessage: "Couldn't update the voice servers." }));
     } finally {
       setSaving(false);
     }
@@ -1772,7 +1897,7 @@ function VoiceServersSection({
     <div className="space-y-1.5">
       <div className="flex items-center justify-between">
         <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-          Voice servers
+          <FormattedMessage id="communitySettingsView.voice.title" defaultMessage="Voice servers" />
         </span>
         {canManage && !editing && (
           <Button
@@ -1780,7 +1905,7 @@ function VoiceServersSection({
             size="icon"
             variant="ghost"
             className="size-6 touch:size-11 shrink-0 text-muted-foreground"
-            aria-label="Edit voice servers"
+            aria-label={intl.formatMessage({ id: "communitySettingsView.voice.edit", defaultMessage: "Edit voice servers" })}
             onClick={startEditing}
           >
             <Pencil className="size-3" />
@@ -1791,8 +1916,7 @@ function VoiceServersSection({
       {!editing ? (
         brokers.length === 0 ? (
           <p className="text-2xs text-muted-foreground">
-            None set, so calls use each member's own voice server. Setting them here makes every
-            call in this community use these, and only these.
+            <FormattedMessage id="communitySettingsView.voice.none" defaultMessage="None set, so calls use each member's own voice server. Setting them here makes every call in this community use these, and only these." />
           </p>
         ) : (
           <ul className="space-y-1">
@@ -1817,7 +1941,7 @@ function VoiceServersSection({
                   size="icon"
                   variant="ghost"
                   className="size-6 touch:size-11 shrink-0 text-muted-foreground hover:text-destructive"
-                  aria-label={`Remove ${b}`}
+                  aria-label={intl.formatMessage({ id: "communitySettingsView.voice.remove", defaultMessage: "Remove {server}" }, { server: b })}
                   disabled={saving || checking}
                   onClick={() => setDraft(draft.filter((x) => x !== b))}
                 >
@@ -1848,21 +1972,23 @@ function VoiceServersSection({
                 variant="ghost"
                 className="size-7 touch:size-11 shrink-0"
                 disabled={saving || checking || !addValue.trim()}
-                aria-label="Add voice server"
+                aria-label={intl.formatMessage({ id: "communitySettingsView.voice.add", defaultMessage: "Add voice server" })}
               >
                 {checking ? <Loader2 className="size-3.5 animate-spin" /> : <Plus className="size-3.5" />}
               </Button>
             </form>
           ) : (
             <p className="text-2xs text-muted-foreground">
-              Up to {MAX_COMMUNITY_AV_BROKERS} voice servers; past that, clients trim the list.
+              <FormattedMessage
+                id="communitySettingsView.voice.max"
+                defaultMessage="Up to {max} voice servers; past that, clients trim the list."
+                values={{ max: MAX_COMMUNITY_AV_BROKERS }}
+              />
             </p>
           )}
 
           <p className="text-2xs text-muted-foreground">
-            Calls use only these, spread across them by channel. Members' own voice servers are
-            ignored here, so if none of these answer, calls can't start. Leave it empty to let
-            every member use their own.
+            <FormattedMessage id="communitySettingsView.voice.exclusiveHint" defaultMessage="Calls use only these, spread across them by channel. Members' own voice servers are ignored here, so if none of these answer, calls can't start. Leave it empty to let every member use their own." />
           </p>
 
           {error && (
@@ -1879,7 +2005,7 @@ function VoiceServersSection({
               size="icon"
               variant="ghost"
               className="size-7 shrink-0"
-              aria-label="Save voice servers"
+              aria-label={intl.formatMessage({ id: "communitySettingsView.voice.save", defaultMessage: "Save voice servers" })}
               disabled={saving || checking}
               onClick={handleSave}
             >
@@ -1890,7 +2016,7 @@ function VoiceServersSection({
               size="icon"
               variant="ghost"
               className="size-7 shrink-0 text-muted-foreground"
-              aria-label="Cancel"
+              aria-label={intl.formatMessage(common.cancel)}
               disabled={saving}
               onClick={() => setEditing(false)}
             >
@@ -1918,6 +2044,7 @@ function RelaysSection({
   relays: string[];
   canManage: boolean;
 }) {
+  const intl = useIntl();
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
   const { updateMetadata } = useMetadataActions(community);
@@ -1938,7 +2065,7 @@ function RelaysSection({
   const handleSave = async () => {
     setError(null);
     if (draft.length === 0) {
-      setError("A community needs at least one relay.");
+      setError(t({ id: "communitySettingsView.relays.needOne", defaultMessage: "A community needs at least one relay." }));
       return;
     }
     if (draft.length === relays.length && draft.every((r, i) => r === relays[i])) {
@@ -1949,7 +2076,10 @@ function RelaysSection({
     const added = draft.filter((r) => !community.relays.includes(r));
     if (!draft.some((r) => relays.includes(r))) {
       const ok = confirm(
-        "This replaces every current relay at once. Members offline during the switch may lose track of the community, and previously shared invite links will keep pointing at the old relays. Keeping at least one current relay through a transition is safer. Continue?",
+        t({
+          id: "communitySettingsView.relays.confirmReplaceAll",
+          defaultMessage: "This replaces every current relay at once. Members offline during the switch may lose track of the community, and previously shared invite links will keep pointing at the old relays. Keeping at least one current relay through a transition is safer. Continue?",
+        }),
       );
       if (!ok) return;
     }
@@ -1963,7 +2093,10 @@ function RelaysSection({
         const rejected = [...report.perRelay.entries()].filter(([, r]) => r.rejected > 0);
         if (rejected.length > 0) {
           rejectedNote = rejected
-            .map(([url, r]) => `${url.replace(/^wss?:\/\//, "")} refused ${r.rejected} of ${report.found} events`)
+            .map(([url, r]) => t(
+              { id: "communitySettingsView.relays.refused", defaultMessage: "{relay} refused {rejected} of {found} events" },
+              { relay: url.replace(/^wss?:\/\//, ""), rejected: r.rejected, found: report.found },
+            ))
             .join("; ");
         }
       }
@@ -1978,12 +2111,12 @@ function RelaysSection({
         );
       }
       toast({
-        title: "Relays updated",
+        title: t({ id: "communitySettingsView.relays.updated", defaultMessage: "Relays updated" }),
         ...(rejectedNote ? { description: rejectedNote, variant: "destructive" as const } : {}),
       });
       setEditing(false);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Couldn't update relays.");
+      setError(e instanceof Error ? e.message : t({ id: "communitySettingsView.relays.failed", defaultMessage: "Couldn't update relays." }));
     } finally {
       setBusy(null);
     }
@@ -1993,16 +2126,22 @@ function RelaysSection({
     busy === null
       ? null
       : busy.phase === "edition"
-        ? "Publishing the new relay list…"
+        ? intl.formatMessage({ id: "communitySettingsView.relays.publishing", defaultMessage: "Publishing the new relay list…" })
         : busy.phase === "fetch"
-          ? `Gathering community history… ${busy.done} events`
-          : `Copying history to ${busy.relay.replace(/^wss?:\/\//, "")}… ${busy.done}/${busy.total}`;
+          ? intl.formatMessage(
+            { id: "communitySettingsView.relays.gathering", defaultMessage: "Gathering community history… {count} events" },
+            { count: busy.done },
+          )
+          : intl.formatMessage(
+            { id: "communitySettingsView.relays.copying", defaultMessage: "Copying history to {relay}… {done}/{total}" },
+            { relay: busy.relay.replace(/^wss?:\/\//, ""), done: busy.done, total: busy.total },
+          );
 
   return (
     <div className="space-y-1.5">
       <div className="flex items-center justify-between">
         <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-          Relays
+          <FormattedMessage id="communitySettingsView.relays.title" defaultMessage="Relays" />
         </span>
         {canManage && !editing && (
           <Button
@@ -2010,7 +2149,7 @@ function RelaysSection({
             size="icon"
             variant="ghost"
             className="size-6 shrink-0 text-muted-foreground"
-            aria-label="Edit relays"
+            aria-label={intl.formatMessage({ id: "communitySettingsView.relays.edit", defaultMessage: "Edit relays" })}
             onClick={startEditing}
           >
             <Pencil className="size-3" />
@@ -2028,7 +2167,10 @@ function RelaysSection({
             disabled={busy !== null}
             min={1}
             max={MAX_COMMUNITY_RELAYS}
-            maxText={`Up to ${MAX_COMMUNITY_RELAYS} relays; past that, clients trim the list.`}
+            maxText={intl.formatMessage(
+              { id: "communitySettingsView.relays.max", defaultMessage: "Up to {max} relays; past that, clients trim the list." },
+              { max: MAX_COMMUNITY_RELAYS },
+            )}
           />
 
           {error && (
@@ -2049,7 +2191,7 @@ function RelaysSection({
               size="icon"
               variant="ghost"
               className="size-7 shrink-0"
-              aria-label="Save relays"
+              aria-label={intl.formatMessage({ id: "communitySettingsView.relays.save", defaultMessage: "Save relays" })}
               disabled={busy !== null || draft.length === 0}
               onClick={handleSave}
             >
@@ -2060,7 +2202,7 @@ function RelaysSection({
               size="icon"
               variant="ghost"
               className="size-7 shrink-0 text-muted-foreground"
-              aria-label="Cancel"
+              aria-label={intl.formatMessage(common.cancel)}
               disabled={busy !== null}
               onClick={() => setEditing(false)}
             >

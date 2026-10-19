@@ -3,6 +3,7 @@ import { useEffect, useReducer, useRef, useState } from "react";
 
 import { getCachedHighlight, highlightAsync } from "@/lib/codeHighlight";
 import { writeClipboardText } from "@/lib/clipboard";
+import { common, useIntl } from "@/i18n";
 
 import type { Root, RootContent } from "hast";
 import type { ReactNode } from "react";
@@ -52,7 +53,9 @@ function useHighlight(code: string, lang: string | undefined): Root | null {
 }
 
 export function CodeBlock({ code, lang }: { code: string; lang?: string }) {
+  const intl = useIntl();
   const tree = useHighlight(code, lang);
+  const copyLabel = intl.formatMessage({ id: "markdown.copyCode", defaultMessage: "Copy code" });
   const [copied, setCopied] = useState(false);
   const resetTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   useEffect(() => () => clearTimeout(resetTimer.current), []);
@@ -60,8 +63,8 @@ export function CodeBlock({ code, lang }: { code: string; lang?: string }) {
     <div className="group/code relative my-1.5 max-w-full">
       <button
         type="button"
-        aria-label={copied ? "Copied" : "Copy code"}
-        title={copied ? "Copied" : "Copy code"}
+        aria-label={copied ? intl.formatMessage(common.copied) : copyLabel}
+        title={copied ? intl.formatMessage(common.copied) : copyLabel}
         onClick={(e) => {
           e.stopPropagation();
           writeClipboardText(code).then(

@@ -8,6 +8,7 @@ import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useEventStore } from "@/hooks/useEventStore";
 import { useNostrPublish } from "@/hooks/useNostrPublish";
 import { useRemoveRailKey } from "@/hooks/useRemoveRailKey";
+import { t } from "@/i18n";
 import {
   buildGroupListSections,
   KIND_USER_GROUPS,
@@ -369,11 +370,11 @@ export function useUpdateUserGroupList() {
 
   return useMutation({
     mutationFn: (action: GroupListAction) => serializeGroupListWrite(async () => {
-      if (!user) throw new Error("User is not logged in");
+      if (!user) throw new Error(t({ id: "useUserGroupList.notLoggedIn", defaultMessage: "User is not logged in" }));
 
       const relays = selfStateRelays(config, user.pubkey);
       if (relays.length === 0) {
-        throw new Error("No account-state relay is available for your server list");
+        throw new Error(t({ id: "useUserGroupList.noRelay", defaultMessage: "No account-state relay is available for your server list" }));
       }
       const deadline = AbortSignal.timeout(8000);
       const [response, storedEvents] = await Promise.all([
@@ -391,9 +392,7 @@ export function useUpdateUserGroupList() {
           .catch(() => [] as NostrRumor[]),
       ]);
       if (response.answered.length === 0) {
-        throw new Error(
-          "Couldn't confirm your current server list on an account-state relay; not saving to avoid wiping it.",
-        );
+throw new Error(t({ id: "useUserGroupList.unconfirmed", defaultMessage: "Couldn't confirm your current server list on an account-state relay; not saving to avoid wiping it." }));
       }
       const events = [...response.events, ...storedEvents];
       const fetched = newestGroupListEvent(events);
@@ -402,7 +401,7 @@ export function useUpdateUserGroupList() {
       // that has seen a list (would wipe it — refuse) and (2) a stale older event.
       const persisted = await readFolded<PersistedGroupList>(groupListFoldKey(user.pubkey));
       if (!fetched && persisted?.event) {
-        throw new Error("Couldn't load your current server list from the network; not saving to avoid wiping it.");
+        throw new Error(t({ id: "useUserGroupList.loadFailed", defaultMessage: "Couldn't load your current server list from the network; not saving to avoid wiping it." }));
       }
 
       let prev: NostrRumor | null = fetched;
@@ -417,7 +416,7 @@ export function useUpdateUserGroupList() {
         const read = await readGroupListEvent(fetched, user.signer);
         // Never write on top of an undecryptable list — it would wipe private items.
         if (read.decryptFailed) {
-          throw new Error("Couldn't read your existing list (decryption failed); not saving to avoid data loss.");
+          throw new Error(t({ id: "useUserGroupList.decryptFailed", defaultMessage: "Couldn't read your existing list (decryption failed); not saving to avoid data loss." }));
         }
         current = read;
       }
@@ -427,7 +426,7 @@ export function useUpdateUserGroupList() {
       // readable to them; a private item must not leak), and so does every other tag.
       const prevPrivate = prev ? await readGroupListPrivate(prev, user.signer) : [];
       if (prevPrivate === undefined) {
-        throw new Error("Couldn't read your existing list (decryption failed); not saving to avoid data loss.");
+        throw new Error(t({ id: "useUserGroupList.decryptFailed", defaultMessage: "Couldn't read your existing list (decryption failed); not saving to avoid data loss." }));
       }
       // New lists encrypt; an existing one adds new items in the form it already uses.
       const newItemsPrivate = prev ? Boolean(prev.content) : true;
@@ -440,7 +439,7 @@ export function useUpdateUserGroupList() {
       let content = "";
       if (privateTags.length > 0 || prev?.content) {
         if (!user.signer.nip44) {
-          throw new Error("NIP-44 encryption not supported by this signer");
+          throw new Error(t({ id: "useUserGroupList.noNip44", defaultMessage: "NIP-44 encryption not supported by this signer" }));
         }
         content = await user.signer.nip44.encrypt(user.pubkey, JSON.stringify(privateTags));
       }

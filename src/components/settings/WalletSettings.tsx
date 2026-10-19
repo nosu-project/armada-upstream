@@ -21,6 +21,7 @@ import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useToast } from "@/hooks/useToast";
 import { useWallet } from "@/hooks/useWallet";
+import { common, FormattedMessage, t, useIntl } from "@/i18n";
 
 import type { CurrencyDisplay } from "@/contexts/AppContext";
 
@@ -35,6 +36,7 @@ const CURRENCY_TABS: readonly PillTab<CurrencyDisplay>[] = [
 
 export function WalletSettings() {
   const { connections, activeConnection, addConnection, removeConnection, setActive, webln } = useWallet();
+  const intl = useIntl();
   const { config, updateConfig } = useAppContext();
   const { toast } = useToast();
   const { user } = useCurrentUser();
@@ -56,7 +58,7 @@ export function WalletSettings() {
     const url = newEsplora.trim().replace(/\/+$/, "");
     if (!url) return;
     if (esploraUrls.includes(url)) {
-      toast({ title: "Already in the list" });
+      toast({ title: t({ id: "walletSettings.alreadyListed", defaultMessage: "Already in the list" }) });
       return;
     }
     saveEsplora([...esploraUrls, url]);
@@ -87,10 +89,10 @@ export function WalletSettings() {
       await addConnection(uri, alias);
       setUri("");
       setAlias("");
-      toast({ title: "Wallet connected" });
+      toast({ title: t({ id: "walletSettings.connected", defaultMessage: "Wallet connected" }) });
     } catch (e) {
       toast({
-        title: "Couldn't connect wallet",
+        title: t({ id: "walletSettings.connectFailed", defaultMessage: "Couldn't connect wallet" }),
         description: e instanceof Error ? e.message : String(e),
         variant: "destructive",
       });
@@ -102,8 +104,8 @@ export function WalletSettings() {
   return (
     <>
       <SettingsRow
-        label="Enable zaps & wallet"
-        description="Show zap buttons, the wallet dialog, and wallet settings. Synced across devices."
+        label={intl.formatMessage({ id: "walletSettings.enable", defaultMessage: "Enable zaps & wallet" })}
+        description={intl.formatMessage({ id: "walletSettings.enableDescription", defaultMessage: "Show zap buttons, the wallet dialog, and wallet settings. Synced across devices." })}
       >
         <Switch
           checked={config.zapsEnabled}
@@ -116,10 +118,12 @@ export function WalletSettings() {
       <SettingsRow>
         <div className="space-y-2">
           <div className="text-sm font-medium">
-            Connect a wallet (NWC)
-            <InfoTip label="About wallet connections" className="-my-1 ml-1">
-              Paste a Nostr Wallet Connect string from your wallet (Alby Hub, Coinos, Primal,
-              lnbits…). It authorizes payments, so it stays on this device and is never synced.
+            <FormattedMessage id="walletSettings.connectTitle" defaultMessage="Connect a wallet (NWC)" />
+            <InfoTip label={intl.formatMessage({ id: "walletSettings.aboutConnections", defaultMessage: "About wallet connections" })} className="-my-1 ml-1">
+              <FormattedMessage
+                id="walletSettings.connectInfo"
+                defaultMessage="Paste a Nostr Wallet Connect string from your wallet (Alby Hub, Coinos, Primal, lnbits…). It authorizes payments, so it stays on this device and is never synced."
+              />
             </InfoTip>
           </div>
           <Input
@@ -134,11 +138,11 @@ export function WalletSettings() {
             <Input
               value={alias}
               onChange={(e) => setAlias(e.target.value)}
-              placeholder="Name (optional)"
+              placeholder={intl.formatMessage({ id: "walletSettings.namePlaceholder", defaultMessage: "Name (optional)" })}
               className="flex-1"
             />
             <Button onClick={handleConnect} disabled={!uri.trim() || connecting}>
-              {connecting ? <Loader2 className="size-4 animate-spin" /> : "Connect"}
+              {connecting ? <Loader2 className="size-4 animate-spin" /> : <FormattedMessage id="walletSettings.connect" defaultMessage="Connect" />}
             </Button>
           </div>
         </div>
@@ -154,12 +158,12 @@ export function WalletSettings() {
                 {connection.alias}
                 {isActive && (
                   <span className="text-3xs font-semibold uppercase tracking-wide text-primary">
-                    active
+                    <FormattedMessage id="walletSettings.active" defaultMessage="active" />
                   </span>
                 )}
               </span>
             }
-            description={`Wallet service ${nwcWalletPubkey(connection.connectionString).slice(0, 12) || "unknown"}…`}
+            description={intl.formatMessage({ id: "walletSettings.walletService", defaultMessage: "Wallet service {id}…" }, { id: nwcWalletPubkey(connection.connectionString).slice(0, 12) || intl.formatMessage({ id: "walletSettings.unknown", defaultMessage: "unknown" }) })}
           >
             <div className="flex items-center gap-1">
               <Button
@@ -167,7 +171,9 @@ export function WalletSettings() {
                 size="sm"
                 onClick={() => setActive(connection.connectionString)}
                 disabled={isActive}
-                title={isActive ? "Active wallet" : "Use this wallet"}
+                title={isActive
+                  ? intl.formatMessage({ id: "walletSettings.activeWallet", defaultMessage: "Active wallet" })
+                  : intl.formatMessage({ id: "walletSettings.useWallet", defaultMessage: "Use this wallet" })}
               >
                 {isActive ? <CheckCircle2 className="size-4 text-primary" /> : <Circle className="size-4" />}
               </Button>
@@ -175,7 +181,7 @@ export function WalletSettings() {
                 variant="ghost"
                 size="sm"
                 onClick={() => removeConnection(connection.connectionString)}
-                title="Remove wallet"
+                title={intl.formatMessage({ id: "walletSettings.removeWallet", defaultMessage: "Remove wallet" })}
               >
                 <Trash2 className="size-4 text-destructive" />
               </Button>
@@ -185,21 +191,23 @@ export function WalletSettings() {
       })}
 
       <SettingsRow
-        label="Browser wallet (WebLN)"
+        label={intl.formatMessage({ id: "walletSettings.webln", defaultMessage: "Browser wallet (WebLN)" })}
         description={
           webln
-            ? "A WebLN extension is available; it's used when no NWC wallet is active."
-            : "No WebLN extension detected in this browser."
+            ? intl.formatMessage({ id: "walletSettings.weblnAvailable", defaultMessage: "A WebLN extension is available; it's used when no NWC wallet is active." })
+            : intl.formatMessage({ id: "walletSettings.weblnMissing", defaultMessage: "No WebLN extension detected in this browser." })
         }
       >
         <span className={`text-xs font-medium ${webln ? "text-primary" : "text-muted-foreground"}`}>
-          {webln ? "Detected" : "Not detected"}
+          {webln
+            ? <FormattedMessage id="walletSettings.detected" defaultMessage="Detected" />
+            : <FormattedMessage id="walletSettings.notDetected" defaultMessage="Not detected" />}
         </span>
       </SettingsRow>
 
       <SettingsRow
-        label="Display amounts in"
-        description="The unit for zaps, fees and totals."
+        label={intl.formatMessage({ id: "walletSettings.displayAmounts", defaultMessage: "Display amounts in" })}
+        description={intl.formatMessage({ id: "walletSettings.displayAmountsDescription", defaultMessage: "The unit for zaps, fees and totals." })}
       >
         <PillTabs
           tabs={CURRENCY_TABS}
@@ -211,8 +219,8 @@ export function WalletSettings() {
       </SettingsRow>
 
       <SettingsRow
-        label="Default payment method"
-        description="The method the zap dialog opens with."
+        label={intl.formatMessage({ id: "walletSettings.defaultMethod", defaultMessage: "Default payment method" })}
+        description={intl.formatMessage({ id: "walletSettings.defaultMethodDescription", defaultMessage: "The method the zap dialog opens with." })}
       >
         <Select
           value={config.defaultZapMethod}
@@ -239,26 +247,30 @@ export function WalletSettings() {
       <SettingsRow>
         <div className="space-y-2">
           <div className="text-sm font-medium">
-            Bitcoin explorers (Esplora)
-            <InfoTip label="About Bitcoin explorers" className="-my-1 ml-1">
-              Blockchain data sources for on-chain zaps (UTXOs, fees, broadcast). Tried in
-              order; the first that responds is used. Stays on this device only.
+            <FormattedMessage id="walletSettings.explorers" defaultMessage="Bitcoin explorers (Esplora)" />
+            <InfoTip label={intl.formatMessage({ id: "walletSettings.aboutExplorers", defaultMessage: "About Bitcoin explorers" })} className="-my-1 ml-1">
+              <FormattedMessage
+                id="walletSettings.explorersInfo"
+                defaultMessage="Blockchain data sources for on-chain zaps (UTXOs, fees, broadcast). Tried in order; the first that responds is used. Stays on this device only."
+              />
             </InfoTip>
           </div>
           <div className="space-y-1">
             {esploraUrls.map((url, i) => (
               <div key={url} className="flex items-center gap-1.5">
                 <span className="text-3xs font-semibold uppercase tracking-wide text-muted-foreground w-16 shrink-0">
-                  {i === 0 ? "Primary" : `Fallback ${i}`}
+                  {i === 0
+                    ? <FormattedMessage id="walletSettings.primary" defaultMessage="Primary" />
+                    : <FormattedMessage id="walletSettings.fallback" defaultMessage="Fallback {index}" values={{ index: i }} />}
                 </span>
                 <span className="text-xs font-mono truncate flex-1">{url}</span>
-                <Button variant="ghost" size="icon" className="size-7 touch:size-11" onClick={() => handleMoveEsplora(i, -1)} disabled={i === 0} title="Move up">
+                <Button variant="ghost" size="icon" className="size-7 touch:size-11" onClick={() => handleMoveEsplora(i, -1)} disabled={i === 0} title={intl.formatMessage({ id: "walletSettings.moveUp", defaultMessage: "Move up" })}>
                   <ArrowUp className="size-3.5" />
                 </Button>
-                <Button variant="ghost" size="icon" className="size-7 touch:size-11" onClick={() => handleMoveEsplora(i, 1)} disabled={i === esploraUrls.length - 1} title="Move down">
+                <Button variant="ghost" size="icon" className="size-7 touch:size-11" onClick={() => handleMoveEsplora(i, 1)} disabled={i === esploraUrls.length - 1} title={intl.formatMessage({ id: "walletSettings.moveDown", defaultMessage: "Move down" })}>
                   <ArrowDown className="size-3.5" />
                 </Button>
-                <Button variant="ghost" size="icon" className="size-7 touch:size-11" onClick={() => handleRemoveEsplora(i)} disabled={esploraUrls.length <= 1} title="Remove">
+                <Button variant="ghost" size="icon" className="size-7 touch:size-11" onClick={() => handleRemoveEsplora(i)} disabled={esploraUrls.length <= 1} title={intl.formatMessage(common.remove)}>
                   <Trash2 className="size-3.5 text-destructive" />
                 </Button>
               </div>
@@ -272,11 +284,11 @@ export function WalletSettings() {
               className="flex-1"
             />
             <Button variant="secondary" size="sm" onClick={handleAddEsplora} disabled={!newEsplora.trim()}>
-              <Plus className="size-4" /> Add
+              <Plus className="size-4" /> <FormattedMessage {...common.add} />
             </Button>
           </div>
           <Button variant="ghost" size="sm" onClick={handleResetEsplora} className="text-xs">
-            <RotateCcw className="size-3.5" /> Restore defaults
+            <RotateCcw className="size-3.5" /> <FormattedMessage id="walletSettings.restoreDefaults" defaultMessage="Restore defaults" />
           </Button>
         </div>
       </SettingsRow>

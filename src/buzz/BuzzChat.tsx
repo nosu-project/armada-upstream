@@ -66,6 +66,7 @@ import { shortTimeAgo } from "@/lib/formatTime";
 import { withSignature } from "@/lib/publishOutbox";
 import { type SlashAction } from "@/lib/slashCommands";
 import { cn } from "@/lib/utils";
+import { FormattedMessage, t, useIntl } from "@/i18n";
 
 import { threadSummary } from "@/components/chat/transport";
 import type { ChatMsg, ChatTransport } from "@/components/chat/transport";
@@ -121,6 +122,7 @@ function BuzzChatMessage({
   isAgent,
   permalink,
 }: BuzzChatMessageProps) {
+  const intl = useIntl();
   const { config } = useAppContext();
   const threadInfo = threadSummary(transport.threadRepliesFor?.(event.id) ?? []);
   // Buzz's "Send to channel": a top-level message naming the thread it came from.
@@ -147,7 +149,7 @@ function BuzzChatMessage({
           isAgent ? (
             <span className="inline-flex items-center gap-0.5 rounded-full bg-primary/15 px-1.5 py-px text-3xs font-medium text-primary align-middle">
               <BotIcon className="size-2.5" aria-hidden />
-              Agent
+              <FormattedMessage id="buzzChat.agent" defaultMessage="Agent" />
             </span>
           ) : undefined
         }
@@ -166,7 +168,13 @@ function BuzzChatMessage({
               onClick={() => openThread?.({ ...event, id: sentFrom.rootId }, false)}
             >
               <MessagesSquare className="size-3 shrink-0" aria-hidden />
-              <span className="shrink-0">Sent from thread{sentFrom.excerpt ? ":" : ""}</span>
+              <span className="shrink-0">
+                {sentFrom.excerpt ? (
+                  <FormattedMessage id="buzzChat.sentFromThreadExcerpt" defaultMessage="Sent from thread:" />
+                ) : (
+                  <FormattedMessage id="buzzChat.sentFromThread" defaultMessage="Sent from thread" />
+                )}
+              </span>
               {sentFrom.excerpt && <span className="truncate">{sentFrom.excerpt}</span>}
             </button>
           ) : undefined
@@ -182,7 +190,7 @@ function BuzzChatMessage({
         <div className="flex items-center gap-1 pl-14 pb-1 -mt-0.5">
           <button
             type="button"
-            aria-label="Upvote"
+            aria-label={intl.formatMessage({ id: "buzzChat.upvote", defaultMessage: "Upvote" })}
             aria-pressed={votes.mine === "+"}
             className={cn(
               "flex items-center gap-0.5 px-1.5 py-0.5 rounded text-xs transition-colors",
@@ -195,7 +203,7 @@ function BuzzChatMessage({
           </button>
           <button
             type="button"
-            aria-label="Downvote"
+            aria-label={intl.formatMessage({ id: "buzzChat.downvote", defaultMessage: "Downvote" })}
             aria-pressed={votes.mine === "-"}
             className={cn(
               "flex items-center gap-0.5 px-1.5 py-0.5 rounded text-xs transition-colors",
@@ -223,6 +231,7 @@ interface BuzzForumPostProps {
 
 /** A forum post as a Reddit-style card; clicking the body opens the thread. */
 function BuzzForumPost({ event, transport, votes, onVote, isAgent }: BuzzForumPostProps) {
+  const intl = useIntl();
   const { user } = useCurrentUser();
   const author = useAuthor(event.pubkey);
   const metadata = author.data?.metadata;
@@ -265,7 +274,7 @@ function BuzzForumPost({ event, transport, votes, onVote, isAgent }: BuzzForumPo
         <div className="flex shrink-0 flex-col items-center gap-0.5 bg-secondary/40 px-1 py-2">
           <button
             type="button"
-            aria-label="Upvote"
+            aria-label={intl.formatMessage({ id: "buzzChat.upvote", defaultMessage: "Upvote" })}
             aria-pressed={mine === "+"}
             onClick={() => onVote?.(event, "+")}
             className={cn(
@@ -285,7 +294,7 @@ function BuzzForumPost({ event, transport, votes, onVote, isAgent }: BuzzForumPo
           </span>
           <button
             type="button"
-            aria-label="Downvote"
+            aria-label={intl.formatMessage({ id: "buzzChat.downvote", defaultMessage: "Downvote" })}
             aria-pressed={mine === "-"}
             onClick={() => onVote?.(event, "-")}
             className={cn(
@@ -311,7 +320,7 @@ function BuzzForumPost({ event, transport, votes, onVote, isAgent }: BuzzForumPo
             {isAgent && (
               <span className="inline-flex items-center gap-0.5 rounded-full bg-primary/15 px-1.5 py-px text-3xs font-medium text-primary">
                 <BotIcon className="size-2.5" aria-hidden />
-                Agent
+                <FormattedMessage id="buzzChat.agent" defaultMessage="Agent" />
               </span>
             )}
             <span aria-hidden>·</span>
@@ -321,7 +330,7 @@ function BuzzForumPost({ event, transport, votes, onVote, isAgent }: BuzzForumPo
                 <DropdownMenuTrigger asChild>
                   <button
                     type="button"
-                    aria-label="Post actions"
+                    aria-label={intl.formatMessage({ id: "buzzChat.postActions", defaultMessage: "Post actions" })}
                     className="flex items-center justify-center rounded p-1 text-muted-foreground transition-colors hover:bg-foreground/10 hover:text-foreground touch:p-1.5"
                   >
                     <MoreHorizontal className="size-4" />
@@ -329,10 +338,10 @@ function BuzzForumPost({ event, transport, votes, onVote, isAgent }: BuzzForumPo
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="w-44">
                   <DropdownMenuItem onSelect={() => writeClipboardText(event.content).catch(() => undefined)}>
-                    <Copy className="mr-2 size-4" /> Copy text
+                    <Copy className="mr-2 size-4" /> <FormattedMessage id="buzzChat.copyText" defaultMessage="Copy text" />
                   </DropdownMenuItem>
                   <DropdownMenuItem onSelect={copyId}>
-                    <Link2 className="size-4" /> Copy post ID
+                    <Link2 className="size-4" /> <FormattedMessage id="buzzChat.copyPostId" defaultMessage="Copy post ID" />
                   </DropdownMenuItem>
                   {canDelete && (
                     <>
@@ -341,7 +350,7 @@ function BuzzForumPost({ event, transport, votes, onVote, isAgent }: BuzzForumPo
                         className="text-destructive focus:text-destructive"
                         onSelect={() => transport.deleteMessage?.(event)}
                       >
-                        <Trash2 className="mr-2 size-4" /> Delete post
+                        <Trash2 className="mr-2 size-4" /> <FormattedMessage id="buzzChat.deletePost" defaultMessage="Delete post" />
                       </DropdownMenuItem>
                     </>
                   )}
@@ -359,7 +368,15 @@ function BuzzForumPost({ event, transport, votes, onVote, isAgent }: BuzzForumPo
               className="inline-flex items-center gap-1.5 rounded px-2 py-1 transition-colors hover:bg-foreground/10 hover:text-foreground touch:py-2"
             >
               <MessagesSquare className="size-4" />
-              {replyCount > 0 ? `${replyCount} ${replyCount === 1 ? "comment" : "comments"}` : "Comment"}
+              {replyCount > 0 ? (
+                <FormattedMessage
+                  id="buzzChat.comments"
+                  defaultMessage="{count, plural, one {# comment} other {# comments}}"
+                  values={{ count: replyCount }}
+                />
+              ) : (
+                <FormattedMessage id="buzzChat.comment" defaultMessage="Comment" />
+              )}
             </button>
           </div>
         </div>
@@ -393,6 +410,7 @@ export function BuzzChat({
   canModerate,
   searchQuery = "",
 }: BuzzChatProps) {
+  const intl = useIntl();
   const { user } = useCurrentUser();
   const isTouch = useIsTouch();
   const composerBoundsRef = useRef<HTMLElement | null>(null);
@@ -534,7 +552,11 @@ export function BuzzChat({
           });
         }
       } catch {
-        toast({ title: "Vote failed", description: "The relay rejected the vote.", variant: "destructive" });
+        toast({
+          title: t({ id: "buzzChat.voteFailed", defaultMessage: "Vote failed" }),
+          description: t({ id: "buzzChat.voteRejected", defaultMessage: "The relay rejected the vote." }),
+          variant: "destructive",
+        });
       }
     },
     [voteTallies, publish, channelId, relayUrl, mergeEvents],
@@ -629,7 +651,12 @@ export function BuzzChat({
       if (action.kind === "openThread") {
         const latest = timeline[timeline.length - 1];
         if (latest) openThread(latest, true);
-        else toast({ title: "No message to thread", description: "Send a message first." });
+        else {
+          toast({
+            title: t({ id: "buzzChat.noMessageToThread", defaultMessage: "No message to thread" }),
+            description: t({ id: "buzzChat.sendFirst", defaultMessage: "Send a message first." }),
+          });
+        }
         return;
       }
       if (action.kind === "kick" || action.kind === "ban") {
@@ -637,7 +664,10 @@ export function BuzzChat({
           pubkey: action.pubkey,
           reason: action.kind === "ban" ? action.reason : undefined,
         });
-        toast({ title: "User removed", description: "The user was removed from the channel." });
+        toast({
+          title: t({ id: "buzzChat.userRemoved", defaultMessage: "User removed" }),
+          description: t({ id: "buzzChat.userRemovedDescription", defaultMessage: "The user was removed from the channel." }),
+        });
       }
     },
     [removeUser, timeline, openThread],
@@ -811,12 +841,18 @@ export function BuzzChat({
             ) : searchResults.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-16 text-center">
                 <Search className="size-9 text-muted-foreground/40 mb-3" />
-                <p className="text-sm text-muted-foreground">No messages found</p>
+                <p className="text-sm text-muted-foreground">
+                  <FormattedMessage id="buzzChat.noResults" defaultMessage="No messages found" />
+                </p>
               </div>
             ) : (
               <>
                 <p className="px-2 pb-1 text-2xs uppercase tracking-wide text-muted-foreground/80">
-                  {searchResults.length} result{searchResults.length === 1 ? "" : "s"}
+                  <FormattedMessage
+                    id="buzzChat.resultCount"
+                    defaultMessage="{count, plural, one {# result} other {# results}}"
+                    values={{ count: searchResults.length }}
+                  />
                 </p>
                 {[...searchResults]
                   .sort((a, b) => a.created_at - b.created_at)
@@ -833,7 +869,9 @@ export function BuzzChat({
             emptyState={
               <div className="flex flex-col items-center justify-center py-16 text-center">
                 <Hash className="size-10 text-muted-foreground/40 mb-3" />
-                <p className="text-sm text-muted-foreground">No messages yet</p>
+                <p className="text-sm text-muted-foreground">
+                  <FormattedMessage id="buzzChat.empty" defaultMessage="No messages yet" />
+                </p>
               </div>
             }
             renderMessage={(msg, continuation) => renderRow(msg, continuation)}
@@ -852,7 +890,11 @@ export function BuzzChat({
             // Buzz's own client produces.
             messageKind={forum ? KIND_FORUM_POST : undefined}
             pollsEnabled={false}
-            placeholder={channelName ? `Message ${channelName}` : undefined}
+            placeholder={
+              channelName
+                ? intl.formatMessage({ id: "buzzChat.placeholder", defaultMessage: "Message {channel}" }, { channel: channelName })
+                : undefined
+            }
             // Android Direct Share label; the publisher can't resolve NIP-29 metadata.
             shareLabel={channelName}
             shareIconUrl={groupDetails?.group?.picture}
@@ -874,7 +916,11 @@ export function BuzzChat({
         ) : (
           <div className="border-t p-3 shrink-0 pb-safe">
             <p className="text-xs text-muted-foreground text-center py-1">
-              {user ? "Join this channel to send messages." : "Sign in to join the conversation."}
+              {user ? (
+                <FormattedMessage id="buzzChat.joinToSend" defaultMessage="Join this channel to send messages." />
+              ) : (
+                <FormattedMessage id="buzzChat.signInToJoin" defaultMessage="Sign in to join the conversation." />
+              )}
             </p>
           </div>
         )}

@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { useNostrPublish } from "@/hooks/useNostrPublish";
 import { useToast } from "@/hooks/useToast";
+import { t } from "@/i18n";
 import {
   buildGroupPinsTags,
   KIND_GROUP_PINS,
@@ -62,7 +63,7 @@ export function usePinnedMessages(relayUrl: string | undefined, groupId: string 
     onError: (err) => {
       // Surface the relay's rejection reason (e.g. "restricted: only admins may pin").
       toast({
-        title: "Pin update failed",
+        title: t({ id: "usePinnedMessages.updateFailed", defaultMessage: "Pin update failed" }),
         description: relayRejectionMessage(err),
         variant: "destructive",
       });

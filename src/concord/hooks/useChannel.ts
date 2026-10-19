@@ -75,6 +75,7 @@ import { useWireScopes } from "@/wire/useWireScopes";
 import { shareByRumorId } from "@/lib/shareRows";
 
 import type { NostrEvent } from "@nostrify/nostrify";
+import { t } from "@/i18n";
 
 export const channelKey = (channelIdHex: string | null) => ["concord", "channel", channelIdHex] as const;
 const deletedKey = (channelIdHex: string | null) => ["concord", "msg-deleted", channelIdHex] as const;
@@ -830,11 +831,11 @@ export function useSendMessage(community: Community | undefined, channel: Channe
       /** Skip the send budget (retries are recovery, not new content). */
       bypassRateLimit?: boolean;
     }) => {
-      if (!user) throw new Error("Sign in to send a message.");
-      if (!community || !channel) throw new Error("No channel selected.");
+      if (!user) throw new Error(t({ id: "useChannel.signInToSend", defaultMessage: "Sign in to send a message." }));
+      if (!community || !channel) throw new Error(t({ id: "useChannel.noChannel", defaultMessage: "No channel selected." }));
       // CORD-02 §9: gated at publish because `canWrite` is undefined on first tick. Local and sticky.
       if ((await dissolvedAt(community.idHex)) !== undefined) {
-        throw new Error("This community has been dissolved; it accepts no new messages.");
+        throw new Error(t({ id: "useChannel.dissolved", defaultMessage: "This community has been dissolved; it accepts no new messages." }));
       }
 
       const effectiveKind = replyTo ? KIND_COMMENT : kind;

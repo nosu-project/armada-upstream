@@ -43,6 +43,7 @@ import { useMediaWithFallback } from "@/hooks/useMediaWithFallback";
 import { useOpenProfile } from "@/hooks/useOpenProfile";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { useToast } from "@/hooks/useToast";
+import { common, FormattedMessage, t, useIntl } from "@/i18n";
 import { AppContext } from "@/contexts/AppContext";
 import { sendsOnEnter } from "@/lib/sendOnEnter";
 import { getComposerCollisionPadding, useComposerBoundsRef } from "@/contexts/ComposerBoundsContext";
@@ -206,17 +207,18 @@ const REPLY_LINE_CLASS =
  * reply's own `q`/`p` tags would let its sender attribute the parent to anyone.
  */
 export function ReplyContextUnavailable({ onClick }: { onClick: () => void }) {
+  const intl = useIntl();
   return (
     <button
       type="button"
       onClick={onClick}
-      title="Find the original message"
+      title={intl.formatMessage({ id: "chatMessage.findOriginal", defaultMessage: "Find the original message" })}
       className={cn(REPLY_LINE_CLASS, "text-left cursor-pointer")}
     >
       <span aria-hidden className="chat-reply-connector" />
       <Reply aria-hidden className="size-3.5 shrink-0 text-muted-foreground/70" />
       <span className="line-clamp-1 min-w-0 italic text-muted-foreground/70 group-hover/reply:underline">
-        Original message not loaded
+        <FormattedMessage id="chatMessage.originalNotLoaded" defaultMessage="Original message not loaded" />
       </span>
     </button>
   );
@@ -267,7 +269,11 @@ function ThreadBadge({
         )}
       </span>
       <span className="text-[13px] font-semibold text-primary">
-        {count} {count === 1 ? "reply" : "replies"}
+        <FormattedMessage
+          id="chatMessage.replyCount"
+          defaultMessage="{count} {count, plural, one {reply} other {replies}}"
+          values={{ count }}
+        />
       </span>
       {lastReplyAt ? (
         <span className="truncate text-2xs text-muted-foreground">
@@ -491,6 +497,7 @@ const ChatMessageInner = memo(function ChatMessageInner({
   // Suppressed for mesh/proxied rows (peer id, not a key).
   const openProfile = useOpenProfile();
   const { toast } = useToast();
+  const intl = useIntl();
 
   // Viewer-local, unpublished and undoable, so offered in every room.
   const hiddenMessages = useHiddenMessages();
@@ -545,15 +552,15 @@ const ChatMessageInner = memo(function ChatMessageInner({
   // One list drives the touch sheet, `⋯` overflow and right-click menu.
   const menuActions: MessageActionItem[] = [];
   if (onJump) {
-    menuActions.push({ id: "jump", label: "Jump to message", icon: CornerDownRight, onSelect: onJump });
+    menuActions.push({ id: "jump", label: intl.formatMessage({ id: "chatMessage.jump", defaultMessage: "Jump to message" }), icon: CornerDownRight, onSelect: onJump });
   }
   if (canWrite && !isEditing && onReply) {
-    menuActions.push({ id: "reply", label: "Reply", icon: Reply, onSelect: () => onReply(event) });
+    menuActions.push({ id: "reply", label: intl.formatMessage(common.reply), icon: Reply, onSelect: () => onReply(event) });
   }
   if (canWrite && !isEditing && onOpenThread) {
     menuActions.push({
       id: "thread",
-      label: "Reply in thread",
+      label: intl.formatMessage({ id: "chatMessage.replyInThread", defaultMessage: "Reply in thread" }),
       icon: MessagesSquare,
       onSelect: () => onOpenThread(event),
     });
@@ -563,18 +570,18 @@ const ChatMessageInner = memo(function ChatMessageInner({
   if (onForward && !isEditing && !poll && event.content.trim().length > 0) {
     menuActions.push({
       id: "forward",
-      label: "Forward message",
+      label: intl.formatMessage({ id: "chatMessage.forward", defaultMessage: "Forward message" }),
       icon: Forward,
       onSelect: () => onForward(event),
     });
   }
   if (canZap && !isEditing) {
-    menuActions.push({ id: "zap", label: "Zap message", icon: Zap, onSelect: () => setZapOpen(true) });
+    menuActions.push({ id: "zap", label: intl.formatMessage({ id: "chatMessage.zap", defaultMessage: "Zap message" }), icon: Zap, onSelect: () => setZapOpen(true) });
   }
   if (canEdit && !isEditing) {
     menuActions.push({
       id: "edit",
-      label: "Edit message",
+      label: intl.formatMessage({ id: "chatMessage.edit", defaultMessage: "Edit message" }),
       icon: Pencil,
       onSelect: () => onEdit?.(event),
     });
@@ -582,14 +589,14 @@ const ChatMessageInner = memo(function ChatMessageInner({
   if (canPin && !isEditing) {
     menuActions.push({
       id: "pin",
-      label: isPinned ? "Unpin message" : "Pin message",
+      label: isPinned ? intl.formatMessage({ id: "chatMessage.unpin", defaultMessage: "Unpin message" }) : intl.formatMessage({ id: "chatMessage.pin", defaultMessage: "Pin message" }),
       icon: isPinned ? PinOff : Pin,
       onSelect: () => onTogglePin?.(event),
     });
   }
   menuActions.push({
     id: "copy-text",
-    label: "Copy text",
+    label: intl.formatMessage({ id: "chatMessage.copyText", defaultMessage: "Copy text" }),
     icon: Copy,
     groupStart: true,
     onSelect: () => writeClipboardText(event.content).catch(() => undefined),
@@ -597,7 +604,7 @@ const ChatMessageInner = memo(function ChatMessageInner({
   if (!identityOverride && !rumor) {
     menuActions.push({
       id: "copy-id",
-      label: "Copy message ID",
+      label: intl.formatMessage({ id: "chatMessage.copyId", defaultMessage: "Copy message ID" }),
       icon: Link2,
       onSelect: copyMessageId,
     });
@@ -606,7 +613,7 @@ const ChatMessageInner = memo(function ChatMessageInner({
   if (permalink && !isPending && !isFailed) {
     menuActions.push({
       id: "copy-link",
-      label: "Copy message link",
+      label: intl.formatMessage({ id: "chatMessage.copyLink", defaultMessage: "Copy message link" }),
       icon: Link,
       onSelect: () =>
         writeClipboardText(chatUrl({ ...permalink, messageId: event.id })).catch(() => undefined),
@@ -614,28 +621,28 @@ const ChatMessageInner = memo(function ChatMessageInner({
   }
   menuActions.push({
     id: "json",
-    label: "View event JSON",
+    label: intl.formatMessage({ id: "chatMessage.viewJson", defaultMessage: "View event JSON" }),
     icon: Braces,
     onSelect: () => setJsonOpen(true),
   });
   if (!identityOverride) {
     menuActions.push({
       id: "view-profile",
-      label: "View profile",
+      label: intl.formatMessage({ id: "chatMessage.viewProfile", defaultMessage: "View profile" }),
       icon: User,
       groupStart: true,
       onSelect: () => openProfile(tryNpubEncode(event.pubkey) ?? event.pubkey),
     });
     menuActions.push({
       id: "copy-npub",
-      label: "Copy npub",
+      label: intl.formatMessage({ id: "chatMessage.copyNpub", defaultMessage: "Copy npub" }),
       icon: Copy,
       onSelect: () => {
         const npub = tryNpubEncode(event.pubkey);
         if (!npub) return;
         writeClipboardText(npub).then(
-          () => toast({ title: "Copied npub" }),
-          () => toast({ title: "Copy failed", variant: "destructive" }),
+          () => toast({ title: t({ id: "chatMessage.copiedNpub", defaultMessage: "Copied npub" }) }),
+          () => toast({ title: t({ id: "chatMessage.copyFailed", defaultMessage: "Copy failed" }), variant: "destructive" }),
         );
       },
     });
@@ -645,7 +652,7 @@ const ChatMessageInner = memo(function ChatMessageInner({
   if (showHide) {
     menuActions.push({
       id: "hide",
-      label: "Hide message",
+      label: intl.formatMessage({ id: "chatMessage.hide", defaultMessage: "Hide message" }),
       icon: EyeOff,
       moderation: true,
       onSelect: () => hiddenMessages.hide(event.id),
@@ -654,7 +661,7 @@ const ChatMessageInner = memo(function ChatMessageInner({
   if (showReport) {
     menuActions.push({
       id: "report",
-      label: "Report message",
+      label: intl.formatMessage({ id: "chatMessage.report", defaultMessage: "Report message" }),
       icon: Flag,
       destructive: true,
       moderation: true,
@@ -664,7 +671,7 @@ const ChatMessageInner = memo(function ChatMessageInner({
   if (canDelete && !isEditing) {
     menuActions.push({
       id: "delete",
-      label: "Delete message",
+      label: intl.formatMessage({ id: "chatMessage.delete", defaultMessage: "Delete message" }),
       icon: Trash2,
       destructive: true,
       // Your own message is housekeeping; someone else's is moderation.
@@ -695,14 +702,16 @@ const ChatMessageInner = memo(function ChatMessageInner({
             <Button
               variant="ghost"
               size="icon"
-              aria-label="Thread"
+              aria-label={intl.formatMessage({ id: "chatMessage.thread", defaultMessage: "Thread" })}
               className="size-9 md:size-7 touch:size-11 touch:md:size-11 text-muted-foreground hover:text-primary"
               onClick={() => onOpenThread(event)}
             >
               <MessagesSquare className="size-[18px] md:size-3.5" />
             </Button>
           </TooltipTrigger>
-          <TooltipContent>Thread</TooltipContent>
+          <TooltipContent>
+            <FormattedMessage id="chatMessage.thread" defaultMessage="Thread" />
+          </TooltipContent>
         </Tooltip>
       )}
       {canWrite && !isEditing && onReply && (
@@ -711,14 +720,16 @@ const ChatMessageInner = memo(function ChatMessageInner({
             <Button
               variant="ghost"
               size="icon"
-              aria-label="Reply"
+              aria-label={intl.formatMessage(common.reply)}
               className="size-9 md:size-7 touch:size-11 touch:md:size-11 text-muted-foreground hover:text-primary"
               onClick={() => onReply(event)}
             >
               <Reply className="size-[18px] md:size-3.5" />
             </Button>
           </TooltipTrigger>
-            <TooltipContent>Reply</TooltipContent>
+            <TooltipContent>
+              <FormattedMessage {...common.reply} />
+            </TooltipContent>
           </Tooltip>
       )}
     </MessageActionToolbar>
@@ -831,15 +842,17 @@ const ChatMessageInner = memo(function ChatMessageInner({
       {isFailed && (
         <div className="flex items-center gap-2 touch:gap-4 mt-1 text-2xs text-destructive">
           <AlertCircle className="size-3.5 shrink-0" />
-          <span>Failed to send.</span>
+          <span>
+            <FormattedMessage id="chatMessage.failedToSend" defaultMessage="Failed to send." />
+          </span>
           {onRetry && (
             <button type="button" className="font-semibold underline hover:no-underline touch:py-2" onClick={onRetry}>
-              Retry
+              <FormattedMessage {...common.retry} />
             </button>
           )}
           {onDiscard && (
             <button type="button" className="text-muted-foreground hover:text-foreground touch:py-2" onClick={onDiscard}>
-              Discard
+              <FormattedMessage id="chatMessage.discard" defaultMessage="Discard" />
             </button>
           )}
         </div>
@@ -932,18 +945,25 @@ const ChatMessageInner = memo(function ChatMessageInner({
     <AlertDialog open={confirmDelete} onOpenChange={setConfirmDelete}>
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle>Delete message?</AlertDialogTitle>
+          <AlertDialogTitle>
+            <FormattedMessage id="chatMessage.deleteTitle" defaultMessage="Delete message?" />
+          </AlertDialogTitle>
           <AlertDialogDescription>
-            This can't be undone. Relays and clients that already have it may keep their copy.
+            <FormattedMessage
+              id="chatMessage.deleteDescription"
+              defaultMessage="This can't be undone. Relays and clients that already have it may keep their copy."
+            />
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
-          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogCancel>
+            <FormattedMessage {...common.cancel} />
+          </AlertDialogCancel>
           <AlertDialogAction
             className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             onClick={() => onDelete?.(event)}
           >
-            Delete
+            <FormattedMessage {...common.delete} />
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>
@@ -967,8 +987,8 @@ const ChatMessageInner = memo(function ChatMessageInner({
         source={rumor ?? event}
         description={
           isRumor
-            ? "The raw, unsigned rumor for this message."
-            : "The raw signed event for this message."
+            ? intl.formatMessage({ id: "chatMessage.rawRumor", defaultMessage: "The raw, unsigned rumor for this message." })
+            : intl.formatMessage({ id: "chatMessage.rawEvent", defaultMessage: "The raw signed event for this message." })
         }
       />
     )}

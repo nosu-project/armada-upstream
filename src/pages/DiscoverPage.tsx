@@ -44,6 +44,7 @@ import {
 import { useInfiniteScroll } from "@/hooks/useInfiniteScroll";
 import { SettingsOverlayContext } from "@/lib/settingsOverlay";
 import { cn } from "@/lib/utils";
+import { defineMessages, FormattedMessage, useIntl, type MessageDescriptor } from "@/i18n";
 
 const EmojiPackDialog = lazy(() =>
   import("@/components/discover/EmojiPackDialog").then((m) => ({ default: m.EmojiPackDialog })),
@@ -61,47 +62,91 @@ const ThemeCreatorDialog = lazy(() =>
 
 type DiscoverTab = "communities" | "emojis" | "themes";
 
-const TABS: (PillTab<DiscoverTab> & { placeholder: string; blurb: string })[] = [
+const m = defineMessages({
+  communities: { id: "discoverPage.tab.communities", defaultMessage: "Communities" },
+  communitiesPlaceholder: { id: "discoverPage.tab.communitiesPlaceholder", defaultMessage: "Search communities…" },
+  communitiesBlurb: {
+    id: "discoverPage.tab.communitiesBlurb",
+    defaultMessage: "Encrypted communities you can join with a link.",
+  },
+  emojis: { id: "discoverPage.tab.emojis", defaultMessage: "Emojis" },
+  emojisPlaceholder: { id: "discoverPage.tab.emojisPlaceholder", defaultMessage: "Search emoji packs…" },
+  emojisBlurb: {
+    id: "discoverPage.tab.emojisBlurb",
+    defaultMessage: "Custom emoji packs shared across Nostr. Add one to your reactions.",
+  },
+  themes: { id: "discoverPage.tab.themes", defaultMessage: "Themes" },
+  themesPlaceholder: { id: "discoverPage.tab.themesPlaceholder", defaultMessage: "Search themes…" },
+  themesBlurb: {
+    id: "discoverPage.tab.themesBlurb",
+    defaultMessage: "Community-made color themes you can preview and apply in a tap.",
+  },
+  you: { id: "discoverPage.scope.you", defaultMessage: "You" },
+  friends: { id: "discoverPage.scope.friends", defaultMessage: "Friends" },
+  world: { id: "discoverPage.scope.world", defaultMessage: "The world" },
+  relaysError: { id: "discoverPage.relaysError", defaultMessage: "Couldn't reach the relays. Try again." },
+  whatDiscoverShows: { id: "discoverPage.whatDiscoverShows", defaultMessage: "What Discover shows" },
+  discoverSettings: { id: "discoverPage.discoverSettings", defaultMessage: "Discover settings" },
+  showEverything: { id: "discoverPage.showEverything", defaultMessage: "Show everything" },
+});
+
+type TabDef = Omit<PillTab<DiscoverTab>, "label"> & {
+  label: MessageDescriptor;
+  placeholder: MessageDescriptor;
+  blurb: MessageDescriptor;
+};
+
+const TAB_DEFS: TabDef[] = [
   {
     id: "communities",
-    label: "Communities",
+    label: m.communities,
     icon: Users,
-    placeholder: "Search communities…",
-    blurb: "Encrypted communities you can join with a link.",
+    placeholder: m.communitiesPlaceholder,
+    blurb: m.communitiesBlurb,
   },
   {
     id: "emojis",
-    label: "Emojis",
+    label: m.emojis,
     icon: Smile,
-    placeholder: "Search emoji packs…",
-    blurb: "Custom emoji packs shared across Nostr. Add one to your reactions.",
+    placeholder: m.emojisPlaceholder,
+    blurb: m.emojisBlurb,
   },
   {
     id: "themes",
-    label: "Themes",
+    label: m.themes,
     icon: Palette,
-    placeholder: "Search themes…",
-    blurb: "Community-made color themes you can preview and apply in a tap.",
+    placeholder: m.themesPlaceholder,
+    blurb: m.themesBlurb,
   },
 ];
 
-const SCOPES: PillTab<DiscoverScope>[] = [
-  { id: "you", label: "You", icon: UserRound },
-  { id: "friends", label: "Friends", icon: UsersRound },
-  { id: "world", label: "The world", icon: Globe },
+const SCOPE_DEFS: (Omit<PillTab<DiscoverScope>, "label"> & { label: MessageDescriptor })[] = [
+  { id: "you", label: m.you, icon: UserRound },
+  { id: "friends", label: m.friends, icon: UsersRound },
+  { id: "world", label: m.world, icon: Globe },
 ];
+
+/** {@link SCOPE_DEFS} in the current language, stable per language for `PillTabs`. */
+function useScopes(): PillTab<DiscoverScope>[] {
+  const intl = useIntl();
+  return useMemo(
+    () => SCOPE_DEFS.map((s) => ({ ...s, label: intl.formatMessage(s.label) })),
+    [intl],
+  );
+}
 
 /**
  * Discover: public directory events — opt-in Concord community listings, NIP-30
  * emoji packs, and themes.
  */
 export function DiscoverPage() {
+  const intl = useIntl();
   const { user } = useCurrentUser();
   // `?tab=` lets a link land on a tab.
   const [searchParams] = useSearchParams();
   const [tab, setTab] = useState<DiscoverTab>(() => {
     const requested = searchParams.get("tab");
-    return TABS.find((t) => t.id === requested)?.id ?? "communities";
+    return TAB_DEFS.find((t) => t.id === requested)?.id ?? "communities";
   });
   // Independent query per tab so switching doesn't carry a stale search.
   const [queries, setQueries] = useState<Record<DiscoverTab, string>>({
@@ -118,7 +163,11 @@ export function DiscoverPage() {
   const unrestricted = useAppContext().config.discoverAllContent && scope === "world";
   const query = queries[tab];
   const setQuery = (v: string) => setQueries((prev) => ({ ...prev, [tab]: v }));
-  const active = TABS.find((t) => t.id === tab)!;
+  const active = TAB_DEFS.find((t) => t.id === tab)!;
+  const tabs = useMemo(
+    () => TAB_DEFS.map(({ placeholder: _p, blurb: _b, ...t }) => ({ ...t, label: intl.formatMessage(t.label) })),
+    [intl],
+  );
 
   return (
     <>
@@ -128,16 +177,20 @@ export function DiscoverPage() {
           {/* Dropped on phones, where the tab pills carry the page identity. */}
           <header className="relative h-12 touch:h-[3.25rem] mt-4 px-3 hidden sm:flex items-center gap-2 shrink-0 clip-corner-lg bg-chrome">
             <Compass className="size-5 shrink-0 text-muted-foreground" />
-            <h1 className="min-w-0 flex-1 truncate font-semibold leading-tight">Discover</h1>
+            <h1 className="min-w-0 flex-1 truncate font-semibold leading-tight">
+              <FormattedMessage id="discoverPage.title" defaultMessage="Discover" />
+            </h1>
             {user && <DiscoverScopeToggle scope={scope} onChange={setScope} />}
             <DiscoverScopeInfo scope={scope} signedIn={!!user} />
           </header>
 
-          <p className="hidden sm:block mt-3 px-1 text-sm text-muted-foreground">{active.blurb}</p>
+          <p className="hidden sm:block mt-3 px-1 text-sm text-muted-foreground">
+            <FormattedMessage {...active.blurb} />
+          </p>
 
           <div className="mt-3 flex shrink-0 flex-col gap-4 sm:mt-5 sm:flex-row sm:items-center sm:gap-3">
             <PillTabs
-              tabs={TABS}
+              tabs={tabs}
               value={tab}
               onChange={(id) => setTab(id)}
               className="h-12 sm:h-auto"
@@ -148,7 +201,7 @@ export function DiscoverPage() {
               <SearchField
                 value={query}
                 onChange={setQuery}
-                placeholder={active.placeholder}
+                placeholder={intl.formatMessage(active.placeholder)}
                 className="flex-1 h-12 touch:h-12 sm:h-9 touch:sm:h-9 sidebar:px-3"
               />
 
@@ -167,8 +220,12 @@ export function DiscoverPage() {
                   onClick={() => setShareOpen(true)}
                 >
                   <Plus className="size-4" />
-                  <span className="hidden sm:inline">Add your community</span>
-                  <span className="sr-only sm:hidden">Add your community</span>
+                  <span className="hidden sm:inline">
+                    <FormattedMessage id="discoverPage.addCommunity" defaultMessage="Add your community" />
+                  </span>
+                  <span className="sr-only sm:hidden">
+                    <FormattedMessage id="discoverPage.addCommunity" defaultMessage="Add your community" />
+                  </span>
                 </Button>
               )}
               {tab === "emojis" && user && (
@@ -177,8 +234,12 @@ export function DiscoverPage() {
                   onClick={() => setCreateOpen(true)}
                 >
                   <Plus className="size-4" />
-                  <span className="hidden sm:inline">New pack</span>
-                  <span className="sr-only sm:hidden">Create emoji pack</span>
+                  <span className="hidden sm:inline">
+                    <FormattedMessage id="discoverPage.newPack" defaultMessage="New pack" />
+                  </span>
+                  <span className="sr-only sm:hidden">
+                    <FormattedMessage id="discoverPage.createEmojiPack" defaultMessage="Create emoji pack" />
+                  </span>
                 </Button>
               )}
 
@@ -188,8 +249,12 @@ export function DiscoverPage() {
                   onClick={() => setThemeCreateOpen(true)}
                 >
                   <Plus className="size-4" />
-                  <span className="hidden sm:inline">New theme</span>
-                  <span className="sr-only sm:hidden">Create theme</span>
+                  <span className="hidden sm:inline">
+                    <FormattedMessage id="discoverPage.newTheme" defaultMessage="New theme" />
+                  </span>
+                  <span className="sr-only sm:hidden">
+                    <FormattedMessage id="discoverPage.createTheme" defaultMessage="Create theme" />
+                  </span>
                 </Button>
               )}
             </div>
@@ -237,7 +302,8 @@ function DiscoverScopeToggle({
   onChange: (scope: DiscoverScope) => void;
   className?: string;
 }) {
-  return <PillTabs tabs={SCOPES} value={scope} onChange={onChange} className={cn("p-0.5", className)} />;
+  const scopes = useScopes();
+  return <PillTabs tabs={scopes} value={scope} onChange={onChange} className={cn("p-0.5", className)} />;
 }
 
 /** Inline while "The world" is unfiltered (`discoverAllContent`), since it's one tap away. */
@@ -246,8 +312,10 @@ function UnfilteredWarning() {
     <p className="mt-3 flex items-start gap-1.5 px-1 text-xs leading-snug text-destructive">
       <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
       <span>
-        Showing everything posted to your relays, by anyone. None of it is filtered or moderated,
-        so expect spam and things you may not want to see. People you've muted stay hidden.
+        <FormattedMessage
+          id="discoverPage.unfilteredWarning"
+          defaultMessage="Showing everything posted to your relays, by anyone. None of it is filtered or moderated, so expect spam and things you may not want to see. People you've muted stay hidden."
+        />
       </span>
     </p>
   );
@@ -266,6 +334,7 @@ function DiscoverScopeInfo({
   signedIn: boolean;
   className?: string;
 }) {
+  const intl = useIntl();
   const { hint, unrestricted } = useDiscoverScopeHint(scope, signedIn);
   const settings = useContext(SettingsOverlayContext);
   const [open, setOpen] = useState(false);
@@ -276,7 +345,7 @@ function DiscoverScopeInfo({
         <Button
           variant="ghost"
           size="icon"
-          aria-label="What Discover shows"
+          aria-label={intl.formatMessage(m.whatDiscoverShows)}
           className={cn("size-8 touch:size-11 shrink-0 text-muted-foreground", className)}
         >
           <Info className="size-4" />
@@ -295,7 +364,7 @@ function DiscoverScopeInfo({
             }}
           >
             <SlidersHorizontal className="size-3.5" />
-            {unrestricted ? "Discover settings" : "Show everything"}
+            {intl.formatMessage(unrestricted ? m.discoverSettings : m.showEverything)}
           </Button>
         )}
       </PopoverContent>
@@ -307,23 +376,40 @@ function useDiscoverScopeHint(
   scope: DiscoverScope,
   signedIn: boolean,
 ): { hint: string; unrestricted: boolean } {
+  const intl = useIntl();
   const { config } = useAppContext();
   const curation = useDiscoverCuration();
   const unrestricted = scope === "world" && config.discoverAllContent;
 
+  const followed = intl.formatMessage({
+    id: "discoverPage.hint.followed",
+    defaultMessage: "Showing only what you and people you follow have shared.",
+  });
   const hint = scope === "you"
-    ? "Showing only what you've shared."
+    ? intl.formatMessage({ id: "discoverPage.hint.you", defaultMessage: "Showing only what you've shared." })
     : scope === "friends"
-      ? "Showing only what you and people you follow have shared."
+      ? followed
       : unrestricted
-        ? "Showing everything posted to your relays, by anyone. None of it is filtered or moderated, so expect spam and things you may not want to see."
+        ? intl.formatMessage({
+          id: "discoverPage.hint.unrestricted",
+          defaultMessage: "Showing everything posted to your relays, by anyone. None of it is filtered or moderated, so expect spam and things you may not want to see.",
+        })
         : curation.type !== "none"
           ? signedIn
-            ? "Showing picks from a curated list and from people you follow. Everything else on your relays is hidden."
-            : "Showing picks from a curated list. Sign in to also see what people you follow have shared."
+            ? intl.formatMessage({
+              id: "discoverPage.hint.curatedSignedIn",
+              defaultMessage: "Showing picks from a curated list and from people you follow. Everything else on your relays is hidden.",
+            })
+            : intl.formatMessage({
+              id: "discoverPage.hint.curatedSignedOut",
+              defaultMessage: "Showing picks from a curated list. Sign in to also see what people you follow have shared.",
+            })
           : signedIn
-            ? "Showing only what you and people you follow have shared."
-            : "Sign in to see picks from people you follow.";
+            ? followed
+            : intl.formatMessage({
+              id: "discoverPage.hint.signedOut",
+              defaultMessage: "Sign in to see picks from people you follow.",
+            });
 
   return { hint, unrestricted };
 }
@@ -343,10 +429,12 @@ function DiscoverScopeMenu({
   signedIn: boolean;
   className?: string;
 }) {
+  const intl = useIntl();
+  const scopes = useScopes();
   const { hint, unrestricted } = useDiscoverScopeHint(scope, signedIn);
   const settings = useContext(SettingsOverlayContext);
   const [open, setOpen] = useState(false);
-  const current = SCOPES.find((s) => s.id === scope)!;
+  const current = scopes.find((s) => s.id === scope)!;
   const Icon = signedIn ? current.icon : Info;
 
   return (
@@ -355,7 +443,14 @@ function DiscoverScopeMenu({
         <Button
           variant="secondary"
           size="icon"
-          aria-label={signedIn ? `Showing content from: ${current.label}` : "What Discover shows"}
+          aria-label={
+            signedIn
+              ? intl.formatMessage(
+                { id: "discoverPage.showingContentFrom", defaultMessage: "Showing content from: {scope}" },
+                { scope: current.label },
+              )
+              : intl.formatMessage(m.whatDiscoverShows)
+          }
           className={cn("size-12 shrink-0 clip-corner-lg", className)}
         >
           <Icon className="size-4" />
@@ -363,8 +458,8 @@ function DiscoverScopeMenu({
       </PopoverTrigger>
       <PopoverContent align="end" className="w-72 space-y-3 p-2 text-xs text-muted-foreground">
         {signedIn && (
-          <div role="radiogroup" aria-label="Show content from" className="flex flex-col gap-1">
-            {SCOPES.map((s) => (
+          <div role="radiogroup" aria-label={intl.formatMessage({ id: "discoverPage.showContentFrom", defaultMessage: "Show content from" })} className="flex flex-col gap-1">
+            {scopes.map((s) => (
               <button
                 key={s.id}
                 type="button"
@@ -399,7 +494,7 @@ function DiscoverScopeMenu({
             }}
           >
             <SlidersHorizontal className="size-3.5" />
-            {unrestricted ? "Discover settings" : "Show everything"}
+            {intl.formatMessage(unrestricted ? m.discoverSettings : m.showEverything)}
           </Button>
         )}
       </PopoverContent>
@@ -557,7 +652,9 @@ function CommunitiesTab({ query, scope }: { query: string; scope: DiscoverScope 
       </div>
     );
   }
-  if (isError) return <TabState icon={Users}>Couldn't reach the relays. Try again.</TabState>;
+  if (isError) return <TabState icon={Users}>
+    <FormattedMessage {...m.relaysError} />
+  </TabState>;
   if (!data || data.length === 0) {
     return (
       <div className="space-y-4">
@@ -565,13 +662,27 @@ function CommunitiesTab({ query, scope }: { query: string; scope: DiscoverScope 
           <CreateCommunityCard />
         </div>
         <TabState icon={Users}>
-          {scope === "you"
-            ? "You haven't listed a community yet. Add one and it'll show up here."
-            : scope === "friends"
-              ? "None of the people you follow have listed a community yet. Yours could be the first."
-              : unrestricted
-                ? "No public communities listed yet. Yours could be the first."
-                : "None of the authors Discover is showing have listed a community yet. Yours could be the first."}
+          {scope === "you" ? (
+            <FormattedMessage
+              id="discoverPage.communities.emptyYou"
+              defaultMessage="You haven't listed a community yet. Add one and it'll show up here."
+            />
+          ) : scope === "friends" ? (
+            <FormattedMessage
+              id="discoverPage.communities.emptyFriends"
+              defaultMessage="None of the people you follow have listed a community yet. Yours could be the first."
+            />
+          ) : unrestricted ? (
+            <FormattedMessage
+              id="discoverPage.communities.emptyWorld"
+              defaultMessage="No public communities listed yet. Yours could be the first."
+            />
+          ) : (
+            <FormattedMessage
+              id="discoverPage.communities.emptyCurated"
+              defaultMessage="None of the authors Discover is showing have listed a community yet. Yours could be the first."
+            />
+          )}
         </TabState>
       </div>
     );
@@ -613,13 +724,20 @@ function EmojisTab({ query, scope }: { query: string; scope: DiscoverScope }) {
   });
 
   if (isLoading && !data) return <TabSkeleton />;
-  if (isError) return <TabState icon={Smile}>Couldn't reach the relays. Try again.</TabState>;
+  if (isError) return <TabState icon={Smile}>
+    <FormattedMessage {...m.relaysError} />
+  </TabState>;
   if (!data || data.length === 0) {
     return (
       <TabState icon={Smile}>
-        {query.trim()
-          ? "No emoji packs matched your search."
-          : "No emoji packs found. Publish one with New pack and it'll show up here."}
+        {query.trim() ? (
+          <FormattedMessage id="discoverPage.emojis.noMatch" defaultMessage="No emoji packs matched your search." />
+        ) : (
+          <FormattedMessage
+            id="discoverPage.emojis.empty"
+            defaultMessage="No emoji packs found. Publish one with New pack and it'll show up here."
+          />
+        )}
       </TabState>
     );
   }
@@ -649,13 +767,20 @@ function ThemesTab({ query, scope }: { query: string; scope: DiscoverScope }) {
   });
 
   if (isLoading && !data) return <TabSkeleton />;
-  if (isError) return <TabState icon={Palette}>Couldn't reach the relays. Try again.</TabState>;
+  if (isError) return <TabState icon={Palette}>
+    <FormattedMessage {...m.relaysError} />
+  </TabState>;
   if (!data || data.length === 0) {
     return (
       <TabState icon={Palette}>
-        {query.trim()
-          ? "No themes matched your search."
-          : "No shared themes found. Publish one with New theme and it'll show up here."}
+        {query.trim() ? (
+          <FormattedMessage id="discoverPage.themes.noMatch" defaultMessage="No themes matched your search." />
+        ) : (
+          <FormattedMessage
+            id="discoverPage.themes.empty"
+            defaultMessage="No shared themes found. Publish one with New theme and it'll show up here."
+          />
+        )}
       </TabState>
     );
   }

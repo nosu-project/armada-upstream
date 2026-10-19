@@ -29,6 +29,7 @@ import { Slider } from "@/components/ui/slider";
 import { useUserModeration } from "@/hooks/useUserModeration";
 import { UserModerationMenuSection } from "@/components/chat/ModerationMenuSection";
 import { toast } from "@/hooks/useToast";
+import { FormattedMessage, t, useIntl } from "@/i18n";
 import { useScreenShareVolume, useUserVolume } from "@/hooks/useUserVolume";
 import { writeClipboardText } from "@/lib/clipboard";
 import { tryNpubEncode } from "@/lib/safeNip19";
@@ -48,13 +49,20 @@ export function VolumeSliderRow({
   displayName: string;
   target?: PlaybackVolumeTarget;
 }) {
+  const intl = useIntl();
   const muted = volume === 0;
-  const targetLabel = target === "screenShare" ? "screen share" : "user";
   return (
     <div className="flex items-center gap-2">
       <button
         type="button"
-        aria-label={muted ? `Unmute ${targetLabel}` : `Mute ${targetLabel}`}
+        aria-label={intl.formatMessage(
+          {
+            id: "voiceUserContextMenu.toggleMute",
+            defaultMessage:
+              "{muted, select, true {Unmute} other {Mute}} {target, select, screenShare {screen share} other {user}}",
+          },
+          { muted: String(muted), target },
+        )}
         className="shrink-0 text-muted-foreground hover:text-foreground"
         onClick={() => apply(muted ? 1 : 0)}
       >
@@ -66,8 +74,8 @@ export function VolumeSliderRow({
         max={MAX_PLAYBACK_VOLUME}
         step={0.05}
         aria-label={target === "screenShare"
-          ? `Screen share volume for ${displayName}`
-          : `Volume for ${displayName}`}
+          ? intl.formatMessage({ id: "voiceUserContextMenu.screenShareVolume", defaultMessage: "Screen share volume for {name}" }, { name: displayName })
+          : intl.formatMessage({ id: "voiceUserContextMenu.volume", defaultMessage: "Volume for {name}" }, { name: displayName })}
         aria-valuetext={`${Math.round(volume * 100)}%`}
         onValueChange={([v]) => apply(v)}
       />
@@ -99,8 +107,8 @@ function useVoiceMenuItems(
     const npub = tryNpubEncode(pubkey);
     if (!npub) return;
     writeClipboardText(npub).then(
-      () => toast({ title: "Copied npub" }),
-      () => toast({ title: "Copy failed", variant: "destructive" }),
+      () => toast({ title: t({ id: "voiceUserContextMenu.copiedNpub", defaultMessage: "Copied npub" }) }),
+      () => toast({ title: t({ id: "voiceUserContextMenu.copyFailed", defaultMessage: "Copy failed" }), variant: "destructive" }),
     );
   };
 
@@ -125,8 +133,15 @@ function useVoiceMenuItems(
       <>
         <Label className="flex items-center justify-between gap-2">
           <span className="truncate">
-            <DisplayName pubkey={verified ? pubkey : undefined} name={displayName} />
-            {volumeTarget === "screenShare" && "'s screen share"}
+            {volumeTarget === "screenShare" ? (
+              <FormattedMessage
+                id="voiceUserContextMenu.screenShareOf"
+                defaultMessage="{name}'s screen share"
+                values={{ name: <DisplayName pubkey={verified ? pubkey : undefined} name={displayName} /> }}
+              />
+            ) : (
+              <DisplayName pubkey={verified ? pubkey : undefined} name={displayName} />
+            )}
           </span>
           {showVolume && (
             <span className="text-xs text-muted-foreground tabular-nums font-normal">{pct}%</span>
@@ -145,13 +160,17 @@ function useVoiceMenuItems(
             </div>
             <Separator />
             <CheckboxItem checked={muted} onSelect={() => setVolume(muted ? 1 : 0)}>
-              {volumeTarget === "screenShare" ? "Mute screen share" : "Mute"}
+              {volumeTarget === "screenShare" ? (
+                <FormattedMessage id="voiceUserContextMenu.muteScreenShare" defaultMessage="Mute screen share" />
+              ) : (
+                <FormattedMessage id="voiceUserContextMenu.mute" defaultMessage="Mute" />
+              )}
             </CheckboxItem>
           </>
         )}
         <Item className="gap-2" onSelect={copyNpub}>
           <Copy className="size-4" />
-          Copy npub
+          <FormattedMessage id="voiceUserContextMenu.copyNpub" defaultMessage="Copy npub" />
         </Item>
         {moderation.actions.length > 0 && (
           <>
@@ -237,6 +256,7 @@ export function VoiceUserMenuButton({
     verified,
     volumeTarget,
   );
+  const intl = useIntl();
 
   return (
     <>
@@ -244,7 +264,7 @@ export function VoiceUserMenuButton({
       <DropdownMenuTrigger asChild>
         <button
           type="button"
-          aria-label={`Actions for ${displayName}`}
+          aria-label={intl.formatMessage({ id: "voiceUserContextMenu.actionsFor", defaultMessage: "Actions for {name}" }, { name: displayName })}
           // Stop propagation, including the channel row's press-and-hold reorder.
           onPointerDown={(e) => e.stopPropagation()}
           onClick={(e) => e.stopPropagation()}

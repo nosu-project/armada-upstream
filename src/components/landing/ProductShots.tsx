@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 
 import { FallbackImage } from "@/components/ui/FallbackImage";
+import { useIntl } from "@/i18n";
 
 import { captureMirrors, captureUrl } from "./captures";
 
@@ -123,6 +124,7 @@ export function ProductShots({
   index: number;
   label: string;
 }) {
+  const intl = useIntl();
   const stageRef = useRef<HTMLDivElement>(null);
 
   // Touch and reduced motion keep resting poses.
@@ -187,7 +189,7 @@ export function ProductShots({
             size="desktop"
             ratio="aspect-[2400/1520]"
             className="rounded-[6px]"
-            alt={`Armada on desktop: ${label}`}
+            alt={intl.formatMessage({ id: "productShots.desktopAlt", defaultMessage: "Armada on desktop: {label}" }, { label })}
           />
         </div>
       </div>
@@ -205,7 +207,7 @@ export function ProductShots({
             size="mobile"
             ratio="aspect-[1170/2532]"
             className="rounded-[24px]"
-            alt={`Armada on a phone: ${label}`}
+            alt={intl.formatMessage({ id: "productShots.phoneAlt", defaultMessage: "Armada on a phone: {label}" }, { label })}
           />
         </div>
       </div>

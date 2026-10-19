@@ -23,6 +23,7 @@ import {
 import { KIND_INVITE_LIST } from "@/concord/lib/kinds";
 import { mergeInviteLists, type InviteList } from "@/concord/lib/invite";
 import { useAppContext } from "@/hooks/useAppContext";
+import { t } from "@/i18n";
 import {
   KIND_BLOSSOM_SERVERS,
   type BlossomServerListQuery,
@@ -155,7 +156,7 @@ export function usePullPortableSetup() {
   const [isPending, setIsPending] = useState(false);
 
   const pull = useCallback(async (): Promise<PortableSetupPullResult> => {
-    if (!user) throw new Error("Not logged in");
+    if (!user) throw new Error(t({ id: "usePullPortableSetup.notLoggedIn", defaultMessage: "Not logged in" }));
     const { signer } = user;
     // Without NIP-44, still restore the public records.
     const canDecrypt = Boolean(signer.nip44);
@@ -202,7 +203,7 @@ export function usePullPortableSetup() {
         ...discoveredWriteRelays,
       ]);
       if (sources.length === 0) {
-        throw new Error("No NIP-65 write relays are available to pull from");
+        throw new Error(t({ id: "usePullPortableSetup.noWriteRelays", defaultMessage: "No NIP-65 write relays are available to pull from" }));
       }
 
       let communityEvents: NostrEvent[] = [];
@@ -232,7 +233,7 @@ export function usePullPortableSetup() {
           const heldKeyring = keys.keyring?.id;
           keys = await resolveSettingsKeys(store, signer, user.pubkey);
           if (!keys.keyring) {
-            throw new Error("Your settings root could not be decrypted; nothing was restored");
+            throw new Error(t({ id: "usePullPortableSetup.rootDecryptFailed", defaultMessage: "Your settings root could not be decrypted; nothing was restored" }));
           }
           if (keys.keyring.id !== heldKeyring) {
             events = [...events, ...await queryExplicitRelays(
@@ -277,7 +278,7 @@ export function usePullPortableSetup() {
         ? await readPersistedInviteList(user.pubkey)
         : undefined;
       if (inviteRead?.unreadable) {
-        throw new Error("Your creator invite records could not be decrypted; nothing was restored");
+        throw new Error(t({ id: "usePullPortableSetup.inviteDecryptFailed", defaultMessage: "Your creator invite records could not be decrypted; nothing was restored" }));
       }
 
       const ctx = { signer, pubkey: user.pubkey, keys };
@@ -295,11 +296,11 @@ export function usePullPortableSetup() {
       if (topicEditions.length > 0) {
         decodedDmIndex = await decodeDmConversationIndexEvents(topicEditions, ctx);
         if (decodedDmIndex.unreadable.size > 0) {
-          throw new Error("Your DM conversation index could not be decrypted completely; nothing was restored");
+          throw new Error(t({ id: "usePullPortableSetup.dmIndexDecryptFailed", defaultMessage: "Your DM conversation index could not be decrypted completely; nothing was restored" }));
         }
         decodedFavoriteGifs = await decodeFavoriteGifEvents(topicEditions, ctx);
         if (decodedFavoriteGifs.headUnreadable) {
-          throw new Error("Your GIF favorites could not be decrypted completely; nothing was restored");
+          throw new Error(t({ id: "usePullPortableSetup.gifFavoritesDecryptFailed", defaultMessage: "Your GIF favorites could not be decrypted completely; nothing was restored" }));
         }
       }
 
@@ -318,7 +319,7 @@ export function usePullPortableSetup() {
           persisted,
         );
         if (groupList.decryptFailed) {
-          throw new Error("Your server list could not be decrypted; nothing was restored");
+          throw new Error(t({ id: "usePullPortableSetup.serverListDecryptFailed", defaultMessage: "Your server list could not be decrypted; nothing was restored" }));
         }
       }
 
@@ -326,7 +327,7 @@ export function usePullPortableSetup() {
         ? await readSearchRelayList(searchEvent, signer)
         : undefined;
       if (searchList?.decryptFailed) {
-        throw new Error("Your search-relay list could not be decrypted; nothing was restored");
+        throw new Error(t({ id: "usePullPortableSetup.searchRelaysDecryptFailed", defaultMessage: "Your search-relay list could not be decrypted; nothing was restored" }));
       }
 
       // What was on disk before this pull: a document is applied only if the pull brought a newer one.
@@ -352,7 +353,7 @@ export function usePullPortableSetup() {
         const { stored, unreadable } = await readSettingsDocChecked(settingsCtx, name);
         if (unreadable) {
           throw new Error(
-            `Your private Armada settings (${name}) could not be decrypted; nothing was restored`,
+            t({ id: "usePullPortableSetup.settingsDecryptFailed", defaultMessage: "Your private Armada settings ({name}) could not be decrypted; nothing was restored" }, { name }),
           );
         }
         if (!stored) continue;
@@ -400,7 +401,7 @@ export function usePullPortableSetup() {
         + topicHeads.length
         + settingsFound;
       if (recordCount === 0) {
-        throw new Error("No portable setup was found on your account relays");
+        throw new Error(t({ id: "usePullPortableSetup.notFound", defaultMessage: "No portable setup was found on your account relays" }));
       }
 
       // Adopt the relay map FIRST: `adopt` schedules invalidation of the keys seeded below; yield

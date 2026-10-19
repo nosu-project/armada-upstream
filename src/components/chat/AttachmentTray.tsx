@@ -9,6 +9,7 @@ import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useAudioMetadata } from "@/hooks/useAudioMetadata";
+import { common, defineMessage, FormattedMessage, useIntl } from "@/i18n";
 import { useMediaWithFallback } from "@/hooks/useMediaWithFallback";
 import { companionEncryption } from "@/lib/imeta";
 import { modelFormat } from "@/lib/mediaUrls";
@@ -19,6 +20,9 @@ import type { ImetaEncryption } from "@/lib/imeta";
 
 /** The longest description the edit dialog accepts. */
 export const MAX_ALT_CHARS = 1000;
+
+const markSpoiler = defineMessage({ id: "attachmentTray.markSpoiler", defaultMessage: "Mark as spoiler" });
+const attachmentLower = defineMessage({ id: "attachmentTray.attachmentLower", defaultMessage: "attachment" });
 
 export interface TrayAttachment {
   kind: "attachment";
@@ -66,13 +70,14 @@ interface AttachmentTrayProps {
 export const AttachmentTray = memo(function AttachmentTray({ items, isTouch, onPreview, onRemove, onCancel, onUpdate }: AttachmentTrayProps) {
   const [editing, setEditing] = useState<string | null>(null);
   const editingItem = items.find((i): i is TrayAttachment => i.kind === "attachment" && i.url === editing);
+  const intl = useIntl();
 
   if (items.length === 0) return null;
 
   return (
     <>
       <ul
-        aria-label="Attachments"
+        aria-label={intl.formatMessage({ id: "attachmentTray.label", defaultMessage: "Attachments" })}
         className="flex gap-2 overflow-x-auto px-3 pt-2 pb-1 animate-in slide-in-from-top-2 fade-in-0 duration-200 [scrollbar-width:thin]"
       >
         {items.map((item) =>
@@ -121,7 +126,9 @@ function AttachmentCard({
   onEdit: (url: string) => void;
   onUpdate: (url: string, patch: { alt?: string; spoiler?: boolean }) => void;
 }) {
+  const intl = useIntl();
   const previewable = item.isImage || item.isVideo;
+  const editLabel = intl.formatMessage({ id: "attachmentTray.editNamed", defaultMessage: "Edit {name}" }, { name: item.label });
   const open = () => {
     if (isTouch) onEdit(item.url);
     else if (previewable) onPreview(item.url);
@@ -133,18 +140,26 @@ function AttachmentCard({
       <button
         type="button"
         onClick={open}
-        aria-label={isTouch ? `Edit ${item.label}` : previewable ? `Preview ${item.label}` : `Edit ${item.label}`}
+        aria-label={
+          isTouch || !previewable
+            ? editLabel
+            : intl.formatMessage({ id: "attachmentTray.previewNamed", defaultMessage: "Preview {name}" }, { name: item.label })
+        }
         title={item.label}
         className={cn(squareClass, previewable && !isTouch && "cursor-zoom-in")}
       >
         <CardPreview item={item} />
         {item.spoiler && (
           <span className="absolute inset-0 flex items-center justify-center bg-black/30 backdrop-blur-xl">
-            <span className="rounded-full bg-black/70 px-2 py-0.5 text-3xs font-bold tracking-wide text-white">SPOILER</span>
+            <span className="rounded-full bg-black/70 px-2 py-0.5 text-3xs font-bold tracking-wide text-white">
+              <FormattedMessage id="attachmentTray.spoilerBadge" defaultMessage="SPOILER" />
+            </span>
           </span>
         )}
         {item.alt && (
-          <span className="absolute left-1 top-1 rounded bg-black/70 px-1 text-3xs font-bold text-white">ALT</span>
+          <span className="absolute left-1 top-1 rounded bg-black/70 px-1 text-3xs font-bold text-white">
+            <FormattedMessage id="attachmentTray.altBadge" defaultMessage="ALT" />
+          </span>
         )}
         {isTouch && (
           <span aria-hidden className="absolute bottom-1 left-1 flex size-6 items-center justify-center rounded-full bg-black/60 text-white">
@@ -162,13 +177,18 @@ function AttachmentCard({
       )}
 
       {isTouch ? (
-        <CornerButton label={`Remove ${item.label}`} onClick={() => onRemove(item.url)} />
+        <CornerButton
+          label={intl.formatMessage({ id: "attachmentTray.removeNamed", defaultMessage: "Remove {name}" }, { name: item.label })}
+          onClick={() => onRemove(item.url)}
+        />
       ) : (
         <div className="absolute right-1 top-1 flex overflow-hidden clip-corner-lg bg-background/95 opacity-0 shadow-sm transition-opacity group-hover/att:opacity-100 focus-within:opacity-100">
-          <ToolbarButton label="Edit attachment" onClick={() => onEdit(item.url)}>
+          <ToolbarButton label={intl.formatMessage({ id: "attachmentTray.editAttachment", defaultMessage: "Edit attachment" })} onClick={() => onEdit(item.url)}>
             <Pencil className="size-3.5" />
           </ToolbarButton>
-          <ToolbarButton label="Remove attachment" destructive onClick={() => onRemove(item.url)}>
+          <ToolbarButton
+            label={intl.formatMessage({ id: "attachmentTray.removeAttachment", defaultMessage: "Remove attachment" })}
+            destructive onClick={() => onRemove(item.url)}>
             <Trash2 className="size-3.5" />
           </ToolbarButton>
         </div>
@@ -179,13 +199,16 @@ function AttachmentCard({
 
 /** Always-visible spoiler switch; a 44px target on touch. */
 function SpoilerToggle({ label, spoiler, onToggle }: { label: string; spoiler: boolean; onToggle: () => void }) {
-  const action = spoiler ? "Remove spoiler" : "Mark as spoiler";
+  const intl = useIntl();
+  const action = spoiler
+    ? intl.formatMessage({ id: "attachmentTray.removeSpoiler", defaultMessage: "Remove spoiler" })
+    : intl.formatMessage(markSpoiler);
   return (
     <Tooltip>
       <TooltipTrigger asChild>
         <button
           type="button"
-          aria-label={`${action}: ${label}`}
+          aria-label={intl.formatMessage({ id: "attachmentTray.spoilerToggleLabel", defaultMessage: "{action}: {name}" }, { action, name: label })}
           aria-pressed={spoiler}
           onClick={onToggle}
           className="absolute -bottom-1 -right-1 flex size-8 items-center justify-center touch:size-11"
@@ -209,6 +232,7 @@ function PendingCard({ item, onCancel }: { item: TrayPending; onCancel: (id: str
   const percent = item.phase === "processing" && item.progress !== undefined
     ? Math.round(Math.min(1, Math.max(0, item.progress)) * 100)
     : undefined;
+  const intl = useIntl();
   return (
     <li className={cardClass} aria-busy="true" title={item.label}>
       <div className={squareClass}>
@@ -216,7 +240,17 @@ function PendingCard({ item, onCancel }: { item: TrayPending; onCancel: (id: str
         <span className="absolute inset-0 flex items-center justify-center">
           <span
             role="status"
-            aria-label={`${item.label}: ${item.phase === "uploading" ? "Uploading" : "Preparing"}${percent !== undefined ? ` ${percent}%` : ""}`}
+            aria-label={
+              percent !== undefined
+                ? intl.formatMessage(
+                  { id: "attachmentTray.pendingProgress", defaultMessage: "{name}: {phase, select, uploading {Uploading} other {Preparing}} {percent}%" },
+                  { name: item.label, phase: item.phase, percent },
+                )
+                : intl.formatMessage(
+                  { id: "attachmentTray.pending", defaultMessage: "{name}: {phase, select, uploading {Uploading} other {Preparing}}" },
+                  { name: item.label, phase: item.phase },
+                )
+            }
             className="relative flex size-11 items-center justify-center rounded-full bg-black/55"
           >
             {percent !== undefined ? (
@@ -230,7 +264,11 @@ function PendingCard({ item, onCancel }: { item: TrayPending; onCancel: (id: str
           </span>
         </span>
       </div>
-      <CornerButton label={`Cancel ${item.label}`} onClick={() => onCancel(item.id)} alwaysVisible />
+      <CornerButton
+        label={intl.formatMessage({ id: "attachmentTray.cancelNamed", defaultMessage: "Cancel {name}" }, { name: item.label })}
+        onClick={() => onCancel(item.id)}
+        alwaysVisible
+      />
     </li>
   );
 }
@@ -386,6 +424,7 @@ function AttachmentPreviewImage({
   alt?: string;
 }) {
   const { resolved, onError, failed } = useMediaWithFallback({ url, encryption, mime });
+  const intl = useIntl();
   if (resolved.status !== "ready" || failed) {
     return (
       <span className="flex size-full items-center justify-center bg-secondary/40">
@@ -397,7 +436,7 @@ function AttachmentPreviewImage({
       </span>
     );
   }
-  return <img src={resolved.src} alt={alt ?? "attachment"} onError={onError} className="size-full object-cover" />;
+  return <img src={resolved.src} alt={alt ?? intl.formatMessage(attachmentLower)} onError={onError} className="size-full object-cover" />;
 }
 
 /** Alt text (imeta `alt`), spoiler and remove; the touch home for a card's actions. */
@@ -425,14 +464,18 @@ function AttachmentEditDialog({
   }
 
   const previewable = !!item && (item.isImage || item.isVideo);
+  const intl = useIntl();
 
   return (
     <Dialog open={!!item} onOpenChange={(open) => !open && onClose()}>
-      <ChromeDialogContent title={item?.label ?? "Attachment"}>
+      <ChromeDialogContent title={item?.label ?? intl.formatMessage({ id: "attachmentTray.attachment", defaultMessage: "Attachment" })}>
         <ChromeDialogHeader
           icon={Paperclip}
-          title={<span className="block max-w-full truncate px-6 normal-case">{item?.label ?? "attachment"}</span>}
-          description="Describe it for people who can't see it, or hide it behind a spoiler."
+          title={<span className="block max-w-full truncate px-6 normal-case">{item?.label ?? intl.formatMessage(attachmentLower)}</span>}
+          description={intl.formatMessage({
+            id: "attachmentTray.editDescription",
+            defaultMessage: "Describe it for people who can't see it, or hide it behind a spoiler.",
+          })}
         />
         {item && (
           <div className="mt-6 space-y-4">
@@ -444,27 +487,31 @@ function AttachmentEditDialog({
                   onPreview(item.url);
                 }}
                 className="relative mx-auto block aspect-square w-40 cursor-zoom-in overflow-hidden clip-corner-lg bg-background/40"
-                aria-label={`Preview ${item.label}`}
+                aria-label={intl.formatMessage({ id: "attachmentTray.previewNamed", defaultMessage: "Preview {name}" }, { name: item.label })}
               >
                 <CardPreview item={item} />
               </button>
             )}
             <div className="space-y-1.5">
-              <Label htmlFor="attachment-alt">Description (alt text)</Label>
+              <Label htmlFor="attachment-alt">
+                <FormattedMessage id="attachmentTray.altLabel" defaultMessage="Description (alt text)" />
+              </Label>
               <Textarea
                 id="attachment-alt"
                 value={alt}
                 onChange={(e) => setAlt(e.target.value.replace(/[\r\n]+/g, " "))}
                 maxLength={MAX_ALT_CHARS}
                 rows={3}
-                placeholder="What's in this attachment?"
+                placeholder={intl.formatMessage({ id: "attachmentTray.altPlaceholder", defaultMessage: "What's in this attachment?" })}
               />
             </div>
             {previewable && (
               <div className="flex items-center justify-between gap-3">
                 <Label htmlFor="attachment-spoiler" className="flex flex-col gap-0.5">
-                  <span>Mark as spoiler</span>
-                  <span className="text-xs font-normal text-muted-foreground">Blurred until someone taps it.</span>
+                  <span><FormattedMessage {...markSpoiler} /></span>
+                  <span className="text-xs font-normal text-muted-foreground">
+                    <FormattedMessage id="attachmentTray.spoilerHint" defaultMessage="Blurred until someone taps it." />
+                  </span>
                 </Label>
                 <Switch id="attachment-spoiler" checked={spoiler} onCheckedChange={setSpoiler} />
               </div>
@@ -482,7 +529,7 @@ function AttachmentEditDialog({
             }}
           >
             <Trash2 className="size-4" />
-            Remove
+            <FormattedMessage {...common.remove} />
           </Button>
           <Button
             type="button"
@@ -491,7 +538,7 @@ function AttachmentEditDialog({
               onClose();
             }}
           >
-            Save
+            <FormattedMessage {...common.save} />
           </Button>
         </ChromeDialogFooter>
       </ChromeDialogContent>

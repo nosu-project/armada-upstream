@@ -11,24 +11,24 @@ import { useHistoryAudit, type AuditPhase } from "@/concord/hooks/useHistoryAudi
 import type { HistoryReport } from "@/concord/lib/historyAudit";
 import { exportFileName, exportHtmlParts, type ExportModel } from "@/concord/lib/historyExport";
 import type { Community } from "@/concord/lib/types";
+import { common, defineMessage, defineMessages, FormattedMessage, useIntl, type MessageDescriptor } from "@/i18n";
 
-const RANGES: { label: string; hours: number | null }[] = [
-  { label: "1d", hours: 24 },
-  { label: "3d", hours: 24 * 3 },
-  { label: "7d", hours: 24 * 7 },
-  { label: "30d", hours: 24 * 30 },
-  { label: "All", hours: null },
+const RANGES: { key: string; label: MessageDescriptor; hours: number | null }[] = [
+  { key: "1d", label: defineMessage({ id: "historyAuditView.range.1d", defaultMessage: "1d" }), hours: 24 },
+  { key: "3d", label: defineMessage({ id: "historyAuditView.range.3d", defaultMessage: "3d" }), hours: 24 * 3 },
+  { key: "7d", label: defineMessage({ id: "historyAuditView.range.7d", defaultMessage: "7d" }), hours: 24 * 7 },
+  { key: "30d", label: defineMessage({ id: "historyAuditView.range.30d", defaultMessage: "30d" }), hours: 24 * 30 },
+  { key: "all", label: defineMessage({ id: "historyAuditView.range.all", defaultMessage: "All" }), hours: null },
 ];
 
-const PHASE_LABEL: Record<AuditPhase, string> = {
-  idle: "",
-  control: "Reading the control plane",
-  channels: "Reading channels",
-  profiles: "Resolving members",
-  assets: "Embedding media",
-  done: "Done",
-  error: "Failed",
-};
+const PHASE_LABEL: Record<Exclude<AuditPhase, "idle">, MessageDescriptor> = defineMessages({
+  control: { id: "historyAuditView.phase.control", defaultMessage: "Reading the control plane" },
+  channels: { id: "historyAuditView.phase.channels", defaultMessage: "Reading channels" },
+  profiles: { id: "historyAuditView.phase.profiles", defaultMessage: "Resolving members" },
+  assets: { id: "historyAuditView.phase.assets", defaultMessage: "Embedding media" },
+  done: { id: "historyAuditView.phase.done", defaultMessage: "Done" },
+  error: { id: "historyAuditView.phase.error", defaultMessage: "Failed" },
+});
 
 /** Built as Blob parts, never one string, so large exports can't overflow max string size. */
 function download(model: ExportModel): void {
@@ -55,6 +55,7 @@ interface HistoryAuditViewProps {
 
 /** Routed full-screen history verify/export (outlives the settings dialog). */
 export function HistoryAuditView({ community, onClose }: HistoryAuditViewProps) {
+  const intl = useIntl();
   const { run, cancel, canRun, progress, result, error, channels } = useHistoryAudit(community);
   const [embed, setEmbed] = useState(true);
   const [rangeHours, setRangeHours] = useState<number | null>(null);
@@ -102,15 +103,17 @@ export function HistoryAuditView({ community, onClose }: HistoryAuditViewProps) 
           </div>
           <div className="space-y-1">
             <h1 className="font-mono text-2xl font-bold lowercase tracking-tight text-foreground">
-              verify &amp; export history
+              <FormattedMessage id="historyAuditView.title" defaultMessage="verify & export history" />
             </h1>
             <p className="text-sm text-muted-foreground">{community.name}</p>
           </div>
         </div>
 
         <p className="text-center text-sm leading-relaxed text-muted-foreground">
-          Reads the control plane and every channel across all this community&apos;s relays, saves what
-          it finds to your local store, and builds a self-contained export from those rumors.
+          <FormattedMessage
+            id="historyAuditView.intro"
+            defaultMessage="Reads the control plane and every channel across all this community's relays, saves what it finds to your local store, and builds a self-contained export from those rumors."
+          />
         </p>
 
         {error && (
@@ -124,8 +127,13 @@ export function HistoryAuditView({ community, onClose }: HistoryAuditViewProps) 
             <div className="flex items-center gap-2.5 text-sm">
               <Loader2 className="size-4 animate-spin text-primary" />
               <span>
-                {progress.label || PHASE_LABEL[progress.phase]}
-                {progress.total > 1 ? ` (${progress.done}/${progress.total})` : ""}
+                {progress.label || (progress.phase === "idle" ? "" : intl.formatMessage(PHASE_LABEL[progress.phase]))}
+                {progress.total > 1
+                  ? intl.formatMessage(
+                    { id: "historyAuditView.progressCount", defaultMessage: " ({done}/{total})" },
+                    { done: progress.done, total: progress.total },
+                  )
+                  : ""}
               </span>
             </div>
             <div className="h-1.5 overflow-hidden rounded-full bg-muted">
@@ -139,20 +147,26 @@ export function HistoryAuditView({ community, onClose }: HistoryAuditViewProps) 
           <div className="space-y-4">
             <div className="flex items-center justify-center gap-2 text-sm text-muted-foreground">
               <Check className="size-4 text-emerald-500" />
-              {exportChannelCount} channel{exportChannelCount === 1 ? "" : "s"},{" "}
-              {exportMessageCount} message{exportMessageCount === 1 ? "" : "s"} ready to export
+              <FormattedMessage
+                id="historyAuditView.ready"
+                defaultMessage="{channels, plural, one {# channel} other {# channels}}, {messages, plural, one {# message} other {# messages}} ready to export"
+                values={{ channels: exportChannelCount, messages: exportMessageCount }}
+              />
             </div>
 
             {relayFailure && (
               <p className="text-center text-xs text-warning">
-                Some relays didn&apos;t respond, so this copy may be missing recent history.
+                <FormattedMessage
+                  id="historyAuditView.relayFailure"
+                  defaultMessage="Some relays didn't respond, so this copy may be missing recent history."
+                />
               </p>
             )}
 
             <div className="flex gap-2">
               <Button type="button" className="h-11 flex-1 clip-corner-lg" onClick={() => download(result.model)}>
                 <FileCode className="size-4" />
-                Download HTML
+                <FormattedMessage id="historyAuditView.downloadHtml" defaultMessage="Download HTML" />
               </Button>
               {relayFailure && (
                 <Button
@@ -161,33 +175,35 @@ export function HistoryAuditView({ community, onClose }: HistoryAuditViewProps) 
                   className="h-11 clip-corner-lg"
                   onClick={startRun}
                 >
-                  Run again
+                  <FormattedMessage id="historyAuditView.runAgain" defaultMessage="Run again" />
                 </Button>
               )}
             </div>
 
             <p className="text-center text-xs text-muted-foreground">
-              Opens as a self-contained mini-Armada with Chat, Text, and JSON views. Offline, with
-              images embedded.
+              <FormattedMessage
+                id="historyAuditView.exportHint"
+                defaultMessage="Opens as a self-contained mini-Armada with Chat, Text, and JSON views. Offline, with images embedded."
+              />
             </p>
           </div>
         ) : (
           <div className="space-y-4">
             <div className="space-y-2">
               <p className="text-center text-xs font-medium uppercase tracking-wider text-muted-foreground">
-                Time range
+                <FormattedMessage id="historyAuditView.timeRange" defaultMessage="Time range" />
               </p>
               <div className="flex flex-wrap justify-center gap-1.5">
                 {RANGES.map((r) => (
                   <Button
-                    key={r.label}
+                    key={r.key}
                     type="button"
                     size="sm"
                     variant={rangeHours === r.hours ? "default" : "secondary"}
                     className="clip-corner-lg"
                     onClick={() => setRangeHours(r.hours)}
                   >
-                    {r.label}
+                    <FormattedMessage {...r.label} />
                   </Button>
                 ))}
               </div>
@@ -195,14 +211,18 @@ export function HistoryAuditView({ community, onClose }: HistoryAuditViewProps) 
             <div className="flex items-center justify-center gap-2">
               <Checkbox id="history-embed" checked={embed} onCheckedChange={(v) => setEmbed(v === true)} />
               <Label htmlFor="history-embed" className="text-sm font-normal text-muted-foreground">
-                Embed images for offline viewing (larger export)
+                <FormattedMessage id="historyAuditView.embedImages" defaultMessage="Embed images for offline viewing (larger export)" />
               </Label>
             </div>
 
             {channels.length > 1 && (
               <Collapsible open={channelsOpen} onOpenChange={setChannelsOpen}>
                 <CollapsibleTrigger className="mx-auto flex items-center gap-1 text-xs font-medium uppercase tracking-wider text-muted-foreground transition-colors hover:text-foreground">
-                  Channels ({selectedIds.length}/{channels.length})
+                  <FormattedMessage
+                    id="historyAuditView.channels"
+                    defaultMessage="Channels ({selected}/{total})"
+                    values={{ selected: selectedIds.length, total: channels.length }}
+                  />
                   <ChevronDown className={cn("size-3.5 transition-transform", channelsOpen && "rotate-180")} />
                 </CollapsibleTrigger>
                 <CollapsibleContent className="overflow-hidden data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down">
@@ -220,7 +240,7 @@ export function HistoryAuditView({ community, onClose }: HistoryAuditViewProps) 
                   </div>
                   {noneSelected && (
                     <p className="mt-1.5 text-center text-xs text-warning">
-                      Select at least one channel to export.
+                      <FormattedMessage id="historyAuditView.selectOne" defaultMessage="Select at least one channel to export." />
                     </p>
                   )}
                 </CollapsibleContent>
@@ -231,7 +251,7 @@ export function HistoryAuditView({ community, onClose }: HistoryAuditViewProps) 
 
         {busy ? (
           <Button type="button" size="lg" variant="secondary" className="h-12 w-full clip-corner-lg" onClick={cancel}>
-            Cancel
+            <FormattedMessage {...common.cancel} />
           </Button>
         ) : !result ? (
           <Button
@@ -241,7 +261,7 @@ export function HistoryAuditView({ community, onClose }: HistoryAuditViewProps) 
             disabled={!canRun || noneSelected}
             onClick={startRun}
           >
-            Run audit
+            <FormattedMessage id="historyAuditView.runAudit" defaultMessage="Run audit" />
           </Button>
         ) : null}
       </div>

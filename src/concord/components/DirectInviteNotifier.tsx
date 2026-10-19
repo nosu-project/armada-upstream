@@ -13,6 +13,7 @@ import { catchUpChannelIds, heldMembershipOf } from "@/concord/lib/directInvite"
 import { sweepControl } from "@/concord/lib/planeSync";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { toast } from "@/hooks/useToast";
+import { t } from "@/i18n";
 
 /**
  * How long a staff-sent catch-up the fold refuses is treated as fold lag: the key
@@ -64,17 +65,17 @@ export function DirectInviteNotifier() {
     const newest = fresh[0].invite;
     const title =
       fresh.length > 1
-        ? `${fresh.length} new community invites`
+        ? t({ id: "directInviteNotifier.newInvites", defaultMessage: "{count, plural, one {# new community invite} other {# new community invites}}" }, { count: fresh.length })
         : newest.catchUp
-          ? "New channel keys offered"
-          : "New community invite";
+          ? t({ id: "directInviteNotifier.newChannelKeys", defaultMessage: "New channel keys offered" })
+          : t({ id: "directInviteNotifier.newInvite", defaultMessage: "New community invite" });
 
     toast({
       title,
       description: fresh.length > 1 ? undefined : newest.name,
       action: (
-        <ToastAction altText="View invites" asChild>
-          <Link to="/invites">View</Link>
+        <ToastAction altText={t({ id: "directInviteNotifier.viewInvites", defaultMessage: "View invites" })} asChild>
+          <Link to="/invites">{t({ id: "directInviteNotifier.view", defaultMessage: "View" })}</Link>
         </ToastAction>
       ),
     });
@@ -162,8 +163,14 @@ function CatchUpAdopter({
       }
       onAdopted(invite.wrapId);
       toast({
-        title: names.length === 1 ? "Channel added" : `${names.length} channels added`,
-        description: `${names.map((n) => `#${n}`).join(", ")} in ${invite.name}`,
+        title: t(
+          { id: "directInviteNotifier.channelsAdded", defaultMessage: "{count, plural, one {Channel added} other {# channels added}}" },
+          { count: names.length },
+        ),
+        description: t(
+          { id: "directInviteNotifier.channelsAddedDescription", defaultMessage: "{channels} in {community}" },
+          { channels: names.map((n) => `#${n}`).join(", "), community: invite.name },
+        ),
       });
       queryClient.invalidateQueries({ queryKey: ["concord", "direct-invites"] });
       queryClient.invalidateQueries({ queryKey: ["concord", "list"] });

@@ -11,6 +11,7 @@ import { isImageAttachment, pinAttachmentEntries } from "@/concord/lib/pinAttach
 import { threadSummary, type ChatMsg } from "@/components/chat/transport";
 
 import type { EncryptedRef } from "@/hooks/useResolvedMediaSrc";
+import { t } from "@/i18n/intl";
 
 /** The NIP-14 tag a titled post carries. */
 export const SUBJECT_TAG = "subject";
@@ -59,9 +60,11 @@ export function isTitledPost(msg: { kind: number; tags: string[][] }): boolean {
  */
 export function subjectTags(title: string): string[][] {
   const trimmed = title.replace(/\s+/g, " ").trim();
-  if (!trimmed) throw new Error("A post needs a title.");
+  if (!trimmed) throw new Error(t({ id: "concordForum.titleRequired", defaultMessage: "A post needs a title." }));
   if (utf8Len(trimmed) > SUBJECT_MAX_BYTES) {
-    throw new Error(`Titles are limited to ${SUBJECT_MAX_BYTES} bytes.`);
+    throw new Error(
+      t({ id: "concordForum.titleTooLong", defaultMessage: "Titles are limited to {max} bytes." }, { max: SUBJECT_MAX_BYTES }),
+    );
   }
   return [[SUBJECT_TAG, trimmed]];
 }

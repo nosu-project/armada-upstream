@@ -48,6 +48,7 @@ import {
   type PaymentMethodDef,
   type PaymentTarget,
 } from "@/lib/paymentTargets";
+import { common, FormattedMessage, useIntl, type IntlShape } from "@/i18n";
 
 import type { ChatMsg, OnchainZapAnnouncement, ZapPayment } from "@/components/chat/transport";
 import type { CurrencyDisplay } from "@/contexts/AppContext";
@@ -77,13 +78,15 @@ interface DialogMethod {
   target?: PaymentTarget;
 }
 
-function methodTitle(method: DialogMethod | undefined): string {
-  if (!method) return "Send Bitcoin";
-  if (method.def.kind === "bitcoin") return "Send Bitcoin";
+function methodTitle(method: DialogMethod | undefined, intl: IntlShape): string {
+  if (!method || method.def.kind === "bitcoin") {
+    return intl.formatMessage({ id: "zapDialogImpl.sendBitcoin", defaultMessage: "Send Bitcoin" });
+  }
   return method.def.label;
 }
 
 export default function ZapDialogImpl({ target, sendZap, sendOnchainZap, onDone }: ZapDialogImplProps) {
+  const intl = useIntl();
   const { config } = useAppContext();
   const { toast } = useToast();
   const { activeConnection, webln } = useWallet();
@@ -192,8 +195,8 @@ export default function ZapDialogImpl({ target, sendZap, sendOnchainZap, onDone 
 
   const handleLightningZap = async () => {
     setError("");
-    if (currency === "usd" && !btcPrice) { setError("Waiting for BTC price…"); return; }
-    if (amountSats <= 0) { setError("Enter an amount."); return; }
+    if (currency === "usd" && !btcPrice) { setError(intl.formatMessage({ id: "zapDialogImpl.waitingForPrice", defaultMessage: "Waiting for BTC price…" })); return; }
+    if (amountSats <= 0) { setError(intl.formatMessage({ id: "zapDialogImpl.enterAmount", defaultMessage: "Enter an amount." })); return; }
 
     // Two-tap safety for large amounts.
     if (isLarge && !confirmArmed) {
@@ -207,16 +210,21 @@ export default function ZapDialogImpl({ target, sendZap, sendOnchainZap, onDone 
         setSuccess({ kind: "lightning", amountSats });
       } else if (outcome === "unproven") {
         toast({
-          title: `Sent ${formatSatsAmount(amountSats)}`,
-          description:
-            "The payment went through, but the wallet hasn't provided the proof a private zap tally needs. We'll keep checking for a couple of minutes and count the zap if it turns up. Alby Hub, Coinos and lnbits provide it reliably.",
+          title: intl.formatMessage(
+            { id: "zapDialogImpl.sentTitle", defaultMessage: "Sent {amount}" },
+            { amount: formatSatsAmount(amountSats) },
+          ),
+          description: intl.formatMessage({
+            id: "zapDialogImpl.unprovenDescription",
+            defaultMessage: "The payment went through, but the wallet hasn't provided the proof a private zap tally needs. We'll keep checking for a couple of minutes and count the zap if it turns up. Alby Hub, Coinos and lnbits provide it reliably.",
+          }),
         });
         setSuccess({ kind: "lightning", amountSats });
       }
       // "manual" keeps the dialog open for the QR view.
     } catch (e) {
       toast({
-        title: "Zap failed",
+        title: intl.formatMessage({ id: "zapDialogImpl.zapFailed", defaultMessage: "Zap failed" }),
         description: e instanceof Error ? e.message : String(e),
         variant: "destructive",
       });
@@ -226,7 +234,7 @@ export default function ZapDialogImpl({ target, sendZap, sendOnchainZap, onDone 
   const handleCopy = () => {
     if (invoice) {
       void writeClipboardText(invoice);
-      toast({ title: "Invoice copied" });
+      toast({ title: intl.formatMessage({ id: "zapDialogImpl.invoiceCopied", defaultMessage: "Invoice copied" }) });
     }
   };
 
@@ -239,9 +247,9 @@ export default function ZapDialogImpl({ target, sendZap, sendOnchainZap, onDone 
       <div className="flex items-center justify-between px-4 h-12">
         <h2 className="font-mono text-lg font-bold lowercase tracking-tight flex items-center gap-1.5 min-w-0">
           {success ? (
-            "Success"
+            <FormattedMessage id="zapDialogImpl.success" defaultMessage="Success" />
           ) : showingInvoice ? (
-            "Lightning Payment"
+            <FormattedMessage id="zapDialogImpl.lightningPayment" defaultMessage="Lightning Payment" />
           ) : targetsLoading ? (
             <Skeleton className="h-5 w-28" />
           ) : methods.length > 1 ? (
@@ -250,10 +258,10 @@ export default function ZapDialogImpl({ target, sendZap, sendOnchainZap, onDone 
                 <button
                   type="button"
                   className="inline-flex items-center gap-1.5 min-w-0 rounded-md px-1 -mx-1 hover:bg-secondary/60 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring transition-colors"
-                  aria-label="Switch payment method"
+                  aria-label={intl.formatMessage({ id: "zapDialogImpl.switchMethod", defaultMessage: "Switch payment method" })}
                 >
                   <PaymentMethodIcon method={currentMethod?.def} />
-                  <span className="truncate">{methodTitle(currentMethod)}</span>
+                  <span className="truncate">{methodTitle(currentMethod, intl)}</span>
                   <ChevronDown className="size-4 shrink-0 opacity-70" />
                 </button>
               </DropdownMenuTrigger>
@@ -273,9 +281,19 @@ export default function ZapDialogImpl({ target, sendZap, sendOnchainZap, onDone 
           ) : (
             <span className="truncate">
               {isPrivate ? (
-                methodTitle(currentMethod)
+                methodTitle(currentMethod, intl)
               ) : (
-                <>Zap <span className="normal-case"><DisplayName pubkey={target.pubkey} name={displayName} /></span></>
+                <FormattedMessage
+                  id="zapDialogImpl.zapName"
+                  defaultMessage="Zap {name}"
+                  values={{
+                    name: (
+                      <span className="normal-case">
+                        <DisplayName pubkey={target.pubkey} name={displayName} />
+                      </span>
+                    ),
+                  }}
+                />
               )}
             </span>
           )}
@@ -285,13 +303,16 @@ export default function ZapDialogImpl({ target, sendZap, sendOnchainZap, onDone 
                 <button
                   type="button"
                   className="inline-flex items-center justify-center rounded-full text-muted-foreground hover:text-foreground transition-colors"
-                  aria-label="How private zaps work"
+                  aria-label={intl.formatMessage({ id: "zapDialogImpl.howPrivateZapsWork", defaultMessage: "How private zaps work" })}
                 >
                   <HelpCircle className="size-4 shrink-0" />
                 </button>
               </PopoverTrigger>
               <PopoverContent align="start" side="bottom" className="w-72 p-3 text-xs leading-relaxed text-foreground/80">
-                Payment proof (preimage) is sealed into the channel so members verify the zap locally. No public receipt, no relay tally.
+                <FormattedMessage
+                  id="zapDialogImpl.privateExplainer"
+                  defaultMessage="Payment proof (preimage) is sealed into the channel so members verify the zap locally. No public receipt, no relay tally."
+                />
               </PopoverContent>
             </Popover>
           )}
@@ -300,7 +321,7 @@ export default function ZapDialogImpl({ target, sendZap, sendOnchainZap, onDone 
           type="button"
           onClick={onDone}
           className="inline-flex size-8 touch:size-11 -mr-1.5 items-center justify-center clip-corner-lg text-muted-foreground hover:text-foreground hover:bg-secondary/60 transition-colors"
-          aria-label="Close"
+          aria-label={intl.formatMessage(common.close)}
         >
           <X className="size-5" />
         </button>
@@ -428,6 +449,7 @@ function LightningZapPane({
   walletRequired,
   onZap,
 }: LightningZapPaneProps) {
+  const intl = useIntl();
   return (
     <div className="grid gap-3 px-4 py-4 w-full overflow-hidden">
       <div className="grid gap-3 pt-2">
@@ -445,8 +467,10 @@ function LightningZapPane({
 
       {walletRequired && (
         <p className="text-xs text-amber-500">
-          Private zaps need a payment proof. Connect a wallet (Settings → Wallet) or
-          switch to Bitcoin or another method from the menu above.
+          <FormattedMessage
+            id="zapDialogImpl.walletRequired"
+            defaultMessage="Private zaps need a payment proof. Connect a wallet (Settings → Wallet) or switch to Bitcoin or another method from the menu above."
+          />
         </p>
       )}
 
@@ -456,9 +480,9 @@ function LightningZapPane({
           type="text"
           value={comment}
           onChange={(e) => setComment(e.target.value)}
-          placeholder="Add a comment (optional)"
+          placeholder={intl.formatMessage({ id: "zapDialogImpl.commentPlaceholder", defaultMessage: "Add a comment (optional)" })}
           maxLength={280}
-          aria-label="Comment"
+          aria-label={intl.formatMessage({ id: "zapDialogImpl.comment", defaultMessage: "Comment" })}
           autoFocus
           className="text-sm rounded-full motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-top-2 motion-safe:duration-200"
         />
@@ -475,12 +499,16 @@ function LightningZapPane({
           {busy ? (
             <>
               <Loader2 className="size-4 mr-1.5 animate-spin" />
-              {status === "resolving" ? "Creating invoice…" : "Paying…"}
+              {status === "resolving" ? intl.formatMessage({ id: "zapDialogImpl.creatingInvoice", defaultMessage: "Creating invoice…" }) : intl.formatMessage({ id: "zapDialogImpl.paying", defaultMessage: "Paying…" })}
             </>
           ) : isLarge && confirmArmed ? (
-            <>Tap again to send {amountDisplay}</>
+            <FormattedMessage
+              id="zapDialogImpl.tapAgain"
+              defaultMessage="Tap again to send {amount}"
+              values={{ amount: amountDisplay }}
+            />
           ) : (
-            <>Send {amountDisplay}</>
+            <FormattedMessage id="zapDialogImpl.send" defaultMessage="Send {amount}" values={{ amount: amountDisplay }} />
           )}
         </Button>
         <Button
@@ -488,7 +516,7 @@ function LightningZapPane({
           variant="ghost"
           size="icon"
           onClick={() => setShowComment(!showComment)}
-          aria-label="Add a comment"
+          aria-label={intl.formatMessage({ id: "zapDialogImpl.addComment", defaultMessage: "Add a comment" })}
           aria-pressed={showComment}
           className={`clip-corner-lg touch:size-11 ${comment.trim() ? "text-primary" : "text-muted-foreground"}`}
         >
@@ -518,6 +546,7 @@ function LightningInvoiceView({
   onCopy,
   onOpenInWallet,
 }: LightningInvoiceViewProps) {
+  const intl = useIntl();
   return (
     <div className="grid gap-3 px-4 py-4 w-full overflow-hidden">
       <div className="flex flex-col items-center pt-1">
@@ -527,7 +556,7 @@ function LightningInvoiceView({
       </div>
 
       <div className="flex justify-center">
-        <div className="bg-white p-3 rounded-xl" aria-label="Lightning invoice QR code">
+        <div className="bg-white p-3 rounded-xl" aria-label={intl.formatMessage({ id: "zapDialogImpl.invoiceQr", defaultMessage: "Lightning invoice QR code" })}>
           <QRCodeCanvas value={invoice.toUpperCase()} size={220} level="M" className="block" />
         </div>
       </div>
@@ -536,7 +565,7 @@ function LightningInvoiceView({
         <Input
           value={invoice}
           readOnly
-          aria-label="Lightning invoice"
+          aria-label={intl.formatMessage({ id: "zapDialogImpl.invoice", defaultMessage: "Lightning invoice" })}
           className="font-mono text-xs min-w-0 flex-1 overflow-hidden text-ellipsis"
           onClick={(e) => e.currentTarget.select()}
         />
@@ -546,7 +575,7 @@ function LightningInvoiceView({
           size="icon"
           onClick={onCopy}
           className="shrink-0"
-          aria-label="Copy invoice"
+          aria-label={intl.formatMessage({ id: "zapDialogImpl.copyInvoice", defaultMessage: "Copy invoice" })}
         >
           <Copy className="h-4 w-4" />
         </Button>
@@ -558,10 +587,10 @@ function LightningInvoiceView({
             {busy ? (
               <>
                 <Loader2 className="size-4 mr-1.5 animate-spin" />
-                Processing…
+                <FormattedMessage id="zapDialogImpl.processing" defaultMessage="Processing…" />
               </>
             ) : (
-              "Pay with WebLN"
+              <FormattedMessage id="zapDialogImpl.payWithWebln" defaultMessage="Pay with WebLN" />
             )}
           </Button>
         )}
@@ -572,12 +601,12 @@ function LightningInvoiceView({
           className="w-full"
         >
           <ExternalLink className="h-4 w-4 mr-2" />
-          Open in Lightning Wallet
+          <FormattedMessage id="zapDialogImpl.openInWallet" defaultMessage="Open in Lightning Wallet" />
         </Button>
       </div>
 
       <p className="text-2xs text-muted-foreground text-center">
-        Scan the QR or copy the invoice to pay with any Lightning wallet.
+        <FormattedMessage id="zapDialogImpl.scanHint" defaultMessage="Scan the QR or copy the invoice to pay with any Lightning wallet." />
       </p>
     </div>
   );

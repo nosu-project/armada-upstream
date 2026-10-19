@@ -142,6 +142,7 @@ import { concordThreadReadKey, useReadState } from "@/hooks/useReadState";
 import { usePageCovered } from "@/lib/settingsOverlay";
 import { NotifLevelMenu } from "@/components/NotifLevelMenu";
 import { toast } from "@/hooks/useToast";
+import { common, FormattedMessage, t, useIntl } from "@/i18n";
 import { CommunityNoAccess } from "@/concord/components/CommunityNoAccess";
 import { useCommunity, useCommunityList, useIsExcluded } from "@/concord/hooks/useCommunityList";
 import { channelDecodeDeadEnd } from "@/concord/lib/channelSync";
@@ -210,17 +211,47 @@ const NO_MEMBER_ACTIONS: MemberActionItem[] = [];
 /** Shared empty feed, so a chat-presented channel keeps a stable reference. */
 const NO_POSTS: ForumPost[] = [];
 
-/** Header names for community-wide panes that aren't moderation ones (those use `MODERATION_TABS`). */
+/** Header names (formatted on read) for community-wide panes that aren't moderation ones (those use `MODERATION_TABS`). */
 const PANE_HEADERS: Record<
   Exclude<Concord2Pane, ModerationPane>,
-  { icon: LucideIcon; label: string }
+  { icon: LucideIcon; readonly label: string }
 > = {
-  all: { icon: Rss, label: "All messages" },
-  mentions: { icon: AtSign, label: "Mentions" },
-  threads: { icon: MessagesSquare, label: "Threads" },
-  projects: { icon: FolderGit2, label: "Projects" },
-  settings: { icon: Settings, label: "Community settings" },
-  suspicious: { icon: Shield, label: "Suspicious activity" },
+  all: {
+    icon: Rss,
+    get label() {
+      return t({ id: "concordPage.pane.allMessages", defaultMessage: "All messages" });
+    },
+  },
+  mentions: {
+    icon: AtSign,
+    get label() {
+      return t({ id: "concordPage.pane.mentions", defaultMessage: "Mentions" });
+    },
+  },
+  threads: {
+    icon: MessagesSquare,
+    get label() {
+      return t({ id: "concordPage.pane.threads", defaultMessage: "Threads" });
+    },
+  },
+  projects: {
+    icon: FolderGit2,
+    get label() {
+      return t({ id: "concordPage.pane.projects", defaultMessage: "Projects" });
+    },
+  },
+  settings: {
+    icon: Settings,
+    get label() {
+      return t({ id: "concordPage.pane.communitySettings", defaultMessage: "Community settings" });
+    },
+  },
+  suspicious: {
+    icon: Shield,
+    get label() {
+      return t({ id: "concordPage.pane.suspiciousActivity", defaultMessage: "Suspicious activity" });
+    },
+  },
 };
 
 /** The community's decrypted icon for the channel-list title; nothing if none. */
@@ -237,13 +268,14 @@ function TitleAvatar({ icon, name }: { icon: ImagePointer | undefined; name: str
 function Banner({ banner }: { banner: ImagePointer | undefined }) {
   const url = useDecryptedImage(banner);
   const [open, setOpen] = useState(false);
+  const intl = useIntl();
   if (!url) return null;
   return (
     <>
       <button
         type="button"
         className="size-full overflow-hidden cursor-zoom-in"
-        aria-label="View banner"
+        aria-label={intl.formatMessage({ id: "concordPage.viewBanner", defaultMessage: "View banner" })}
         onClick={() => setOpen(true)}
       >
         <img src={url} alt="" className="size-full object-cover" />
@@ -466,6 +498,7 @@ export const ChannelRow = memo(function ChannelRow({
   // Every Channel is callable (CORD-07); presence drives the nested roster. The
   // broker is NOT resolved per row (one query observer per channel on every page
   // switch); `handleJoinVoice` resolves it lazily.
+  const intl = useIntl();
   const fold = useVoicePresence(community, channel);
   const { voiceRoomPubkeys, streamingPubkeys } = useVoiceActivity();
   const { isConcordChannelMuted } = useMutes();
@@ -489,6 +522,9 @@ export const ChannelRow = memo(function ChannelRow({
   const hasMention = Boolean(unread?.mention);
   const callable = channel.view !== "forum";
   const occupied = callable && participants.length > 0;
+  const callLabel = occupied
+    ? intl.formatMessage({ id: "concordPage.channelRow.joinCall", defaultMessage: "Join call" })
+    : intl.formatMessage({ id: "concordPage.channelRow.startCall", defaultMessage: "Start call" });
   // A live call swaps the row's glyph for a speaker.
   return (
     <ContextMenu>
@@ -527,7 +563,7 @@ export const ChannelRow = memo(function ChannelRow({
               {hasMention ? (
                 <span
                   className="shrink-0 flex items-center justify-center min-w-4 h-4 px-1 rounded-full bg-primary text-primary-foreground text-3xs font-bold leading-none"
-                  aria-label="You were mentioned"
+                  aria-label={intl.formatMessage({ id: "concordPage.channelRow.mentioned", defaultMessage: "You were mentioned" })}
                 >
                   @
                 </span>
@@ -540,8 +576,8 @@ export const ChannelRow = memo(function ChannelRow({
                   e.stopPropagation();
                   onJoinVoice(channel, null);
                 }}
-                aria-label={occupied ? "Join call" : "Start call"}
-                title={occupied ? "Join call" : "Start call"}
+                aria-label={callLabel}
+                title={callLabel}
                 className={cn(
                   "shrink-0 flex items-center justify-center size-7 mr-2 clip-corner transition-opacity",
                   "opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100",
@@ -573,12 +609,12 @@ export const ChannelRow = memo(function ChannelRow({
         {onMove && (
           <ContextMenuItem onSelect={() => onMove(channel.idHex)}>
             <GripVertical className="mr-2 size-4" />
-            Move
+            <FormattedMessage id="concordPage.channelRow.move" defaultMessage="Move" />
           </ContextMenuItem>
         )}
         {community && (
           <NotifLevelMenu
-            label="Channel notifications"
+            label={intl.formatMessage({ id: "concordPage.channelRow.notifications", defaultMessage: "Channel notifications" })}
             level={notificationLevel}
             onChange={(lvl) =>
               setNotifLevel(concordChannelScopeKey("c2", community.idHex, channel.idHex), lvl)
@@ -589,7 +625,7 @@ export const ChannelRow = memo(function ChannelRow({
           <ContextMenuSub>
             <ContextMenuSubTrigger>
               <Folder className="size-4" />
-              Move to category
+              <FormattedMessage id="concordPage.channelRow.moveToCategory" defaultMessage="Move to category" />
             </ContextMenuSubTrigger>
             <ContextMenuSubContent className="w-52">
               {(categories ?? []).map((name) => (
@@ -605,12 +641,12 @@ export const ChannelRow = memo(function ChannelRow({
               {(categories ?? []).length > 0 && <ContextMenuSeparator />}
               <ContextMenuItem onSelect={() => onNewCategory?.(channel)}>
                 <Plus className="mr-2 size-4" />
-                New category…
+                <FormattedMessage id="concordPage.channelRow.newCategory" defaultMessage="New category…" />
               </ContextMenuItem>
               {channel.category && (
                 <ContextMenuItem onSelect={() => onSetCategory(channel.idHex, undefined)}>
                   <X className="mr-2 size-4" />
-                  Remove from category
+                  <FormattedMessage id="concordPage.channelRow.removeFromCategory" defaultMessage="Remove from category" />
                 </ContextMenuItem>
               )}
             </ContextMenuSubContent>
@@ -643,11 +679,14 @@ function MentionsView({
     for (const c of channels) m.set(c.idHex, c);
     return m;
   }, [channels]);
+  const intl = useIntl();
 
   if (mentions.length === 0) {
     return (
       <p className="px-2 py-8 text-center text-sm text-muted-foreground">
-        {isLoading ? "Loading mentions…" : "No mentions yet. When someone @-mentions you, it'll show up here."}
+        {isLoading
+          ? intl.formatMessage({ id: "concordPage.mentions.loading", defaultMessage: "Loading mentions…" })
+          : intl.formatMessage({ id: "concordPage.mentions.empty", defaultMessage: "No mentions yet. When someone @-mentions you, it'll show up here." })}
       </p>
     );
   }
@@ -661,7 +700,7 @@ function MentionsView({
           <div key={msg.id} className="pb-1">
             <div className="flex items-center gap-1 px-3 pt-2 pb-0.5 text-xs font-medium text-muted-foreground">
               <ChannelGlyph isPrivate={ch?.isPrivate} view={ch?.view} className="size-3 shrink-0" />
-              <span className="truncate">{ch?.name ?? "unknown channel"}</span>
+              <span className="truncate">{ch?.name ?? intl.formatMessage({ id: "concordPage.unknownChannel", defaultMessage: "unknown channel" })}</span>
             </div>
             <AggregateMessage
               event={msg}
@@ -690,6 +729,7 @@ const AggregateMessage = memo(function AggregateMessage({
 }) {
   // `ChatMsg` is already signature-less, so the message IS the rumor.
   const rumor = event;
+  const intl = useIntl();
   // Hover tint is a clipped `::before`: clipping the wrapper would slice off
   // ChatMessage's toolbar, which floats above the row.
   return (
@@ -712,7 +752,7 @@ const AggregateMessage = memo(function AggregateMessage({
         onJump &&
           "cursor-pointer before:absolute before:inset-0 before:-z-10 before:clip-corner-lg before:transition-colors before:content-[''] hover:before:bg-foreground/5",
       )}
-      aria-label={onJump ? "Jump to this message" : undefined}
+      aria-label={onJump ? intl.formatMessage({ id: "concordPage.aggregate.jump", defaultMessage: "Jump to this message" }) : undefined}
     >
       <ChatMessage event={event} rumor={rumor} canWrite={false} canModerate={false} everyoneMention={everyoneMention} />
     </div>
@@ -762,13 +802,14 @@ function AllMessagesView({
       return { msg, channelIdHex, newDay, newChannel };
     });
   }, [messages]);
+  const intl = useIntl();
 
   if (messages.length === 0) {
     return (
       <p className="px-2 py-8 text-center text-sm text-muted-foreground">
         {isLoading
-          ? "Loading messages…"
-          : "No messages yet. Every channel's messages will show up here together."}
+          ? intl.formatMessage({ id: "concordPage.allMessages.loading", defaultMessage: "Loading messages…" })
+          : intl.formatMessage({ id: "concordPage.allMessages.empty", defaultMessage: "No messages yet. Every channel's messages will show up here together." })}
       </p>
     );
   }
@@ -783,7 +824,7 @@ function AllMessagesView({
             {newChannel ? (
               <div className="flex items-center gap-1 px-3 pt-2 pb-0.5 text-xs font-medium text-muted-foreground">
                 <ChannelGlyph isPrivate={ch?.isPrivate} view={ch?.view} className="size-3 shrink-0" />
-                <span className="truncate">{ch?.name ?? "unknown channel"}</span>
+                <span className="truncate">{ch?.name ?? intl.formatMessage({ id: "concordPage.unknownChannel", defaultMessage: "unknown channel" })}</span>
               </div>
             ) : null}
             <AggregateMessage
@@ -806,10 +847,10 @@ function AllMessagesView({
             {isLoadingOlder ? (
               <>
                 <Loader2 className="mr-2 size-4 animate-spin" />
-                Loading…
+                <FormattedMessage {...common.loading} />
               </>
             ) : (
-              "Load older messages"
+              <FormattedMessage id="concordPage.allMessages.loadOlder" defaultMessage="Load older messages" />
             )}
           </Button>
         </div>
@@ -840,13 +881,14 @@ function ThreadsView({
     for (const c of channels) m.set(c.idHex, c);
     return m;
   }, [channels]);
+  const intl = useIntl();
 
   if (threads.length === 0) {
     return (
       <p className="px-2 py-8 text-center text-sm text-muted-foreground">
         {isLoading
-          ? "Loading threads…"
-          : "No threads yet. Threads you start or reply in will show up here."}
+          ? intl.formatMessage({ id: "concordPage.threads.loading", defaultMessage: "Loading threads…" })
+          : intl.formatMessage({ id: "concordPage.threads.empty", defaultMessage: "No threads yet. Threads you start or reply in will show up here." })}
       </p>
     );
   }
@@ -859,11 +901,11 @@ function ThreadsView({
           <div key={t.root.id} className="pb-1">
             <div className="flex items-center gap-1 px-3 pt-2 pb-0.5 text-xs font-medium text-muted-foreground">
               <ChannelGlyph isPrivate={ch?.isPrivate} view={ch?.view} className="size-3 shrink-0" />
-              <span className="truncate">{ch?.name ?? "unknown channel"}</span>
+              <span className="truncate">{ch?.name ?? intl.formatMessage({ id: "concordPage.unknownChannel", defaultMessage: "unknown channel" })}</span>
               {t.hasNew ? (
                 <span
                   className="ml-1 shrink-0 size-1.5 rounded-full bg-primary"
-                  aria-label="New replies"
+                  aria-label={intl.formatMessage({ id: "concordPage.threads.newReplies", defaultMessage: "New replies" })}
                 />
               ) : null}
             </div>
@@ -874,7 +916,7 @@ function ThreadsView({
                 "block w-full text-left clip-corner-lg cursor-pointer hover:bg-foreground/5 transition-colors",
                 t.hasNew && "bg-primary/5",
               )}
-              aria-label="Open thread"
+              aria-label={intl.formatMessage({ id: "concordPage.threads.open", defaultMessage: "Open thread" })}
             >
               <ThreadRootPreview event={t.root} everyoneMention={mentionsEveryone(t.root)} />
               <div className="flex items-center gap-2 pl-[3.875rem] pr-3 pb-1.5 -mt-1">
@@ -885,7 +927,11 @@ function ThreadsView({
                     t.hasNew ? "text-primary" : "text-muted-foreground",
                   )}
                 >
-                  {t.replyCount} {t.replyCount === 1 ? "reply" : "replies"}
+                  <FormattedMessage
+                    id="concordPage.threads.replyCount"
+                    defaultMessage="{count, plural, one {# reply} other {# replies}}"
+                    values={{ count: t.replyCount }}
+                  />
                 </span>
                 <span className="text-xs text-muted-foreground">· {shortTimeAgo(t.lastReplyAt)}</span>
               </div>
@@ -939,6 +985,8 @@ function ThreadReplyAvatar({ pubkey }: { pubkey: string }) {
 function TimerNotice({ author, seconds, self }: { author: string; seconds: number; self: string | undefined }) {
   const a = useAuthor(author);
   const name = a.data?.metadata?.name ?? author.slice(0, 8);
+  // `communityTimerNotice` formats through `t()`; the hook re-renders on a language switch.
+  useIntl();
   return (
     <div className="flex items-center justify-center gap-1.5 px-4 py-1.5 select-none" role="status">
       <Timer className="size-3.5 shrink-0 text-muted-foreground/70" aria-hidden />
@@ -958,6 +1006,7 @@ export function ConcordPage() {
   // same parse the builder and notifications use.
   const location = useLocation();
   const navigationType = useNavigationType();
+  const intl = useIntl();
   const { pathname } = location;
   const route = useMemo(() => {
     const parsed = parseChatRoute(pathname);
@@ -1446,11 +1495,13 @@ export function ConcordPage() {
             return;
           }
           const opened = openedById.get(event.id);
-          if (!opened) throw new Error("That message isn't loaded anymore. Scroll to it and try again.");
+          if (!opened) throw new Error(
+              t({ id: "concordPage.pin.notLoaded", defaultMessage: "That message isn't loaded anymore. Scroll to it and try again." }),
+            );
           await pins.pin({ opened });
-          toast({ title: "Pinned" });
+          toast({ title: t({ id: "concordPage.pin.pinned", defaultMessage: "Pinned" }) });
         } catch (e) {
-          toast({ title: "Couldn't update pins", description: e instanceof Error ? e.message : undefined, variant: "destructive" });
+          toast({ title: t({ id: "concordPage.pin.updateFailed", defaultMessage: "Couldn't update pins" }), description: e instanceof Error ? e.message : undefined, variant: "destructive" });
         }
       };
       void run();
@@ -1541,7 +1592,7 @@ export function ConcordPage() {
   }), [user, gitActions, projects, ticketRepository, canSetTicketStatus]);
   const handleCreateIssue = useCallback(async (repoCoord: string, subject: string, body: string, media?: readonly string[][], labels?: readonly string[]) => {
     const address = parseGitRepositoryAddress(repoCoord);
-    if (!address) throw new Error("Unknown repository.");
+    if (!address) throw new Error(t({ id: "concordPage.unknownRepository", defaultMessage: "Unknown repository." }));
     const repo = projects.repos.find((candidate) => candidate.coord === repoCoord);
     await gitActions.openIssue({ address, maintainers: repo?.contributors ?? [] }, subject, body, projects.relaysForCoordinates([repoCoord]), media, labels);
   }, [gitActions, projects]);
@@ -1601,7 +1652,7 @@ export function ConcordPage() {
     if (!retry) return;
     toast(dissolveMissToast(outcome, () => {
       void retry().then(
-        (next) => (next.retry ? showRetirementMiss(next) : toast({ title: "Invite links and listings taken down" })),
+        (next) => (next.retry ? showRetirementMiss(next) : toast({ title: t({ id: "concordPage.dissolve.linksTakenDown", defaultMessage: "Invite links and listings taken down" }) })),
         () => showRetirementMiss(outcome),
       );
     }));
@@ -1614,7 +1665,7 @@ export function ConcordPage() {
         await setChannelCategory({ channelIdHex, category });
       } catch (e) {
         toast({
-          title: "Couldn't move the channel",
+          title: t({ id: "concordPage.channel.moveFailed", defaultMessage: "Couldn't move the channel" }),
           description: e instanceof Error ? e.message : undefined,
           variant: "destructive",
         });
@@ -1676,7 +1727,7 @@ export function ConcordPage() {
         // Nothing published: restore the sidebar.
         setPendingArrangement(null);
         toast({
-          title: "Couldn't rearrange the channels",
+          title: t({ id: "concordPage.channel.rearrangeFailed", defaultMessage: "Couldn't rearrange the channels" }),
           description: e instanceof Error ? e.message : undefined,
           variant: "destructive",
         });
@@ -1712,7 +1763,13 @@ export function ConcordPage() {
         }
       } catch (e) {
         toast({
-          title: moved > 0 ? `Only moved ${moved} of ${members.length} channels` : "Couldn't move the channels",
+          title:
+            moved > 0
+              ? t(
+                  { id: "concordPage.category.partialMove", defaultMessage: "Only moved {moved} of {total} channels" },
+                  { moved, total: members.length },
+                )
+              : t({ id: "concordPage.category.moveFailed", defaultMessage: "Couldn't move the channels" }),
           description: e instanceof Error ? e.message : undefined,
           variant: "destructive",
         });
@@ -1755,10 +1812,18 @@ export function ConcordPage() {
       }
       if (!resolved) {
         toast({
-          title: "Voice unavailable",
+          title: t({ id: "concordPage.voice.unavailable", defaultMessage: "Voice unavailable" }),
           description: avBrokers.length > 0
-            ? "None of this community's voice servers answered. Your own server isn't used here, because a community that sets voice servers uses only those."
-            : "No reachable voice server. Add one to this community under Settings → Network, or set your own under Settings → Voice.",
+            ? t({
+                id: "concordPage.voice.communityServersDown",
+                defaultMessage:
+                  "None of this community's voice servers answered. Your own server isn't used here, because a community that sets voice servers uses only those.",
+              })
+            : t({
+                id: "concordPage.voice.noServer",
+                defaultMessage:
+                  "No reachable voice server. Add one to this community under Settings → Network, or set your own under Settings → Voice.",
+              }),
           variant: "destructive",
         });
         return;
@@ -2056,7 +2121,7 @@ export function ConcordPage() {
    * custody drift (keys held after revocation, suspected leaks).
    */
   const handleRotateChannelKey = useCallback(async (channelIdHex: string) => {
-    if (!roster) throw new Error("Not ready.");
+    if (!roster) throw new Error(t({ id: "concordPage.notReady", defaultMessage: "Not ready." }));
     const keep = memberPubkeys.filter((pk) => isEntitled(roster, ownerHex, pk, channelIdHex));
     const keepSet = new Set(keep);
     await rekeyChannel({
@@ -2072,19 +2137,27 @@ export function ConcordPage() {
    */
   const handlePrivatiseChannel = useCallback(async (channelIdHex: string, accessRoleName?: string) => {
     const def = folded?.channels.get(channelIdHex);
-    if (!def) throw new Error("Channel not found in the control fold yet; try again shortly.");
+    if (!def) throw new Error(t({ id: "concordPage.channel.notFound", defaultMessage: "Channel not found in the control fold yet; try again shortly." }));
     const roleName = accessRoleName?.trim() || def.name;
     // The conversion can't cover past messages, so say so.
     const ok = confirm(
-      `Make #${def.name} private?\n\n` +
-      `It gets its own key from here on, and the "${roleName}" role decides who may read it. Nobody holds that role yet, so grant it to the members who should have access. ` +
-      "Messages already posted stay readable to everyone in the community; a restriction can't be applied backwards.",
+      t(
+        {
+          id: "concordPage.privatise.confirm",
+          defaultMessage:
+            "Make #{channel} private?\n\nIt gets its own key from here on, and the \"{role}\" role decides who may read it. Nobody holds that role yet, so grant it to the members who should have access. Messages already posted stay readable to everyone in the community; a restriction can't be applied backwards.",
+        },
+        { channel: def.name, role: roleName },
+      ),
     );
     if (!ok) return;
     await privatiseChannel({ channelIdHex, accessRoleName: roleName });
     toast({
-      title: "Channel is now private",
-      description: `Grant the "${roleName}" role to give members access.`,
+      title: t({ id: "concordPage.privatise.done", defaultMessage: "Channel is now private" }),
+      description: t(
+        { id: "concordPage.privatise.grantHint", defaultMessage: "Grant the \"{role}\" role to give members access." },
+        { role: roleName },
+      ),
     });
   }, [folded, privatiseChannel]);
 
@@ -2094,7 +2167,13 @@ export function ConcordPage() {
    */
   const handleMintAccessRole = useCallback(async (channelIdHex: string, name: string) => {
     await mintAccessRole({ channelIdHex, name });
-    toast({ title: "Access role created", description: `Grant "${name.trim()}" to give members access.` });
+    toast({
+      title: t({ id: "concordPage.accessRole.created", defaultMessage: "Access role created" }),
+      description: t(
+        { id: "concordPage.accessRole.grantHint", defaultMessage: "Grant \"{role}\" to give members access." },
+        { role: name.trim() },
+      ),
+    });
   }, [mintAccessRole]);
 
 
@@ -2233,7 +2312,9 @@ export function ConcordPage() {
   transportRef.current = transport;
   // Refuse sends while paused for non-staff (CORD-04 §8). Reads the ref for a stable identity.
   const composerCanSend = useCallback((): string | null => {
-    if (communityPaused) return "This community is paused. A moderator must resume it before anyone can post.";
+    if (communityPaused) {
+      return t({ id: "concordPage.paused.cantSend", defaultMessage: "This community is paused. A moderator must resume it before anyone can post." });
+    }
     return transportRef.current.canSend?.() ?? null;
   }, [communityPaused]);
 
@@ -2341,7 +2422,7 @@ export function ConcordPage() {
             tier === "admin"
               ? {
                 id: "make-admin",
-                label: "Make admin",
+                label: intl.formatMessage({ id: "concordPage.member.makeAdmin", defaultMessage: "Make admin" }),
                 icon: Crown,
                 confirm: tierChangeConfirm("concord", "admin"),
                 onSelect: () => void handleSetRoleStable(pubkey, ["admin"]),
@@ -2349,14 +2430,14 @@ export function ConcordPage() {
               : tier === "moderator"
                 ? {
                   id: "make-moderator",
-                  label: current === "admin" ? "Demote to moderator" : "Make moderator",
+                  label: current === "admin" ? intl.formatMessage({ id: "concordPage.member.demoteToModerator", defaultMessage: "Demote to moderator" }) : intl.formatMessage({ id: "concordPage.member.makeModerator", defaultMessage: "Make moderator" }),
                   icon: Shield,
                   confirm: tierChangeConfirm("concord", current === "admin" ? "demote" : "moderator"),
                   onSelect: () => void handleSetRoleStable(pubkey, ["moderator"]),
                 }
                 : {
                   id: "remove-tier",
-                  label: current === "admin" ? "Remove admin" : "Remove moderator",
+                  label: current === "admin" ? intl.formatMessage({ id: "concordPage.member.removeAdmin", defaultMessage: "Remove admin" }) : intl.formatMessage({ id: "concordPage.member.removeModerator", defaultMessage: "Remove moderator" }),
                   icon: ShieldOff,
                   confirm: tierChangeConfirm("concord", "remove"),
                   onSelect: () => void handleSetRoleStable(pubkey, []),
@@ -2367,7 +2448,7 @@ export function ConcordPage() {
       if (canKickAny && roster && canActOnMember(roster, user.pubkey, ownerHex, pubkey, Permissions.KICK)) {
         out.push({
           id: "kick",
-          label: "Kick",
+          label: intl.formatMessage({ id: "concordPage.member.kick", defaultMessage: "Kick" }),
           icon: UserMinus,
           // The confirm dialog, not an instant kick: easy to hit by accident.
           onSelect: () => setKickTarget(pubkey),
@@ -2376,13 +2457,13 @@ export function ConcordPage() {
       if (bannedHere.has(pubkey)) {
         // A banned member's old messages outlive their roster row.
         if (canBanAny) {
-          out.push({ id: "unban", label: "Unban", icon: ShieldOff, onSelect: () => handleUnbanMember(pubkey) });
+          out.push({ id: "unban", label: intl.formatMessage({ id: "concordPage.member.unban", defaultMessage: "Unban" }), icon: ShieldOff, onSelect: () => handleUnbanMember(pubkey) });
         }
       } else if (canBanAny && roster && canActOnMember(roster, user.pubkey, ownerHex, pubkey, Permissions.BAN)) {
         out.push({
           id: "ban",
           // A Private ban rotates keys unless someone ELSE holds a live link.
-          label: folded && canRekeyHere && !hasForeignLiveLinks(folded, user.pubkey, pubkey) ? "Ban & lock out" : "Ban",
+          label: folded && canRekeyHere && !hasForeignLiveLinks(folded, user.pubkey, pubkey) ? intl.formatMessage({ id: "concordPage.member.banLockOut", defaultMessage: "Ban & lock out" }) : intl.formatMessage({ id: "concordPage.member.ban", defaultMessage: "Ban" }),
           icon: Ban,
           destructive: true,
           onSelect: () => setBanTarget(pubkey),
@@ -2413,7 +2494,7 @@ export function ConcordPage() {
     };
   }, [
     user, canKickAny, canBanAny, bannedHere, canRekeyHere, handleUnbanMember, folded, roster, ownerHex, handleSetRoleStable,
-    canManageRoles, roleCatalog, canEditMemberRoles, intendedRolesFor, isRoleTogglePending, handleToggleRoleStable,
+    canManageRoles, roleCatalog, canEditMemberRoles, intendedRolesFor, isRoleTogglePending, handleToggleRoleStable, intl,
   ]);
 
   const suppressChannelClick = channelDrag.shouldSuppressClick;
@@ -2461,7 +2542,7 @@ export function ConcordPage() {
       navigateTo("/");
     } catch (e) {
       toast({
-        title: "Couldn't leave",
+        title: t({ id: "concordPage.leave.failed", defaultMessage: "Couldn't leave" }),
         description: e instanceof Error ? e.message : undefined,
         variant: "destructive",
       });
@@ -2471,7 +2552,11 @@ export function ConcordPage() {
   const handleDissolve = async () => {
     if (
       !confirm(
-        "Permanently dissolve this community for everyone? This cannot be undone. Your invite links will be revoked and your Discover listings removed.",
+        t({
+          id: "concordPage.dissolve.confirm",
+          defaultMessage:
+            "Permanently dissolve this community for everyone? This cannot be undone. Your invite links will be revoked and your Discover listings removed.",
+        }),
       )
     ) return;
     let missed: RetirementOutcome | undefined;
@@ -2486,17 +2571,24 @@ export function ConcordPage() {
       if (missed?.retry) {
         showRetirementMiss(missed);
       } else {
-        toast({ title: "Community dissolved" });
+        toast({ title: t({ id: "concordPage.dissolve.done", defaultMessage: "Community dissolved" }) });
       }
       navigateTo("/");
     } catch (e) {
-      toast({ title: "Couldn't dissolve", description: e instanceof Error ? e.message : undefined, variant: "destructive" });
+      toast({ title: t({ id: "concordPage.dissolve.failed", defaultMessage: "Couldn't dissolve" }), description: e instanceof Error ? e.message : undefined, variant: "destructive" });
     }
   };
 
   const handleToggleRole = async (pubkey: string, roleId: string, on: boolean) => {
     if (on && !roleIntent.rolesFor(pubkey).includes(roleId) && roleIntent.rolesFor(pubkey).length >= MAX_ROLES_PER_MEMBER) {
-      toast({ title: "Role limit reached", description: `A member holds at most ${MAX_ROLES_PER_MEMBER} roles.`, variant: "destructive" });
+      toast({
+        title: t({ id: "concordPage.roles.limitReached", defaultMessage: "Role limit reached" }),
+        description: t(
+          { id: "concordPage.roles.limitDescription", defaultMessage: "A member holds at most {max} roles." },
+          { max: MAX_ROLES_PER_MEMBER },
+        ),
+        variant: "destructive",
+      });
       return;
     }
     try {
@@ -2504,9 +2596,9 @@ export function ConcordPage() {
       // Grant replaces the whole role list, so racing toggles would clobber.
       const published = await roleIntent.toggle(pubkey, roleId, on);
       if (!published) return; // already in flight
-      toast({ title: on ? "Role granted" : "Role removed" });
+      toast({ title: on ? t({ id: "concordPage.roles.granted", defaultMessage: "Role granted" }) : t({ id: "concordPage.roles.removed", defaultMessage: "Role removed" }) });
     } catch (e) {
-      toast({ title: "Couldn't change roles", description: e instanceof Error ? e.message : undefined, variant: "destructive" });
+      toast({ title: t({ id: "concordPage.roles.changeFailed", defaultMessage: "Couldn't change roles" }), description: e instanceof Error ? e.message : undefined, variant: "destructive" });
       return;
     }
 
@@ -2526,11 +2618,34 @@ export function ConcordPage() {
             // Overlay the just-published Grant, or the recipient reads as unentitled.
             entitlementOverlay: { withRoleIds: [roleId] },
           });
-          toast({ title: "Channel keys sent", description: `The member received ${affected.held.length} private channel key${affected.held.length > 1 ? "s" : ""}.` });
+          toast({
+            title: t({ id: "concordPage.keys.sent", defaultMessage: "Channel keys sent" }),
+            description: t(
+              {
+                id: "concordPage.keys.sentDescription",
+                defaultMessage: "The member received {count, plural, one {# private channel key} other {# private channel keys}}.",
+              },
+              { count: affected.held.length },
+            ),
+          });
         } catch (e) {
           toast({
-            title: "Couldn't send the channel keys",
-            description: `The role was granted, but delivering its private channel keys failed${e instanceof Error ? `: ${e.message}` : "."} Toggle the role off and on to retry.`,
+            title: t({ id: "concordPage.keys.sendFailed", defaultMessage: "Couldn't send the channel keys" }),
+            description:
+              e instanceof Error
+                ? t(
+                    {
+                      id: "concordPage.keys.sendFailedDetail",
+                      defaultMessage:
+                        "The role was granted, but delivering its private channel keys failed: {error} Toggle the role off and on to retry.",
+                    },
+                    { error: e.message },
+                  )
+                : t({
+                    id: "concordPage.keys.sendFailedDescription",
+                    defaultMessage:
+                      "The role was granted, but delivering its private channel keys failed. Toggle the role off and on to retry.",
+                  }),
             variant: "destructive",
           });
         }
@@ -2538,8 +2653,15 @@ export function ConcordPage() {
       // Only a key holder can vend; the grantee waits until one does.
       if (affected.unheld.length > 0) {
         toast({
-          title: "Some channel keys weren't sent",
-          description: `You don't hold the key to ${listNames(affected.unheld)}, so a member who does has to share it before they can read ${affected.unheld.length > 1 ? "those channels" : "that channel"}.`,
+          title: t({ id: "concordPage.keys.someUnsent", defaultMessage: "Some channel keys weren't sent" }),
+          description: t(
+            {
+              id: "concordPage.keys.someUnsentDescription",
+              defaultMessage:
+                "You don't hold the key to {channels}, so a member who does has to share it before they can read {count, plural, one {that channel} other {those channels}}.",
+            },
+            { channels: listNames(affected.unheld), count: affected.unheld.length },
+          ),
         });
       }
       return;
@@ -2549,16 +2671,26 @@ export function ConcordPage() {
     // Report the un-rotatable part first: a revoke that cuts nobody is the failure to hear about.
     if (affected.unheld.length > 0) {
       toast({
-        title: "Channel access not revoked",
-        description: `You don't hold the key to ${listNames(affected.unheld)}, so they keep reading until a member who does rotates it.`,
+        title: t({ id: "concordPage.keys.notRevoked", defaultMessage: "Channel access not revoked" }),
+        description: t(
+          {
+            id: "concordPage.keys.notRevokedDescription",
+            defaultMessage: "You don't hold the key to {channels}, so they keep reading until a member who does rotates it.",
+          },
+          { channels: listNames(affected.unheld) },
+        ),
         variant: "destructive",
       });
     }
     if (affected.held.length === 0) return;
     if (!canRekeyChannel) {
       toast({
-        title: "Channel keys not rotated",
-        description: "They lost access to a private channel, but rotating its key needs the Manage channels permission. Ask an admin to rotate it.",
+        title: t({ id: "concordPage.keys.notRotated", defaultMessage: "Channel keys not rotated" }),
+        description: t({
+          id: "concordPage.keys.notRotatedDescription",
+          defaultMessage:
+            "They lost access to a private channel, but rotating its key needs the Manage channels permission. Ask an admin to rotate it.",
+        }),
         variant: "destructive",
       });
       return;
@@ -2572,8 +2704,17 @@ export function ConcordPage() {
         await rekeyChannel({ channelIdHex: idHex, keepRecipients: keep, removedTargets: [pubkey] });
       } catch (e) {
         toast({
-          title: "Channel key rotation failed",
-          description: `They may still read #${nameOf(idHex)} until it succeeds${e instanceof Error ? `: ${e.message}` : "."}`,
+          title: t({ id: "concordPage.keys.rotationFailed", defaultMessage: "Channel key rotation failed" }),
+          description:
+            e instanceof Error
+              ? t(
+                  { id: "concordPage.keys.rotationFailedDetail", defaultMessage: "They may still read #{channel} until it succeeds: {error}" },
+                  { channel: nameOf(idHex), error: e.message },
+                )
+              : t(
+                  { id: "concordPage.keys.rotationFailedDescription", defaultMessage: "They may still read #{channel} until it succeeds." },
+                  { channel: nameOf(idHex) },
+                ),
           variant: "destructive",
         });
       }
@@ -2584,9 +2725,16 @@ export function ConcordPage() {
     const tier = roles.includes("admin") ? ("admin" as const) : roles.includes("moderator") ? ("moderator" as const) : null;
     try {
       await setTier({ member: pubkey, tier });
-      toast({ title: tier === "admin" ? "Made admin" : tier === "moderator" ? "Made moderator" : "Role removed" });
+      toast({
+        title:
+          tier === "admin"
+            ? t({ id: "concordPage.tier.madeAdmin", defaultMessage: "Made admin" })
+            : tier === "moderator"
+              ? t({ id: "concordPage.tier.madeModerator", defaultMessage: "Made moderator" })
+              : t({ id: "concordPage.roles.removed", defaultMessage: "Role removed" }),
+      });
     } catch (e) {
-      toast({ title: "Couldn't change role", description: e instanceof Error ? e.message : undefined, variant: "destructive" });
+      toast({ title: t({ id: "concordPage.tier.changeFailed", defaultMessage: "Couldn't change role" }), description: e instanceof Error ? e.message : undefined, variant: "destructive" });
     }
   };
 
@@ -2607,16 +2755,25 @@ export function ConcordPage() {
   const runBan = async (targets: string[], onPhase: (phase: BanPhase) => void) => {
     const { rekeyed, publicBan } = await moderation.banMany({ targets, onPhase });
     if (rekeyed || publicBan) {
-      toast({ title: "Member banned", description: "They are silenced for everyone in this community." });
+      toast({
+        title: t({ id: "concordPage.ban.done", defaultMessage: "Member banned" }),
+        description: t({ id: "concordPage.ban.silenced", defaultMessage: "They are silenced for everyone in this community." }),
+      });
     } else {
-      toast({ title: "Member banned", description: "Added to the banlist; key rotation didn't complete (you can retry)." });
+      toast({
+        title: t({ id: "concordPage.ban.done", defaultMessage: "Member banned" }),
+        description: t({ id: "concordPage.ban.rotationIncomplete", defaultMessage: "Added to the banlist; key rotation didn't complete (you can retry)." }),
+      });
     }
   };
 
   const runKick = async (targets: string[], onProgress: (done: number, total: number) => void) => {
     const result = await moderation.kickMany({ targets, onProgress });
     if (result.failed.length === 0) {
-      toast({ title: "Member kicked", description: "They're off the member list, but can rejoin from an invite." });
+      toast({
+        title: t({ id: "concordPage.kick.done", defaultMessage: "Member kicked" }),
+        description: t({ id: "concordPage.kick.description", defaultMessage: "They're off the member list, but can rejoin from an invite." }),
+      });
     }
     return result;
   };
@@ -2627,8 +2784,8 @@ export function ConcordPage() {
   const runRotateKeys = async () => {
     await moderation.rotateKeys();
     toast({
-      title: "Community keys rotated",
-      description: "Everyone still in the community keeps access. The previous keys can't read new messages.",
+      title: t({ id: "concordPage.rotate.done", defaultMessage: "Community keys rotated" }),
+      description: t({ id: "concordPage.rotate.description", defaultMessage: "Everyone still in the community keeps access. The previous keys can't read new messages." }),
     });
   };
 
@@ -2676,7 +2833,7 @@ export function ConcordPage() {
       )}
       {armed && !dragged && (
         <GripVertical
-          aria-label="Drag to move"
+          aria-label={intl.formatMessage({ id: "concordPage.channelRow.dragToMove", defaultMessage: "Drag to move" })}
           className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 size-4 text-primary"
         />
       )}
@@ -2695,7 +2852,7 @@ export function ConcordPage() {
           className="group flex w-full items-center gap-1 min-w-0 text-left cursor-pointer rounded outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-default"
           onClick={() => community && setCommunityMenuOpen((v) => !v)}
           disabled={!community}
-          aria-label="Community menu"
+          aria-label={intl.formatMessage({ id: "concordPage.communityMenu.label", defaultMessage: "Community menu" })}
           aria-expanded={communityMenuOpen}
         >
           <TitleIcon icon={folded?.metadata?.icon} />
@@ -2719,13 +2876,13 @@ export function ConcordPage() {
                   {
                     show: Object.keys(unreadByChannel).length > 0,
                     icon: <CheckCheck className="size-4" />,
-                    label: "Mark all as read",
+                    label: intl.formatMessage({ id: "concordPage.communityMenu.markAllRead", defaultMessage: "Mark all as read" }),
                     onClick: markAllChannelsRead,
                   },
                   {
                     show: true,
                     icon: <Settings className="size-4" />,
-                    label: "Community settings",
+                    label: intl.formatMessage({ id: "concordPage.communityMenu.settings", defaultMessage: "Community settings" }),
                     onClick: () => {
                       selectPane("settings");
                       setChannelsOpen(false);
@@ -2734,27 +2891,27 @@ export function ConcordPage() {
                   {
                     show: !!user && !dissolved,
                     icon: <UserPlus className="size-4" />,
-                    label: "Invite people",
+                    label: intl.formatMessage({ id: "concordPage.communityMenu.invitePeople", defaultMessage: "Invite people" }),
                     onClick: () => setInviteOpen(true),
                   },
                   {
                     // Listing publishes the secret link, so owner/admin only.
                     show: iAmAdminOrOwner && !dissolved,
                     icon: <Megaphone className="size-4" />,
-                    label: "Share to Discover",
+                    label: intl.formatMessage({ id: "concordPage.communityMenu.shareToDiscover", defaultMessage: "Share to Discover" }),
                     onClick: () => setShareDiscoverOpen(true),
                   },
                   {
                     show: canManageChannels && !dissolved,
                     icon: <Plus className="size-4" />,
-                    label: "Create channel",
+                    label: intl.formatMessage({ id: "concordPage.communityMenu.createChannel", defaultMessage: "Create channel" }),
                     onClick: () => setCreatingChannel(true),
                   },
                   {
                     // One entry for the moderation panes; also closes the mobile drawer.
                     show: true,
                     icon: <Shield className="size-4" />,
-                    label: "Moderation",
+                    label: intl.formatMessage({ id: "concordPage.communityMenu.moderation", defaultMessage: "Moderation" }),
                     onClick: () => {
                       const pane = firstModerationPane(moderationAccess);
                       if (pane) selectPane(pane);
@@ -2764,7 +2921,9 @@ export function ConcordPage() {
                   {
                     show: true,
                     icon: communityMuted ? <Bell className="size-4" /> : <BellOff className="size-4" />,
-                    label: communityMuted ? "Unmute community" : "Mute community",
+                    label: communityMuted
+                      ? intl.formatMessage({ id: "concordPage.communityMenu.unmute", defaultMessage: "Unmute community" })
+                      : intl.formatMessage({ id: "concordPage.communityMenu.mute", defaultMessage: "Mute community" }),
                     onClick: () => toggleCommunityMute(`c2:${community.idHex}`),
                   },
                 ]
@@ -2797,7 +2956,7 @@ export function ConcordPage() {
                         }}
                       >
                         <KeyRound className="size-4" />
-                        Rotate community keys
+                        <FormattedMessage id="concordPage.communityMenu.rotateKeys" defaultMessage="Rotate community keys" />
                       </button>
                     )}
                     <button
@@ -2810,7 +2969,9 @@ export function ConcordPage() {
                       }}
                     >
                       <LogOut className="size-4" />
-                      {dissolved ? "Remove community" : "Leave community"}
+                      {dissolved
+                        ? intl.formatMessage({ id: "concordPage.communityMenu.remove", defaultMessage: "Remove community" })
+                        : intl.formatMessage({ id: "concordPage.communityMenu.leave", defaultMessage: "Leave community" })}
                     </button>
                     {iAmOwner && !dissolved && (
                       <button
@@ -2822,7 +2983,7 @@ export function ConcordPage() {
                         }}
                       >
                         <Trash2 className="size-4" />
-                        Dissolve community
+                        <FormattedMessage id="concordPage.communityMenu.dissolve" defaultMessage="Dissolve community" />
                       </button>
                     )}
                   </>
@@ -2833,7 +2994,7 @@ export function ConcordPage() {
         ) : undefined
       }
       banner={folded?.metadata?.banner ? <Banner banner={folded.metadata.banner} /> : undefined}
-      addChannelLabel={user && community && canManageChannels ? "Add channel" : undefined}
+      addChannelLabel={user && community && canManageChannels ? intl.formatMessage({ id: "concordPage.addChannel", defaultMessage: "Add channel" }) : undefined}
       onAddChannel={user && community && canManageChannels ? () => setCreatingChannel((v) => !v) : undefined}
       addChannelOpen={creatingChannel}
       footer={<SidebarFooter />}
@@ -2856,7 +3017,7 @@ export function ConcordPage() {
               aria-current={view === "all"}
             >
               <Rss className="size-4 shrink-0" />
-              <span className="truncate flex-1 min-w-0">All messages</span>
+              <span className="truncate flex-1 min-w-0"><FormattedMessage id="concordPage.pane.allMessages" defaultMessage="All messages" /></span>
             </button>
             <button
               type="button"
@@ -2874,11 +3035,11 @@ export function ConcordPage() {
               aria-current={view === "mentions"}
             >
               <AtSign className="size-4 shrink-0" />
-              <span className="truncate flex-1 min-w-0">Mentions</span>
+              <span className="truncate flex-1 min-w-0"><FormattedMessage id="concordPage.pane.mentions" defaultMessage="Mentions" /></span>
               {view !== "mentions" && hasUnreadMention ? (
                 <span
                   className="shrink-0 flex items-center justify-center min-w-4 h-4 px-1 rounded-full bg-primary text-primary-foreground text-3xs font-bold leading-none"
-                  aria-label="You have unread mentions"
+                  aria-label={intl.formatMessage({ id: "concordPage.unreadMentions", defaultMessage: "You have unread mentions" })}
                 >
                   @
                 </span>
@@ -2900,11 +3061,11 @@ export function ConcordPage() {
               aria-current={view === "threads"}
             >
               <MessagesSquare className="size-4 shrink-0" />
-              <span className="truncate flex-1 min-w-0">Threads</span>
+              <span className="truncate flex-1 min-w-0"><FormattedMessage id="concordPage.pane.threads" defaultMessage="Threads" /></span>
               {view !== "threads" && hasNewThreadReplies ? (
                 <span
                   className="shrink-0 size-2 rounded-full bg-primary"
-                  aria-label="New thread replies"
+                  aria-label={intl.formatMessage({ id: "concordPage.newThreadReplies", defaultMessage: "New thread replies" })}
                 />
               ) : null}
             </button>
@@ -2925,7 +3086,7 @@ export function ConcordPage() {
                 aria-current={view === "projects"}
               >
                 <FolderGit2 className="size-4 shrink-0" />
-                <span className="truncate flex-1 min-w-0">Projects</span>
+                <span className="truncate flex-1 min-w-0"><FormattedMessage id="concordPage.pane.projects" defaultMessage="Projects" /></span>
               </button>
             )}
           </>
@@ -2990,7 +3151,7 @@ export function ConcordPage() {
               )}
             >
               <Plus className="size-3.5" />
-              New category
+              <FormattedMessage id="concordPage.newCategory" defaultMessage="New category" />
             </div>
           )}
         </>
@@ -3072,7 +3233,7 @@ export function ConcordPage() {
               avatar={<TitleAvatar icon={folded?.metadata?.icon} name={community?.name} />}
               context={community?.name ?? "…"}
               onContextClick={community ? () => selectPane("settings") : undefined}
-              contextLabel="Community settings"
+              contextLabel={intl.formatMessage({ id: "concordPage.pane.communitySettings", defaultMessage: "Community settings" })}
               indicator={(className) => <SyncStatusIndicator priorityScope={channelScope} className={className} />}
             />
             <ChatHeaderActions>
@@ -3080,7 +3241,7 @@ export function ConcordPage() {
               {user && view === "channel" && channel && channel.view !== "forum" && !dissolved && (
                 <ChatHeaderAction
                   icon={inThisVoice ? Headphones : Phone}
-                  label={inThisVoice ? "In voice" : "Join voice"}
+                  label={inThisVoice ? intl.formatMessage({ id: "concordPage.header.inVoice", defaultMessage: "In voice" }) : intl.formatMessage({ id: "concordPage.header.joinVoice", defaultMessage: "Join voice" })}
                   className={cn(inThisVoice && "text-success")}
                   disabled={inThisVoice}
                   onClick={() => channel && handleJoinVoice(channel, activeBroker ?? null)}
@@ -3089,7 +3250,7 @@ export function ConcordPage() {
               {view === "channel" && channel && (
                 <ChatHeaderAction
                   icon={Search}
-                  label="Search messages"
+                  label={intl.formatMessage({ id: "concordPage.header.searchMessages", defaultMessage: "Search messages" })}
                   pressed={searchOpen}
                   className="hidden sidebar:inline-flex"
                   onClick={() => setSearchOpen(true)}
@@ -3098,8 +3259,12 @@ export function ConcordPage() {
               {view === "channel" && channel && channel.view !== "forum" && (pins.pins.length > 0 || pins.dark) && (
                 <ChatHeaderAction
                   icon={Pin}
-                  label={pinsOpen ? "Hide pinned messages" : "Show pinned messages"}
-                  tooltip="Pinned messages"
+                  label={
+                    pinsOpen
+                      ? intl.formatMessage({ id: "concordPage.header.hidePins", defaultMessage: "Hide pinned messages" })
+                      : intl.formatMessage({ id: "concordPage.header.showPins", defaultMessage: "Show pinned messages" })
+                  }
+                  tooltip={intl.formatMessage({ id: "concordPage.header.pins", defaultMessage: "Pinned messages" })}
                   pressed={pinsOpen}
                   onClick={() => setPinsOpen((v) => !v)}
                 />
@@ -3109,8 +3274,8 @@ export function ConcordPage() {
               {view === "channel" && channel && channel.view !== "forum" && calendar.events.length > 0 && (
                 <ChatHeaderAction
                   icon={CalendarClock}
-                  label={eventsOpen ? "Hide events" : "Show events"}
-                  tooltip="Events"
+                  label={eventsOpen ? intl.formatMessage({ id: "concordPage.header.hideEvents", defaultMessage: "Hide events" }) : intl.formatMessage({ id: "concordPage.header.showEvents", defaultMessage: "Show events" })}
+                  tooltip={intl.formatMessage({ id: "concordPage.header.events", defaultMessage: "Events" })}
                   pressed={eventsOpen}
                   onClick={() => setEventsOpen((v) => !v)}
                 />
@@ -3128,26 +3293,28 @@ export function ConcordPage() {
                   {view === "channel" && channel && channel.view !== "forum" && calendar.canModerate && calendar.events.length === 0 && (
                     <DropdownMenuItem onClick={() => setCreateEventOpen(true)}>
                       <CalendarClock className="size-4" />
-                      Schedule an event
+                      <FormattedMessage id="concordPage.menu.scheduleEvent" defaultMessage="Schedule an event" />
                     </DropdownMenuItem>
                   )}
                   {view === "channel" && channel?.isPrivate && addableChannelRoles.length > 0 && (
                     <DropdownMenuItem onClick={openAddMembers}>
                       <UserPlus className="size-4" />
-                      Add members
+                      <FormattedMessage id="concordPage.menu.addMembers" defaultMessage="Add members" />
                     </DropdownMenuItem>
                   )}
                   {user && !dissolved && (
                     <DropdownMenuItem onClick={() => setInviteOpen(true)}>
                       <UserPlus className="size-4" />
-                      Invite people
+                      <FormattedMessage id="concordPage.communityMenu.invitePeople" defaultMessage="Invite people" />
                     </DropdownMenuItem>
                   )}
                   {/* A forum's alternate view (CORD-03 §2): the plain timeline. */}
                   {view === "channel" && channel?.view === "forum" && (
                     <DropdownMenuItem onClick={toggleForumPresentation}>
                       {forumOpensAsChat ? <MessageSquareText className="size-4" /> : <Hash className="size-4" />}
-                      {forumOpensAsChat ? "View as posts" : "View as chat"}
+                      {forumOpensAsChat
+                        ? intl.formatMessage({ id: "concordPage.menu.viewAsPosts", defaultMessage: "View as posts" })
+                        : intl.formatMessage({ id: "concordPage.menu.viewAsChat", defaultMessage: "View as chat" })}
                     </DropdownMenuItem>
                   )}
                   {user && community && channel && (
@@ -3156,14 +3323,16 @@ export function ConcordPage() {
                       onClick={() => toggleConcordChannelMute("c2", community.idHex, channel.idHex)}
                     >
                       {channelMuted ? <Bell className="size-4" /> : <BellOff className="size-4" />}
-                      {channelMuted ? "Unmute channel" : "Mute channel"}
+                      {channelMuted
+                        ? intl.formatMessage({ id: "concordPage.menu.unmuteChannel", defaultMessage: "Unmute channel" })
+                        : intl.formatMessage({ id: "concordPage.menu.muteChannel", defaultMessage: "Mute channel" })}
                     </DropdownMenuItem>
                   )}
                   {canManageChannels && community && !dissolved && (
                     communityPause ? (
                       <DropdownMenuItem onClick={() => clearPause.mutate()}>
                         <Play className="size-4" />
-                        Resume community
+                        <FormattedMessage id="concordPage.menu.resume" defaultMessage="Resume community" />
                       </DropdownMenuItem>
                     ) : (
                       // A duration submenu, not a toggle: pausing freezes chat for
@@ -3171,7 +3340,7 @@ export function ConcordPage() {
                       <DropdownMenuSub>
                         <DropdownMenuSubTrigger>
                           <Pause className="size-4" />
-                          Pause community
+                          <FormattedMessage id="concordPage.menu.pause" defaultMessage="Pause community" />
                         </DropdownMenuSubTrigger>
                         <DropdownMenuPortal>
                           <DropdownMenuSubContent>
@@ -3205,7 +3374,7 @@ export function ConcordPage() {
                 value={searchFilters.query}
                 onChange={(query) => setSearchFilters((f) => resolveTypedTokens({ ...f, query }))}
                 onClose={closeSearch}
-                placeholder="Search all channels…"
+                placeholder={intl.formatMessage({ id: "concordPage.search.placeholder", defaultMessage: "Search all channels…" })}
                 suggestions={(input) => (
                   <SearchTokenSuggest
                     inputRef={input}
@@ -3323,8 +3492,8 @@ export function ConcordPage() {
                     repos={projects.repos}
                     items={projects.items}
                     isLoading={projects.isLoading}
-                    intro="Browse this community's repositories and activity."
-                    emptyHint="Repositories attached to this community's channels will appear here."
+                    intro={intl.formatMessage({ id: "concordPage.projects.intro", defaultMessage: "Browse this community's repositories and activity." })}
+                    emptyHint={intl.formatMessage({ id: "concordPage.projects.emptyHint", defaultMessage: "Repositories attached to this community's channels will appear here." })}
                     onOpenItem={openProjectItem}
                     headerExtra={
                       <div className="flex items-center gap-1.5">
@@ -3334,14 +3503,14 @@ export function ConcordPage() {
                               variant="ghost"
                               size="icon"
                               className="size-8 text-muted-foreground"
-                              aria-label="Refresh repository activity"
+                              aria-label={intl.formatMessage({ id: "concordPage.projects.refresh", defaultMessage: "Refresh repository activity" })}
                               disabled={projects.isSyncing}
                               onClick={projects.refresh}
                             >
                               <RefreshCw className={cn("size-4", projects.isSyncing && "animate-spin")} />
                             </Button>
                           </TooltipTrigger>
-                          <TooltipContent>Refresh repository activity</TooltipContent>
+                          <TooltipContent><FormattedMessage id="concordPage.projects.refresh" defaultMessage="Refresh repository activity" /></TooltipContent>
                         </Tooltip>
                         {user && <NewIssueDialog repos={projects.repos} items={projects.items} onCreate={handleCreateIssue} />}
                       </div>
@@ -3377,9 +3546,20 @@ export function ConcordPage() {
                       void (async () => {
                         try {
                           const n = await pins.refreshEdits();
-                          toast({ title: n > 0 ? `Updated ${n} pin${n === 1 ? "" : "s"}` : "Pins already current" });
+                          toast({
+                            title:
+                              n > 0
+                                ? t(
+                                    {
+                                      id: "concordPage.pin.refreshed",
+                                      defaultMessage: "{count, plural, one {Updated # pin} other {Updated # pins}}",
+                                    },
+                                    { count: n },
+                                  )
+                                : t({ id: "concordPage.pin.current", defaultMessage: "Pins already current" }),
+                          });
                         } catch (e) {
-                          toast({ title: "Couldn't update pins", description: e instanceof Error ? e.message : undefined, variant: "destructive" });
+                          toast({ title: t({ id: "concordPage.pin.updateFailed", defaultMessage: "Couldn't update pins" }), description: e instanceof Error ? e.message : undefined, variant: "destructive" });
                         }
                       })();
                     } : undefined}
@@ -3389,7 +3569,7 @@ export function ConcordPage() {
                         try {
                           await pins.unpin({ rumorId });
                         } catch (e) {
-                          toast({ title: "Couldn't unpin", description: e instanceof Error ? e.message : undefined, variant: "destructive" });
+                          toast({ title: t({ id: "concordPage.pin.unpinFailed", defaultMessage: "Couldn't unpin" }), description: e instanceof Error ? e.message : undefined, variant: "destructive" });
                         }
                       })();
                     }}
@@ -3483,13 +3663,11 @@ export function ConcordPage() {
                       channel ? (
                         channelDecodeDeadEnd(channel.idHex) ? (
                           <p className="px-2 py-8 text-center text-sm text-muted-foreground">
-                            There are messages here, but they can't be decrypted with the keys
-                            this device holds yet. They should become readable once the next key
-                            update from the community reaches you.
+                            <FormattedMessage id="concordPage.timeline.undecryptable" defaultMessage="There are messages here, but they can't be decrypted with the keys this device holds yet. They should become readable once the next key update from the community reaches you." />
                           </p>
                         ) : (
                           <p className="px-2 py-8 text-center text-sm text-muted-foreground">
-                            No messages yet. Only members can read this channel.
+                            <FormattedMessage id="concordPage.timeline.empty" defaultMessage="No messages yet. Only members can read this channel." />
                           </p>
                         )
                       ) : undefined
@@ -3541,9 +3719,11 @@ export function ConcordPage() {
                     <div className="mx-gutter mb-3 mt-1 px-3 py-3 clip-corner-lg bg-destructive/10 flex items-center gap-3">
                       <Trash2 className="size-5 shrink-0 text-destructive" />
                       <div className="min-w-0 flex-1 text-sm">
-                        <p className="font-medium text-destructive">This community was dissolved by its owner.</p>
+                        <p className="font-medium text-destructive">
+                          <FormattedMessage id="concordPage.dissolved.title" defaultMessage="This community was dissolved by its owner." />
+                        </p>
                         <p className="text-muted-foreground">
-                          It's now read-only. You can still browse the history, or remove it from your list.
+                          <FormattedMessage id="concordPage.dissolved.description" defaultMessage="It's now read-only. You can still browse the history, or remove it from your list." />
                         </p>
                       </div>
                       <Button
@@ -3553,17 +3733,18 @@ export function ConcordPage() {
                         disabled={isLeaving}
                         onClick={handleLeave}
                       >
-                        {isLeaving ? <Loader2 className="size-4 animate-spin" /> : "Remove"}
+                        {isLeaving ? <Loader2 className="size-4 animate-spin" /> : <FormattedMessage {...common.remove} />}
                       </Button>
                     </div>
                   ) : excluded ? (
                     <div className="mx-gutter mb-3 mt-1 px-3 py-3 clip-corner-lg bg-muted/60 flex items-center gap-3">
                       <Lock className="size-5 shrink-0 text-muted-foreground" />
                       <div className="min-w-0 flex-1 text-sm">
-                        <p className="font-medium">You no longer have access to this community.</p>
+                        <p className="font-medium">
+                          <FormattedMessage id="concordPage.excluded.title" defaultMessage="You no longer have access to this community." />
+                        </p>
                         <p className="text-muted-foreground">
-                          A moderator rotated its keys without you. Your history stays readable; new
-                          messages won't. It reappears if you're re-invited, or you can leave.
+                          <FormattedMessage id="concordPage.excluded.description" defaultMessage="A moderator rotated its keys without you. Your history stays readable; new messages won't. It reappears if you're re-invited, or you can leave." />
                         </p>
                       </div>
                       <Button
@@ -3573,20 +3754,20 @@ export function ConcordPage() {
                         disabled={isLeaving}
                         onClick={handleLeave}
                       >
-                        {isLeaving ? <Loader2 className="size-4 animate-spin" /> : "Leave"}
+                        {isLeaving ? <Loader2 className="size-4 animate-spin" /> : <FormattedMessage id="concordPage.excluded.leave" defaultMessage="Leave" />}
                       </Button>
                     </div>
                   ) : stranded ? (
                     <div className="mx-gutter mb-3 mt-1 px-3 py-3 clip-corner-lg bg-muted/60 flex items-center gap-3">
                       <Lock className="size-5 shrink-0 text-muted-foreground" />
                       <div className="min-w-0 flex-1 text-sm">
-                        <p className="font-medium">This invite link is out of date.</p>
+                        <p className="font-medium">
+                          <FormattedMessage id="concordPage.stranded.title" defaultMessage="This invite link is out of date." />
+                        </p>
                         <p className="text-muted-foreground">
-                          The community rotated its keys after this link was made, so you're on an
-                          older version and can't read new messages.
                           {canRecover
-                            ? " This checks for updated keys automatically; you can also ask whoever invited you for a fresh invite, or ask a moderator to send you the current keys."
-                            : " Ask whoever invited you for a fresh invite, or ask a moderator to send you the current keys."}
+                            ? intl.formatMessage({ id: "concordPage.stranded.descriptionRecover", defaultMessage: "The community rotated its keys after this link was made, so you're on an older version and can't read new messages. This checks for updated keys automatically; you can also ask whoever invited you for a fresh invite, or ask a moderator to send you the current keys." })
+                            : intl.formatMessage({ id: "concordPage.stranded.description", defaultMessage: "The community rotated its keys after this link was made, so you're on an older version and can't read new messages. Ask whoever invited you for a fresh invite, or ask a moderator to send you the current keys." })}
                         </p>
                       </div>
                       {canRecover && (
@@ -3597,7 +3778,7 @@ export function ConcordPage() {
                           disabled={recoveryChecking}
                           onClick={() => void recoveryCheckNow()}
                         >
-                          {recoveryChecking ? <Loader2 className="size-4 animate-spin" /> : "Check again"}
+                          {recoveryChecking ? <Loader2 className="size-4 animate-spin" /> : <FormattedMessage id="concordPage.stranded.checkAgain" defaultMessage="Check again" />}
                         </Button>
                       )}
                     </div>
@@ -3624,7 +3805,16 @@ export function ConcordPage() {
                           botCommands
                           recentAuthors={recentAuthors}
                           conversationRelays={community?.relays}
-                          placeholder={communityPaused ? "This community is paused" : user ? `Message #${channel.name}` : "Sign in to send"}
+                          placeholder={
+                            communityPaused
+                              ? intl.formatMessage({ id: "concordPage.composer.paused", defaultMessage: "This community is paused" })
+                              : user
+                                ? intl.formatMessage(
+                                    { id: "concordPage.composer.placeholder", defaultMessage: "Message #{channel}" },
+                                    { channel: channel.name },
+                                  )
+                                : intl.formatMessage({ id: "concordPage.composer.signIn", defaultMessage: "Sign in to send" })
+                          }
                           // Android Direct Share: named community-first. No icon:
                           // the community image is encrypted and the OS fetches
                           // shortcut avatars over plain HTTP.

@@ -1,3 +1,4 @@
+import { FormattedMessage } from "@/i18n";
 import { APP_NAME } from "@/lib/platform";
 
 import type { ReactNode } from "react";
@@ -9,7 +10,7 @@ import type { ReactNode } from "react";
  */
 export function BrandMark({
   align = "center",
-  tagline = "a sovereign harbor on the open web",
+  tagline = <FormattedMessage id="brandMark.tagline" defaultMessage="a sovereign harbor on the open web" />,
   lines = [],
 }: {
   align?: "center" | "left";

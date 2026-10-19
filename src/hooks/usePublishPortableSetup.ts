@@ -22,6 +22,7 @@ import {
 import { KIND_COMMUNITY_LIST_FRAG, KIND_INVITE_LIST } from "@/concord/lib/kinds";
 import { mergeInviteLists, type InviteList } from "@/concord/lib/invite";
 import { useAppContext } from "@/hooks/useAppContext";
+import { t } from "@/i18n";
 import {
   KIND_BLOSSOM_SERVERS,
   type BlossomServerListQuery,
@@ -199,15 +200,15 @@ export async function fetchPortableWireState(
   );
   if (sourceRequirementFailed) {
     throw new Error(requireEverySource
-      ? "Not all current account-state relays completed the portable-state read; the NIP-65 relay set was not changed"
-      : "No bootstrap account-state relay completed the portable-state read; the NIP-65 relay set was not changed");
+      ? t({ id: "usePublishPortableSetup.sourcesIncomplete", defaultMessage: "Not all current account-state relays completed the portable-state read; the NIP-65 relay set was not changed" })
+      : t({ id: "usePublishPortableSetup.bootstrapIncomplete", defaultMessage: "No bootstrap account-state relay completed the portable-state read; the NIP-65 relay set was not changed" }));
   }
   if (fragments.unreadable) {
-    throw new Error("Your encrypted community list could not be decrypted; nothing was published");
+    throw new Error(t({ id: "usePublishPortableSetup.communityDecryptFailed", defaultMessage: "Your encrypted community list could not be decrypted; nothing was published" }));
   }
   if (fragments.set && !fragments.set.complete) {
     throw new Error(
-      `Only ${fragments.set.createdAt.size} of ${fragments.set.declared} community-list fragments were found; nothing was published`,
+      t({ id: "usePublishPortableSetup.fragmentsMissing", defaultMessage: "Only {found} of {declared} community-list fragments were found; nothing was published" }, { found: fragments.set.createdAt.size, declared: fragments.set.declared }),
     );
   }
   const communityEvents = fragments.set
@@ -280,7 +281,7 @@ export async function confirmPortableRecordHeads(
       );
       if (!read.answered.includes(target)) {
         throw new Error(
-          `The new account-state relay ${target} could not be read back; the NIP-65 relay set was not changed`,
+          t({ id: "usePublishPortableSetup.targetUnreadable", defaultMessage: "The new account-state relay {relay} could not be read back; the NIP-65 relay set was not changed" }, { relay: target }),
         );
       }
       for (const wanted of chunk) {
@@ -292,7 +293,7 @@ export async function confirmPortableRecordHeads(
         }
         if (retained?.id !== wanted.id) {
           throw new Error(
-            `The new account-state relay ${target} did not retain setup record kind ${wanted.kind} as its NIP-01 winner; the relay set was not changed`,
+            t({ id: "usePublishPortableSetup.targetNotRetained", defaultMessage: "The new account-state relay {relay} did not retain setup record kind {kind} as its NIP-01 winner; the relay set was not changed" }, { relay: target, kind: wanted.kind }),
           );
         }
       }
@@ -308,7 +309,7 @@ export async function publishSignedPortableRecords(
   requireEveryDestination = false,
 ): Promise<{ records: number; rejectedDeliveries: number }> {
   const targets = uniqueRelayUrls(targetRelays);
-  if (targets.length === 0) throw new Error("No portable-state destination is available");
+  if (targets.length === 0) throw new Error(t({ id: "usePublishPortableSetup.noDestination", defaultMessage: "No portable-state destination is available" }));
   const uniqueEvents = [...new Map([...events].map((event) => [event.id, event])).values()];
   let rejectedDeliveries = 0;
   for (const event of uniqueEvents) {
@@ -318,11 +319,11 @@ export async function publishSignedPortableRecords(
     await recordQueuedPublishAttempt(event.id, targets, result.rejected).catch(() => undefined);
     rejectedDeliveries += result.rejected.length;
     if (result.accepted.length === 0) {
-      throw new Error(`No relay accepted setup record kind ${event.kind}`);
+      throw new Error(t({ id: "usePublishPortableSetup.noRelayAccepted", defaultMessage: "No relay accepted setup record kind {kind}" }, { kind: event.kind }));
     }
     if (requireEveryDestination && result.rejected.length > 0) {
       throw new Error(
-        `The new relay set is still missing setup record kind ${event.kind}; retry before changing NIP-65 relays`,
+        t({ id: "usePublishPortableSetup.stillMissing", defaultMessage: "The new relay set is still missing setup record kind {kind}; retry before changing NIP-65 relays" }, { kind: event.kind }),
       );
     }
   }
@@ -366,7 +367,7 @@ export async function mirrorPortableStateBeforeRelayChange(
   );
   if (!proposed.every((url) => wire.answered.includes(url))) {
     throw new Error(
-      "Every proposed account-state relay must complete a portable-state read before the NIP-65 relay set can be changed",
+      t({ id: "usePublishPortableSetup.proposedIncomplete", defaultMessage: "Every proposed account-state relay must complete a portable-state read before the NIP-65 relay set can be changed" }),
     );
   }
   const persistedCommunity = await readFolded<PersistedList>(
@@ -381,7 +382,7 @@ export async function mirrorPortableStateBeforeRelayChange(
   );
   if (hasKnownCommunityFacts && !wire.communitySet) {
     throw new Error(
-      "A known community list was absent from the current relay read; the NIP-65 relay set was not changed",
+      t({ id: "usePublishPortableSetup.communityAbsent", defaultMessage: "A known community list was absent from the current relay read; the NIP-65 relay set was not changed" }),
     );
   }
   const communityNeedsConsolidation = Boolean(
@@ -420,7 +421,7 @@ export async function mirrorPortableStateBeforeRelayChange(
   );
   if (knownPublishedInvites && !wire.events.some((event) => event.kind === KIND_INVITE_LIST)) {
     throw new Error(
-      "A known creator invite list was absent from the current relay read; the NIP-65 relay set was not changed",
+      t({ id: "usePublishPortableSetup.inviteAbsent", defaultMessage: "A known creator invite list was absent from the current relay read; the NIP-65 relay set was not changed" }),
     );
   }
   if (inviteEvents.length > 0 || persistedInvites) {
@@ -430,7 +431,7 @@ export async function mirrorPortableStateBeforeRelayChange(
       : invite.list;
     if (invite.unreadable) {
       throw new Error(
-        "Your creator invite records could not be decrypted; the NIP-65 relay set was not changed",
+        t({ id: "usePublishPortableSetup.inviteDecryptFailedRelays", defaultMessage: "Your creator invite records could not be decrypted; the NIP-65 relay set was not changed" }),
       );
     }
     const foldIsAhead = Boolean(
@@ -442,7 +443,7 @@ export async function mirrorPortableStateBeforeRelayChange(
       && JSON.stringify(complete) === JSON.stringify(invite.list)) {
       records.push(invite.exactEvent);
     } else {
-      if (!user.signer.nip44) throw new Error("Your signer cannot encrypt creator invite records");
+      if (!user.signer.nip44) throw new Error(t({ id: "usePublishPortableSetup.cannotEncryptInvites", defaultMessage: "Your signer cannot encrypt creator invite records" }));
       const event = await user.signer.signEvent({
         kind: KIND_INVITE_LIST,
         content: await user.signer.nip44.encrypt(user.pubkey, JSON.stringify(complete)),
@@ -453,7 +454,7 @@ export async function mirrorPortableStateBeforeRelayChange(
           (persistedInvites?.newestCreatedAt ?? 0) + 1,
         ),
       });
-      if (event.pubkey !== user.pubkey) throw new Error("The signer returned a different account");
+      if (event.pubkey !== user.pubkey) throw new Error(t({ id: "usePublishPortableSetup.differentAccount", defaultMessage: "The signer returned a different account" }));
       records.push(event);
     }
   }
@@ -503,7 +504,7 @@ export async function signedPortableSingletonWinner(
     return await withSignature(winner);
   } catch {
     throw new Error(
-      `A newer local setup record (kind ${kind}) has no retained signature; refusing to mirror an older relay copy`,
+      t({ id: "usePublishPortableSetup.noRetainedSignature", defaultMessage: "A newer local setup record (kind {kind}) has no retained signature; refusing to mirror an older relay copy" }, { kind }),
     );
   }
 }
@@ -525,7 +526,7 @@ async function signedPortableRumor(
       tags: rumor.tags,
       created_at: nextCreatedAt(rumor),
     });
-    if (event.pubkey !== user.pubkey) throw new Error("The signer returned a different account");
+    if (event.pubkey !== user.pubkey) throw new Error(t({ id: "usePublishPortableSetup.differentAccount", defaultMessage: "The signer returned a different account" }));
     return event;
   }
 }
@@ -654,8 +655,8 @@ export function usePublishPortableSetup() {
   const isAutomatic = isConfigured && config.automaticSettingsSync !== false;
 
   const publish = useCallback(async (): Promise<PortableSetupPublishResult> => {
-    if (!user) throw new Error("Not logged in");
-    if (!user.signer.nip44) throw new Error("Your signer does not support encrypted settings");
+    if (!user) throw new Error(t({ id: "usePublishPortableSetup.notLoggedIn", defaultMessage: "Not logged in" }));
+    if (!user.signer.nip44) throw new Error(t({ id: "usePublishPortableSetup.noEncryptedSettings", defaultMessage: "Your signer does not support encrypted settings" }));
 
     const ownsRelayList = config.relayMetadata.pubkey === user.pubkey;
     const targets = uniqueRelayUrls(
@@ -666,7 +667,7 @@ export function usePublishPortableSetup() {
         : [],
     );
     if (targets.length === 0) {
-      throw new Error("Publish a NIP-65 write relay first");
+      throw new Error(t({ id: "usePublishPortableSetup.noWriteRelay", defaultMessage: "Publish a NIP-65 write relay first" }));
     }
 
     setIsPending(true);
@@ -726,7 +727,7 @@ export function usePublishPortableSetup() {
         !wire.communitySet
         || communityListWireDiffers(community.list, wire.communitySet)
       )) {
-        throw new Error("Your complete community list did not reach the account relays; nothing was published");
+        throw new Error(t({ id: "usePublishPortableSetup.communityNotDelivered", defaultMessage: "Your complete community list did not reach the account relays; nothing was published" }));
       }
       const { events } = wire;
 
@@ -736,7 +737,7 @@ export function usePublishPortableSetup() {
         KIND_RELAY_LIST,
       );
       if (!relayList) {
-        throw new Error("Could not refresh your signed NIP-65 list; nothing was published");
+        throw new Error(t({ id: "usePublishPortableSetup.nip65RefreshFailed", defaultMessage: "Could not refresh your signed NIP-65 list; nothing was published" }));
       }
 
       // Portable data first, discovery pointer LAST, so a partial run never advertises relays
@@ -806,7 +807,7 @@ export function usePublishPortableSetup() {
         .filter((event) => event.kind === KIND_INVITE_LIST);
       const decodedInvites = await decodeInviteListEvents(inviteEvents, user);
       if (decodedInvites.unreadable) {
-        throw new Error("Your creator invite records could not be decrypted; nothing was published");
+        throw new Error(t({ id: "usePublishPortableSetup.inviteDecryptFailed", defaultMessage: "Your creator invite records could not be decrypted; nothing was published" }));
       }
       const cachedInvites = queryClient.getQueryData<InviteList>(inviteListKey(user.pubkey));
       const persistedInvites = await readPersistedInviteList(user.pubkey);
@@ -865,7 +866,7 @@ export function usePublishPortableSetup() {
         const { stored, unreadable } = await readSettingsDocChecked(ctx, name);
         if (unreadable) {
           throw new Error(
-            `Could not decrypt your existing private settings (${name}); nothing was published`,
+            t({ id: "usePublishPortableSetup.settingsDecryptFailed", defaultMessage: "Could not decrypt your existing private settings ({name}); nothing was published" }, { name }),
           );
         }
         const onWire = events.some((event) => isSettingsDocEvent(keys, user.pubkey, name, event));
@@ -910,7 +911,7 @@ export function usePublishPortableSetup() {
       const uniqueToPublish = [...new Map(toPublish.map((event) => [event.id, event])).values()];
       for (const event of uniqueToPublish) {
         if (event.pubkey !== user.pubkey && !keyring.byPubkey.has(event.pubkey)) {
-          throw new Error("The signer returned a different account");
+          throw new Error(t({ id: "usePublishPortableSetup.differentAccount", defaultMessage: "The signer returned a different account" }));
         }
       }
 

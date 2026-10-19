@@ -17,6 +17,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useGroupModeration } from "@/hooks/useGroupModeration";
 import { toast } from "@/hooks/useToast";
+import { common, FormattedMessage, t, useIntl } from "@/i18n";
 import { cn } from "@/lib/utils";
 import { writeClipboardText } from "@/lib/clipboard";
 
@@ -36,6 +37,7 @@ function randomInviteCode(): string {
 
 /** Channel admin: edit NIP-29 metadata (kind 9002) and mint invite codes (kind 9009). */
 export function GroupSettingsDialog({ relayUrl, group, open, onOpenChange }: GroupSettingsDialogProps) {
+  const intl = useIntl();
   const { editMetadata, createInvite } = useGroupModeration(relayUrl, group.id);
   const [name, setName] = useState(group.name);
   const [about, setAbout] = useState(group.about ?? "");
@@ -71,12 +73,12 @@ export function GroupSettingsDialog({ relayUrl, group, open, onOpenChange }: Gro
         },
         current: group.event,
       });
-      toast({ title: "Channel updated" });
+      toast({ title: t({ id: "groupSettingsDialog.channelUpdated", defaultMessage: "Channel updated" }) });
       onOpenChange(false);
     } catch (e) {
       toast({
-        title: "Update failed",
-        description: e instanceof Error ? e.message : "The relay rejected the edit.",
+        title: t({ id: "groupSettingsDialog.updateFailed", defaultMessage: "Update failed" }),
+        description: e instanceof Error ? e.message : t({ id: "groupSettingsDialog.editRejected", defaultMessage: "The relay rejected the edit." }),
         variant: "destructive",
       });
     }
@@ -89,8 +91,8 @@ export function GroupSettingsDialog({ relayUrl, group, open, onOpenChange }: Gro
       setInviteCode(code);
     } catch (e) {
       toast({
-        title: "Invite failed",
-        description: e instanceof Error ? e.message : "The relay rejected the invite.",
+        title: t({ id: "groupSettingsDialog.inviteFailed", defaultMessage: "Invite failed" }),
+        description: e instanceof Error ? e.message : t({ id: "groupSettingsDialog.inviteRejected", defaultMessage: "The relay rejected the invite." }),
         variant: "destructive",
       });
     }
@@ -103,7 +105,7 @@ export function GroupSettingsDialog({ relayUrl, group, open, onOpenChange }: Gro
         setCopied(true);
         setTimeout(() => setCopied(false), 1500);
       },
-      () => toast({ title: "Copy failed", variant: "destructive" }),
+      () => toast({ title: t({ id: "groupSettingsDialog.copyFailed", defaultMessage: "Copy failed" }), variant: "destructive" }),
     );
   };
 
@@ -111,7 +113,12 @@ export function GroupSettingsDialog({ relayUrl, group, open, onOpenChange }: Gro
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <ChromeDialogContent title={`#${displayName} settings`}>
+      <ChromeDialogContent
+        title={intl.formatMessage(
+          { id: "groupSettingsDialog.title", defaultMessage: "#{name} settings" },
+          { name: displayName },
+        )}
+      >
         <div className="flex flex-col items-center gap-3 text-center">
           <div className="flex size-12 items-center justify-center clip-corner-lg bg-primary/15 text-primary">
             <Hash className="size-6" />
@@ -119,13 +126,15 @@ export function GroupSettingsDialog({ relayUrl, group, open, onOpenChange }: Gro
           <h2 className="chrome-dialog-title font-mono font-bold lowercase tracking-tight text-foreground truncate max-w-full">
             {displayName}
           </h2>
-          <p className="text-sm text-muted-foreground">Channel settings</p>
+          <p className="text-sm text-muted-foreground">
+            <FormattedMessage id="groupSettingsDialog.channelSettings" defaultMessage="Channel settings" />
+          </p>
         </div>
 
         <div className="mt-6 space-y-5 max-h-[55vh] overflow-y-auto">
           <div className="space-y-1.5">
             <Label htmlFor="settings-name" className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-              Channel name
+              <FormattedMessage id="groupSettingsDialog.channelName" defaultMessage="Channel name" />
             </Label>
             <div className="relative">
               <Hash className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground pointer-events-none" />
@@ -134,19 +143,21 @@ export function GroupSettingsDialog({ relayUrl, group, open, onOpenChange }: Gro
           </div>
 
           <div className="space-y-2">
-            <Label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Invites</Label>
+            <Label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              <FormattedMessage id="groupSettingsDialog.invites" defaultMessage="Invites" />
+            </Label>
             {inviteCode ? (
               <div className="flex gap-2">
                 <Input readOnly value={inviteCode} className="font-mono bg-background/40 border-transparent" />
-                <Button variant="outline" size="icon" className="clip-corner-lg shrink-0" aria-label="Copy invite code" onClick={copyInvite}>
+                <Button variant="outline" size="icon" className="clip-corner-lg shrink-0" aria-label={intl.formatMessage({ id: "groupSettingsDialog.copyInviteCode", defaultMessage: "Copy invite code" })} onClick={copyInvite}>
                   {copied ? <Check className="size-4 text-primary" /> : <Copy className="size-4" />}
                 </Button>
               </div>
             ) : (
               <Button className="w-full clip-corner-lg" onClick={handleInvite} disabled={createInvite.isPending}>
                 {createInvite.isPending
-                  ? <><Loader2 className="size-4 mr-2 animate-spin" /> Creating…</>
-                  : <><TicketPlus className="size-4 mr-2" /> Create invite code</>}
+                  ? <><Loader2 className="size-4 mr-2 animate-spin" /> <FormattedMessage id="groupSettingsDialog.creating" defaultMessage="Creating…" /></>
+                  : <><TicketPlus className="size-4 mr-2" /> <FormattedMessage id="groupSettingsDialog.createInviteCode" defaultMessage="Create invite code" /></>}
               </Button>
             )}
           </div>
@@ -157,7 +168,7 @@ export function GroupSettingsDialog({ relayUrl, group, open, onOpenChange }: Gro
                 type="button"
                 className="flex w-full items-center justify-center gap-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
               >
-                Advanced
+                <FormattedMessage id="groupSettingsDialog.advanced" defaultMessage="Advanced" />
                 <ChevronDown className={cn("size-3.5 transition-transform", advancedOpen && "rotate-180")} />
               </button>
             </CollapsibleTrigger>
@@ -165,14 +176,14 @@ export function GroupSettingsDialog({ relayUrl, group, open, onOpenChange }: Gro
               <div className="space-y-5 pt-4">
                 <div className="space-y-1.5">
                   <Label htmlFor="settings-about" className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                    Topic
+                    <FormattedMessage id="groupSettingsDialog.topic" defaultMessage="Topic" />
                   </Label>
                   <Textarea id="settings-about" value={about} onChange={(e) => setAbout(e.target.value)} maxLength={300} rows={2} className="bg-background/40 border-transparent focus-visible:ring-0 focus-visible:ring-offset-0" />
                 </div>
 
                 <div className="space-y-1.5">
                   <Label htmlFor="settings-banner" className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                    Banner image URL
+                    <FormattedMessage id="groupSettingsDialog.bannerUrl" defaultMessage="Banner image URL" />
                   </Label>
                   <Input
                     id="settings-banner"
@@ -191,16 +202,16 @@ export function GroupSettingsDialog({ relayUrl, group, open, onOpenChange }: Gro
                   <PrivacyToggle
                     id="settings-private"
                     icon={isPrivate ? <Lock className="size-4" /> : <Globe className="size-4" />}
-                    title="Private"
-                    description="Only members can read messages."
+                    title={intl.formatMessage({ id: "groupSettingsDialog.private", defaultMessage: "Private" })}
+                    description={intl.formatMessage({ id: "groupSettingsDialog.privateDescription", defaultMessage: "Only members can read messages." })}
                     checked={isPrivate}
                     onCheckedChange={setIsPrivate}
                   />
                   <PrivacyToggle
                     id="settings-closed"
                     icon={<Mail className="size-4" />}
-                    title="Invite only"
-                    description="People need an invite code to join."
+                    title={intl.formatMessage({ id: "groupSettingsDialog.inviteOnly", defaultMessage: "Invite only" })}
+                    description={intl.formatMessage({ id: "groupSettingsDialog.inviteOnlyDescription", defaultMessage: "People need an invite code to join." })}
                     checked={isClosed}
                     onCheckedChange={setIsClosed}
                   />
@@ -212,10 +223,16 @@ export function GroupSettingsDialog({ relayUrl, group, open, onOpenChange }: Gro
 
         <div className="flex gap-2 pt-6">
           <Button variant="ghost" className="flex-1 clip-corner-lg" onClick={() => onOpenChange(false)}>
-            Cancel
+            <FormattedMessage {...common.cancel} />
           </Button>
           <Button className="flex-1 clip-corner-lg" onClick={handleSave} disabled={editMetadata.isPending}>
-            {editMetadata.isPending ? <><Loader2 className="size-4 mr-2 animate-spin" /> Saving…</> : "Save changes"}
+            {editMetadata.isPending ? (
+              <>
+                <Loader2 className="size-4 mr-2 animate-spin" /> <FormattedMessage {...common.saving} />
+              </>
+            ) : (
+              <FormattedMessage id="groupSettingsDialog.saveChanges" defaultMessage="Save changes" />
+            )}
           </Button>
         </div>
       </ChromeDialogContent>

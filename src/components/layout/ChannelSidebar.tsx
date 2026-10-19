@@ -37,6 +37,7 @@ import { useRelayUnread, type GroupUnread } from "@/hooks/useRelayUnread";
 import { useServerActions } from "@/hooks/useServerActions";
 import { toast } from "@/hooks/useToast";
 import { useUpdateUserGroupList, useUserGroupList } from "@/hooks/useUserGroupList";
+import { common, FormattedMessage, t, useIntl } from "@/i18n";
 import { groupRefsOn, missingGroupIds } from "@/lib/nip29";
 import { relayToRouteParam } from "@/lib/platform";
 import { sanitizeImageSrc } from "@/lib/sanitizeUrl";
@@ -59,6 +60,7 @@ function ChannelLink({
   buzzDm?: boolean;
   dimmed?: boolean;
 }) {
+  const intl = useIntl();
   const { user } = useCurrentUser();
   const { activeCall } = useCall();
   const { speakingPubkeys, mutedPubkeys, streamingPubkeys, voiceRoomPubkeys } = useVoiceActivity();
@@ -113,16 +115,16 @@ function ChannelLink({
         {inCall && (
           <Tooltip>
             <TooltipTrigger asChild>
-              <Headphones className="size-3.5 shrink-0 text-success" aria-label="Voice active" />
+              <Headphones className="size-3.5 shrink-0 text-success" aria-label={intl.formatMessage({ id: "channelSidebar.voiceActive", defaultMessage: "Voice active" })} />
             </TooltipTrigger>
-            <TooltipContent>You're in voice here</TooltipContent>
+            <TooltipContent><FormattedMessage id="channelSidebar.inVoiceHere" defaultMessage="You're in voice here" /></TooltipContent>
           </Tooltip>
         )}
-        {group.isPrivate && <Lock className="size-3 shrink-0 opacity-60" aria-label="Private" />}
+        {group.isPrivate && <Lock className="size-3 shrink-0 opacity-60" aria-label={intl.formatMessage({ id: "channelSidebar.private", defaultMessage: "Private" })} />}
         {hasMention ? (
           <span
             className="shrink-0 flex items-center justify-center min-w-4 h-4 px-1 rounded-full bg-primary text-primary-foreground text-3xs font-bold leading-none"
-            aria-label="You were mentioned"
+            aria-label={intl.formatMessage({ id: "channelSidebar.mentioned", defaultMessage: "You were mentioned" })}
           >
             @
           </span>
@@ -145,10 +147,10 @@ function ChannelLink({
             if (unread) markRead(channelReadKey(group.relay, group.id), unread.latest);
           }}
         >
-          <CheckCheck className="mr-2 size-4" /> Mark as read
+          <CheckCheck className="mr-2 size-4" /> <FormattedMessage id="channelSidebar.markAsRead" defaultMessage="Mark as read" />
         </ContextMenuItem>
         <NotifLevelMenu
-          label="Notifications"
+          label={intl.formatMessage({ id: "channelSidebar.notifications", defaultMessage: "Notifications" })}
           level={notificationLevel}
           onChange={(lvl) => setLevel(channelScopeKey(group.relay, group.id), lvl)}
         />
@@ -158,7 +160,7 @@ function ChannelLink({
             writeClipboardText(url).catch(() => undefined);
           }}
         >
-          <LinkIcon className="mr-2 size-4" /> Copy channel link
+          <LinkIcon className="mr-2 size-4" /> <FormattedMessage id="channelSidebar.copyChannelLink" defaultMessage="Copy channel link" />
         </ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>
@@ -169,6 +171,7 @@ function ChannelLink({
 function MissingChannelRow({ relayUrl, groupId }: { relayUrl: string; groupId: string }) {
   const { data: list } = useUserGroupList();
   const { mutateAsync: updateList, isPending } = useUpdateUserGroupList();
+  const intl = useIntl();
   const remove = async () => {
     // Every spelling of this relay the list carries for the id.
     const refs = groupRefsOn(list?.groups ?? [], relayUrl).filter((ref) => ref.id === groupId);
@@ -184,7 +187,9 @@ function MissingChannelRow({ relayUrl, groupId }: { relayUrl: string; groupId: s
             <span className="truncate font-mono text-xs">{groupId}</span>
           </span>
         </TooltipTrigger>
-        <TooltipContent>Not found on this server. It may not support NIP-29 groups, or the channel was deleted.</TooltipContent>
+        <TooltipContent>
+          <FormattedMessage id="channelSidebar.missingTooltip" defaultMessage="Not found on this server. It may not support NIP-29 groups, or the channel was deleted." />
+        </TooltipContent>
       </Tooltip>
       <Button
         variant="ghost"
@@ -194,13 +199,13 @@ function MissingChannelRow({ relayUrl, groupId }: { relayUrl: string; groupId: s
         onClick={() =>
           void remove().catch((e: unknown) =>
             toast({
-              title: "Couldn't update your channel list",
+              title: t({ id: "channelSidebar.removeFailed", defaultMessage: "Couldn't update your channel list" }),
               description: e instanceof Error ? e.message : undefined,
               variant: "destructive",
             }),
           )
         }
-        aria-label={`Remove ${groupId} from your channel list`}
+        aria-label={intl.formatMessage({ id: "channelSidebar.removeMissing", defaultMessage: "Remove {groupId} from your channel list" }, { groupId })}
       >
         <X className="size-3.5" />
       </Button>
@@ -217,6 +222,7 @@ interface ChannelSidebarProps {
 /** Channel list for a NIP-29 server, with create-channel and the account area. */
 export function ChannelSidebar({ relayUrl, onNavigate, className }: ChannelSidebarProps) {
   const { data: groups, isLoading, isFetching, isError, refetch, relayInfo } = useRelayGroups(relayUrl);
+  const intl = useIntl();
   const { user } = useCurrentUser();
   const { data: userGroupList } = useUserGroupList();
   const { registerCallBarSlot } = useCall();
@@ -273,8 +279,8 @@ export function ChannelSidebar({ relayUrl, onNavigate, className }: ChannelSideb
   const [skeletonExpired, setSkeletonExpired] = useState(false);
   useEffect(() => {
     setSkeletonExpired(false);
-    const t = setTimeout(() => setSkeletonExpired(true), 2500);
-    return () => clearTimeout(t);
+    const timer = setTimeout(() => setSkeletonExpired(true), 2500);
+    return () => clearTimeout(timer);
   }, [relayUrl]);
 
   // Cache hits resolve in a frame; don't flash a skeleton.
@@ -313,7 +319,7 @@ export function ChannelSidebar({ relayUrl, onNavigate, className }: ChannelSideb
           type="button"
           className="group flex w-full items-center gap-1 min-w-0 text-left cursor-pointer rounded outline-none focus-visible:ring-1 focus-visible:ring-ring"
           onClick={() => setServerMenuOpen((v) => !v)}
-          aria-label="Server menu"
+          aria-label={intl.formatMessage({ id: "channelSidebar.serverMenu", defaultMessage: "Server menu" })}
           aria-expanded={serverMenuOpen}
         >
           {relayIcon && (
@@ -336,43 +342,45 @@ export function ChannelSidebar({ relayUrl, onNavigate, className }: ChannelSideb
                 {
                   show: !!user && hasUnread,
                   icon: <CheckCheck className="size-4" />,
-                  label: "Mark all as read",
+                  label: intl.formatMessage({ id: "channelSidebar.markAllRead", defaultMessage: "Mark all as read" }),
                   onClick: markAllRead,
                 },
                 {
                   show: !!user,
                   icon: <Plus className="size-4" />,
-                  label: "Create channel",
+                  label: intl.formatMessage({ id: "channelSidebar.createChannel", defaultMessage: "Create channel" }),
                   onClick: () => setCreateOpen(true),
                 },
                 {
                   show: !!user,
                   icon: <IdCard className="size-4" />,
-                  label: "Server identity",
+                  label: intl.formatMessage({ id: "channelSidebar.serverIdentity", defaultMessage: "Server identity" }),
                   onClick: () => setProfileOpen(true),
                 },
                 {
                   show: !!user,
                   icon: serverMuted ? <Bell className="size-4" /> : <BellOff className="size-4" />,
-                  label: serverMuted ? "Unmute server" : "Mute server",
+                  label: serverMuted
+                    ? intl.formatMessage({ id: "channelSidebar.unmuteServer", defaultMessage: "Unmute server" })
+                    : intl.formatMessage({ id: "channelSidebar.muteServer", defaultMessage: "Mute server" }),
                   onClick: toggleMute,
                 },
                 {
                   show: true,
                   icon: <LinkIcon className="size-4" />,
-                  label: "Copy server link",
+                  label: intl.formatMessage({ id: "channelSidebar.copyServerLink", defaultMessage: "Copy server link" }),
                   onClick: copyLink,
                 },
                 {
                   show: true,
                   icon: <RefreshCw className="size-4" />,
-                  label: "Refresh channels",
+                  label: intl.formatMessage({ id: "channelSidebar.refreshChannels", defaultMessage: "Refresh channels" }),
                   onClick: () => refetch(),
                 },
                 {
                   show: isRemovable,
                   icon: <Trash2 className="size-4" />,
-                  label: "Remove server",
+                  label: intl.formatMessage({ id: "channelSidebar.removeServer", defaultMessage: "Remove server" }),
                   onClick: removeServer,
                   destructive: true,
                 },
@@ -412,7 +420,7 @@ export function ChannelSidebar({ relayUrl, onNavigate, className }: ChannelSideb
           </div>
         ) : undefined
       }
-      addChannelLabel={user ? "Create channel" : undefined}
+      addChannelLabel={user ? intl.formatMessage({ id: "channelSidebar.createChannel", defaultMessage: "Create channel" }) : undefined}
       onAddChannel={user ? () => setCreateOpen(true) : undefined}
       preChannels={
         user || isBuzz ? (
@@ -431,11 +439,14 @@ export function ChannelSidebar({ relayUrl, onNavigate, className }: ChannelSideb
                 }
               >
                 <Inbox className="size-4 shrink-0" />
-                <span className="truncate flex-1 min-w-0">Inbox</span>
+                <span className="truncate flex-1 min-w-0"><FormattedMessage id="channelSidebar.inbox" defaultMessage="Inbox" /></span>
                 {inboxUnread > 0 && (
                   <span
                     className="shrink-0 flex items-center justify-center min-w-4 h-4 px-1 rounded-full bg-primary text-primary-foreground text-3xs font-bold leading-none"
-                    aria-label={`${inboxUnread} unread mentions`}
+                    aria-label={intl.formatMessage(
+                      { id: "channelSidebar.unreadMentions", defaultMessage: "{count, plural, one {# unread mention} other {# unread mentions}}" },
+                      { count: inboxUnread },
+                    )}
                   >
                     {Math.min(inboxUnread, 99)}
                   </span>
@@ -456,7 +467,7 @@ export function ChannelSidebar({ relayUrl, onNavigate, className }: ChannelSideb
                 }
               >
                 <FolderGit2 className="size-4 shrink-0" />
-                <span className="truncate flex-1 min-w-0">Projects</span>
+                <span className="truncate flex-1 min-w-0"><FormattedMessage id="channelSidebar.projects" defaultMessage="Projects" /></span>
               </NavLink>
             )}
           </>
@@ -469,7 +480,7 @@ export function ChannelSidebar({ relayUrl, onNavigate, className }: ChannelSideb
               <div className="space-y-0.5">
                 <div className="flex h-10 items-center px-2">
                   <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                    Forums
+                    <FormattedMessage id="channelSidebar.forums" defaultMessage="Forums" />
                   </span>
                 </div>
                 {buzzSections.forums.map((group) => (
@@ -482,7 +493,7 @@ export function ChannelSidebar({ relayUrl, onNavigate, className }: ChannelSideb
                 <div className="flex h-10 items-center gap-1.5 px-2">
                   <MessageSquareText className="size-3 text-muted-foreground" />
                   <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                    Direct messages
+                    <FormattedMessage id="channelSidebar.directMessages" defaultMessage="Direct messages" />
                   </span>
                 </div>
                 {buzzSections.dms.map((group) => (
@@ -494,7 +505,7 @@ export function ChannelSidebar({ relayUrl, onNavigate, className }: ChannelSideb
               <div className="space-y-0.5">
                 <div className="flex h-10 items-center px-2">
                   <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground/70">
-                    Archived
+                    <FormattedMessage id="channelSidebar.archived" defaultMessage="Archived" />
                   </span>
                 </div>
                 {buzzSections.archived.map((group) => (
@@ -538,7 +549,7 @@ export function ChannelSidebar({ relayUrl, onNavigate, className }: ChannelSideb
       ) : isLoading ? (
         <div className="px-2 py-8 text-center text-sm text-muted-foreground">
           <span className="inline-flex items-center gap-2">
-            <Loader2 className="size-4 animate-spin" /> Connecting to server…
+            <Loader2 className="size-4 animate-spin" /> <FormattedMessage id="channelSidebar.connecting" defaultMessage="Connecting to server…" />
           </span>
         </div>
       ) : buzzSections ? (
@@ -548,7 +559,7 @@ export function ChannelSidebar({ relayUrl, onNavigate, className }: ChannelSideb
           ))}
           {buzzSections.streams.length + buzzSections.forums.length + buzzSections.dms.length + buzzSections.archived.length === 0 && (
             <div className="px-2 py-8 text-center text-sm text-muted-foreground">
-              No channels yet.
+              <FormattedMessage id="channelSidebar.noChannels" defaultMessage="No channels yet." />
             </div>
           )}
         </>
@@ -561,7 +572,7 @@ export function ChannelSidebar({ relayUrl, onNavigate, className }: ChannelSideb
             <div className="space-y-0.5 pt-2">
               <div className="flex h-10 items-center px-2">
                 <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground/70">
-                  Not found on this server
+                  <FormattedMessage id="channelSidebar.notFound" defaultMessage="Not found on this server" />
                 </span>
               </div>
               {missingIds.map((id) => (
@@ -572,15 +583,17 @@ export function ChannelSidebar({ relayUrl, onNavigate, className }: ChannelSideb
         </>
       ) : isError && !groups ? (
         <div className="px-3 py-8 text-center text-sm text-muted-foreground space-y-3">
-          <p>Couldn&rsquo;t reach this server. It may be offline or unreachable.</p>
+          <p>
+            <FormattedMessage id="channelSidebar.unreachable" defaultMessage="Couldn’t reach this server. It may be offline or unreachable." />
+          </p>
           <Button variant="outline" size="sm" onClick={() => refetch()} className="gap-2">
             <RefreshCw className="size-3.5" />
-            Retry
+            <FormattedMessage {...common.retry} />
           </Button>
         </div>
       ) : (
         <div className="px-2 py-8 text-center text-sm text-muted-foreground">
-          No channels yet.
+          <FormattedMessage id="channelSidebar.noChannels" defaultMessage="No channels yet." />
         </div>
       )}
     </ChannelSidebarView>

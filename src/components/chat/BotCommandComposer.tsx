@@ -14,6 +14,7 @@ import {
   type BotArg,
   type BotCommandEntry,
 } from "@/lib/botCommands";
+import { FormattedMessage, useIntl } from "@/i18n";
 import { cn } from "@/lib/utils";
 import type { ImetaEntry } from "@/lib/imeta";
 
@@ -70,6 +71,8 @@ export function BotCommandComposer({
 }: BotCommandComposerProps) {
   const { command, bot } = entry;
   const args = command.args;
+  const intl = useIntl();
+  const skipLabel = intl.formatMessage({ id: "botCommandComposer.skip", defaultMessage: "(skip)" });
 
   const [values, setValues] = useState<string[]>(() => args.map(() => ""));
   const [npubs, setNpubs] = useState<(string | undefined)[]>(() => args.map(() => undefined));
@@ -119,7 +122,7 @@ export function BotCommandComposer({
         const base = arg.type === "bool" ? ["true", "false"] : arg.choices;
         const opts: Option[] = base.map((c) => ({ value: c, label: c }));
         // Optional arguments can be left out; the wire format just stops early.
-        if (!arg.required) opts.unshift({ value: "", label: "(skip)" });
+        if (!arg.required) opts.unshift({ value: "", label: skipLabel });
         return opts;
       }
       if (arg.type === "user") {
@@ -138,7 +141,7 @@ export function BotCommandComposer({
       }
       return [];
     },
-    [args, memberPubkeys, profiles, recentAuthors],
+    [args, memberPubkeys, profiles, recentAuthors, skipLabel],
   );
 
   const menuOptions = useMemo(
@@ -295,16 +298,27 @@ export function BotCommandComposer({
   return (
     <div className="flex flex-col gap-1.5 rounded-xl border border-border bg-secondary/40 px-3 py-2">
       <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-        <span>Using</span>
-        <span className="font-mono font-semibold text-foreground">/{command.name}</span>
-        <span>with</span>
-        <Avatar className="size-4 shrink-0">
-          <AvatarImage src={profiles[bot]?.picture} imeta={profiles[bot]?.pictureImeta} alt="" />
-          <AvatarFallback className="text-monogram">
-            {displayName(bot, profiles).slice(0, 2).toUpperCase()}
-          </AvatarFallback>
-        </Avatar>
-        <span className="font-medium text-foreground">{displayName(bot, profiles)}</span>
+        <FormattedMessage
+          id="botCommandComposer.usingWith"
+          defaultMessage="<s>Using</s> <cmd>/{command}</cmd> <s>with</s> <bot>{name}</bot>"
+          values={{
+            command: command.name,
+            name: displayName(bot, profiles),
+            s: (chunks) => <span>{chunks}</span>,
+            cmd: (chunks) => <span className="font-mono font-semibold text-foreground">{chunks}</span>,
+            bot: (chunks) => (
+              <>
+                <Avatar className="size-4 shrink-0">
+                  <AvatarImage src={profiles[bot]?.picture} imeta={profiles[bot]?.pictureImeta} alt="" />
+                  <AvatarFallback className="text-monogram">
+                    {displayName(bot, profiles).slice(0, 2).toUpperCase()}
+                  </AvatarFallback>
+                </Avatar>
+                <span className="font-medium text-foreground">{chunks}</span>
+              </>
+            ),
+          }}
+        />
         {focusedArg?.description && (
           <span className="truncate border-l border-border pl-1.5">{focusedArg.description}</span>
         )}
@@ -313,7 +327,7 @@ export function BotCommandComposer({
           variant="ghost"
           size="icon"
           className="ml-auto size-5 touch:size-11 shrink-0 clip-corner-lg"
-          aria-label="Cancel command"
+          aria-label={intl.formatMessage({ id: "botCommandComposer.cancel", defaultMessage: "Cancel command" })}
           onClick={onCancel}
         >
           <X className="size-3" />
@@ -381,7 +395,7 @@ export function BotCommandComposer({
                 autoComplete="off"
                 spellCheck={arg.type === "string"}
                 inputMode={arg.type === "int" || arg.type === "number" ? "decimal" : undefined}
-                placeholder={arg.type === "user" ? "@member" : undefined}
+                placeholder={arg.type === "user" ? intl.formatMessage({ id: "botCommandComposer.memberPlaceholder", defaultMessage: "@member" }) : undefined}
                 className="w-28 min-w-0 bg-transparent text-sm outline-none"
                 onFocus={() => {
                   setFocused(i);
@@ -446,7 +460,7 @@ export function BotCommandComposer({
         <button
           type="button"
           onClick={submit}
-          aria-label="Send command"
+          aria-label={intl.formatMessage({ id: "botCommandComposer.send", defaultMessage: "Send command" })}
           className="p-2 shrink-0 clip-corner-lg bg-primary text-primary-foreground hover:opacity-90 transition-opacity flex items-center justify-center size-9 touch:size-11"
         >
           <ArrowUpRight className="size-5" strokeWidth={2.5} />

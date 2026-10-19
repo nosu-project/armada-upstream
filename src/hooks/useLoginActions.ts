@@ -18,6 +18,7 @@ import { addAndSwitchAccount, signOutAccount } from "@/lib/switchAccount";
 import { finalLogout } from "@/lib/finalLogout";
 import { logSync } from "@/lib/syncLog";
 import { beginAccountExit } from "@/components/accountExitState";
+import { t } from "@/i18n";
 
 export type { NostrConnectParams, NostrConnectStatus };
 export { generateNostrConnectParams, generateNostrConnectURI } from "@nostrify/react/login";
@@ -97,7 +98,7 @@ export function useLoginActions() {
     async bunker(uri: string): Promise<void> {
       const { pubkey: bunkerPubkey, secret, relays } = new BunkerURI(uri);
       if (!relays.length) {
-        throw new Error("No relay provided");
+        throw new Error(t({ id: "useLoginActions.noRelay", defaultMessage: "No relay provided" }));
       }
       const clientSk = generateSecretKey();
       const transport = new Nip46Transport(relays);
@@ -184,7 +185,7 @@ export function useLoginActions() {
           err.name = "AbortError";
           throw err;
         }
-        throw new Error("Timeout waiting for remote signer");
+        throw new Error(t({ id: "useLoginActions.signerTimeout", defaultMessage: "Timeout waiting for remote signer" }));
       } finally {
         transport.close();
       }

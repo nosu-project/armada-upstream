@@ -21,6 +21,7 @@ import type { EventTemplate, NostrEvent } from "nostr-tools/pure";
 
 import { validateBundle, type InviteBundle } from "@/concord/lib/invite";
 import { KIND_DIRECT_INVITE, KIND_WRAP } from "@/concord/lib/kinds";
+import { t } from "@/i18n/intl";
 
 /** The standard NIP-59 seal kind (classic giftwrap — not a CORD-01 seal). */
 export const KIND_NIP59_SEAL = 13;
@@ -70,7 +71,9 @@ export async function sealDirectInvite(
   recipientPubkey: string,
   signer: DirectInviteSigner,
 ): Promise<NostrEvent> {
-  if (!signer.nip44) throw new Error("This signer can't send direct invites (NIP-44 unsupported).");
+  if (!signer.nip44) throw new Error(
+      t({ id: "concordDirectInvite.noNip44", defaultMessage: "This signer can't send direct invites (NIP-44 unsupported)." }),
+    );
   return signer.signEvent({
     kind: KIND_NIP59_SEAL,
     content: await signer.nip44.encrypt(recipientPubkey, JSON.stringify(rumor)),

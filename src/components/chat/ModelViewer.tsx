@@ -5,6 +5,7 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 
 import { decryptBuffer, fetchCapped, verifyPlaintextHash } from "@/lib/encryptedMedia";
 import { parseModel, stageModel } from "@/lib/modelRenderer";
+import { FormattedMessage, useIntl } from "@/i18n";
 
 import type { ImetaEncryption } from "@/lib/imeta";
 import type { ModelFormat } from "@/lib/mediaUrls";
@@ -45,6 +46,7 @@ const IDLE_RETURN_MS = 5_000;
  * three's loaders — and mounted only on a tap, since models run large.
  */
 export default function ModelViewer({ candidates, format, encryption }: ModelViewerProps) {
+  const intl = useIntl();
   const containerRef = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   const [progress, setProgress] = useState<number>();
@@ -305,7 +307,7 @@ export default function ModelViewer({ candidates, format, encryption }: ModelVie
       onClick={(e) => e.stopPropagation()}
     >
       {status === "loading" && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center gap-2" role="status" aria-label="Loading model">
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-2" role="status" aria-label={intl.formatMessage({ id: "modelViewer.loading", defaultMessage: "Loading model" })}>
           <Loader2 className="size-6 animate-spin text-muted-foreground" />
           {progress !== undefined && progress < 1 && (
             <span className="text-xs text-muted-foreground tabular-nums">{Math.round(progress * 100)}%</span>
@@ -314,7 +316,7 @@ export default function ModelViewer({ candidates, format, encryption }: ModelVie
       )}
       {status === "error" && (
         <div className="absolute inset-0 flex items-center justify-center p-4 text-center text-sm text-muted-foreground">
-          This model couldn't be displayed.
+          <FormattedMessage id="modelViewer.error" defaultMessage="This model couldn't be displayed." />
         </div>
       )}
     </div>

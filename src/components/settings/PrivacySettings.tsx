@@ -8,9 +8,12 @@ import { Switch } from "@/components/ui/switch";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useMutedPubkeys } from "@/hooks/useMuteList";
+import { FormattedMessage, useIntl } from "@/i18n";
 
 /** Settings › Privacy & safety: who and what is hidden, what loads without asking, and links. */
 export function PrivacySettings() {
+  const intl = useIntl();
+  const none = intl.formatMessage({ id: "privacySettings.none", defaultMessage: "None" });
   const { config, updateConfig } = useAppContext();
   const { user } = useCurrentUser();
   const nav = useContext(SettingsNavContext);
@@ -20,37 +23,37 @@ export function PrivacySettings() {
     <>
       {user && (
         <SettingsGroup
-          title="Blocking"
-          info="Blocked people and muted words are hidden everywhere in Armada. Only you see these lists, and nobody is told."
+          title={intl.formatMessage({ id: "privacySettings.blocking", defaultMessage: "Blocking" })}
+          info={intl.formatMessage({ id: "privacySettings.blockingInfo", defaultMessage: "Blocked people and muted words are hidden everywhere in Armada. Only you see these lists, and nobody is told." })}
         >
           {/* The only place to unblock: blocked people appear in no other list. */}
           <SettingsRow
             icon={UserX}
             tone="destructive"
-            label="Blocked people"
-            value={ready ? (mutedPubkeys.size || "None") : undefined}
+            label={intl.formatMessage({ id: "privacySettings.blockedPeople", defaultMessage: "Blocked people" })}
+            value={ready ? (mutedPubkeys.size ? intl.formatNumber(mutedPubkeys.size) : none) : undefined}
             chevron
             onClick={() => nav.open("blocked")}
           />
           <SettingsRow
             icon={SpellCheck}
             tone="warning"
-            label="Muted words"
-            value={config.mutedWords.length || "None"}
+            label={intl.formatMessage({ id: "privacySettings.mutedWords", defaultMessage: "Muted words" })}
+            value={config.mutedWords.length ? intl.formatNumber(config.mutedWords.length) : none}
             chevron
             onClick={() => nav.open("muted-words")}
           />
         </SettingsGroup>
       )}
 
-      <SettingsGroup id="media" title="Media">
+      <SettingsGroup id="media" title={intl.formatMessage({ id: "privacySettings.media", defaultMessage: "Media" })}>
         <MediaPrivacySettings />
       </SettingsGroup>
 
-      <SettingsGroup id="links" title="Links">
+      <SettingsGroup id="links" title={intl.formatMessage({ id: "privacySettings.links", defaultMessage: "Links" })}>
         <SettingsRow
-          label="Clean up links"
-          description="Strip tracking parameters like utm_ and ?si= from links."
+          label={intl.formatMessage({ id: "privacySettings.cleanLinks", defaultMessage: "Clean up links" })}
+          description={intl.formatMessage({ id: "privacySettings.cleanLinksDescription", defaultMessage: "Strip tracking parameters like utm_ and ?si= from links." })}
         >
           <Switch
             checked={config.stripTrackingParams}
@@ -60,17 +63,17 @@ export function PrivacySettings() {
         </SettingsRow>
       </SettingsGroup>
 
-      <SettingsGroup id="discover" title="Discover">
+      <SettingsGroup id="discover" title={intl.formatMessage({ id: "privacySettings.discover", defaultMessage: "Discover" })}>
         {/* Bypasses Discover's curated allow-list (a foot-gun). */}
         <SettingsRow
-          label="Show all content"
+          label={intl.formatMessage({ id: "privacySettings.showAll", defaultMessage: "Show all content" })}
           description={
             <>
-              Not just curated picks and people you follow.
+              <FormattedMessage id="privacySettings.showAllDescription" defaultMessage="Not just curated picks and people you follow." />
               {config.discoverAllContent && (
                 <span className="mt-1 flex items-start gap-1.5 text-destructive">
                   <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
-                  <span>Unmoderated. Expect spam and offensive content.</span>
+                  <span><FormattedMessage id="privacySettings.showAllWarning" defaultMessage="Unmoderated. Expect spam and offensive content." /></span>
                 </span>
               )}
             </>
@@ -88,8 +91,8 @@ export function PrivacySettings() {
         <SettingsRow
           icon={LifeBuoy}
           tone="success"
-          label="Help & safety"
-          description="Blocking, hiding, muted words, reporting and getting help."
+          label={intl.formatMessage({ id: "privacySettings.helpSafety", defaultMessage: "Help & safety" })}
+          description={intl.formatMessage({ id: "privacySettings.helpSafetyDescription", defaultMessage: "Blocking, hiding, muted words, reporting and getting help." })}
           to="/support"
         />
       </SettingsGroup>

@@ -1,6 +1,8 @@
 import QRCode from 'qrcode';
 import { useEffect, useState } from 'react';
 
+import { useIntl } from '@/i18n';
+
 interface QRCodeCanvasProps {
   value: string;
   size?: number;
@@ -13,6 +15,7 @@ interface QRCodeCanvasProps {
  * blockers poison canvas readback. Name kept for call sites.
  */
 export function QRCodeCanvas({ value, size = 256, level = 'M', className }: QRCodeCanvasProps) {
+  const intl = useIntl();
   const [dataUrl, setDataUrl] = useState('');
 
   useEffect(() => {
@@ -43,7 +46,7 @@ export function QRCodeCanvas({ value, size = 256, level = 'M', className }: QRCo
   return (
     <img
       src={dataUrl}
-      alt="QR code"
+      alt={intl.formatMessage({ id: 'qrcode.alt', defaultMessage: 'QR code' })}
       width={size}
       height={size}
       className={className}

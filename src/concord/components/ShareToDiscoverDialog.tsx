@@ -36,6 +36,7 @@ import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useListingRelays } from "@/hooks/useDiscover";
 import { useNostrPublish } from "@/hooks/useNostrPublish";
 import { toast } from "@/hooks/useToast";
+import { common, FormattedMessage, t, useIntl } from "@/i18n";
 
 import type { ImagePointer } from "@/concord/lib/types";
 
@@ -55,6 +56,7 @@ export function ShareToDiscoverDialog({
   /** Preselect this community and skip the picker (the community-page entry). */
   communityId?: string;
 }) {
+  const intl = useIntl();
   const [selectedId, setSelectedId] = useState<string | undefined>(communityId);
 
   useEffect(() => {
@@ -63,16 +65,19 @@ export function ShareToDiscoverDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <ChromeDialogContent title="Share to Discover">
+      <ChromeDialogContent title={intl.formatMessage({ id: "shareToDiscoverDialog.title", defaultMessage: "Share to Discover" })}>
         <div className="flex flex-col items-center gap-6">
           <div className="flex flex-col items-center gap-3 text-center">
             <ArmadaCrest size={72} />
             <div className="space-y-1">
               <h2 className="chrome-dialog-title font-mono font-bold lowercase tracking-tight text-foreground">
-                share to discover
+                <FormattedMessage id="shareToDiscoverDialog.heading" defaultMessage="share to discover" />
               </h2>
               <p className="text-sm text-muted-foreground">
-                List a community publicly so anyone browsing Discover can find and join it.
+                <FormattedMessage
+                  id="shareToDiscoverDialog.description"
+                  defaultMessage="List a community publicly so anyone browsing Discover can find and join it."
+                />
               </p>
             </div>
           </div>
@@ -182,7 +187,7 @@ function CommunityPicker({ onSelect }: { onSelect: (idHex: string) => void }) {
     <div className="w-full space-y-2">
       <div className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wider text-muted-foreground">
         <Megaphone className="size-3.5" />
-        Pick a community you own or admin
+        <FormattedMessage id="shareToDiscoverDialog.pick" defaultMessage="Pick a community you own or admin" />
       </div>
       <div className="max-h-64 space-y-0.5 overflow-y-auto p-1 clip-corner-lg bg-secondary">
         {!inviteList.isLoading &&
@@ -197,14 +202,15 @@ function CommunityPicker({ onSelect }: { onSelect: (idHex: string) => void }) {
         {checking && (
           <div className="flex items-center gap-2 px-3 py-2 text-sm text-muted-foreground">
             <Loader2 className="size-4 animate-spin" />
-            Checking your communities…
+            <FormattedMessage id="shareToDiscoverDialog.checkingCommunities" defaultMessage="Checking your communities…" />
           </div>
         )}
         {noneEligible && (
           <p className="px-3 py-2 text-sm text-muted-foreground">
-            None of your communities can be listed here: sharing needs a community you own or
-            admin with a live invite link of yours to publish. Create an invite link from the
-            community's menu first.
+            <FormattedMessage
+              id="shareToDiscoverDialog.noneEligible"
+              defaultMessage="None of your communities can be listed here: sharing needs a community you own or admin with a live invite link of yours to publish. Create an invite link from the community's menu first."
+            />
           </p>
         )}
       </div>
@@ -246,8 +252,12 @@ function ShareForm({ idHex, onDone }: { idHex: string; onDone: () => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const intl = useIntl();
 
-  const name = folded?.metadata?.name ?? community?.name ?? "this community";
+  const name =
+    folded?.metadata?.name ??
+    community?.name ??
+    intl.formatMessage({ id: "shareToDiscoverDialog.thisCommunity", defaultMessage: "this community" });
 
   // Reuse a live link so repeat shares fold to one listing, one revocation from un-listing.
   const now = Math.floor(Date.now() / 1000);
@@ -273,12 +283,15 @@ function ShareForm({ idHex, onDone }: { idHex: string; onDone: () => void }) {
       // NIP-09; Discover also honors these client-side and drops them from cache.
       await unlist(targets.map(announcementFromEvent).filter((a): a is DiscoveredInvite => !!a));
       toast({
-        title: "Unpublished from Discover",
-        description: `${name} is no longer listed by you.`,
+        title: t({ id: "shareToDiscoverDialog.unpublished", defaultMessage: "Unpublished from Discover" }),
+        description: t(
+          { id: "shareToDiscoverDialog.unpublishedDescription", defaultMessage: "{name} is no longer listed by you." },
+          { name },
+        ),
       });
       onDone();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Couldn't unpublish the listing.");
+      setError(e instanceof Error ? e.message : t({ id: "shareToDiscoverDialog.unpublishFailed", defaultMessage: "Couldn't unpublish the listing." }));
     } finally {
       setBusy(false);
     }
@@ -301,19 +314,22 @@ function ShareForm({ idHex, onDone }: { idHex: string; onDone: () => void }) {
       }
       // Just the link: viewers resolve name/icon/banner (and which community) live from the bundle.
       const announcement = buildCommunityAnnouncement({ inviteUrl: url });
-      if (!announcement) throw new Error("Couldn't build the listing.");
+      if (!announcement) throw new Error(t({ id: "shareToDiscoverDialog.buildFailed", defaultMessage: "Couldn't build the listing." }));
       await publishEvent(announcement);
       queryClient.invalidateQueries({ queryKey: ["discover", "invite-bundle"] });
       queryClient.invalidateQueries({ queryKey: ["discover", "directory-infinite"] });
       queryClient.invalidateQueries({ queryKey: ["discover", "my-announcements"] });
       queryClient.invalidateQueries({ queryKey: ["discover", "link-announcements"] });
       toast({
-        title: "Shared to Discover",
-        description: `${name} is now publicly listed.`,
+        title: t({ id: "shareToDiscoverDialog.shared", defaultMessage: "Shared to Discover" }),
+        description: t(
+          { id: "shareToDiscoverDialog.sharedDescription", defaultMessage: "{name} is now publicly listed." },
+          { name },
+        ),
       });
       onDone();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Couldn't share the community.");
+      setError(e instanceof Error ? e.message : t({ id: "shareToDiscoverDialog.shareFailed", defaultMessage: "Couldn't share the community." }));
     } finally {
       setBusy(false);
     }
@@ -332,12 +348,15 @@ function ShareForm({ idHex, onDone }: { idHex: string; onDone: () => void }) {
     return isLoading ? (
       <div className="flex items-center gap-2 text-sm text-muted-foreground">
         <Loader2 className="size-4 animate-spin" />
-        Checking permissions…
+        <FormattedMessage id="shareToDiscoverDialog.checkingPermissions" defaultMessage="Checking permissions…" />
       </div>
     ) : (
       <Alert>
         <AlertDescription>
-          Only this community's owner or an admin can share it to Discover.
+          <FormattedMessage
+            id="shareToDiscoverDialog.notEligible"
+            defaultMessage="Only this community's owner or an admin can share it to Discover."
+          />
         </AlertDescription>
       </Alert>
     );
@@ -350,29 +369,44 @@ function ShareForm({ idHex, onDone }: { idHex: string; onDone: () => void }) {
         <div className="min-w-0 flex-1">
           <p className="truncate font-medium leading-tight">{name}</p>
           <p className="text-xs text-muted-foreground">
-            {listed ? "is listed publicly on Discover" : "will be listed publicly on Discover"}
+            {listed ? (
+              <FormattedMessage id="shareToDiscoverDialog.isListed" defaultMessage="is listed publicly on Discover" />
+            ) : (
+              <FormattedMessage id="shareToDiscoverDialog.willBeListed" defaultMessage="will be listed publicly on Discover" />
+            )}
           </p>
         </div>
       </div>
       <p className="text-sm text-muted-foreground">
-        Its name and images come from the community itself, so the listing stays current as they
-        change.
+        <FormattedMessage
+          id="shareToDiscoverDialog.stayCurrent"
+          defaultMessage="Its name and images come from the community itself, so the listing stays current as they change."
+        />
       </p>
       {!listed && makesPublic && (
         <Alert variant="destructive">
           <AlertTriangle className="size-4" />
-          <AlertTitle>Invite links make communities public</AlertTitle>
+          <AlertTitle>
+            <FormattedMessage
+              id="shareToDiscoverDialog.publicWarningTitle"
+              defaultMessage="Invite links make communities public"
+            />
+          </AlertTitle>
           <AlertDescription>
-            Anyone who gets the link can read every message sent up to this point in the
-            community's public channels.
+            <FormattedMessage
+              id="shareToDiscoverDialog.publicWarning"
+              defaultMessage="Anyone who gets the link can read every message sent up to this point in the community's public channels."
+            />
           </AlertDescription>
         </Alert>
       )}
       {!listed && (
         <Alert>
           <AlertDescription>
-            Sharing publishes an invite link from your account, including its secret, so anyone
-            can find and join.
+            <FormattedMessage
+              id="shareToDiscoverDialog.secretNotice"
+              defaultMessage="Sharing publishes an invite link from your account, including its secret, so anyone can find and join."
+            />
           </AlertDescription>
         </Alert>
       )}
@@ -386,12 +420,13 @@ function ShareForm({ idHex, onDone }: { idHex: string; onDone: () => void }) {
       >
         {busy ? (
           <>
-            <Loader2 className="mr-2 size-4 animate-spin" /> Working…
+            <Loader2 className="mr-2 size-4 animate-spin" />{" "}
+            <FormattedMessage id="shareToDiscoverDialog.working" defaultMessage="Working…" />
           </>
         ) : listed ? (
-          "Update listing"
+          <FormattedMessage id="shareToDiscoverDialog.update" defaultMessage="Update listing" />
         ) : (
-          "Share publicly"
+          <FormattedMessage id="shareToDiscoverDialog.sharePublicly" defaultMessage="Share publicly" />
         )}
       </Button>
       {listed && (
@@ -402,7 +437,7 @@ function ShareForm({ idHex, onDone }: { idHex: string; onDone: () => void }) {
           disabled={busy}
           className="w-full clip-corner-lg text-destructive hover:text-destructive"
         >
-          Unpublish from Discover
+          <FormattedMessage id="shareToDiscoverDialog.unpublish" defaultMessage="Unpublish from Discover" />
         </Button>
       )}
       {error && (
@@ -415,19 +450,32 @@ function ShareForm({ idHex, onDone }: { idHex: string; onDone: () => void }) {
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>
-              {makesPublic
-                ? "Are you sure you want to make this community\u00A0public?"
-                : "Share this community to Discover?"}
+              {makesPublic ? (
+                <FormattedMessage
+                  id="shareToDiscoverDialog.confirmPublicTitle"
+                  defaultMessage="Are you sure you want to make this community public?"
+                />
+              ) : (
+                <FormattedMessage id="shareToDiscoverDialog.confirmTitle" defaultMessage="Share this community to Discover?" />
+              )}
             </AlertDialogTitle>
             <AlertDialogDescription>
-              The listing publishes the invite link, including its secret, from your account, so
-              anyone can find and join.
+              <FormattedMessage
+                id="shareToDiscoverDialog.confirmDescription"
+                defaultMessage="The listing publishes the invite link, including its secret, from your account, so anyone can find and join."
+              />
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogCancel>
+              <FormattedMessage {...common.cancel} />
+            </AlertDialogCancel>
             <AlertDialogAction onClick={() => void handleShare()}>
-              {makesPublic ? "Make Room Public and Share" : "Share Publicly"}
+              {makesPublic ? (
+                <FormattedMessage id="shareToDiscoverDialog.confirmPublic" defaultMessage="Make Room Public and Share" />
+              ) : (
+                <FormattedMessage id="shareToDiscoverDialog.confirmShare" defaultMessage="Share Publicly" />
+              )}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

@@ -13,6 +13,7 @@ import { KIND_EMOJI_SET, emojiPackName } from "@/hooks/useEmojiPacks";
 import { publicRelayHints, useAddrEvent } from "@/hooks/useEvent";
 import { parseNaddr } from "@/lib/naddrLink";
 import { THEME_DEFINITION_KIND, parseDittoTheme } from "@/lib/themeEvent";
+import { FormattedMessage, common, useIntl } from "@/i18n";
 import { NotFound } from "@/pages/NotFound";
 import { coreToTokens } from "@/themes";
 
@@ -30,6 +31,7 @@ const ICON_CLASS = "size-4 shrink-0 text-primary";
 export function NaddrPage() {
   const { user: segment } = useParams<{ user: string }>();
   const address = useMemo(() => parseNaddr(segment), [segment]);
+  const intl = useIntl();
   const discoverRelays = useDiscoverRelays();
   // Our relays first so link hints can't crowd them out; hints are
   // author-chosen, so only public `wss:` ones survive.
@@ -46,7 +48,7 @@ export function NaddrPage() {
     kind === THEME_DEFINITION_KIND ? <Palette className={ICON_CLASS} />
     : kind === KIND_EMOJI_SET ? <Smile className={ICON_CLASS} />
     : null;
-  const noun = kind === THEME_DEFINITION_KIND ? "theme" : kind === KIND_EMOJI_SET ? "emoji pack" : "event";
+  const noun = kind === THEME_DEFINITION_KIND ? "theme" : kind === KIND_EMOJI_SET ? "emojiPack" : "other";
 
   if (isLoading) {
     return (
@@ -59,16 +61,26 @@ export function NaddrPage() {
 
   if (!event) {
     return (
-      <DetailPage title={`Missing ${noun}`} icon={icon}>
+      <DetailPage title={intl.formatMessage(
+          {
+            id: "naddrPage.missingTitle",
+            defaultMessage: "{noun, select, theme {Missing theme} emojiPack {Missing emoji pack} other {Missing event}}",
+          },
+          { noun },
+        )} icon={icon}>
         <div className="flex flex-col items-center gap-4 pt-12 text-center">
           <FileQuestion className="size-10 text-muted-foreground/50" />
           <p className="text-sm text-muted-foreground max-w-sm">
-            Couldn't find this {noun}. It may have been deleted, or its relays are unreachable.
+            <FormattedMessage
+              id="naddrPage.missingBody"
+              defaultMessage="{noun, select, theme {Couldn't find this theme. It may have been deleted, or its relays are unreachable.} emojiPack {Couldn't find this emoji pack. It may have been deleted, or its relays are unreachable.} other {Couldn't find this event. It may have been deleted, or its relays are unreachable.}}"
+              values={{ noun }}
+            />
           </p>
           <Button asChild variant="secondary">
             <Link to="/discover">
               <Compass className="size-4" />
-              Browse Discover
+              <FormattedMessage id="naddrPage.browseDiscover" defaultMessage="Browse Discover" />
             </Link>
           </Button>
         </div>
@@ -80,6 +92,7 @@ export function NaddrPage() {
 }
 
 function NaddrView({ event, icon }: { event: NostrRumor; icon: ReactNode }) {
+  const intl = useIntl();
   const theme = useMemo(
     () => (event.kind === THEME_DEFINITION_KIND ? parseDittoTheme(event) : null),
     [event],
@@ -105,7 +118,7 @@ function NaddrView({ event, icon }: { event: NostrRumor; icon: ReactNode }) {
 
   const title = event.tags.find(([n]) => n === "title")?.[1];
   return (
-    <DetailPage title={title || "Shared event"} icon={icon}>
+    <DetailPage title={title || intl.formatMessage({ id: "naddrPage.sharedEvent", defaultMessage: "Shared event" })} icon={icon}>
       <EmbeddedEventCard event={event} />
     </DetailPage>
   );
@@ -113,12 +126,13 @@ function NaddrView({ event, icon }: { event: NostrRumor; icon: ReactNode }) {
 
 /** A mock of the app in the theme's palette, for judging it before applying. */
 function ThemePreview({ title, tokens }: { title: string; tokens: ThemeTokens }) {
+  const intl = useIntl();
   const hsl = (v: string) => `hsl(${v})`;
   return (
     <div
       className="rounded-xl overflow-hidden border border-border/60 flex h-56"
       style={{ backgroundColor: hsl(tokens.background), color: hsl(tokens.foreground) }}
-      aria-label={`Preview of ${title}`}
+      aria-label={intl.formatMessage({ id: "naddrPage.previewOf", defaultMessage: "Preview of {title}" }, { title })}
     >
       <div className="w-12 shrink-0 flex flex-col items-center gap-2 py-3" style={{ backgroundColor: hsl(tokens.chromeDeep) }}>
         <span className="size-7 rounded-lg" style={{ backgroundColor: hsl(tokens.primary) }} />
@@ -134,14 +148,18 @@ function ThemePreview({ title, tokens }: { title: string; tokens: ThemeTokens })
             <span className="size-8 shrink-0 rounded-full" style={{ backgroundColor: hsl(tokens.accent) }} />
             <div className="min-w-0">
               <p className="font-semibold" style={{ color: hsl(tokens.primary) }}>Ana</p>
-              <p>Trying out a new theme. What do you think?</p>
+              <p>
+                <FormattedMessage id="naddrPage.preview.message1" defaultMessage="Trying out a new theme. What do you think?" />
+              </p>
             </div>
           </div>
           <div className="flex gap-2">
             <span className="size-8 shrink-0 rounded-full" style={{ backgroundColor: hsl(tokens.secondary) }} />
             <div className="min-w-0">
               <p className="font-semibold">Ben</p>
-              <p style={{ color: hsl(tokens.mutedForeground) }}>Looks great.</p>
+              <p style={{ color: hsl(tokens.mutedForeground) }}>
+                <FormattedMessage id="naddrPage.preview.message2" defaultMessage="Looks great." />
+              </p>
             </div>
           </div>
         </div>
@@ -151,7 +169,7 @@ function ThemePreview({ title, tokens }: { title: string; tokens: ThemeTokens })
             className="clip-corner-lg px-3 py-1.5 text-xs font-medium"
             style={{ backgroundColor: hsl(tokens.primary), color: hsl(tokens.primaryForeground) }}
           >
-            Send
+            <FormattedMessage {...common.send} />
           </span>
         </div>
       </div>

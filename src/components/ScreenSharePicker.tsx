@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { ChromeDialogContent, ChromeDialogHeader, Dialog } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
+import { FormattedMessage, t, useIntl } from "@/i18n";
 import {
   Select,
   SelectContent,
@@ -26,6 +27,7 @@ function activeFullscreenContainer(): HTMLElement | undefined {
 
 /** Electron has no getDisplayMedia picker: this handles the main process's source request. No-op on web. */
 export function ScreenSharePicker() {
+  const intl = useIntl();
   const [open, setOpen] = useState(false);
   const [sources, setSources] = useState<ScreenSource[]>([]);
   const [sourceError, setSourceError] = useState<string | null>(null);
@@ -58,7 +60,9 @@ export function ScreenSharePicker() {
         ]);
         setSources(screenSources);
         setSourceError(
-          screenSources.length === 0 ? "No screens or windows are available to share." : null,
+          screenSources.length === 0
+            ? t({ id: "screenSharePicker.noSources", defaultMessage: "No screens or windows are available to share." })
+            : null,
         );
         setShowScreenRecordingSettings(false);
         setAudio(audioSources.reason === null && !audioSources.supported ? null : audioSources);
@@ -74,8 +78,15 @@ export function ScreenSharePicker() {
         } catch { /* ignore */ }
         setSourceError(
           macDenied
-            ? "Armada needs Screen Recording permission in macOS Privacy & Security."
-            : "Armada couldn't open the system screen picker. Check your operating system's screen-capture permission or picker service and try again.",
+            ? t({
+                id: "screenSharePicker.macDenied",
+                defaultMessage: "Armada needs Screen Recording permission in macOS Privacy & Security.",
+              })
+            : t({
+                id: "screenSharePicker.pickerFailed",
+                defaultMessage:
+                  "Armada couldn't open the system screen picker. Check your operating system's screen-capture permission or picker service and try again.",
+              }),
         );
         setShowScreenRecordingSettings(
           macDenied && Boolean(bridge.openScreenCapturePrivacySettings),
@@ -116,7 +127,12 @@ export function ScreenSharePicker() {
           : { mode: "applications", sourceIds: [audioChoice.slice(4)] },
       );
       if (!prepared) {
-        setAudioError("Application audio could not be started. Choose No audio or try again.");
+        setAudioError(
+          t({
+            id: "screenSharePicker.audioFailed",
+            defaultMessage: "Application audio could not be started. Choose No audio or try again.",
+          }),
+        );
         setChoosing(false);
         return;
       }
@@ -131,15 +147,18 @@ export function ScreenSharePicker() {
   return (
     <Dialog open={open} onOpenChange={(o) => !o && cancel()}>
       <ChromeDialogContent
-        title="Share your screen"
+        title={intl.formatMessage({ id: "screenSharePicker.dialogTitle", defaultMessage: "Share your screen" })}
         className="sm:max-w-2xl"
         contentClassName="grid gap-4"
         portalContainer={portalContainer}
       >
         <ChromeDialogHeader
           icon={MonitorUp}
-          title="share your screen"
-          description="Choose a screen or window and, on Linux, the audio to share."
+          title={intl.formatMessage({ id: "screenSharePicker.title", defaultMessage: "share your screen" })}
+          description={intl.formatMessage({
+            id: "screenSharePicker.description",
+            defaultMessage: "Choose a screen or window and, on Linux, the audio to share.",
+          })}
           className="mb-2"
         />
         <div className="grid grid-cols-2 gap-3 max-h-[48vh] overflow-y-auto sm:grid-cols-3">
@@ -175,7 +194,10 @@ export function ScreenSharePicker() {
                   className="text-sm font-medium text-primary hover:underline"
                   onClick={() => void desktop()?.openScreenCapturePrivacySettings?.()}
                 >
-                  Open Screen Recording settings
+                  <FormattedMessage
+                    id="screenSharePicker.openSettings"
+                    defaultMessage="Open Screen Recording settings"
+                  />
                 </button>
               )}
             </div>
@@ -183,25 +205,35 @@ export function ScreenSharePicker() {
         </div>
         {audio && (
           <div className="space-y-2 border-t border-chrome pt-4">
-            <Label htmlFor="screen-share-audio">Share audio</Label>
+            <Label htmlFor="screen-share-audio">
+              <FormattedMessage id="screenSharePicker.shareAudio" defaultMessage="Share audio" />
+            </Label>
             {audio.supported ? (
               <Select value={audioChoice} onValueChange={setAudioChoice} disabled={choosing}>
                 <SelectTrigger id="screen-share-audio">
-                  <SelectValue placeholder="Choose audio" />
+                  <SelectValue placeholder={intl.formatMessage({ id: "screenSharePicker.chooseAudio", defaultMessage: "Choose audio" })} />
                 </SelectTrigger>
                 <SelectContent portalContainer={portalContainer}>
-                  <SelectItem value="system">Entire system</SelectItem>
+                  <SelectItem value="system">
+                    <FormattedMessage id="screenSharePicker.entireSystem" defaultMessage="Entire system" />
+                  </SelectItem>
                   {audio.sources.map((source) => (
                     <SelectItem key={source.id} value={`app:${source.id}`}>
                       {source.name}
                     </SelectItem>
                   ))}
-                  <SelectItem value="none">No audio</SelectItem>
+                  <SelectItem value="none">
+                    <FormattedMessage id="screenSharePicker.noAudio" defaultMessage="No audio" />
+                  </SelectItem>
                 </SelectContent>
               </Select>
             ) : (
               <p className="text-sm text-muted-foreground">
-                {audio.reason || "Application audio is unavailable in this Linux session."}
+                {audio.reason ||
+                  intl.formatMessage({
+                    id: "screenSharePicker.audioUnavailable",
+                    defaultMessage: "Application audio is unavailable in this Linux session.",
+                  })}
               </p>
             )}
             {audioError && <p className="text-sm text-destructive">{audioError}</p>}

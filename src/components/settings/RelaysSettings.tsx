@@ -16,6 +16,7 @@ import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { recommendedDmInbox } from "@/hooks/useDmInboxSetup";
 import { useDmRelayList } from "@/hooks/useDmRelayList";
 import { useSearchRelayList } from "@/hooks/useSearchRelayList";
+import { FormattedMessage, useIntl } from "@/i18n";
 import { APP_BLOSSOM_SERVERS, uploadTargets } from "@/lib/blossom";
 import { APP_RELAYS, BROADCAST_RELAYS, COMMUNITY_RELAYS, SEARCH_RELAYS } from "@/lib/platform";
 import { cn } from "@/lib/utils";
@@ -37,6 +38,7 @@ function hostList(urls: string[]): ReactNode {
 
 /** Settings › Relays: every relay and media-server list, as at sign-up. */
 export function RelaysSettings() {
+  const intl = useIntl();
   const { config, updateConfig } = useAppContext();
   const { user } = useCurrentUser();
   const searching = useContext(SettingsSearchingContext);
@@ -128,26 +130,26 @@ export function RelaysSettings() {
     userRelayUrls.length === config.appRelays.length &&
     userRelayUrls.every((url) => config.appRelays.includes(url));
   const publishedOpen = searching || publishedListOpen;
+  const connectTo = intl.formatMessage({ id: "relaysSettings.connectTo", defaultMessage: "Connect to" });
 
   return (
     <>
       <SettingsGroup
         id="app-relays"
-        title="Your relays"
-        info="Relays are servers that store and pass along your profile, messages and lists. Armada picked these for you; change any of them here, just as at sign-up."
+        title={intl.formatMessage({ id: "relaysSettings.yourRelays", defaultMessage: "Your relays" })}
+        info={intl.formatMessage({ id: "relaysSettings.yourRelaysInfo", defaultMessage: "Relays are servers that store and pass along your profile, messages and lists. Armada picked these for you; change any of them here, just as at sign-up." })}
       >
         {!config.useAppRelays && !(config.useUserRelays && userRelayUrls.length > 0) && (
           <SettingsRow>
             <p className="text-sm text-destructive leading-snug">
-              No home relays in use. Your profile and lists won't load or sync
-              until you add one.
+              <FormattedMessage id="relaysSettings.noHomeRelays" defaultMessage="No home relays in use. Your profile and lists won't load or sync until you add one." />
             </p>
           </SettingsRow>
         )}
         <SetupListRow
-          label="Home"
-          hint="Stores your profile, follows and settings."
-          detail="Stores your profile, follows and settings. Every other list here may be empty; this one can't."
+          label={intl.formatMessage({ id: "relaysSettings.home", defaultMessage: "Home" })}
+          hint={intl.formatMessage({ id: "relaysSettings.homeHint", defaultMessage: "Stores your profile, follows and settings." })}
+          detail={intl.formatMessage({ id: "relaysSettings.homeDetail", defaultMessage: "Stores your profile, follows and settings. Every other list here may be empty; this one can't." })}
           urls={config.appRelays}
           open={relayRowOpen("home")}
           onOpenChange={setRelayRowOpen("home")}
@@ -157,7 +159,7 @@ export function RelaysSettings() {
             relays={config.appRelays}
             onChange={setAppRelays}
             onReset={() => setAppRelays([...APP_RELAYS])}
-            emptyText="None. Add a relay, or reset to Armada's defaults."
+            emptyText={intl.formatMessage({ id: "relaysSettings.homeEmpty", defaultMessage: "None. Add a relay, or reset to Armada's defaults." })}
           />
           {user && (
             <Collapsible
@@ -168,13 +170,15 @@ export function RelaysSettings() {
               <CollapsibleTrigger asChild>
                 <button type="button" className="flex w-full items-start gap-3 px-3 py-2.5 text-left">
                   <div className="min-w-0 flex-1 space-y-0.5">
-                    <div className="text-sm font-medium leading-tight">Published relay list</div>
+                    <div className="text-sm font-medium leading-tight">
+                      <FormattedMessage id="relaysSettings.publishedList" defaultMessage="Published relay list" />
+                    </div>
                     <div className="text-xs text-muted-foreground leading-snug">
                       {userRelayUrls.length === 0
-                        ? "Not published, so other Nostr apps can't find you."
+                        ? <FormattedMessage id="relaysSettings.notPublished" defaultMessage="Not published, so other Nostr apps can't find you." />
                         : publishedMatchesHome
-                          ? "How other Nostr apps find you. Matches Home."
-                          : <>How other Nostr apps find you. Names {hostList(userRelayUrls)}, unlike Home.</>}
+                          ? <FormattedMessage id="relaysSettings.publishedMatches" defaultMessage="How other Nostr apps find you. Matches Home." />
+                          : <FormattedMessage id="relaysSettings.publishedDiffers" defaultMessage="How other Nostr apps find you. Names {hosts}, unlike Home." values={{ hosts: hostList(userRelayUrls) }} />}
                     </div>
                   </div>
                   <ChevronDown
@@ -194,9 +198,9 @@ export function RelaysSettings() {
           )}
         </SetupListRow>
         <SetupListRow
-          label="Messages"
-          hint="Other apps deliver your direct messages here."
-          detail="Other apps deliver your direct messages here. Armada also checks your home relays."
+          label={intl.formatMessage({ id: "relaysSettings.messages", defaultMessage: "Messages" })}
+          hint={intl.formatMessage({ id: "relaysSettings.messagesHint", defaultMessage: "Other apps deliver your direct messages here." })}
+          detail={intl.formatMessage({ id: "relaysSettings.messagesDetail", defaultMessage: "Other apps deliver your direct messages here. Armada also checks your home relays." })}
           urls={config.dmRelays}
           open={relayRowOpen("dm")}
           onOpenChange={setRelayRowOpen("dm")}
@@ -207,14 +211,14 @@ export function RelaysSettings() {
             relays={config.dmRelays}
             onChange={setDmRelays}
             onReset={() => setDmRelays(recommendedDmInbox(config))}
-            emptyText="None. Armada users can still reach you on your home relays; other apps can't."
+            emptyText={intl.formatMessage({ id: "relaysSettings.messagesEmpty", defaultMessage: "None. Armada users can still reach you on your home relays; other apps can't." })}
             placeholder="wss://dm-relay.example.com"
           />
         </SetupListRow>
         <SetupListRow
-          label="Search"
-          hint="Used to find people and communities."
-          detail="Used to find people and communities by name (NIP-50)."
+          label={intl.formatMessage({ id: "relaysSettings.search", defaultMessage: "Search" })}
+          hint={intl.formatMessage({ id: "relaysSettings.searchHint", defaultMessage: "Used to find people and communities." })}
+          detail={intl.formatMessage({ id: "relaysSettings.searchDetail", defaultMessage: "Used to find people and communities by name (NIP-50)." })}
           urls={config.searchRelays}
           open={relayRowOpen("search")}
           onOpenChange={setRelayRowOpen("search")}
@@ -224,22 +228,15 @@ export function RelaysSettings() {
             relays={config.searchRelays}
             onChange={setSearchRelays}
             onReset={() => setSearchRelays([...SEARCH_RELAYS])}
-            emptyText="None. Search uses your home relays."
+            emptyText={intl.formatMessage({ id: "relaysSettings.searchEmpty", defaultMessage: "None. Search uses your home relays." })}
           />
         </SetupListRow>
         <SetupListRow
-          label="Media"
-          hint="Your uploads go here. Links use the first server."
-          detail={(
-            <>
-              Your uploads go here. A file is sent to every server in the list; links point
-              at the primary one, first in the list, and the others keep a copy in case it
-              goes away.
-              {!ownServers && (
-                " These are Armada's servers. Changing the list makes it your own and saves it to your account."
-              )}
-            </>
-          )}
+          label={intl.formatMessage({ id: "relaysSettings.media", defaultMessage: "Media" })}
+          hint={intl.formatMessage({ id: "relaysSettings.mediaHint", defaultMessage: "Your uploads go here. Links use the first server." })}
+          detail={ownServers
+            ? intl.formatMessage({ id: "relaysSettings.mediaDetail", defaultMessage: "Your uploads go here. A file is sent to every server in the list; links point at the primary one, first in the list, and the others keep a copy in case it goes away." })
+            : intl.formatMessage({ id: "relaysSettings.mediaDetailDefaults", defaultMessage: "Your uploads go here. A file is sent to every server in the list; links point at the primary one, first in the list, and the others keep a copy in case it goes away. These are Armada's servers. Changing the list makes it your own and saves it to your account." })}
           urls={targets.servers}
           kind="blossom"
           open={relayRowOpen("blossom")}
@@ -255,9 +252,9 @@ export function RelaysSettings() {
           />
         </SetupListRow>
         <SetupListRow
-          label="Communities"
-          hint="Default relays for communities you create."
-          detail="Default relays for communities you create. Each community can change its own afterwards."
+          label={intl.formatMessage({ id: "relaysSettings.communities", defaultMessage: "Communities" })}
+          hint={intl.formatMessage({ id: "relaysSettings.communitiesHint", defaultMessage: "Default relays for communities you create." })}
+          detail={intl.formatMessage({ id: "relaysSettings.communitiesDetail", defaultMessage: "Default relays for communities you create. Each community can change its own afterwards." })}
           urls={config.communityRelays}
           open={relayRowOpen("community")}
           onOpenChange={setRelayRowOpen("community")}
@@ -267,13 +264,13 @@ export function RelaysSettings() {
             relays={config.communityRelays}
             onChange={setCommunityRelays}
             onReset={() => setCommunityRelays([...COMMUNITY_RELAYS])}
-            emptyText="None. New communities use the shared Concord relays."
+            emptyText={intl.formatMessage({ id: "relaysSettings.communitiesEmpty", defaultMessage: "None. New communities use the shared Concord relays." })}
           />
         </SetupListRow>
         <SetupListRow
-          label="Broadcast"
-          hint="Extra relays your public profile is sent to."
-          detail="Extra relays your public profile is sent to, so people on other Nostr apps see it. Armada never reads from them or sends messages here."
+          label={intl.formatMessage({ id: "relaysSettings.broadcast", defaultMessage: "Broadcast" })}
+          hint={intl.formatMessage({ id: "relaysSettings.broadcastHint", defaultMessage: "Extra relays your public profile is sent to." })}
+          detail={intl.formatMessage({ id: "relaysSettings.broadcastDetail", defaultMessage: "Extra relays your public profile is sent to, so people on other Nostr apps see it. Armada never reads from them or sends messages here." })}
           urls={config.broadcastRelays}
           open={relayRowOpen("broadcast")}
           onOpenChange={setRelayRowOpen("broadcast")}
@@ -283,28 +280,32 @@ export function RelaysSettings() {
             relays={config.broadcastRelays}
             onChange={setBroadcastRelays}
             onReset={() => setBroadcastRelays([...BROADCAST_RELAYS])}
-            emptyText="None. Your public profile goes only to your home relays."
+            emptyText={intl.formatMessage({ id: "relaysSettings.broadcastEmpty", defaultMessage: "None. Your public profile goes only to your home relays." })}
           />
         </SetupListRow>
       </SettingsGroup>
 
       <SettingsGroup
-        title="Advanced"
+        title={intl.formatMessage({ id: "relaysSettings.advanced", defaultMessage: "Advanced" })}
       >
         <SettingsRow
-          label="Connect to"
+          label={connectTo}
           info={userRelayUrls.length > 0
-            ? "Which relays Armada reads and writes your account data on: the Home list above, the relay list you published for other apps, or both."
-            : "Which relays Armada reads and writes your account data on. Publish a relay list under Home to choose it here."}
+            ? intl.formatMessage({ id: "relaysSettings.connectToInfo", defaultMessage: "Which relays Armada reads and writes your account data on: the Home list above, the relay list you published for other apps, or both." })
+            : intl.formatMessage({ id: "relaysSettings.connectToInfoUnpublished", defaultMessage: "Which relays Armada reads and writes your account data on. Publish a relay list under Home to choose it here." })}
         >
           <Select value={relaySources} onValueChange={setRelaySources}>
-            <SelectTrigger className="w-44 sm:w-52" aria-label="Connect to">
-              <SelectValue placeholder="None" />
+            <SelectTrigger className="w-44 sm:w-52" aria-label={connectTo}>
+              <SelectValue placeholder={intl.formatMessage({ id: "relaysSettings.none", defaultMessage: "None" })} />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="home">Home relays</SelectItem>
-              <SelectItem value="published" disabled={userRelayUrls.length === 0}>Published relay list</SelectItem>
-              <SelectItem value="both" disabled={userRelayUrls.length === 0}>Both</SelectItem>
+              <SelectItem value="home"><FormattedMessage id="relaysSettings.homeRelays" defaultMessage="Home relays" /></SelectItem>
+              <SelectItem value="published" disabled={userRelayUrls.length === 0}>
+                <FormattedMessage id="relaysSettings.publishedList" defaultMessage="Published relay list" />
+              </SelectItem>
+              <SelectItem value="both" disabled={userRelayUrls.length === 0}>
+                <FormattedMessage id="relaysSettings.both" defaultMessage="Both" />
+              </SelectItem>
             </SelectContent>
           </Select>
         </SettingsRow>

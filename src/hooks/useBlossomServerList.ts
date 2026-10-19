@@ -14,6 +14,7 @@ import {
 import { queryExplicitRelays, queryExplicitRelaysWithStatus } from "@/lib/nip65";
 
 import type { NostrRumor } from "@/lib/nostrRumor";
+import { t } from "@/i18n";
 
 /** BUD-03 Blossom server list kind: `server` tags in a replaceable event. */
 export const KIND_BLOSSOM_SERVERS = 10063;
@@ -73,7 +74,7 @@ export function useBlossomServerList() {
 
   const publish = useMutation({
     mutationFn: async (servers: string[]) => {
-      if (!user) throw new Error("Not logged in");
+      if (!user) throw new Error(t({ id: "useBlossomServerList.notLoggedIn", defaultMessage: "Not logged in" }));
       const urls = servers
         .map((url) => normalizeBlossomServerUrl(url))
         .filter((url): url is string => !!url);
@@ -95,7 +96,7 @@ export function useBlossomServerList() {
       ]);
       if (response.answered.length === 0) {
         throw new Error(
-          "Could not confirm your current media-server list; no changes were published",
+          t({ id: "useBlossomServerList.unconfirmed", defaultMessage: "Could not confirm your current media-server list; no changes were published" }),
         );
       }
       const cached = queryClient.getQueryData<BlossomServerListQuery>(queryKey);

@@ -7,6 +7,7 @@ import { useFollowList } from "@/hooks/useFollowList";
 import { useWebxdcApps, type WebxdcApp } from "@/hooks/useWebxdcApps";
 import { sanitizeImageSrc } from "@/lib/sanitizeUrl";
 import { cn } from "@/lib/utils";
+import { FormattedMessage, useIntl } from "@/i18n";
 
 function GameRow({ app, onSelect }: { app: WebxdcApp; onSelect: (app: WebxdcApp) => void }) {
   const [iconError, setIconError] = useState(false);
@@ -39,6 +40,7 @@ export function WebxdcGamePicker({
   /** Extra relays to search alongside the default pool (e.g. the community's). */
   relays?: string[];
 }) {
+  const intl = useIntl();
   const [query, setQuery] = useState("");
   const [followsOnly, setFollowsOnly] = useState(false);
   const { data: apps, isLoading, isError } = useWebxdcApps(relays);
@@ -58,12 +60,14 @@ export function WebxdcGamePicker({
   return (
     <div className="flex flex-col w-full h-[360px] max-h-[55dvh] overflow-hidden">
       <div className="flex items-center gap-2 px-3 pt-2 pb-2">
-        <SearchField value={query} onChange={setQuery} placeholder="Search games" className="flex-1" />
+        <SearchField value={query} onChange={setQuery} placeholder={intl.formatMessage({ id: "webxdcGamePicker.search", defaultMessage: "Search games" })} className="flex-1" />
         <button
           type="button"
           onClick={() => setFollowsOnly((v) => !v)}
           disabled={!canFilterFollows}
-          title={canFilterFollows ? "Only games from people you follow" : "Follow people to filter"}
+          title={canFilterFollows
+            ? intl.formatMessage({ id: "webxdcGamePicker.followsOnly", defaultMessage: "Only games from people you follow" })
+            : intl.formatMessage({ id: "webxdcGamePicker.followToFilter", defaultMessage: "Follow people to filter" })}
           className={cn(
             "flex items-center gap-1.5 h-9 touch:h-11 px-3 shrink-0 clip-corner-lg text-sm font-medium transition-colors disabled:opacity-40",
             followsOnly && canFilterFollows
@@ -72,7 +76,7 @@ export function WebxdcGamePicker({
           )}
         >
           <Users className="size-3.5" />
-          Follows
+          <FormattedMessage id="webxdcGamePicker.follows" defaultMessage="Follows" />
         </button>
       </div>
 
@@ -80,25 +84,31 @@ export function WebxdcGamePicker({
         {isLoading ? (
           <div className="flex flex-col items-center justify-center h-40 text-muted-foreground">
             <Loader2 className="size-6 animate-spin mb-2" />
-            <p className="text-sm">Finding games…</p>
+            <p className="text-sm">
+              <FormattedMessage id="webxdcGamePicker.finding" defaultMessage="Finding games…" />
+            </p>
           </div>
         ) : isError ? (
           <div className="flex flex-col items-center justify-center h-40 text-muted-foreground">
             <ImageOff className="size-8 mb-2 opacity-40" />
-            <p className="text-sm">Couldn't load games</p>
+            <p className="text-sm">
+              <FormattedMessage id="webxdcGamePicker.loadFailed" defaultMessage="Couldn't load games" />
+            </p>
           </div>
         ) : filtered.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-40 text-muted-foreground px-6 text-center">
             <Blocks className="size-8 mb-2 opacity-40" />
             <p className="text-sm">
               {followsOnly
-                ? "No games from people you follow"
+                ? intl.formatMessage({ id: "webxdcGamePicker.noFollowGames", defaultMessage: "No games from people you follow" })
                 : query
-                  ? "No games match your search"
-                  : "No games found yet"}
+                  ? intl.formatMessage({ id: "webxdcGamePicker.noMatches", defaultMessage: "No games match your search" })
+                  : intl.formatMessage({ id: "webxdcGamePicker.noGames", defaultMessage: "No games found yet" })}
             </p>
             {!query && !followsOnly && (
-              <p className="text-xs mt-1">Publish a .xdc as a kind-1063 event to list it here.</p>
+              <p className="text-xs mt-1">
+                <FormattedMessage id="webxdcGamePicker.publishHint" defaultMessage="Publish a .xdc as a kind-1063 event to list it here." />
+              </p>
             )}
           </div>
         ) : (

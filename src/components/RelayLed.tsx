@@ -1,5 +1,6 @@
 import { useBlossomReachable } from "@/hooks/useBlossomReachable";
 import { useRelayReachable } from "@/hooks/useRelayReachable";
+import { useIntl } from "@/i18n";
 import { cn } from "@/lib/utils";
 
 /** Cheap stable hash so each light blinks out of phase without a caller-supplied index. */
@@ -11,12 +12,12 @@ function phase(url: string): number {
 
 export function RelayLed({ url, phase: phaseIndex, className }: { url: string; phase?: number; className?: string }) {
   const alive = useRelayReachable(url);
-  return <StatusLed alive={alive} url={url} phase={phaseIndex} noun="Relay" className={className} />;
+  return <StatusLed alive={alive} url={url} phase={phaseIndex} noun="relay" className={className} />;
 }
 
 export function BlossomLed({ url, className }: { url: string; className?: string }) {
   const alive = useBlossomReachable(url);
-  return <StatusLed alive={alive} url={url} noun="Server" className={className} />;
+  return <StatusLed alive={alive} url={url} noun="server" className={className} />;
 }
 
 /** Status light (keyframes in index.css): grey while checking, blinking green when up, a red fault pulse when down. */
@@ -25,11 +26,19 @@ export function StatusLed({ alive, url, phase: phaseIndex, noun, className }: {
   /** Seeds the blink phase, so lights in one list don't blink in step. */
   url: string;
   phase?: number;
-  noun: string;
+  noun: "relay" | "server";
   className?: string;
 }) {
+  const intl = useIntl();
   const p = phaseIndex ?? phase(url);
-  const label = alive === undefined ? `Checking ${noun.toLowerCase()}` : alive ? `${noun} reachable` : `${noun} unreachable`;
+  const label = intl.formatMessage(
+    {
+      id: "relayLed.status",
+      defaultMessage:
+        "{state, select, checking {Checking {noun, select, relay {relay} other {server}}} up {{noun, select, relay {Relay} other {Server}} reachable} other {{noun, select, relay {Relay} other {Server}} unreachable}}",
+    },
+    { state: alive === undefined ? "checking" : alive ? "up" : "down", noun },
+  );
 
   return (
     <span

@@ -3,6 +3,7 @@ import { forwardRef } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { useIntl } from "@/i18n";
 import { cn } from "@/lib/utils";
 
 import type { InputHTMLAttributes, ReactNode } from "react";
@@ -21,7 +22,9 @@ interface SearchFieldProps
 
 /** The inline search idiom: a cut-corner chrome well. Escape and the X both clear it. */
 export const SearchField = forwardRef<HTMLInputElement, SearchFieldProps>(
-  ({ value, onChange, placeholder, className, hint, busy, onKeyDown, ...inputProps }, ref) => (
+  ({ value, onChange, placeholder, className, hint, busy, onKeyDown, ...inputProps }, ref) => {
+    const intl = useIntl();
+    return (
     <div
       className={cn(
         "flex h-9 touch:h-11 min-w-0 items-center gap-1.5 px-2 clip-corner-lg bg-chrome",
@@ -55,7 +58,7 @@ export const SearchField = forwardRef<HTMLInputElement, SearchFieldProps>(
           type="button"
           variant="ghost"
           size="icon"
-          aria-label="Clear search"
+          aria-label={intl.formatMessage({ id: "searchField.clear", defaultMessage: "Clear search" })}
           className="size-7 touch:size-9 shrink-0 text-muted-foreground"
           onClick={() => onChange("")}
         >
@@ -67,6 +70,7 @@ export const SearchField = forwardRef<HTMLInputElement, SearchFieldProps>(
         </span>
       ) : null}
     </div>
-  ),
+    );
+  },
 );
 SearchField.displayName = "SearchField";

@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { getAvatarShape } from "@/lib/avatarShape";
 import { useLoggedInAccounts } from "@/hooks/useLoggedInAccounts";
 import { useSwitchAccount } from "@/hooks/useSwitchAccount";
+import { FormattedMessage, useIntl } from "@/i18n";
 
 /**
  * Shown at `/c/:communityId` when the active account has no membership. Shows
@@ -14,32 +15,37 @@ import { useSwitchAccount } from "@/hooks/useSwitchAccount";
  * list has resolved (an unresolved list looks empty). Offers account switching.
  */
 export function CommunityNoAccess() {
+  const intl = useIntl();
   const { currentUser, otherUsers } = useLoggedInAccounts();
   const { switchTo } = useSwitchAccount();
 
   const displayName = (metadata: { name?: string; display_name?: string }) =>
-    metadata.name || metadata.display_name || "Anonymous";
+    metadata.name || metadata.display_name || intl.formatMessage({ id: "communityNoAccess.anonymous", defaultMessage: "Anonymous" });
 
   return (
     <div className="flex h-full flex-col items-center justify-center gap-4 p-8 text-center">
       <Lock className="size-12 text-muted-foreground/50" />
-      <h1 className="text-2xl font-bold">You don't have access to this community</h1>
+      <h1 className="text-2xl font-bold">
+        <FormattedMessage id="communityNoAccess.title" defaultMessage="You don't have access to this community" />
+      </h1>
       <p className="max-w-md text-sm text-muted-foreground">
         {currentUser ? (
-          <>
-            This account isn't a member, so it holds none of the keys needed to read
-            anything here. If you joined with a different account, switch to it, or ask
-            a member for an invite link.
-          </>
+          <FormattedMessage
+            id="communityNoAccess.notMember"
+            defaultMessage="This account isn't a member, so it holds none of the keys needed to read anything here. If you joined with a different account, switch to it, or ask a member for an invite link."
+          />
         ) : (
-          <>Sign in with an account that's a member, or ask a member for an invite link.</>
+          <FormattedMessage
+            id="communityNoAccess.signedOut"
+            defaultMessage="Sign in with an account that's a member, or ask a member for an invite link."
+          />
         )}
       </p>
 
       {otherUsers.length > 0 && (
         <div className="flex w-full max-w-xs flex-col gap-1">
           <div className="pb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-            Switch account
+            <FormattedMessage id="communityNoAccess.switchAccount" defaultMessage="Switch account" />
           </div>
           {otherUsers.map((user) => (
             <button
@@ -60,7 +66,7 @@ export function CommunityNoAccess() {
       )}
 
       <Button asChild variant="outline">
-        <Link to="/">Back to base</Link>
+        <Link to="/"><FormattedMessage id="communityNoAccess.backToBase" defaultMessage="Back to base" /></Link>
       </Button>
     </div>
   );

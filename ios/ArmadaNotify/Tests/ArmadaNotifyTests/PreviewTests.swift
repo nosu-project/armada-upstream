@@ -26,6 +26,14 @@ final class PreviewTests: XCTestCase {
         )
     }
 
+    private func line(_ msg: NotificationPreview.Message) -> String {
+        NotificationPreview.messageLine(msg, strings: .english)
+    }
+
+    private func present(_ msg: NotificationPreview.Message) -> NotificationPreview.Presented {
+        NotificationPreview.present(msg, strings: .english)
+    }
+
     // MARK: - Content cleaning
 
     func testStripsInlineMediaUrls() {
@@ -51,61 +59,60 @@ final class PreviewTests: XCTestCase {
         )
     }
 
-    // MARK: - Media labels
+    // MARK: - Media kinds
 
     func testNamesTheMediaWhenStrippingLeftNothing() {
         let msg = message(content: "https://blossom.example/abcd.jpg")
-        XCTAssertEqual(NotificationPreview.messageLine(msg), "Sent an image")
+        XCTAssertEqual(line(msg), "Sent an image")
     }
 
     func testImetaMimeWinsOverTheUrlExtension() {
         // An encrypted attachment's blob URL carries no extension at all, and a
         // voice message in a .webm container is only audio by its MIME.
         let msg = message(content: "https://blossom.example/opaque.webm", imetaMime: "audio/webm")
-        XCTAssertEqual(NotificationPreview.messageLine(msg), "Sent a voice message")
+        XCTAssertEqual(line(msg), "Sent a voice message")
     }
 
     func testDistinguishesGifsAndGames() {
+        XCTAssertEqual(NotificationPreview.mediaKind(imetaMime: "image/gif", content: ""), .gif)
         XCTAssertEqual(
-            NotificationPreview.mediaLabel(imetaMime: "image/gif", content: ""), "a GIF"
+            NotificationPreview.mediaKind(imetaMime: nil, content: "https://x.example/a.xdc"),
+            .game
         )
-        XCTAssertEqual(
-            NotificationPreview.mediaLabel(imetaMime: nil, content: "https://x.example/a.xdc"),
-            "a game"
-        )
+        XCTAssertEqual(line(message(content: "https://x.example/a.gif")), "Sent a GIF")
     }
 
     // MARK: - Message lines
 
     func testAReactionNamesTheEmoji() {
         XCTAssertEqual(
-            NotificationPreview.messageLine(message(kind: 7, content: "+", reaction: true)),
+            line(message(kind: 7, content: "+", reaction: true)),
             "Reacted 👍 to your message"
         )
         XCTAssertEqual(
-            NotificationPreview.messageLine(message(kind: 7, content: "-", reaction: true)),
+            line(message(kind: 7, content: "-", reaction: true)),
             "Reacted 👎 to your message"
         )
         XCTAssertEqual(
-            NotificationPreview.messageLine(message(kind: 7, content: ":party:", reaction: true)),
+            line(message(kind: 7, content: ":party:", reaction: true)),
             "Reacted party to your message"
         )
     }
 
     func testAThreadReplyIsPrefixed() {
         let msg = message(content: "sure", threadReply: true)
-        XCTAssertEqual(NotificationPreview.messageLine(msg), "Replied in thread: sure")
+        XCTAssertEqual(line(msg), "Replied in thread: sure")
     }
 
     func testAMentionSaysSoWhereTheRoomIsTheTitle() {
         XCTAssertEqual(
-            NotificationPreview.messageLine(message(content: "ping", mention: true)),
+            line(message(content: "ping", mention: true)),
             "@you ping"
         )
         // A DM's title IS the sender, so there is no room for "@you" to
         // disambiguate against.
         XCTAssertEqual(
-            NotificationPreview.messageLine(
+            line(
                 message(plane: .dm, kind: 14, content: "ping", room: nil, mention: true)
             ),
             "ping"
@@ -114,18 +121,18 @@ final class PreviewTests: XCTestCase {
 
     func testFallsBackByPlane() {
         XCTAssertEqual(
-            NotificationPreview.messageLine(message(plane: .dm, kind: 14, content: "", room: nil)),
+            line(message(plane: .dm, kind: 14, content: "", room: nil)),
             "Sent you a direct message"
         )
-        XCTAssertEqual(NotificationPreview.messageLine(message(content: "")), "Sent a message")
+        XCTAssertEqual(line(message(content: "")), "Sent a message")
         XCTAssertEqual(
-            NotificationPreview.messageLine(message(plane: .dm, kind: 15, content: "", room: nil)),
+            line(message(plane: .dm, kind: 15, content: "", room: nil)),
             "Sent a file"
         )
     }
 
     func testElidesLongBodies() {
-        let line = NotificationPreview.messageLine(
+        let line = line(
             message(content: String(repeating: "x", count: 400))
         )
         XCTAssertEqual(line.count, NotificationPreview.contentCap)
@@ -135,13 +142,13 @@ final class PreviewTests: XCTestCase {
     // MARK: - Presentation shape
 
     func testARoomTitlesTheNotificationAndAttributesTheLine() {
-        let presented = NotificationPreview.present(message(content: "shipped it"))
+        let presented = present(message(content: "shipped it"))
         XCTAssertEqual(presented.title, "Armada / #general")
         XCTAssertEqual(presented.body, "alex: shipped it")
     }
 
     func testADmIsTitledByItsSenderWithABareBody() {
-        let presented = NotificationPreview.present(
+        let presented = present(
             message(plane: .dm, kind: 14, content: "hey", room: nil)
         )
         XCTAssertEqual(presented.title, "alex")
@@ -149,7 +156,7 @@ final class PreviewTests: XCTestCase {
     }
 
     func testAnUnnamedRoomFallsBackToChat() {
-        let presented = NotificationPreview.present(message(content: "hi", room: nil))
+        let presented = present(message(content: "hi", room: nil))
         XCTAssertEqual(presented.title, "Chat")
     }
 

@@ -124,6 +124,8 @@ import {
 } from "@/lib/screenShareQuality";
 import { nip19 } from "nostr-tools";
 
+import { common, FormattedMessage, t } from "@/i18n";
+
 /** Reports live speakers (as pubkeys) to call context. Unverified identities are skipped. */
 function SpeakingReporter() {
   const { setSpeakingPubkeys } = useCall();
@@ -531,7 +533,7 @@ function useRoomOptions(extra?: Partial<RoomOptions>): RoomOptions {
   }, []);
 }
 
-function LoadingBar({ placeBar, label }: { placeBar: PlaceBar; label: string }) {
+function LoadingBar({ placeBar, label }: { placeBar: PlaceBar; label: React.ReactNode }) {
   return placeBar(
     <div className="flex items-center justify-center gap-2 px-3 py-2 clip-corner-lg bg-chrome-deep min-h-12 shadow-lg">
       <Loader2 className="size-4 animate-spin text-muted-foreground" />
@@ -544,10 +546,18 @@ function ErrorBar({ placeBar, error, onLeave }: { placeBar: PlaceBar; error: unk
   return placeBar(
     <div className="flex items-center gap-2 px-3 py-2 clip-corner-lg bg-chrome-deep min-h-12 shadow-lg">
       <span className="text-sm text-destructive flex-1 min-w-0 truncate">
-        Could not join voice{error instanceof Error ? `: ${error.message}` : "."}
+        {error instanceof Error ? (
+          <FormattedMessage
+            id="persistentVoiceRoom.joinFailedDetail"
+            defaultMessage="Could not join voice: {detail}"
+            values={{ detail: error.message }}
+          />
+        ) : (
+          <FormattedMessage id="persistentVoiceRoom.joinFailed" defaultMessage="Could not join voice." />
+        )}
       </span>
       <Button className="h-8 px-3 text-sm shrink-0" variant="outline" onClick={onLeave}>
-        Back
+        <FormattedMessage {...common.back} />
       </Button>
     </div>,
   );
@@ -723,7 +733,7 @@ function VoiceRoomShell({
     },
     [onDisconnected],
   );
-  if (!micReady) return <LoadingBar placeBar={placeBar} label="Opening the microphone…" />;
+  if (!micReady) return <LoadingBar placeBar={placeBar} label={<FormattedMessage id="persistentVoiceRoom.openingMic" defaultMessage="Opening the microphone…" />} />;
   const mobileBar = (
     <ServerScopeProvider relayUrl={scopeRelayUrl}>
       <div className="clip-corner-lg bg-chrome-deep shadow-lg">
@@ -839,7 +849,7 @@ function Nip29VoiceRoom({
     return () => registerCallSummary(null);
   }, [registerCallSummary, channelName, serverName, icon]);
 
-  if (isLoading) return <>{<LoadingBar placeBar={placeBar} label="Requesting voice access…" />}</>;
+  if (isLoading) return <>{<LoadingBar placeBar={placeBar} label={<FormattedMessage id="persistentVoiceRoom.requestingAccess" defaultMessage="Requesting voice access…" />} />}</>;
   if (error || !tokenData) return <>{<ErrorBar placeBar={placeBar} error={error} onLeave={onLeave} />}</>;
 
   const label = (
@@ -1241,12 +1251,14 @@ function ConcordVoiceRoom({
     const room = e2ee.room;
     if (!tokenData || !room) {
       stopHevcCapturedMedia(stream);
-      throw new Error("The Concord voice room is not connected.");
+      throw new Error(t({ id: "persistentVoiceRoom.hevc.notConnected", defaultMessage: "The Concord voice room is not connected." }));
     }
     const video = stream.getVideoTracks()[0];
     if (!video) {
       stopHevcCapturedMedia(stream);
-      throw new Error("The selected source did not provide a video track.");
+      throw new Error(
+        t({ id: "persistentVoiceRoom.hevc.noVideoTrack", defaultMessage: "The selected source did not provide a video track." }),
+      );
     }
 
     for (const pending of pendingHevcCaptures.current) stopHevcCapturedMedia(pending);
@@ -1263,7 +1275,7 @@ function ConcordVoiceRoom({
       startGeneration === hevcStartGeneration.current &&
       initialSessionGeneration === hevcSessionGeneration.current;
     const assertInitialCurrent = () => {
-      if (!initialCurrent()) throw new Error("The H.265 screen share was cancelled.");
+      if (!initialCurrent()) throw new Error(t({ id: "persistentVoiceRoom.hevc.cancelled", defaultMessage: "The H.265 screen share was cancelled." }));
     };
 
     // Listen before the awaits: DOM events aren't buffered, so a cancel during
@@ -1293,7 +1305,9 @@ function ConcordVoiceRoom({
     setHevcCapability(capability);
     if (!capability.available) {
       stopCandidateCapture();
-      throw new Error(capability.reason || "The Linux H.265 encoder is unavailable.");
+      throw new Error(capability.reason ||
+          t({ id: "persistentVoiceRoom.hevc.encoderUnavailable", defaultMessage: "The Linux H.265 encoder is unavailable." }),
+      );
     }
 
     const previous = activeHevc.current;
@@ -1338,16 +1352,32 @@ function ConcordVoiceRoom({
         : String(shellResult.reason);
       throw new Error(
         previous
-          ? `The previous H.265 screen share stopped locally, but its publisher could not be retired before switching: ${detail}`
-          : `The previous H.265 publisher could not be retired: ${detail}`,
+          ? t(
+              {
+                id: "persistentVoiceRoom.hevc.retireFailedSwitching",
+                defaultMessage:
+                  "The previous H.265 screen share stopped locally, but its publisher could not be retired before switching: {detail}",
+              },
+              { detail },
+            )
+          : t(
+              {
+                id: "persistentVoiceRoom.hevc.retireFailed",
+                defaultMessage: "The previous H.265 publisher could not be retired: {detail}",
+              },
+              { detail },
+            ),
       );
     }
     if (startGeneration !== hevcStartGeneration.current) {
       stopCandidateCapture();
       throw new Error(
         previous
-          ? "The previous H.265 screen share stopped while switching, and the replacement was cancelled."
-          : "The H.265 screen share was cancelled.",
+          ? t({
+              id: "persistentVoiceRoom.hevc.switchCancelled",
+              defaultMessage: "The previous H.265 screen share stopped while switching, and the replacement was cancelled.",
+            })
+          : t({ id: "persistentVoiceRoom.hevc.cancelled", defaultMessage: "The H.265 screen share was cancelled." }),
       );
     }
 
@@ -1356,7 +1386,7 @@ function ConcordVoiceRoom({
       startGeneration === hevcStartGeneration.current &&
       sessionGeneration === hevcSessionGeneration.current;
     const assertCurrent = () => {
-      if (!current()) throw new Error("The H.265 screen share was cancelled.");
+      if (!current()) throw new Error(t({ id: "persistentVoiceRoom.hevc.cancelled", defaultMessage: "The H.265 screen share was cancelled." }));
     };
 
     let publisherToken;
@@ -1370,7 +1400,14 @@ function ConcordVoiceRoom({
       const detail = error instanceof Error ? error.message : String(error);
       throw new Error(
         previous
-          ? `The previous H.265 screen share stopped while switching, and the replacement could not obtain access: ${detail}`
+          ? t(
+              {
+                id: "persistentVoiceRoom.hevc.switchNoAccess",
+                defaultMessage:
+                  "The previous H.265 screen share stopped while switching, and the replacement could not obtain access: {detail}",
+              },
+              { detail },
+            )
           : detail,
       );
     }
@@ -1381,8 +1418,12 @@ function ConcordVoiceRoom({
       stopCandidateCapture();
       throw new Error(
         previous
-          ? "The previous H.265 screen share stopped while switching, and the replacement resolution is invalid."
-          : "The selected H.265 resolution is invalid.",
+          ? t({
+              id: "persistentVoiceRoom.hevc.switchInvalidResolution",
+              defaultMessage:
+                "The previous H.265 screen share stopped while switching, and the replacement resolution is invalid.",
+            })
+          : t({ id: "persistentVoiceRoom.hevc.invalidResolution", defaultMessage: "The selected H.265 resolution is invalid." }),
       );
     }
 
@@ -1402,7 +1443,7 @@ function ConcordVoiceRoom({
       height: resolution.height,
       frameRate: quality.frameRate,
       bitrate: quality.maxBitrate,
-      pipelineStage: "Waiting for first captured frame",
+      pipelineStage: t({ id: "persistentVoiceRoom.hevc.waitingFirstFrame", defaultMessage: "Waiting for first captured frame" }),
     });
 
     try {
@@ -1420,7 +1461,12 @@ function ConcordVoiceRoom({
       });
       assertCurrent();
       if (!shellHevcSessions.current.bind(status.sessionId)) {
-        throw new Error("The H.265 publisher returned a retired or uncorrelated session.");
+        throw new Error(
+          t({
+            id: "persistentVoiceRoom.hevc.staleSession",
+            defaultMessage: "The H.265 publisher returned a retired or uncorrelated session.",
+          }),
+        );
       }
       setHevcPreview({ track: video, identity: publisherToken.identity });
 
@@ -1434,7 +1480,7 @@ function ConcordVoiceRoom({
           if (publication.track) {
             await room.localParticipant.unpublishTrack(publication.track, true);
           }
-          throw new Error("The H.265 screen share was cancelled.");
+          throw new Error(t({ id: "persistentVoiceRoom.hevc.cancelled", defaultMessage: "The H.265 screen share was cancelled." }));
         }
         if (publication.track) active.audioTrack = publication.track;
       }
@@ -1445,13 +1491,20 @@ function ConcordVoiceRoom({
         setHevcStatus({
           state: "error",
           active: false,
-          error: error instanceof Error ? error.message : "The H.265 publisher failed to start.",
+          error: error instanceof Error ? error.message : t({ id: "persistentVoiceRoom.hevc.startFailed", defaultMessage: "The H.265 publisher failed to start." }),
         });
       }
       const detail = error instanceof Error ? error.message : String(error);
       throw new Error(
         previous
-          ? `The previous H.265 screen share stopped while switching, and the replacement could not start: ${detail}`
+          ? t(
+              {
+                id: "persistentVoiceRoom.hevc.switchStartFailed",
+                defaultMessage:
+                  "The previous H.265 screen share stopped while switching, and the replacement could not start: {detail}",
+              },
+              { detail },
+            )
           : detail,
       );
     }
@@ -1520,14 +1573,38 @@ function ConcordVoiceRoom({
     warnedSplit.current = true;
     const host = elsewhereOrigin.replace(/^https:\/\//, "");
     toast({
-      title: `${strandedFrom.length} ${strandedFrom.length === 1 ? "member is" : "members are"} on another voice server`,
-      description: `They're on ${host}, ${communityBrokers.length > 0 ? "not one this community sets" : "not your voice server"}, so they're in a separate call you won't hear.`,
+      title: t(
+        {
+          id: "persistentVoiceRoom.split.title",
+          defaultMessage:
+            "{count, plural, one {# member is} other {# members are}} on another voice server",
+        },
+        { count: strandedFrom.length },
+      ),
+      description:
+        communityBrokers.length > 0
+          ? t(
+              {
+                id: "persistentVoiceRoom.split.descriptionCommunity",
+                defaultMessage:
+                  "They're on {host}, not one this community sets, so they're in a separate call you won't hear.",
+              },
+              { host },
+            )
+          : t(
+              {
+                id: "persistentVoiceRoom.split.descriptionOwn",
+                defaultMessage:
+                  "They're on {host}, not your voice server, so they're in a separate call you won't hear.",
+              },
+              { host },
+            ),
       action: (
         <ToastAction
-          altText={`Join the call on ${host}`}
+          altText={t({ id: "persistentVoiceRoom.split.joinAlt", defaultMessage: "Join the call on {host}" }, { host })}
           onClick={() => joinConcordCall({ ...ctx, broker: elsewhereOrigin })}
         >
-          Join them
+          {t({ id: "persistentVoiceRoom.split.join", defaultMessage: "Join them" })}
         </ToastAction>
       ),
     });
@@ -1569,7 +1646,7 @@ function ConcordVoiceRoom({
     [onLeave],
   );
 
-  if (isLoading) return <>{<LoadingBar placeBar={placeBar} label="Requesting voice access…" />}</>;
+  if (isLoading) return <>{<LoadingBar placeBar={placeBar} label={<FormattedMessage id="persistentVoiceRoom.requestingAccess" defaultMessage="Requesting voice access…" />} />}</>;
   if (error || !tokenData) return <>{<ErrorBar placeBar={placeBar} error={error} onLeave={onLeave} />}</>;
   // Never join Concord without E2EE; show a leavable error instead.
   const room = e2ee.room;
@@ -1577,7 +1654,12 @@ function ConcordVoiceRoom({
     const e2eeError =
       e2ee.error instanceof Error
         ? e2ee.error
-        : new Error("Voice encryption couldn’t start in this browser. Reload to update, then rejoin.");
+        : new Error(
+            t({
+              id: "persistentVoiceRoom.encryptionUnavailable",
+              defaultMessage: "Voice encryption couldn’t start in this browser. Reload to update, then rejoin.",
+            }),
+          );
     return <>{<ErrorBar placeBar={placeBar} error={e2eeError} onLeave={onLeave} />}</>;
   }
 
@@ -1779,14 +1861,19 @@ function DmVoiceRoom({
     [onLeave],
   );
 
-  if (isLoading) return <>{<LoadingBar placeBar={placeBar} label="Requesting voice access…" />}</>;
+  if (isLoading) return <>{<LoadingBar placeBar={placeBar} label={<FormattedMessage id="persistentVoiceRoom.requestingAccess" defaultMessage="Requesting voice access…" />} />}</>;
   if (error || !tokenData) return <>{<ErrorBar placeBar={placeBar} error={error} onLeave={onLeave} />}</>;
   const room = e2ee.room;
   if (e2ee.error || !room) {
     const e2eeError =
       e2ee.error instanceof Error
         ? e2ee.error
-        : new Error("Voice encryption couldn’t start in this browser. Reload to update, then rejoin.");
+        : new Error(
+            t({
+              id: "persistentVoiceRoom.encryptionUnavailable",
+              defaultMessage: "Voice encryption couldn’t start in this browser. Reload to update, then rejoin.",
+            }),
+          );
     return <>{<ErrorBar placeBar={placeBar} error={e2eeError} onLeave={onLeave} />}</>;
   }
 

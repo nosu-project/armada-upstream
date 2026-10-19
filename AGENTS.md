@@ -786,6 +786,53 @@ to fail a run:
   so its blobs are already there; ngit needs only one confirmed copy per blob
   and reports incomplete replication as a warning.
 
+## Translations (i18n)
+
+The web UI ships in English, German, Spanish, French, Italian, Dutch and
+Japanese through FormatJS (`react-intl`), the same arrangement as Ditto. English
+is never a catalog the app loads: it is the inline `defaultMessage` at each call
+site. `src/i18n/locales/<lang>.json` are flat `{ id: ICU message }` files, one
+lazily-loaded chunk each; `en.json` is GENERATED (`npm run i18n:extract`) and
+exists for the check and for translators.
+
+- **Import from `@/i18n`, never from `react-intl`.** `useIntl`/`FormattedMessage`
+  there fall back to English with no provider mounted, which is what keeps
+  component tests and the outermost `ErrorBoundary` free of wrappers. Code the
+  service worker bundles imports from `@/i18n/intl`, which has no React in it.
+- **In a component, `useIntl()` or `<FormattedMessage>`** — both subscribe to the
+  language, so a switch re-renders them. `t()` is for code outside a render (a
+  class component, a toast fired from a lib, a callback). Never format at module
+  load: a table of labels holds `defineMessage` descriptors and is formatted
+  where it is shown.
+- **Ids are static literals**, `<componentOrArea>.<key>` in camelCase
+  (`messageComposer.placeholder`); the extractor rejects a computed id and two
+  different messages under one id. A bare word that is a whole button or menu
+  item can use `common.*` (`src/i18n/common.ts`); a sentence gets its own id.
+- **Whole sentences, ICU for the grammar.** No concatenating translated
+  fragments (`"Sent " + label`) and no `n === 1 ? "" : "s"`: write
+  `{count, plural, one {# member} other {# members}}`, `{kind, select, …}`, and
+  rich text as tags (`Read the <link>guide</link>` with
+  `values={{ link: (chunks) => <a …>{chunks}</a> }}`).
+- **Not translated:** user and event content, brand and protocol names (Armada,
+  Concord, Nostr, Buzz, Blossom, LiveKit, NIP-xx), console/log output, and errors
+  that never reach the screen.
+- **Dates and numbers use the app's language**, not the browser's: pass
+  `intl.locale` (or `getLocale()` outside React) where code would pass
+  `undefined` to `toLocale*String` / `Intl.*`.
+- **Every new or changed message is translated into every catalog in the same
+  change.** `npm run test` runs `npm run i18n:check`, which fails when `en.json`
+  is stale, a catalog lacks or has extra ids, or a translation's placeholders and
+  tags differ from the English. `node scripts/i18n.mjs missing <lang>` lists
+  what a catalog lacks.
+- The choice is device-wide (`armada:locale`, like the text size), preserved by
+  the logout purge, and absent means "follow the browser/OS".
+- **Background notifications are localized on every platform.** The service
+  worker gets the locale and the `notification.*` slice of the catalog in its
+  sealed config; Android's service and iOS's extension get the locale in theirs
+  and carry their own tables (`values-<lang>/strings.xml`,
+  `ArmadaNotify`'s `Strings.swift`), which must stay in step with the
+  `notification.*` messages.
+
 ## Conventions
 
 - **Comments say why, briefly.** Keep invariants, ordering/race constraints,

@@ -19,6 +19,7 @@ import { useMutedPubkeys, useMuteUser } from "@/hooks/useMuteList";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { useSendReport } from "@/hooks/useSendReport";
 import { toast } from "@/hooks/useToast";
+import { common, FormattedMessage, t, useIntl } from "@/i18n";
 import {
   reportAudience,
   REPORT_REASONS,
@@ -41,6 +42,7 @@ interface ReportDialogProps {
  * ({@link reportDestination} decides). Mute is checked by default, omitted if already muted.
  */
 export function ReportDialog({ open, onOpenChange, target, destination }: ReportDialogProps) {
+  const intl = useIntl();
   const author = useAuthor(target.pubkey);
   const name = useScopedDisplayName(target.pubkey, author.data?.metadata);
   const { mutedPubkeys } = useMutedPubkeys();
@@ -67,10 +69,16 @@ export function ReportDialog({ open, onOpenChange, target, destination }: Report
 
   const title =
     destination.kind === "network"
-      ? "Report to the Nostr network"
+      ? intl.formatMessage({ id: "reportDialog.titleNetwork", defaultMessage: "Report to the Nostr network" })
       : target.eventId
-        ? "Report message"
-        : <>Report <DisplayName pubkey={target.pubkey} name={name} />?</>;
+        ? intl.formatMessage({ id: "reportDialog.titleMessage", defaultMessage: "Report message" })
+        : (
+          <FormattedMessage
+            id="reportDialog.titleUser"
+            defaultMessage="Report {name}?"
+            values={{ name: <DisplayName pubkey={target.pubkey} name={name} /> }}
+          />
+        );
 
   const submit = async () => {
     if (!reason) return;
@@ -84,7 +92,7 @@ export function ReportDialog({ open, onOpenChange, target, destination }: Report
         comment: comment.trim(),
       });
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Couldn't send the report.");
+      setError(e instanceof Error ? e.message : t({ id: "reportDialog.sendFailed", defaultMessage: "Couldn't send the report." }));
       setBusy(false);
       return;
     }
@@ -95,8 +103,10 @@ export function ReportDialog({ open, onOpenChange, target, destination }: Report
         await muteUser.mutateAsync(target.pubkey);
       } catch (e) {
         toast({
-          title: "Reported, but couldn't block",
-          description: e instanceof Error ? e.message : "Failed to update your block list.",
+          title: t({ id: "reportDialog.blockFailed.title", defaultMessage: "Reported, but couldn't block" }),
+          description: e instanceof Error
+            ? e.message
+            : t({ id: "reportDialog.blockFailed.description", defaultMessage: "Failed to update your block list." }),
           variant: "destructive",
         });
         setBusy(false);
@@ -106,7 +116,7 @@ export function ReportDialog({ open, onOpenChange, target, destination }: Report
     }
 
     toast({
-      title: "Report sent",
+      title: t({ id: "reportDialog.sent", defaultMessage: "Report sent" }),
       description: reportAudience(destination),
     });
     setBusy(false);
@@ -115,13 +125,13 @@ export function ReportDialog({ open, onOpenChange, target, destination }: Report
 
   return (
     <Dialog open={open} onOpenChange={(next) => !busy && onOpenChange(next)}>
-      <ChromeDialogContent title={typeof title === "string" ? title : `Report ${name}`} className="sm:max-w-sm">
+      <ChromeDialogContent title={typeof title === "string" ? title : intl.formatMessage({ id: "reportDialog.titleUserPlain", defaultMessage: "Report {name}" }, { name })} className="sm:max-w-sm">
         <ChromeDialogHeader icon={Flag} tone="destructive" title={title} description={reportAudience(destination)} />
 
         <div className="mt-6 space-y-3">
           <Select value={reason} onValueChange={(v) => setReason(v as ReportReason)}>
-            <SelectTrigger aria-label="Reason">
-              <SelectValue placeholder="Choose a reason" />
+            <SelectTrigger aria-label={intl.formatMessage({ id: "reportDialog.reason", defaultMessage: "Reason" })}>
+              <SelectValue placeholder={intl.formatMessage({ id: "reportDialog.chooseReason", defaultMessage: "Choose a reason" })} />
             </SelectTrigger>
             <SelectContent>
               {REPORT_REASONS.map((r) => (
@@ -135,9 +145,9 @@ export function ReportDialog({ open, onOpenChange, target, destination }: Report
           <Textarea
             value={comment}
             onChange={(e) => setComment(e.target.value.slice(0, MAX_COMMENT))}
-            placeholder="Add details (optional)"
+            placeholder={intl.formatMessage({ id: "reportDialog.detailsPlaceholder", defaultMessage: "Add details (optional)" })}
             rows={3}
-            aria-label="Details"
+            aria-label={intl.formatMessage({ id: "reportDialog.details", defaultMessage: "Details" })}
           />
 
           {!alreadyMuted && (
@@ -146,7 +156,11 @@ export function ReportDialog({ open, onOpenChange, target, destination }: Report
                 checked={alsoMute}
                 onCheckedChange={(v) => setAlsoMute(v === true)}
               />
-              Also block <DisplayName pubkey={target.pubkey} name={name} />
+              <FormattedMessage
+                id="reportDialog.alsoBlock"
+                defaultMessage="Also block {name}"
+                values={{ name: <DisplayName pubkey={target.pubkey} name={name} /> }}
+              />
             </Label>
           )}
         </div>
@@ -155,11 +169,15 @@ export function ReportDialog({ open, onOpenChange, target, destination }: Report
 
         <ChromeDialogFooter>
           <Button type="button" variant="ghost" onClick={() => onOpenChange(false)} disabled={busy}>
-            Cancel
+            <FormattedMessage {...common.cancel} />
           </Button>
           <Button type="button" variant="destructive" onClick={submit} disabled={busy || !reason}>
             {busy ? <Loader2 className="size-4 animate-spin" /> : <Flag className="size-4" />}
-            {busy ? "Sending" : "Report"}
+            {busy ? (
+              <FormattedMessage id="reportDialog.sending" defaultMessage="Sending" />
+            ) : (
+              <FormattedMessage id="reportDialog.report" defaultMessage="Report" />
+            )}
           </Button>
         </ChromeDialogFooter>
       </ChromeDialogContent>

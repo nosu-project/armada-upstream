@@ -24,6 +24,7 @@ import { KIND_WRAP } from "@/concord/lib/kinds";
 import { KIND_NIP59_SEAL } from "@/concord/lib/directInvite";
 import type { Community } from "@/concord/lib/types";
 import { buildReportTags, KIND_REPORT, type ReportReason, type ReportTarget } from "@/lib/report";
+import { t } from "@/i18n/intl";
 
 /** NIP-59: outer timestamps are tweaked into the past, up to two days. */
 const MAX_BACKDATE_SECS = 2 * 24 * 60 * 60;
@@ -74,7 +75,7 @@ export async function sealReport(
   controlPk: string,
   signer: ReportSigner,
 ): Promise<NostrEvent> {
-  if (!signer.nip44) throw new Error("This signer can't send reports (NIP-44 unsupported).");
+  if (!signer.nip44) throw new Error(t({ id: "concordReport.noNip44", defaultMessage: "This signer can't send reports (NIP-44 unsupported)." }));
   return signer.signEvent({
     kind: KIND_NIP59_SEAL,
     content: await signer.nip44.encrypt(controlPk, JSON.stringify(rumor)),

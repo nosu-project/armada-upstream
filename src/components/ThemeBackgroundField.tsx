@@ -7,6 +7,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { useMediaSrc } from "@/hooks/useMediaPolicy";
 import { useUploadFile } from "@/hooks/useUploadFile";
 import { toast } from "@/hooks/useToast";
+import { FormattedMessage, t, useIntl } from "@/i18n";
 
 import type { ThemeBackground } from "@/themes";
 
@@ -19,6 +20,7 @@ export function ThemeBackgroundField({
   onChange: (background: ThemeBackground | undefined) => void;
   onUploadingChange?: (uploading: boolean) => void;
 }) {
+  const intl = useIntl();
   const { mutateAsync: uploadFile, isPending: uploading } = useUploadFile();
   const fileRef = useRef<HTMLInputElement>(null);
   const thumbSrc = useMediaSrc(value?.url);
@@ -34,8 +36,10 @@ export function ThemeBackgroundField({
       onChange({ url, mode: value?.mode ?? "cover", mimeType, dimensions });
     } catch (e) {
       toast({
-        title: "Couldn't upload background",
-        description: e instanceof Error ? e.message : "Upload failed.",
+        title: t({ id: "themeBackgroundField.uploadFailed.title", defaultMessage: "Couldn't upload background" }),
+        description: e instanceof Error
+          ? e.message
+          : t({ id: "themeBackgroundField.uploadFailed.description", defaultMessage: "Upload failed." }),
         variant: "destructive",
       });
     } finally {
@@ -46,7 +50,7 @@ export function ThemeBackgroundField({
   return (
     <div className="space-y-1.5">
       <Label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-        Background image
+        <FormattedMessage id="themeBackgroundField.label" defaultMessage="Background image" />
       </Label>
       <input
         ref={fileRef}
@@ -77,7 +81,11 @@ export function ThemeBackgroundField({
           onClick={() => fileRef.current?.click()}
         >
           {uploading ? <Loader2 className="size-4 animate-spin" /> : <Upload className="size-4" />}
-          {value?.url ? "Replace" : "Upload"}
+          {value?.url ? (
+            <FormattedMessage id="themeBackgroundField.replace" defaultMessage="Replace" />
+          ) : (
+            <FormattedMessage id="themeBackgroundField.upload" defaultMessage="Upload" />
+          )}
         </Button>
         {value?.url && (
           <>
@@ -85,19 +93,23 @@ export function ThemeBackgroundField({
               value={value.mode ?? "cover"}
               onValueChange={(v) => onChange({ ...value, mode: v === "tile" ? "tile" : "cover" })}
             >
-              <SelectTrigger className="h-9 w-24" aria-label="Background fit">
+              <SelectTrigger className="h-9 w-24" aria-label={intl.formatMessage({ id: "themeBackgroundField.fit", defaultMessage: "Background fit" })}>
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="cover">Fill</SelectItem>
-                <SelectItem value="tile">Tile</SelectItem>
+                <SelectItem value="cover">
+                  <FormattedMessage id="themeBackgroundField.fill" defaultMessage="Fill" />
+                </SelectItem>
+                <SelectItem value="tile">
+                  <FormattedMessage id="themeBackgroundField.tile" defaultMessage="Tile" />
+                </SelectItem>
               </SelectContent>
             </Select>
             <Button
               variant="ghost"
               size="icon"
               className="size-9 touch:size-11 text-muted-foreground hover:text-destructive"
-              aria-label="Remove background"
+              aria-label={intl.formatMessage({ id: "themeBackgroundField.remove", defaultMessage: "Remove background" })}
               onClick={() => onChange(undefined)}
             >
               <Trash2 className="size-4" />

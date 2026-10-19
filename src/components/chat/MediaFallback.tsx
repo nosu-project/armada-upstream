@@ -2,6 +2,7 @@ import { ExternalLink, ImageOff, Lock, RotateCw } from "lucide-react";
 
 import { formatBytes } from "@/lib/fileBytes";
 import { cn } from "@/lib/utils";
+import { FormattedMessage, common, useIntl } from "@/i18n";
 
 export interface MediaFallbackProps {
   /** The original media URL — the target of the "open" action. */
@@ -26,10 +27,13 @@ export function MediaFallback({
   onRetry,
   oversized,
   onDecryptAnyway,
-  label = "Media",
+  label: labelProp,
   className,
   compact = false,
 }: MediaFallbackProps) {
+  const intl = useIntl();
+  const label = labelProp ?? intl.formatMessage({ id: "mediaFallback.media", defaultMessage: "Media" });
+  const lowerLabel = label.toLocaleLowerCase(intl.locale);
   const retry = (e: React.MouseEvent) => {
     e.stopPropagation();
     e.preventDefault();
@@ -53,8 +57,14 @@ export function MediaFallback({
             "absolute inset-0 flex flex-col items-center justify-center gap-1 bg-muted text-muted-foreground hover:text-foreground transition-colors",
             className,
           )}
-          title={`${label} is ${formatBytes(oversized)}. Tap to decrypt anyway`}
-          aria-label={`Decrypt ${label.toLowerCase()} anyway`}
+          title={intl.formatMessage(
+            { id: "mediaFallback.oversizedTitle", defaultMessage: "{label} is {size}. Tap to decrypt anyway" },
+            { label, size: formatBytes(oversized) },
+          )}
+          aria-label={intl.formatMessage(
+            { id: "mediaFallback.decryptLabel", defaultMessage: "Decrypt {label} anyway" },
+            { label: lowerLabel },
+          )}
         >
           <Lock className="size-5" />
           <span className="text-3xs">{formatBytes(oversized)}</span>
@@ -72,14 +82,18 @@ export function MediaFallback({
       >
         <Lock className="size-5 shrink-0 text-muted-foreground" />
         <span className="min-w-0 flex-1 text-sm text-muted-foreground">
-          {label} is large ({formatBytes(oversized)})
+          <FormattedMessage
+            id="mediaFallback.oversized"
+            defaultMessage="{label} is large ({size})"
+            values={{ label, size: formatBytes(oversized) }}
+          />
         </span>
         <button
           type="button"
           onClick={decrypt}
           className="shrink-0 clip-corner-lg px-2 py-1 text-xs font-medium text-primary hover:bg-primary/10 transition-colors touch:min-h-11"
         >
-          Decrypt anyway
+          <FormattedMessage id="mediaFallback.decryptAnyway" defaultMessage="Decrypt anyway" />
         </button>
       </div>
     );
@@ -94,11 +108,17 @@ export function MediaFallback({
           "absolute inset-0 flex flex-col items-center justify-center gap-1 bg-muted text-muted-foreground hover:text-foreground transition-colors",
           className,
         )}
-        title={`${label} unavailable. Tap to retry`}
-        aria-label={`Retry loading ${label.toLowerCase()}`}
+        title={intl.formatMessage(
+          { id: "mediaFallback.unavailableTitle", defaultMessage: "{label} unavailable. Tap to retry" },
+          { label },
+        )}
+        aria-label={intl.formatMessage(
+          { id: "mediaFallback.retryLabel", defaultMessage: "Retry loading {label}" },
+          { label: lowerLabel },
+        )}
       >
         <ImageOff className="size-5" />
-        <span className="text-3xs">Retry</span>
+        <span className="text-3xs"><FormattedMessage {...common.retry} /></span>
       </button>
     );
   }
@@ -112,13 +132,18 @@ export function MediaFallback({
       onClick={(e) => e.stopPropagation()}
     >
       <ImageOff className="size-5 shrink-0 text-muted-foreground" />
-      <span className="min-w-0 flex-1 text-sm text-muted-foreground">{label} unavailable</span>
+      <span className="min-w-0 flex-1 text-sm text-muted-foreground">
+        <FormattedMessage id="mediaFallback.unavailable" defaultMessage="{label} unavailable" values={{ label }} />
+      </span>
       <button
         type="button"
         onClick={retry}
         className="shrink-0 text-muted-foreground hover:text-foreground transition-colors"
-        title="Retry"
-        aria-label={`Retry loading ${label.toLowerCase()}`}
+        title={intl.formatMessage(common.retry)}
+        aria-label={intl.formatMessage(
+          { id: "mediaFallback.retryLabel", defaultMessage: "Retry loading {label}" },
+          { label: lowerLabel },
+        )}
       >
         <RotateCw className="size-4" />
       </button>
@@ -127,8 +152,8 @@ export function MediaFallback({
         target="_blank"
         rel="noopener noreferrer"
         className="shrink-0 text-muted-foreground hover:text-foreground transition-colors"
-        title="Open in a new tab"
-        aria-label="Open in a new tab"
+        title={intl.formatMessage({ id: "mediaFallback.openInNewTab", defaultMessage: "Open in a new tab" })}
+        aria-label={intl.formatMessage({ id: "mediaFallback.openInNewTab", defaultMessage: "Open in a new tab" })}
         onClick={(e) => e.stopPropagation()}
       >
         <ExternalLink className="size-4" />

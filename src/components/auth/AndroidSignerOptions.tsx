@@ -6,6 +6,7 @@ import { Loader2 } from 'lucide-react';
 import { AndroidNativeSigner } from '@/lib/androidNativeSigner';
 import { useLoginActions } from '@/hooks/useLoginActions';
 import { Alert, AlertDescription } from '@/components/ui/alert';
+import { FormattedMessage } from '@/i18n';
 
 interface AndroidSignerOptionsProps {
   onLogin: () => void;
@@ -84,10 +85,22 @@ export function AndroidSignerOptions({ onLogin }: AndroidSignerOptionsProps) {
               )}
               <div className="flex-1 min-w-0">
                 <div className="font-medium text-sm truncate">
-                  {connecting ? 'Connecting…' : `Log in with ${app.name}`}
+                  {connecting ? (
+                    <FormattedMessage id="androidSignerOptions.connecting" defaultMessage="Connecting…" />
+                  ) : (
+                    <FormattedMessage
+                      id="androidSignerOptions.logInWith"
+                      defaultMessage="Log in with {name}"
+                      values={{ name: app.name }}
+                    />
+                  )}
                 </div>
                 <div className="text-xs text-muted-foreground truncate">
-                  Use the {app.name} app on your device.
+                  <FormattedMessage
+                    id="androidSignerOptions.useApp"
+                    defaultMessage="Use the {name} app on your device."
+                    values={{ name: app.name }}
+                  />
                 </div>
               </div>
               {connecting && (

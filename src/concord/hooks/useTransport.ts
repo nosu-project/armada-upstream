@@ -26,6 +26,7 @@ import type { Channel, Community } from "@/concord/lib/types";
 
 import { sameReactionTallies, stableZapsFor, toChatMsg } from "@/components/chat/transport";
 import type { ChatMsg, ChatTransport, MessageCalendar, MessagePoll, MessageReactions, OnchainZapAnnouncement, PollDraft, ReactInput, ReactionTally, ZapPayment } from "@/components/chat/transport";
+import { t } from "@/i18n";
 
 /** Stable empties, so memoized rows keep constant props. */
 const EMPTY_TALLIES: ReactionTally[] = [];
@@ -271,7 +272,7 @@ export function useTransport(
   // CORD.md zap announcement: a kind-9735 rumor with the payment proof, via `send`.
   const sendZap = useCallback(
     async (target: ChatMsg, payment: ZapPayment) => {
-      if (!payment.preimage) throw new Error("A private zap needs its payment proof.");
+      if (!payment.preimage) throw new Error(t({ id: "useTransport.privateZapNeedsProof", defaultMessage: "A private zap needs its payment proof." }));
       await send({
         content: payment.comment,
         kind: KIND_ZAP,

@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from "react";
 
+import { t } from "@/i18n";
 import { desktop } from "@/lib/desktop";
 
 const STORAGE_KEY = "armada:push-to-talk";
@@ -237,7 +238,7 @@ export async function configureDesktopPushToTalk(
       supported: false,
       backend: null,
       bindingLabel: binding?.label ?? null,
-      reason: "This desktop build does not include push to talk.",
+      reason: t({ id: "pushToTalk.unsupportedBuild", defaultMessage: "This desktop build does not include push to talk." }),
     };
   }
   try {
@@ -247,7 +248,7 @@ export async function configureDesktopPushToTalk(
       supported: false,
       backend: null,
       bindingLabel: binding?.label ?? null,
-      reason: "The global push-to-talk shortcut could not be registered.",
+      reason: t({ id: "pushToTalk.registerFailed", defaultMessage: "The global push-to-talk shortcut could not be registered." }),
     };
   }
 }

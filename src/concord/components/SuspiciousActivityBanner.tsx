@@ -5,6 +5,7 @@ import { useTimeTravelers } from "@/concord/hooks/useTimeTravelers";
 import type { FoldedControl } from "@/concord/lib/control";
 import type { Channel, Community } from "@/concord/lib/types";
 import { cn } from "@/lib/utils";
+import { FormattedMessage } from "@/i18n";
 
 /** Sidebar entry for the control-plane watchdog and time-traveler flag; details live in {@link SuspiciousActivityView}. */
 export function SuspiciousActivityBanner({
@@ -35,7 +36,9 @@ export function SuspiciousActivityBanner({
       )}
     >
       <Shield className="size-4 shrink-0" />
-      <span className="truncate flex-1 min-w-0">Suspicious Activity</span>
+      <span className="truncate flex-1 min-w-0">
+        <FormattedMessage id="suspiciousActivityBanner.label" defaultMessage="Suspicious Activity" />
+      </span>
       {count > 1 ? (
         <span className="shrink-0 flex items-center justify-center min-w-4 h-4 px-1 rounded-full bg-destructive text-destructive-foreground text-3xs font-bold leading-none">
           {count}

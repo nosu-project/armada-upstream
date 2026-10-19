@@ -6,6 +6,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Dialog, ChromeDialogContent } from "@/components/ui/dialog";
 import { QRCodeCanvas } from "@/components/ui/qrcode";
 import { useBitcoinWallet } from "@/hooks/useBitcoinWallet";
+import { common, FormattedMessage, useIntl, type IntlShape } from "@/i18n";
 import { satsToUSD, formatBTC } from "@/lib/bitcoin";
 import { writeClipboardText } from "@/lib/clipboard";
 
@@ -15,6 +16,7 @@ interface WalletDialogProps {
 }
 
 export function WalletDialog({ open, onOpenChange }: WalletDialogProps) {
+  const intl = useIntl();
   // Rendered unconditionally by the parent, so gate queries on `open` or they poll Esplora all session.
   const { bitcoinAddress, addressData, btcPrice, transactions, isLoading, error, refetch } = useBitcoinWallet({ enabled: open });
   const [copiedAddress, setCopiedAddress] = useState(false);
@@ -32,7 +34,11 @@ export function WalletDialog({ open, onOpenChange }: WalletDialogProps) {
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <ChromeDialogContent title="Wallet" className="max-w-[95vw] sm:max-w-sm" contentClassName="max-h-[90dvh] overflow-y-auto">
+      <ChromeDialogContent
+        title={intl.formatMessage({ id: "walletDialog.title", defaultMessage: "Wallet" })}
+        className="max-w-[95vw] sm:max-w-sm"
+        contentClassName="max-h-[90dvh] overflow-y-auto"
+      >
         <div className="flex flex-col items-center px-1 pt-2 pb-4 space-y-5">
           {isLoading ? (
             <div className="flex flex-col items-center space-y-2">
@@ -41,10 +47,12 @@ export function WalletDialog({ open, onOpenChange }: WalletDialogProps) {
             </div>
           ) : error ? (
             <div className="text-center space-y-3">
-              <p className="text-sm text-destructive">Failed to load balance</p>
+              <p className="text-sm text-destructive">
+                <FormattedMessage id="walletDialog.loadFailed" defaultMessage="Failed to load balance" />
+              </p>
               <Button variant="outline" size="sm" onClick={() => refetch()}>
                 <RefreshCw className="size-3.5 mr-1.5" />
-                Retry
+                <FormattedMessage {...common.retry} />
               </Button>
             </div>
           ) : addressData ? (
@@ -58,9 +66,15 @@ export function WalletDialog({ open, onOpenChange }: WalletDialogProps) {
               {addressData.pendingBalance !== 0 && (
                 <span className="flex items-center gap-1 text-xs text-orange-500 pt-1">
                   <RefreshCw className="size-3 animate-spin" />
-                  {btcPrice
-                    ? `${satsToUSD(addressData.pendingBalance, btcPrice)} pending`
-                    : "pending"}
+                  {btcPrice ? (
+                    <FormattedMessage
+                      id="walletDialog.amountPending"
+                      defaultMessage="{amount} pending"
+                      values={{ amount: satsToUSD(addressData.pendingBalance, btcPrice) }}
+                    />
+                  ) : (
+                    <FormattedMessage id="walletDialog.pending" defaultMessage="pending" />
+                  )}
                 </span>
               )}
             </div>
@@ -85,7 +99,7 @@ export function WalletDialog({ open, onOpenChange }: WalletDialogProps) {
           {transactions && transactions.length > 0 && (
             <details className="w-full group">
               <summary className="cursor-pointer text-xs text-muted-foreground hover:text-foreground transition-colors list-none flex items-center gap-1">
-                Transactions
+                <FormattedMessage id="walletDialog.transactions" defaultMessage="Transactions" />
                 <ChevronDown className="size-3 transition-transform group-open:rotate-180" />
               </summary>
               <div className="w-full divide-y mt-2">
@@ -101,24 +115,25 @@ export function WalletDialog({ open, onOpenChange }: WalletDialogProps) {
   );
 }
 
-function formatTxDate(timestamp?: number): string {
-  if (!timestamp) return "Pending";
+function formatTxDate(intl: IntlShape, timestamp?: number): string {
+  if (!timestamp) return intl.formatMessage({ id: "walletDialog.txPending", defaultMessage: "Pending" });
   const date = new Date(timestamp * 1000);
   const now = new Date();
   const diffDays = Math.floor((now.getTime() - date.getTime()) / (1000 * 60 * 60 * 24));
-  if (diffDays === 0) return "Today";
-  if (diffDays === 1) return "Yesterday";
-  if (diffDays < 7) return `${diffDays}d ago`;
-  return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  if (diffDays === 0) return intl.formatMessage({ id: "walletDialog.today", defaultMessage: "Today" });
+  if (diffDays === 1) return intl.formatMessage({ id: "walletDialog.yesterday", defaultMessage: "Yesterday" });
+  if (diffDays < 7) return intl.formatMessage({ id: "walletDialog.daysAgo", defaultMessage: "{days}d ago" }, { days: diffDays });
+  return date.toLocaleDateString(intl.locale, { month: "short", day: "numeric" });
 }
 
 function TxRow({ tx, btcPrice }: { tx: import("@/lib/bitcoin").Transaction; btcPrice?: number }) {
+  const intl = useIntl();
   const isReceive = tx.type === "receive";
   return (
     <div className="flex items-center justify-between py-2.5">
       <div>
-        <p className="text-xs font-medium">{isReceive ? "Received" : "Sent"}</p>
-        <p className="text-2xs text-muted-foreground">{formatTxDate(tx.timestamp)}</p>
+        <p className="text-xs font-medium">{isReceive ? <FormattedMessage id="walletDialog.received" defaultMessage="Received" /> : <FormattedMessage id="walletDialog.sent" defaultMessage="Sent" />}</p>
+        <p className="text-2xs text-muted-foreground">{formatTxDate(intl, tx.timestamp)}</p>
       </div>
       <div className="text-right">
         <p className={`text-xs font-medium ${isReceive ? "text-green-600" : "text-red-600"}`}>

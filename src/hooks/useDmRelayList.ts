@@ -24,6 +24,7 @@ import {
 
 import type { NostrEvent } from "@nostrify/nostrify";
 import type { NostrRumor } from "@/lib/nostrRumor";
+import { t } from "@/i18n";
 
 /** NIP-17 DM relay list: a plain replaceable event whose `relay` tags hold the URLs. */
 export const KIND_DM_RELAYS = 10050;
@@ -165,7 +166,7 @@ export function useDmRelayList() {
 
   const publish = useMutation({
     mutationFn: async (relays: string[]) => {
-      if (!user) throw new Error("Not logged in");
+      if (!user) throw new Error(t({ id: "useDmRelayList.notLoggedIn", defaultMessage: "Not logged in" }));
       const urls = relays
         .map((r) => normalizeRelayUrl(r))
         .filter((r): r is string => !!r);
@@ -187,7 +188,7 @@ export function useDmRelayList() {
       ]);
       if (response.answered.length === 0) {
         throw new Error(
-          "Could not confirm your current DM relay list; no changes were published",
+          t({ id: "useDmRelayList.unconfirmed", defaultMessage: "Could not confirm your current DM relay list; no changes were published" }),
         );
       }
       const cached = queryClient.getQueryData<DmRelayListQuery>(queryKey);

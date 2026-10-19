@@ -14,6 +14,7 @@ import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useNostrPublish } from "@/hooks/useNostrPublish";
 import { toast } from "@/hooks/useToast";
 import { useUploadProfileImage } from "@/hooks/useUploadProfileImage";
+import { common, FormattedMessage, t, useIntl } from "@/i18n";
 import { profileImetaTags } from "@/lib/profileImeta";
 import { DEFAULT_AVATARS, defaultAvatarImeta, type DefaultAvatar } from "@/lib/defaultAvatars";
 import { impact } from "@/lib/haptics";
@@ -41,6 +42,7 @@ export interface ProfileStepBodyProps {
 }
 
 export function ProfileStepBody({ expectedPubkey, onPublished, onFinish }: ProfileStepBodyProps) {
+  const intl = useIntl();
   const [name, setName] = useState("");
   const [picture, setPicture] = useState<Picture>({ kind: "none" });
   const [saving, setSaving] = useState(false);
@@ -68,13 +70,13 @@ export function ProfileStepBody({ expectedPubkey, onPublished, onFinish }: Profi
     if (!file) return;
 
     if (!file.type.startsWith("image/")) {
-      toast({ title: "Pick an image", variant: "destructive" });
+      toast({ title: t({ id: "profileStep.pickImage", defaultMessage: "Pick an image" }), variant: "destructive" });
       return;
     }
     if (file.size > 5 * 1024 * 1024) {
       toast({
-        title: "That image is too big",
-        description: "5MB at most.",
+        title: t({ id: "profileStep.tooBig.title", defaultMessage: "That image is too big" }),
+        description: t({ id: "profileStep.tooBig.description", defaultMessage: "5MB at most." }),
         variant: "destructive",
       });
       return;
@@ -85,8 +87,11 @@ export function ProfileStepBody({ expectedPubkey, onPublished, onFinish }: Profi
       if (url) setPicture({ kind: "uploaded", url, imeta });
     } catch {
       toast({
-        title: "Couldn't upload that",
-        description: "Try again, or pick one of the pictures below.",
+        title: t({ id: "profileStep.uploadFailed.title", defaultMessage: "Couldn't upload that" }),
+        description: t({
+          id: "profileStep.uploadFailed.description",
+          defaultMessage: "Try again, or pick one of the pictures below.",
+        }),
         variant: "destructive",
       });
     }
@@ -103,8 +108,11 @@ export function ProfileStepBody({ expectedPubkey, onPublished, onFinish }: Profi
     // Refuse if the new login isn't the active signer, or we'd overwrite another account.
     if (!user || !expectedPubkey || user.pubkey !== expectedPubkey) {
       toast({
-        title: "Profile not saved",
-        description: "This account isn't active yet. You can set it up from Settings.",
+        title: t({ id: "profileStep.notActive.title", defaultMessage: "Profile not saved" }),
+        description: t({
+          id: "profileStep.notActive.description",
+          defaultMessage: "This account isn't active yet. You can set it up from Settings.",
+        }),
         variant: "destructive",
       });
       onFinish();
@@ -139,8 +147,11 @@ export function ProfileStepBody({ expectedPubkey, onPublished, onFinish }: Profi
       queryClient.invalidateQueries({ queryKey: ["author", user.pubkey] });
     } catch {
       toast({
-        title: "Couldn't save your profile",
-        description: "Your account is fine. Set a name and picture from Settings.",
+        title: t({ id: "profileStep.saveFailed.title", defaultMessage: "Couldn't save your profile" }),
+        description: t({
+          id: "profileStep.saveFailed.description",
+          defaultMessage: "Your account is fine. Set a name and picture from Settings.",
+        }),
         variant: "destructive",
       });
     } finally {
@@ -152,7 +163,7 @@ export function ProfileStepBody({ expectedPubkey, onPublished, onFinish }: Profi
   return (
     <div className="flex flex-col items-center gap-6 text-center">
       <h1 className="font-mono text-2xl font-bold lowercase tracking-tight text-foreground">
-        set up your profile
+        <FormattedMessage id="profileStep.title" defaultMessage="set up your profile" />
       </h1>
 
       <div className="relative">
@@ -170,7 +181,7 @@ export function ProfileStepBody({ expectedPubkey, onPublished, onFinish }: Profi
           type="button"
           onClick={() => fileInputRef.current?.click()}
           disabled={busy}
-          aria-label="Choose a photo"
+          aria-label={intl.formatMessage({ id: "profileStep.choosePhoto", defaultMessage: "Choose a photo" })}
           className="absolute -bottom-1 -right-1 flex size-9 touch:size-11 items-center justify-center rounded-full border-4 border-background bg-primary text-primary-foreground outline-none transition-transform hover:scale-105 focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
         >
           {uploading ? (
@@ -193,14 +204,14 @@ export function ProfileStepBody({ expectedPubkey, onPublished, onFinish }: Profi
           cut corners (see `.clip-hairline-lg`), and inputs have no ::before. */}
       <div className="w-full">
         <label htmlFor="onboarding-name" className="sr-only">
-          Your name
+          <FormattedMessage id="profileStep.yourName" defaultMessage="Your name" />
         </label>
         <div className="clip-hairline-lg [--edge:var(--border)] [--fill:var(--muted)] [--fill-hover:var(--muted)] focus-within:[--edge:var(--ring)]">
           <Input
             id="onboarding-name"
             value={name}
             onChange={(event) => setName(event.target.value)}
-            placeholder="Your name"
+            placeholder={intl.formatMessage({ id: "profileStep.yourName", defaultMessage: "Your name" })}
             autoComplete="name"
             autoCapitalize="words"
             enterKeyHint="done"
@@ -261,10 +272,10 @@ export function ProfileStepBody({ expectedPubkey, onPublished, onFinish }: Profi
           {saving ? (
             <>
               <Loader2 aria-hidden="true" className="size-4 animate-spin" />
-              Saving…
+              <FormattedMessage {...common.saving} />
             </>
           ) : (
-            "Continue"
+            <FormattedMessage {...common.continue} />
           )}
         </Button>
         <Button
@@ -274,7 +285,7 @@ export function ProfileStepBody({ expectedPubkey, onPublished, onFinish }: Profi
           onClick={onFinish}
           disabled={busy}
         >
-          Skip for now
+          <FormattedMessage id="profileStep.skipForNow" defaultMessage="Skip for now" />
         </Button>
       </div>
     </div>

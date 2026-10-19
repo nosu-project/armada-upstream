@@ -140,7 +140,7 @@ public class IncomingCallActivity extends Activity {
         root.addView(title);
 
         TextView sub = new TextView(this);
-        sub.setText("Incoming call");
+        sub.setText(AppLocale.string(this, R.string.notif_incoming_call));
         sub.setTextColor(Color.parseColor("#b3ffffff"));
         sub.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
         sub.setGravity(Gravity.CENTER);
@@ -153,10 +153,10 @@ public class IncomingCallActivity extends Activity {
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER);
-        row.addView(roundButton("Decline", "#e5484d", onDecline));
+        row.addView(roundButton(AppLocale.string(this, R.string.call_decline), "#e5484d", onDecline));
         LinearLayout gap = new LinearLayout(this);
         row.addView(gap, new LinearLayout.LayoutParams(dp(72), 1));
-        row.addView(roundButton("Accept", "#30a46c", onAccept));
+        row.addView(roundButton(AppLocale.string(this, R.string.call_accept), "#30a46c", onAccept));
         root.addView(row);
         return root;
     }

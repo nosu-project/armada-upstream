@@ -2,6 +2,7 @@ import { Loader2, Pause, Play } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import type { ActivePause } from "@/concord/lib/control";
+import { FormattedMessage, useIntl } from "@/i18n";
 
 /** Pause banner (CORD-04 §8); enforcement is the fold and the composer. MANAGE_CHANNELS gets Resume. */
 export function CommunityPauseBanner({
@@ -15,14 +16,29 @@ export function CommunityPauseBanner({
   onResume: () => void;
   resuming: boolean;
 }) {
-  const until = pause.until ? new Date(pause.until * 1000) : undefined;
+  const intl = useIntl();
+  const until = pause.until
+    ? new Date(pause.until * 1000).toLocaleString(intl.locale, { hour: "numeric", minute: "2-digit", month: "short", day: "numeric" })
+    : undefined;
   return (
     <div className="flex items-center gap-2 px-3 py-2 text-xs border-t border-warning/20 bg-warning/10 text-warning">
       <Pause className="size-4 shrink-0" />
       <span className="flex-1 min-w-0">
-        This community is paused. New messages are on hold
-        {until ? ` until ${until.toLocaleString([], { hour: "numeric", minute: "2-digit", month: "short", day: "numeric" })}` : ""}
-        {canManage ? "." : ". A moderator can resume it."}
+        {until ? (
+          canManage ? (
+            <FormattedMessage id="communityPauseBanner.pausedUntil" defaultMessage="This community is paused. New messages are on hold until {until}." values={{ until }} />
+          ) : (
+            <FormattedMessage
+              id="communityPauseBanner.pausedUntilAskMod"
+              defaultMessage="This community is paused. New messages are on hold until {until}. A moderator can resume it."
+              values={{ until }}
+            />
+          )
+        ) : canManage ? (
+          <FormattedMessage id="communityPauseBanner.paused" defaultMessage="This community is paused. New messages are on hold." />
+        ) : (
+          <FormattedMessage id="communityPauseBanner.pausedAskMod" defaultMessage="This community is paused. New messages are on hold. A moderator can resume it." />
+        )}
       </span>
       {canManage && (
         <Button
@@ -33,7 +49,7 @@ export function CommunityPauseBanner({
           onClick={onResume}
         >
           {resuming ? <Loader2 className="size-3.5 animate-spin" /> : <Play className="size-3.5" />}
-          Resume
+          <FormattedMessage id="communityPauseBanner.resume" defaultMessage="Resume" />
         </Button>
       )}
     </div>

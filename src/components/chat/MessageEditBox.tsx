@@ -4,6 +4,7 @@ import { RichTextarea } from "@/components/chat/RichTextarea";
 import { useRichText } from "@/components/chat/useRichText";
 import { useAutosizeTextarea } from "@/hooks/useAutosizeTextarea";
 import { useCustomEmojis } from "@/hooks/useCustomEmojis";
+import { FormattedMessage, common } from "@/i18n";
 
 interface MessageEditBoxProps {
   /** The message's canonical content. */
@@ -73,12 +74,14 @@ export function MessageEditBox({ content, tags, sendOnEnter, onSubmit, onCancel 
           className="font-semibold text-primary hover:underline touch:py-2"
           onClick={() => onSubmit(text)}
         >
-          Save
+          <FormattedMessage {...common.save} />
         </button>
         <button type="button" className="hover:text-foreground touch:py-2" onClick={onCancel}>
-          Cancel
+          <FormattedMessage {...common.cancel} />
         </button>
-        <span className="opacity-70">escape to cancel · enter to save</span>
+        <span className="opacity-70">
+          <FormattedMessage id="messageEditBox.hint" defaultMessage="escape to cancel · enter to save" />
+        </span>
       </div>
     </div>
   );

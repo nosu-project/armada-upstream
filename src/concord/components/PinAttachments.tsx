@@ -10,6 +10,7 @@ import {
 } from "@/concord/lib/pinAttachments";
 import type { ImetaEntry } from "@/lib/imeta";
 import { cn } from "@/lib/utils";
+import { FormattedMessage, useIntl } from "@/i18n";
 
 /**
  * A pin's attachments INLINE: keyless readers can't jump to context, but the
@@ -20,6 +21,7 @@ const MAX_INLINE = 4;
 const PREVIEW_CLASS = "max-h-32 max-w-full rounded object-contain";
 
 function PinImage({ entry, onOpen }: { entry: ImetaEntry; onOpen?: () => void }) {
+  const intl = useIntl();
   const [revealed, setRevealed] = useState(false);
   const { resolved, onError, failed } = useMediaWithFallback({
     url: entry.url,
@@ -56,7 +58,7 @@ function PinImage({ entry, onOpen }: { entry: ImetaEntry; onOpen?: () => void })
   const img = (
     <img
       src={src}
-      alt={cover ? "" : (entry.name ?? "Pinned image")}
+      alt={cover ? "" : (entry.name ?? intl.formatMessage({ id: "pinAttachments.imageAlt", defaultMessage: "Pinned image" }))}
       aria-hidden={cover ? true : undefined}
       loading="lazy"
       className={PREVIEW_CLASS}
@@ -126,7 +128,9 @@ export function PinAttachments({
         );
       })}
       {hidden > 0 && (
-        <span className="text-2xs text-muted-foreground">+{hidden} more</span>
+        <span className="text-2xs text-muted-foreground">
+          <FormattedMessage id="pinAttachments.more" defaultMessage="+{count} more" values={{ count: hidden }} />
+        </span>
       )}
     </div>
   );

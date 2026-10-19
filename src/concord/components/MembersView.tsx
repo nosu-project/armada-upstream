@@ -47,6 +47,7 @@ import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { shortTimeAgo } from "@/lib/formatTime";
 import { toast } from "@/hooks/useToast";
 import { useEventStore } from "@/hooks/useEventStore";
+import { defineMessages, FormattedMessage, t, useIntl } from "@/i18n";
 
 /** Render cap before "Show all" (slicing, not virtualization). */
 const RENDER_CAP = 150;
@@ -68,6 +69,7 @@ export function MembersView({
   canModerate: boolean;
   canManageRoles: boolean;
 }) {
+  const intl = useIntl();
   const { user } = useCurrentUser();
   const { mutedPubkeys } = useMutedPubkeys();
   const queryClient = useQueryClient();
@@ -201,10 +203,17 @@ export function MembersView({
   const runSetTier = async (member: string, tier: StockTier | null) => {
     try {
       await setTier({ member, tier });
-      toast({ title: tier === "admin" ? "Made admin" : tier === "moderator" ? "Made moderator" : "Role removed" });
+      toast({
+        title:
+          tier === "admin"
+            ? t({ id: "membersView.madeAdmin", defaultMessage: "Made admin" })
+            : tier === "moderator"
+              ? t({ id: "membersView.madeModerator", defaultMessage: "Made moderator" })
+              : t({ id: "membersView.roleRemoved", defaultMessage: "Role removed" }),
+      });
       setSelection(emptySelection());
     } catch (e) {
-      toast({ title: "Couldn't change role", description: e instanceof Error ? e.message : undefined, variant: "destructive" });
+      toast({ title: t({ id: "membersView.roleFailed", defaultMessage: "Couldn't change role" }), description: e instanceof Error ? e.message : undefined, variant: "destructive" });
     }
   };
   const healTargets = useMemo(() => {
@@ -252,8 +261,20 @@ export function MembersView({
     setHealing(null);
     setSelection(emptySelection());
     toast({
-      title: `Sent current keys to ${sent} member${sent === 1 ? "" : "s"}`,
-      description: failed.length > 0 ? `${failed.length} failed. Try them again shortly.` : undefined,
+      title: t(
+        {
+          id: "membersView.keysSent",
+          defaultMessage: "{count, plural, one {Sent current keys to # member} other {Sent current keys to # members}}",
+        },
+        { count: sent },
+      ),
+      description:
+        failed.length > 0
+          ? t(
+              { id: "membersView.keysFailed", defaultMessage: "{count} failed. Try them again shortly." },
+              { count: failed.length },
+            )
+          : undefined,
       variant: failed.length > 0 ? "destructive" : undefined,
     });
   };
@@ -287,7 +308,9 @@ export function MembersView({
     <div ref={containerRef} className="mx-auto w-full max-w-3xl space-y-4 p-4 pb-24">
       <div className="flex items-center gap-2">
         <Users className="size-5 text-primary" />
-        <h2 className="text-lg font-semibold">Members</h2>
+        <h2 className="text-lg font-semibold">
+          <FormattedMessage id="membersView.title" defaultMessage="Members" />
+        </h2>
         <span className="text-sm text-muted-foreground">{allRows.length}</span>
       </div>
 
@@ -300,9 +323,18 @@ export function MembersView({
           }`}
         >
           <ShieldAlert className="size-4 shrink-0" />
-          {suspiciousSet.size} member{suspiciousSet.size === 1 ? " has" : "s have"} tried to make
-          changes they aren't allowed to. Nothing worked, but they're worth a look.
-          <span className="ml-auto shrink-0 text-xs underline">{suspiciousOnly ? "Show all" : "Show them"}</span>
+          <FormattedMessage
+            id="membersView.suspiciousBanner"
+            defaultMessage="{count, plural, one {# member has tried to make changes they aren't allowed to. Nothing worked, but they're worth a look.} other {# members have tried to make changes they aren't allowed to. Nothing worked, but they're worth a look.}}"
+            values={{ count: suspiciousSet.size }}
+          />
+          <span className="ml-auto shrink-0 text-xs underline">
+            {suspiciousOnly ? (
+              <FormattedMessage id="membersView.showAll" defaultMessage="Show all" />
+            ) : (
+              <FormattedMessage id="membersView.showThem" defaultMessage="Show them" />
+            )}
+          </span>
         </button>
       )}
 
@@ -315,39 +347,62 @@ export function MembersView({
           }`}
         >
           <TriangleAlert className="size-4 shrink-0" />
-          {behindCount} member{behindCount === 1 ? " was" : "s were"} last seen on an older epoch and
-          never adopted a key rotation.
-          <span className="ml-auto shrink-0 text-xs underline">{behindOnly ? "Show all" : "Show them"}</span>
+          <FormattedMessage
+            id="membersView.behindBanner"
+            defaultMessage="{count, plural, one {# member was last seen on an older epoch and never adopted a key rotation.} other {# members were last seen on an older epoch and never adopted a key rotation.}}"
+            values={{ count: behindCount }}
+          />
+          <span className="ml-auto shrink-0 text-xs underline">
+            {behindOnly ? (
+              <FormattedMessage id="membersView.showAll" defaultMessage="Show all" />
+            ) : (
+              <FormattedMessage id="membersView.showThem" defaultMessage="Show them" />
+            )}
+          </span>
         </button>
       )}
 
       <div className="flex flex-wrap items-center gap-2">
-        <SearchField value={query} onChange={setQuery} placeholder="Search members" className="min-w-40 flex-1" />
+        <SearchField value={query} onChange={setQuery} placeholder={intl.formatMessage({ id: "membersView.searchPlaceholder", defaultMessage: "Search members" })} className="min-w-40 flex-1" />
         <Select value={roleFilter} onValueChange={setRoleFilter}>
           <SelectTrigger className="w-36 shrink-0">
-            <SelectValue placeholder="Role" />
+            <SelectValue placeholder={intl.formatMessage({ id: "membersView.rolePlaceholder", defaultMessage: "Role" })} />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="all">Every role</SelectItem>
+            <SelectItem value="all">
+              <FormattedMessage id="membersView.everyRole" defaultMessage="Every role" />
+            </SelectItem>
             {roles.map((r) => (
               <SelectItem key={r.roleId} value={r.roleId}>
                 {r.name}
               </SelectItem>
             ))}
-            <SelectItem value="none">No role</SelectItem>
+            <SelectItem value="none">
+              <FormattedMessage id="membersView.noRole" defaultMessage="No role" />
+            </SelectItem>
           </SelectContent>
         </Select>
         {inviters.length > 0 && (
           <Select value={inviterFilter} onValueChange={setInviterFilter}>
             <SelectTrigger className="w-40 shrink-0">
-              <SelectValue placeholder="Invited by" />
+              <SelectValue
+                placeholder={intl.formatMessage({ id: "membersView.invitedByPlaceholder", defaultMessage: "Invited by" })}
+              />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="all">Any arrival</SelectItem>
-              <SelectItem value="any">Invited (any link)</SelectItem>
+              <SelectItem value="all">
+                <FormattedMessage id="membersView.anyArrival" defaultMessage="Any arrival" />
+              </SelectItem>
+              <SelectItem value="any">
+                <FormattedMessage id="membersView.invitedAnyLink" defaultMessage="Invited (any link)" />
+              </SelectItem>
               {inviters.map((pk) => (
                 <SelectItem key={pk} value={pk}>
-                  by <InviterName pubkey={pk} />
+                  <FormattedMessage
+                    id="membersView.byInviter"
+                    defaultMessage="by {name}"
+                    values={{ name: <InviterName pubkey={pk} /> }}
+                  />
                 </SelectItem>
               ))}
             </SelectContent>
@@ -355,13 +410,21 @@ export function MembersView({
         )}
         <Select value={sortKey} onValueChange={(v) => setSortKey(v as MemberSortKey)}>
           <SelectTrigger className="w-40 shrink-0">
-            <SelectValue placeholder="Sort" />
+            <SelectValue placeholder={intl.formatMessage({ id: "membersView.sortPlaceholder", defaultMessage: "Sort" })} />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="role">By role</SelectItem>
-            <SelectItem value="seen">Recently seen</SelectItem>
-            <SelectItem value="joined-newest">Newest members</SelectItem>
-            <SelectItem value="joined-oldest">Oldest members</SelectItem>
+            <SelectItem value="role">
+              <FormattedMessage id="membersView.sortRole" defaultMessage="By role" />
+            </SelectItem>
+            <SelectItem value="seen">
+              <FormattedMessage id="membersView.sortSeen" defaultMessage="Recently seen" />
+            </SelectItem>
+            <SelectItem value="joined-newest">
+              <FormattedMessage id="membersView.sortNewest" defaultMessage="Newest members" />
+            </SelectItem>
+            <SelectItem value="joined-oldest">
+              <FormattedMessage id="membersView.sortOldest" defaultMessage="Oldest members" />
+            </SelectItem>
           </SelectContent>
         </Select>
       </div>
@@ -372,14 +435,18 @@ export function MembersView({
             checked={allVisibleSelected ? true : someVisibleSelected ? "indeterminate" : false}
             onCheckedChange={toggleAllVisible}
           />
-          Select all shown
+          <FormattedMessage id="membersView.selectAllShown" defaultMessage="Select all shown" />
         </label>
       )}
 
       {visible.length === 0 ? (
         <div className="flex flex-col items-center gap-2 rounded-md bg-foreground/5 px-4 py-8 text-sm text-muted-foreground">
           <Users className="size-5" />
-          {allRows.length === 0 ? "No members observed yet." : "No members match."}
+          {allRows.length === 0 ? (
+            <FormattedMessage id="membersView.noneObserved" defaultMessage="No members observed yet." />
+          ) : (
+            <FormattedMessage id="membersView.noneMatch" defaultMessage="No members match." />
+          )}
         </div>
       ) : (
         <ul className="space-y-1.5">
@@ -402,26 +469,40 @@ export function MembersView({
 
       {!showAll && rows.length > RENDER_CAP && (
         <Button type="button" variant="outline" className="w-full" onClick={() => setShowAll(true)}>
-          Show all {rows.length}
+          <FormattedMessage id="membersView.showAllCount" defaultMessage="Show all {count}" values={{ count: rows.length }} />
         </Button>
       )}
 
       {selectable && selected.length > 0 && (
         <div className="vessel-lift sticky bottom-2 z-10">
           <div className="vessel flex flex-wrap items-center gap-2 px-3 py-2 pb-safe">
-            <span className="text-sm font-medium">{selected.length} selected</span>
+            <span className="text-sm font-medium">
+              <FormattedMessage
+                id="membersView.selectedCount"
+                defaultMessage="{count} selected"
+                values={{ count: selected.length }}
+              />
+            </span>
             <div className="ml-auto flex flex-wrap items-center gap-2">
               {healTargets.length > 0 && (
                 <Button type="button" size="sm" variant="secondary" disabled={healing !== null} onClick={runMassHeal}>
                   {healing ? (
                     <>
                       <Loader2 className="size-3.5 animate-spin" />
-                      Sending {healing.done}/{healing.total}
+                      <FormattedMessage
+                        id="membersView.sendingProgress"
+                        defaultMessage="Sending {done}/{total}"
+                        values={{ done: healing.done, total: healing.total }}
+                      />
                     </>
                   ) : (
                     <>
                       <KeyRound className="size-3.5" />
-                      Send keys ({healTargets.length})
+                      <FormattedMessage
+                        id="membersView.sendKeys"
+                        defaultMessage="Send keys ({count})"
+                        values={{ count: healTargets.length }}
+                      />
                     </>
                   )}
                 </Button>
@@ -436,11 +517,19 @@ export function MembersView({
                   onClick={() => void runSetTier(tierTarget, tier)}
                 >
                   {tier === "admin" ? <Crown className="size-3.5" /> : tier === "moderator" ? <Shield className="size-3.5" /> : <ShieldOff className="size-3.5" />}
-                  {tier === "admin"
-                    ? "Make admin"
-                    : tier === "moderator"
-                      ? tierCurrent === "admin" ? "Demote to moderator" : "Make moderator"
-                      : tierCurrent === "admin" ? "Remove admin" : "Remove moderator"}
+                  {tier === "admin" ? (
+                    <FormattedMessage id="membersView.makeAdmin" defaultMessage="Make admin" />
+                  ) : tier === "moderator" ? (
+                    tierCurrent === "admin" ? (
+                      <FormattedMessage id="membersView.demoteToModerator" defaultMessage="Demote to moderator" />
+                    ) : (
+                      <FormattedMessage id="membersView.makeModerator" defaultMessage="Make moderator" />
+                    )
+                  ) : tierCurrent === "admin" ? (
+                    <FormattedMessage id="membersView.removeAdmin" defaultMessage="Remove admin" />
+                  ) : (
+                    <FormattedMessage id="membersView.removeModerator" defaultMessage="Remove moderator" />
+                  )}
                 </Button>
               ))}
               {canModerate && (
@@ -453,7 +542,15 @@ export function MembersView({
                     onClick={() => setKickTargets(kickable)}
                   >
                     <UserMinus className="size-3.5" />
-                    Kick{kickable.length > 0 ? ` (${kickable.length})` : ""}
+                    {kickable.length > 0 ? (
+                      <FormattedMessage
+                        id="membersView.kickCount"
+                        defaultMessage="Kick ({count})"
+                        values={{ count: kickable.length }}
+                      />
+                    ) : (
+                      <FormattedMessage id="membersView.kick" defaultMessage="Kick" />
+                    )}
                   </Button>
                   <Button
                     type="button"
@@ -463,12 +560,20 @@ export function MembersView({
                     onClick={() => setBanTargets(bannable)}
                   >
                     <Ban className="size-3.5" />
-                    Ban{bannable.length > 0 ? ` (${bannable.length})` : ""}
+                    {bannable.length > 0 ? (
+                      <FormattedMessage
+                        id="membersView.banCount"
+                        defaultMessage="Ban ({count})"
+                        values={{ count: bannable.length }}
+                      />
+                    ) : (
+                      <FormattedMessage id="membersView.ban" defaultMessage="Ban" />
+                    )}
                   </Button>
                 </>
               )}
               <Button type="button" size="sm" variant="ghost" onClick={() => setSelection(emptySelection())}>
-                Clear
+                <FormattedMessage id="membersView.clear" defaultMessage="Clear" />
               </Button>
             </div>
           </div>
@@ -486,7 +591,13 @@ export function MembersView({
           const result = await moderation.kickMany({ targets, onProgress });
           if (result.failed.length === 0) {
             toast({
-              title: `Kicked ${result.kicked.length} member${result.kicked.length === 1 ? "" : "s"}`,
+              title: t(
+                {
+                  id: "membersView.kicked",
+                  defaultMessage: "{count, plural, one {Kicked # member} other {Kicked # members}}",
+                },
+                { count: result.kicked.length },
+              ),
             });
           }
           return result;
@@ -502,13 +613,28 @@ export function MembersView({
         }}
         onConfirm={async (targets, onPhase, onStripProgress) => {
           const { rekeyed, publicBan, banned } = await moderation.banMany({ targets, onPhase, onStripProgress });
-          const who = `${banned.length} member${banned.length === 1 ? "" : "s"}`;
+          const title = t(
+            {
+              id: "membersView.banned",
+              defaultMessage: "{count, plural, one {Banned # member} other {Banned # members}}",
+            },
+            { count: banned.length },
+          );
           if (rekeyed || publicBan) {
-            toast({ title: `Banned ${who}`, description: "They are silenced for everyone in this community." });
+            toast({
+              title,
+              description: t({
+                id: "membersView.bannedSilenced",
+                defaultMessage: "They are silenced for everyone in this community.",
+              }),
+            });
           } else {
             toast({
-              title: `Banned ${who}`,
-              description: "They're silenced; the final lock-out will finish on your next visit.",
+              title,
+              description: t({
+                id: "membersView.bannedPending",
+                defaultMessage: "They're silenced; the final lock-out will finish on your next visit.",
+              }),
             });
           }
         }}
@@ -517,11 +643,17 @@ export function MembersView({
   );
 }
 
-const JOIN_PROVENANCE: Record<MemberDirectoryRow["joinKind"], string> = {
-  join: "From their own join.",
-  snapshot: "Estimated. This is the time of a key rotation, not the actual join.",
-  observed: "Unknown. Inferred from activity because no join was observed.",
-};
+const JOIN_PROVENANCE = defineMessages({
+  join: { id: "membersView.provenance.join", defaultMessage: "From their own join." },
+  snapshot: {
+    id: "membersView.provenance.snapshot",
+    defaultMessage: "Estimated. This is the time of a key rotation, not the actual join.",
+  },
+  observed: {
+    id: "membersView.provenance.observed",
+    defaultMessage: "Unknown. Inferred from activity because no join was observed.",
+  },
+}) satisfies Record<MemberDirectoryRow["joinKind"], unknown>;
 
 function MemberRow({
   row,
@@ -546,6 +678,7 @@ function MemberRow({
 }) {
   const author = useAuthor(row.pubkey);
   const name = useScopedDisplayName(row.pubkey, author.data?.metadata);
+  const intl = useIntl();
 
   return (
     <li
@@ -569,7 +702,7 @@ function MemberRow({
             e.stopPropagation();
             onToggle(e.shiftKey);
           }}
-          aria-label={`Select ${name}`}
+          aria-label={intl.formatMessage({ id: "membersView.selectMember", defaultMessage: "Select {name}" }, { name })}
         />
       )}
       <Avatar className="size-6 shrink-0">
@@ -581,7 +714,9 @@ function MemberRow({
       {/* flex-auto, not flex-1: with basis 0% the chips would crush the name. */}
       <span className="min-w-0 flex-auto truncate font-medium">
         <DisplayName pubkey={row.pubkey} name={name} />
-        {row.isSelf && <span className="ml-1.5 text-xs font-normal text-muted-foreground">(you)</span>}
+        {row.isSelf && <span className="ml-1.5 text-xs font-normal text-muted-foreground">
+            <FormattedMessage id="membersView.you" defaultMessage="(you)" />
+          </span>}
       </span>
 
       {suspicion && (
@@ -589,19 +724,26 @@ function MemberRow({
           <TooltipTrigger asChild>
             <span className="inline-flex min-w-0 shrink items-center gap-1 rounded-full bg-destructive/15 px-1.5 py-0.5 text-3xs font-medium text-destructive">
               <ShieldAlert className="size-3 shrink-0" />
-              <span className="truncate">Suspicious</span>
+              <span className="truncate">
+                <FormattedMessage id="membersView.suspicious" defaultMessage="Suspicious" />
+              </span>
             </span>
           </TooltipTrigger>
           <TooltipContent className="max-w-60 text-xs">
-            Tried to make {describeAttempts(suspicion.attempts)} without permission. None of it
-            worked, and nothing in the community changed.
+            <FormattedMessage
+              id="membersView.suspiciousTooltip"
+              defaultMessage="Tried to make {attempts} without permission. None of it worked, and nothing in the community changed."
+              values={{ attempts: describeAttempts(suspicion.attempts) }}
+            />
           </TooltipContent>
         </Tooltip>
       )}
       {row.isOwner && (
         <span className="inline-flex min-w-0 shrink items-center gap-1 rounded-full bg-amber-500/15 px-1.5 py-0.5 text-3xs font-medium text-amber-500">
           <Crown className="size-3 shrink-0" />
-          <span className="truncate">Owner</span>
+          <span className="truncate">
+            <FormattedMessage id="membersView.owner" defaultMessage="Owner" />
+          </span>
         </span>
       )}
       {!row.isOwner && badge && (
@@ -613,7 +755,13 @@ function MemberRow({
               }`}
             >
               <Shield className="size-3 shrink-0" />
-              <span className="truncate">{badge === "admin" ? "Admin" : "Mod"}</span>
+              <span className="truncate">
+                {badge === "admin" ? (
+                  <FormattedMessage id="membersView.admin" defaultMessage="Admin" />
+                ) : (
+                  <FormattedMessage id="membersView.mod" defaultMessage="Mod" />
+                )}
+              </span>
             </span>
           </TooltipTrigger>
           {roleNames.length > 0 && (
@@ -627,16 +775,37 @@ function MemberRow({
         <Tooltip>
           <TooltipTrigger asChild>
             <span className="min-w-0 shrink-[3] truncate text-xs tabular-nums text-muted-foreground">
-              {row.joinMs !== undefined ? `joined ${shortTimeAgo(Math.floor(row.joinMs / 1000))}` : "join unknown"}
+              {row.joinMs !== undefined ? (
+                <FormattedMessage
+                  id="membersView.joinedAgo"
+                  defaultMessage="joined {ago}"
+                  values={{ ago: shortTimeAgo(Math.floor(row.joinMs / 1000)) }}
+                />
+              ) : (
+                <FormattedMessage id="membersView.joinUnknown" defaultMessage="join unknown" />
+              )}
             </span>
           </TooltipTrigger>
           <TooltipContent className="max-w-56 space-y-0.5 text-xs">
-            {row.joinMs !== undefined && <p>{new Date(row.joinMs).toLocaleString()}</p>}
-            <p>{JOIN_PROVENANCE[row.joinKind]}</p>
+            {row.joinMs !== undefined && <p>{new Date(row.joinMs).toLocaleString(intl.locale)}</p>}
+            <p>
+              <FormattedMessage {...JOIN_PROVENANCE[row.joinKind]} />
+            </p>
             {row.invite && (
               <p>
-                Invited by <InviterName pubkey={row.invite.creator} />
-                {row.invite.label ? ` through "${row.invite.label}"` : ""}.
+                {row.invite.label ? (
+                  <FormattedMessage
+                    id="membersView.invitedByThrough"
+                    defaultMessage={'Invited by {name} through "{label}".'}
+                    values={{ name: <InviterName pubkey={row.invite.creator} />, label: row.invite.label }}
+                  />
+                ) : (
+                  <FormattedMessage
+                    id="membersView.invitedBy"
+                    defaultMessage="Invited by {name}."
+                    values={{ name: <InviterName pubkey={row.invite.creator} /> }}
+                  />
+                )}
               </p>
             )}
           </TooltipContent>
@@ -647,21 +816,44 @@ function MemberRow({
         <Tooltip>
           <TooltipTrigger asChild>
             <span className="min-w-0 shrink-[4] truncate text-xs text-muted-foreground">
-              via <InviterName pubkey={row.invite.creator} />
+              <FormattedMessage
+                id="membersView.via"
+                defaultMessage="via {name}"
+                values={{ name: <InviterName pubkey={row.invite.creator} /> }}
+              />
             </span>
           </TooltipTrigger>
           <TooltipContent className="max-w-56 text-xs">
-            Joined through {row.invite.label ? `the "${row.invite.label}" invite link` : "an invite link"} created
-            by <InviterName pubkey={row.invite.creator} />.
+            {row.invite.label ? (
+              <FormattedMessage
+                id="membersView.joinedThroughLabel"
+                defaultMessage={'Joined through the "{label}" invite link created by {name}.'}
+                values={{ label: row.invite.label, name: <InviterName pubkey={row.invite.creator} /> }}
+              />
+            ) : (
+              <FormattedMessage
+                id="membersView.joinedThrough"
+                defaultMessage="Joined through an invite link created by {name}."
+                values={{ name: <InviterName pubkey={row.invite.creator} /> }}
+              />
+            )}
           </TooltipContent>
         </Tooltip>
       )}
       {density !== "minimal" && (
         <span
           className="min-w-0 shrink-[2] truncate text-xs tabular-nums text-muted-foreground"
-          title={row.lastSeenMs > 0 ? new Date(row.lastSeenMs).toLocaleString() : undefined}
+          title={row.lastSeenMs > 0 ? new Date(row.lastSeenMs).toLocaleString(intl.locale) : undefined}
         >
-          {row.lastSeenMs > 0 ? `seen ${shortTimeAgo(Math.floor(row.lastSeenMs / 1000))}` : "not seen"}
+          {row.lastSeenMs > 0 ? (
+            <FormattedMessage
+              id="membersView.seenAgo"
+              defaultMessage="seen {ago}"
+              values={{ ago: shortTimeAgo(Math.floor(row.lastSeenMs / 1000)) }}
+            />
+          ) : (
+            <FormattedMessage id="membersView.notSeen" defaultMessage="not seen" />
+          )}
         </span>
       )}
 
@@ -670,12 +862,15 @@ function MemberRow({
           <TooltipTrigger asChild>
             <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-warning/15 px-1.5 py-0.5 text-3xs font-medium text-warning">
               <TriangleAlert className="size-3" />
-              epoch {row.epoch?.toString()}
+              <FormattedMessage id="membersView.epochChip" defaultMessage="epoch {epoch}" values={{ epoch: row.epoch?.toString() }} />
             </span>
           </TooltipTrigger>
           <TooltipContent className="max-w-52 text-xs">
-            Last seen posting under epoch {row.epoch?.toString()}, but the community is on{" "}
-            {currentEpoch.toString()}. Select them and use Send keys to catch them up.
+            <FormattedMessage
+              id="membersView.behindTooltip"
+              defaultMessage="Last seen posting under epoch {epoch}, but the community is on {current}. Select them and use Send keys to catch them up."
+              values={{ epoch: row.epoch?.toString(), current: currentEpoch.toString() }}
+            />
           </TooltipContent>
         </Tooltip>
       )}

@@ -44,6 +44,7 @@ import {
   nativeNotificationConfigAction,
   type NativeNotificationEnablement,
 } from "@/lib/nativeNotificationConfig";
+import { getLocale, useIntl } from "@/i18n";
 
 const NATIVE_INTENT_KEY = "armada:native-notif-intent";
 
@@ -151,7 +152,7 @@ export async function disableNativeNotificationsForAccountExit(): Promise<void> 
   // Close the gate synchronously so a rerender can't re-enqueue the outgoing account's payload.
   // Intent is unchanged.
   setEnabledShared("disabled");
-  await configureNative({ enabled: false });
+  await configureNative({ enabled: false, locale: getLocale() });
 }
 
 // One module-wide account-exit subscription so the native teardown doesn't run twice.
@@ -214,6 +215,8 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
     configurationReady: dmPeersConfigReady,
   } = useKnownDmPeers();
   const { channelLevel, concordChannelLevel } = useNotifLevels();
+  // Part of the deduped payload, so a language switch re-words the native side.
+  const { locale } = useIntl();
 
   const enablement = useSyncExternalStore(
     subscribeEnabled,
@@ -479,12 +482,13 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
 
     let payload: Parameters<typeof ArmadaNotification.configure>[0];
     if (action === "disable") {
-      payload = { enabled: false };
+      payload = { enabled: false, locale };
     } else if (action === "preserve") {
       return;
     } else {
       payload = {
         enabled: true,
+        locale,
         userPubkey: user!.pubkey,
         groupPlaneReady,
         dmRelayPlaneReady: dmRelaysReady,
@@ -526,7 +530,7 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
     configureNative(payload, nativeNeedsRepair).catch((err) => {
       console.warn("[native-notif] configure failed:", err);
     });
-  }, [supported, enablement, user, notificationSettingsReady, selfDocs, relayUrls, groupIds, groupSubs, mentionOnlyGroupIds, prefsRecord, concordSubs, concordLevels, concordSubsReady, concordLeftCommunities, dmRelays, dmRelaysReady, dmFollows, dmKnownPeers, dmKnownConversations, dmLevels, dmMutedPeers, dmPeersConfigReady, prefs.dmRequests, selfRelays, signerCfg, gitSubs, mediaPolicy, groupList, gitRepositories.length, gitAnnouncements.data, health]);
+  }, [supported, enablement, user, notificationSettingsReady, selfDocs, relayUrls, groupIds, groupSubs, mentionOnlyGroupIds, prefsRecord, concordSubs, concordLevels, concordSubsReady, concordLeftCommunities, dmRelays, dmRelaysReady, dmFollows, dmKnownPeers, dmKnownConversations, dmLevels, dmMutedPeers, dmPeersConfigReady, prefs.dmRequests, selfRelays, signerCfg, gitSubs, mediaPolicy, groupList, gitRepositories.length, gitAnnouncements.data, health, locale]);
 
   // Auto-enable on launch only if intended AND already granted; never prompts here (LoginSetup
   // and Settings do).
@@ -675,11 +679,11 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
     try {
       saveIntent(false);
       setEnabledShared("disabled");
-      await configureNative({ enabled: false });
+      await configureNative({ enabled: false, locale });
     } finally {
       setBusy(false);
     }
-  }, [supported]);
+  }, [supported, locale]);
 
   const setPrefs = useCallback(async (next: PushPrefs) => {
     savePushPrefs(next, user?.pubkey);

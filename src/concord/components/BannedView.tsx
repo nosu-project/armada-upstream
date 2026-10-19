@@ -9,6 +9,7 @@ import { DisplayName } from "@/components/DisplayName";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { toast } from "@/hooks/useToast";
+import { FormattedMessage, t } from "@/i18n";
 
 /** CORD-04 §4 banlist; the ONLY unban surface since the roster fold hides banned members. */
 export function BannedView({ community }: { community: Community }) {
@@ -19,10 +20,13 @@ export function BannedView({ community }: { community: Community }) {
     setPending(pubkey);
     try {
       await unban({ target: pubkey });
-      toast({ title: "Member unbanned", description: "They can take part in the community again." });
+      toast({
+        title: t({ id: "bannedView.unbanned", defaultMessage: "Member unbanned" }),
+        description: t({ id: "bannedView.unbannedDescription", defaultMessage: "They can take part in the community again." }),
+      });
     } catch (e) {
       toast({
-        title: "Couldn't unban",
+        title: t({ id: "bannedView.unbanFailed", defaultMessage: "Couldn't unban" }),
         description: e instanceof Error ? e.message : undefined,
         variant: "destructive",
       });
@@ -36,13 +40,15 @@ export function BannedView({ community }: { community: Community }) {
   return (
     <div className="mx-auto w-full max-w-2xl space-y-4 p-4">
       <p className="text-sm text-muted-foreground">
-        Banned members are silenced and hidden for everyone in this community. Unbanning lets
-        them take part again.
+        <FormattedMessage
+          id="bannedView.intro"
+          defaultMessage="Banned members are silenced and hidden for everyone in this community. Unbanning lets them take part again."
+        />
       </p>
       {list.length === 0 ? (
         <div className="flex flex-col items-center gap-2 rounded-md bg-foreground/5 px-4 py-8 text-sm text-muted-foreground">
           <Ban className="size-5" />
-          Nobody is banned.
+          <FormattedMessage id="bannedView.empty" defaultMessage="Nobody is banned." />
         </div>
       ) : (
         <ul className="space-y-1.5">
@@ -88,7 +94,7 @@ function BannedRow({
       {canUnban && (
         <Button type="button" size="sm" variant="outline" disabled={busy} onClick={onUnban}>
           {busy ? <Loader2 className="size-3.5 animate-spin" /> : <ShieldOff className="size-3.5" />}
-          Unban
+          <FormattedMessage id="bannedView.unban" defaultMessage="Unban" />
         </Button>
       )}
     </li>

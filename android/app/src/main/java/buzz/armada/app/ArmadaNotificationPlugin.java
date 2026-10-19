@@ -781,6 +781,12 @@ public class ArmadaNotificationPlugin extends Plugin {
     public void configure(PluginCall call) {
         if (ServiceProfiler.ON) ServiceProfiler.count("plugin.configure");
         boolean enabled = Boolean.TRUE.equals(call.getBoolean("enabled", false));
+        // Device-wide, so it is stored apart from the account config cleared
+        // below, and a change only re-words: no revision bump of its own.
+        if (call.hasOption("locale")
+                && AppLocale.set(getContext(), call.getString("locale"))) {
+            NotificationRelayService.onLocaleChanged(getContext());
+        }
         String userPubkey = call.getString("userPubkey");
         // Missing flags mean "replace", preserving the all-at-once contract of
         // older web bundles. Current bundles send one authority bit per async

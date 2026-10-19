@@ -10,6 +10,7 @@ import { recordReaction } from "@/hooks/useFrequentReactions";
 import { useQuickReactions } from "@/hooks/useQuickReactionList";
 import { QUICK_SLOTS_SHEET, toggleInput } from "@/lib/reactionToggle";
 import { cn } from "@/lib/utils";
+import { FormattedMessage, useIntl } from "@/i18n";
 
 import type { MessageActionItem } from "@/components/chat/messageActions";
 import type { ReactInput, ReactionTally } from "@/hooks/useReactions";
@@ -47,6 +48,7 @@ export function MessageActionSheet({
 }: MessageActionSheetProps) {
   // The picker takes over the sheet rather than nesting an overlay (like Discord).
   const [pickerOpen, setPickerOpen] = useState(false);
+  const intl = useIntl();
   const { user } = useCurrentUser();
   const { emojis: customEmojis } = useCustomEmojis();
   const frequent = useQuickReactions(user?.pubkey, QUICK_SLOTS_SHEET);
@@ -100,7 +102,9 @@ export function MessageActionSheet({
           if (Date.now() - openedAt.current < OPEN_GUARD_MS) e.preventDefault();
         }}
       >
-        <DrawerTitle className="sr-only">Message actions</DrawerTitle>
+        <DrawerTitle className="sr-only">
+          <FormattedMessage id="messageActionSheet.title" defaultMessage="Message actions" />
+        </DrawerTitle>
 
         {pickerOpen ? (
           <div className="flex w-full flex-col pt-2 pb-[var(--safe-area-pad-bottom,0.75rem)]">
@@ -127,7 +131,9 @@ export function MessageActionSheet({
                       <button
                         key={f.key}
                         type="button"
-                        aria-label={mine ? `Remove ${f.key} reaction` : `React with ${f.key}`}
+                        aria-label={mine
+                          ? intl.formatMessage({ id: "messageActionSheet.removeReaction", defaultMessage: "Remove {emoji} reaction" }, { emoji: f.key })
+                          : intl.formatMessage({ id: "messageActionSheet.reactWith", defaultMessage: "React with {emoji}" }, { emoji: f.key })}
                         aria-pressed={mine}
                         className={cn(
                           "flex size-11 flex-1 items-center justify-center clip-corner-lg transition-colors",
@@ -146,7 +152,7 @@ export function MessageActionSheet({
                 </div>
                 <button
                   type="button"
-                  aria-label="Add reaction"
+                  aria-label={intl.formatMessage({ id: "messageActionSheet.addReaction", defaultMessage: "Add reaction" })}
                   className="flex size-12 shrink-0 items-center justify-center clip-corner-lg bg-muted/60 text-muted-foreground active:bg-secondary"
                   onClick={() => setPickerOpen(true)}
                 >
@@ -175,7 +181,7 @@ export function MessageActionSheet({
                     <span className="flex size-10 shrink-0 items-center justify-center clip-corner-lg bg-secondary">
                       <Shield className="size-5 text-muted-foreground" />
                     </span>
-                    Moderation
+                    <FormattedMessage id="messageActionSheet.moderation" defaultMessage="Moderation" />
                     <ChevronDown className={cn("ml-auto size-5 text-muted-foreground transition-transform", moderationOpen && "rotate-180")} />
                   </button>
                   {moderationOpen && (

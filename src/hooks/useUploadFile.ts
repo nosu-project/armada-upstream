@@ -6,6 +6,7 @@ import { useCallback } from "react";
 import { z } from "zod";
 
 import { uploadTargets } from "@/lib/blossom";
+import { t } from "@/i18n";
 import { mediaSrc } from "@/lib/mediaPolicy";
 import { preflightRefusal, uploadTimeoutMs, type PreflightRequest } from "@/lib/blossomPreflight";
 
@@ -33,7 +34,7 @@ export function useUploadFile() {
   return useMutation({
     mutationFn: async (request: File | UploadRequest) => {
       if (!user) {
-        throw new Error("Must be logged in to upload files");
+        throw new Error(t({ id: "useUploadFile.notLoggedIn", defaultMessage: "Must be logged in to upload files" }));
       }
       const { file, signal, expiration } = request instanceof File ? { file: request } as UploadRequest : request;
 
@@ -214,7 +215,7 @@ export function useRehostFile() {
 
   return useMutation({
     mutationFn: async (sourceUrl: string): Promise<string> => {
-      if (!user) throw new Error("Must be logged in to upload files");
+      if (!user) throw new Error(t({ id: "useUploadFile.notLoggedIn", defaultMessage: "Must be logged in to upload files" }));
 
       const { servers } = uploadTargets(config.blossomServerMetadata);
       const originOf = (u: string) => {
@@ -245,9 +246,9 @@ export function useRehostFile() {
       } catch {
         // Fetching the creator's host from here is a sender-named load like any image.
         const src = mediaSrc(sourceUrl, policy);
-        if (!src) throw new Error("This file can't be copied.");
+        if (!src) throw new Error(t({ id: "useUploadFile.cannotCopy", defaultMessage: "This file can't be copied." }));
         const response = await globalThis.fetch(src, { signal: AbortSignal.timeout(60_000) });
-        if (!response.ok) throw new Error(`Download failed (${response.status})`);
+        if (!response.ok) throw new Error(t({ id: "useUploadFile.downloadFailed", defaultMessage: "Download failed ({status})" }, { status: response.status }));
         const blob = await response.blob();
         const name = new URL(sourceUrl).pathname.split("/").pop() || "file";
         tags = await uploader.upload(new File([blob], name, { type: blob.type }));

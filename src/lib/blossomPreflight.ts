@@ -4,6 +4,8 @@
  * attachment; a 401 is just "unknown".
  */
 
+import { t } from "@/i18n";
+
 /** What a server said about a prospective upload. */
 export type PreflightVerdict =
   | { kind: "accepted" }
@@ -69,10 +71,10 @@ export async function preflightRefusal(
 export function describeRefusal(refusal: { status: number; reason?: string }): string {
   if (refusal.reason) return refusal.reason;
   switch (refusal.status) {
-    case 413: return "The file is larger than your media servers accept.";
-    case 415: return "Your media servers don't accept this type of file.";
-    case 402: return "Your media servers require payment for this upload.";
-    default: return "Your media servers refused this file.";
+    case 413: return t({ id: "blossomPreflight.tooLarge", defaultMessage: "The file is larger than your media servers accept." });
+    case 415: return t({ id: "blossomPreflight.badType", defaultMessage: "Your media servers don't accept this type of file." });
+    case 402: return t({ id: "blossomPreflight.paymentRequired", defaultMessage: "Your media servers require payment for this upload." });
+    default: return t({ id: "blossomPreflight.refused", defaultMessage: "Your media servers refused this file." });
   }
 }
 

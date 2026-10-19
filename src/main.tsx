@@ -22,6 +22,8 @@ import { PUBLIC_WEB_ORIGIN } from "@/lib/shareOrigin";
 import { signalWebReady } from "@/lib/webReady";
 import { perfMark, startLoopLagSampler } from "@/lib/perf";
 import { getArmadaDB } from "@/lib/db/armadaDB";
+import { getPreferredLocale } from "@/i18n/language";
+import { loadCatalog } from "@/i18n/locales";
 import { persistVerifiedIds } from "@/lib/verifyCache";
 // Installs `window.__armadaDbCensus()` (diagnostics reachable on-device).
 import "@/lib/db/dbCensus";
@@ -65,6 +67,9 @@ if (Capacitor.getPlatform() !== "android" && navigator.storage?.persist) {
 }
 
 persistVerifiedIds(() => getArmadaDB().kv);
+
+// Overlap the language chunk with module evaluation; I18nProvider waits for it.
+void loadCatalog(getPreferredLocale()).catch(() => {});
 
 // Before render so lag during mount is sampled too.
 startLoopLagSampler();

@@ -15,6 +15,7 @@ import { useTheme } from "@/hooks/useTheme";
 import { useThemeLibrary } from "@/hooks/useThemeLibrary";
 import { useUserThemes } from "@/hooks/useUserThemes";
 import { toast } from "@/hooks/useToast";
+import { FormattedMessage, t, useIntl } from "@/i18n";
 import { getAvatarShape } from "@/lib/avatarShape";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { naddrPath } from "@/lib/naddrLink";
@@ -31,6 +32,7 @@ interface ThemeDiscoverCardProps {
 }
 
 export function ThemeDiscoverCard({ event, className }: ThemeDiscoverCardProps) {
+  const intl = useIntl();
   const theme = useMemo(() => parseDittoTheme(event), [event]);
   const { customTheme, theme: mode } = useTheme();
   const { user } = useCurrentUser();
@@ -81,11 +83,11 @@ export function ThemeDiscoverCard({ event, className }: ThemeDiscoverCardProps) 
         source: config.source,
       });
       setJustSaved(true);
-      toast({ title: "Saved to your themes", description: theme.title });
+      toast({ title: t({ id: "themeDiscoverCard.savedToThemes", defaultMessage: "Saved to your themes" }), description: theme.title });
     } catch (e) {
       toast({
-        title: "Couldn't save theme",
-        description: e instanceof Error ? e.message : "Publishing failed.",
+        title: t({ id: "themeDiscoverCard.saveFailed", defaultMessage: "Couldn't save theme" }),
+        description: e instanceof Error ? e.message : t({ id: "themeDiscoverCard.publishingFailed", defaultMessage: "Publishing failed." }),
         variant: "destructive",
       });
     }
@@ -143,7 +145,7 @@ export function ThemeDiscoverCard({ event, className }: ThemeDiscoverCardProps) 
               isActive ? "bg-success/15 text-success" : "bg-secondary text-muted-foreground",
             )}
           >
-            {isActive ? "Applied" : "Theme"}
+            {isActive ? <FormattedMessage id="themeDiscoverCard.applied" defaultMessage="Applied" /> : <FormattedMessage id="themeDiscoverCard.theme" defaultMessage="Theme" />}
           </span>
         </div>
 
@@ -163,7 +165,11 @@ export function ThemeDiscoverCard({ event, className }: ThemeDiscoverCardProps) 
               </AvatarFallback>
             </Avatar>
             <span className="truncate">
-              by <DisplayName pubkey={creator} name={displayName} />
+              <FormattedMessage
+                id="themeDiscoverCard.byAuthor"
+                defaultMessage="by {name}"
+                values={{ name: <DisplayName pubkey={creator} name={displayName} /> }}
+              />
             </span>
           </button>
         </ProfilePreviewCard>
@@ -172,12 +178,12 @@ export function ThemeDiscoverCard({ event, className }: ThemeDiscoverCardProps) 
           {isActive ? (
             <Button variant="secondary" className="flex-1 clip-corner-lg" disabled>
               <Check className="size-4" />
-              Applied
+              <FormattedMessage id="themeDiscoverCard.applied" defaultMessage="Applied" />
             </Button>
           ) : (
             <Button className="flex-1 clip-corner-lg" onClick={onTry}>
               <Palette className="size-4" />
-              Try this theme
+              <FormattedMessage id="themeDiscoverCard.tryTheme" defaultMessage="Try this theme" />
             </Button>
           )}
           {isOwn ? (
@@ -185,8 +191,8 @@ export function ThemeDiscoverCard({ event, className }: ThemeDiscoverCardProps) 
               variant="secondary"
               className="shrink-0 clip-corner-lg"
               onClick={() => setEditOpen(true)}
-              aria-label="Edit theme"
-              title="Edit theme"
+              aria-label={intl.formatMessage({ id: "themeDiscoverCard.editTheme", defaultMessage: "Edit theme" })}
+              title={intl.formatMessage({ id: "themeDiscoverCard.editTheme", defaultMessage: "Edit theme" })}
             >
               <Pencil className="size-4" />
             </Button>
@@ -196,8 +202,8 @@ export function ThemeDiscoverCard({ event, className }: ThemeDiscoverCardProps) 
               className="shrink-0 clip-corner-lg"
               onClick={onSave}
               disabled={saving || saved}
-              aria-label={saved ? "In your themes" : "Save to my themes"}
-              title={saved ? "In your themes" : "Save to my themes"}
+              aria-label={saved ? intl.formatMessage({ id: "themeDiscoverCard.inYourThemes", defaultMessage: "In your themes" }) : intl.formatMessage({ id: "themeDiscoverCard.saveToMyThemes", defaultMessage: "Save to my themes" })}
+              title={saved ? intl.formatMessage({ id: "themeDiscoverCard.inYourThemes", defaultMessage: "In your themes" }) : intl.formatMessage({ id: "themeDiscoverCard.saveToMyThemes", defaultMessage: "Save to my themes" })}
             >
               {saving ? (
                 <Loader2 className="size-4 animate-spin" />
@@ -213,8 +219,8 @@ export function ThemeDiscoverCard({ event, className }: ThemeDiscoverCardProps) 
               variant="secondary"
               className="shrink-0 clip-corner-lg"
               onClick={copy}
-              aria-label="Copy theme link"
-              title="Copy theme link"
+              aria-label={intl.formatMessage({ id: "themeDiscoverCard.copyThemeLink", defaultMessage: "Copy theme link" })}
+              title={intl.formatMessage({ id: "themeDiscoverCard.copyThemeLink", defaultMessage: "Copy theme link" })}
             >
               {copied ? <Check className="size-4" /> : <Link2 className="size-4" />}
             </Button>

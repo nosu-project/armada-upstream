@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 
+import { useIntl } from "@/i18n";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { formatSats, presetsFor, type AmountPresetSet } from "@/lib/bitcoinMoney";
 import { formatSats as abbreviateSats } from "@/lib/zaps";
@@ -36,8 +37,10 @@ export function AmountField({
   setEditing,
   presets,
   invalid = false,
-  label = "Amount",
+  label: labelProp,
 }: AmountFieldProps) {
+  const intl = useIntl();
+  const label = labelProp ?? intl.formatMessage({ id: "amountField.label", defaultMessage: "Amount" });
   const inputRef = useRef<HTMLInputElement>(null);
   const isSats = currency === "sats";
   const unitLabel = isSats ? "sats" : "USD";
@@ -95,7 +98,7 @@ export function AmountField({
                   commit();
                 }
               }}
-              aria-label={`${label} in ${unitLabel}`}
+              aria-label={intl.formatMessage({ id: "amountField.inputLabel", defaultMessage: "{label} in {unit}" }, { label, unit: unitLabel })}
               className={`bg-transparent border-0 outline-none text-4xl font-semibold text-center [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${amountClass}`}
               style={{ width: `${Math.max(2, String(value).length + 1)}ch` }}
             />
@@ -105,7 +108,7 @@ export function AmountField({
           <button
             type="button"
             onClick={() => setEditing(true)}
-            aria-label={`Edit ${label.toLowerCase()}`}
+            aria-label={intl.formatMessage({ id: "amountField.editLabel", defaultMessage: "Edit {label}" }, { label: label.toLowerCase() })}
             className="flex items-baseline justify-center rounded-md px-2 -mx-2 hover:bg-muted/50 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring transition-colors"
           >
             {!isSats && <span className={`text-4xl font-semibold ${accentClass}`}>$</span>}

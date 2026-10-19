@@ -37,6 +37,7 @@ import { getArmadaDB } from "@/lib/db/armadaDB";
 import { IdLog } from "@/lib/db/idLog";
 import { readFolded, writeFolded } from "@/lib/foldedCache";
 import { beginSyncTask } from "@/lib/syncActivity";
+import { t } from "@/i18n/intl";
 import { logSync, sinceMs } from "@/lib/syncLog";
 import type { NostrRumor } from "@/lib/nostrRumor";
 
@@ -898,7 +899,7 @@ function newBatch(nostr: NostrLike, url: string): RelayBatch {
   const b: RelayBatch = { scopes: [], closed: false, promise: Promise.resolve(new Map()) };
   b.promise = (async () => {
     // The whole batch lifetime counts as sync activity (auth hold can take seconds).
-    const task = beginSyncTask("community updates");
+    const task = beginSyncTask(t({ id: "planeSync.communityUpdates", defaultMessage: "community updates" }));
     try {
       await new Promise((r) => setTimeout(r, BATCH_WINDOW_MS));
       await whenAuthReady(url, () => b.scopes.flatMap((s) => s.groups));

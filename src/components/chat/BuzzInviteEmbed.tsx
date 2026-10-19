@@ -14,6 +14,7 @@ import {
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useNip29Servers } from "@/hooks/useNip29Servers";
 import { toast } from "@/hooks/useToast";
+import { FormattedMessage, t, useIntl } from "@/i18n";
 import { useUpdateUserGroupList } from "@/hooks/useUserGroupList";
 import { relayToHttpUrl, relayToRouteParam } from "@/lib/platform";
 import { cn } from "@/lib/utils";
@@ -28,9 +29,15 @@ interface BuzzInviteEmbedProps {
  * A relay with a join policy hands off to the full invite page.
  */
 export function BuzzInviteEmbed({ url, className }: BuzzInviteEmbedProps) {
+  const intl = useIntl();
   const invite = parseBuzzInviteUrl(url);
   if (!invite) {
-    return <BuzzInviteTombstone message="This invite link is malformed." className={className} />;
+    return (
+      <BuzzInviteTombstone
+        message={intl.formatMessage({ id: "buzzInviteEmbed.malformed", defaultMessage: "This invite link is malformed." })}
+        className={className}
+      />
+    );
   }
   return <BuzzInviteCard invite={invite} className={className} />;
 }
@@ -84,7 +91,10 @@ function BuzzInviteCard({
 
   const doJoin = async () => {
     if (!user) {
-      toast({ title: "Sign in to join", description: "Create an account or sign in to accept this invite." });
+      toast({
+        title: t({ id: "buzzInviteEmbed.signInTitle", defaultMessage: "Sign in to join" }),
+        description: t({ id: "buzzInviteEmbed.signInDescription", defaultMessage: "Create an account or sign in to accept this invite." }),
+      });
       return;
     }
     setJoining(true);
@@ -99,10 +109,10 @@ function BuzzInviteCard({
       // Kind 10009 is the only store for added servers, so this write IS the add.
       // Awaited so a rejected publish surfaces as an error.
       await updateList({ type: "add-server", url: invite.relayUrl });
-      toast({ title: "Joined", description: preview?.name || invite.host });
+      toast({ title: t({ id: "buzzInviteEmbed.joined", defaultMessage: "Joined" }), description: preview?.name || invite.host });
       navigate(`/s/${relayToRouteParam(invite.relayUrl)}`);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Couldn't join with that invite link.");
+      setError(e instanceof Error ? e.message : t({ id: "buzzInviteEmbed.joinFailed", defaultMessage: "Couldn't join with that invite link." }));
     } finally {
       setJoining(false);
     }
@@ -127,7 +137,7 @@ function BuzzInviteCard({
     >
       <div className="px-3.5 py-3 space-y-2.5">
         <p className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground">
-          You've been invited to join a server
+          <FormattedMessage id="buzzInviteEmbed.invited" defaultMessage="You've been invited to join a server" />
         </p>
 
         <div className="flex items-center gap-3 min-w-0">
@@ -151,11 +161,15 @@ function BuzzInviteCard({
 
         {alreadyJoined ? (
           <Button variant="secondary" className="w-full clip-corner-lg" onClick={open}>
-            Open
+            <FormattedMessage id="buzzInviteEmbed.open" defaultMessage="Open" />
           </Button>
         ) : (
           <Button className="w-full clip-corner-lg" onClick={doJoin} disabled={joining}>
-            {joining ? "Joining…" : "Join"}
+            {joining ? (
+              <FormattedMessage id="buzzInviteEmbed.joining" defaultMessage="Joining…" />
+            ) : (
+              <FormattedMessage id="buzzInviteEmbed.join" defaultMessage="Join" />
+            )}
           </Button>
         )}
       </div>

@@ -4,6 +4,7 @@ import { X } from "lucide-react"
 
 import { useBackDismiss } from "@/hooks/useAndroidBack"
 import { usePortalContainer } from "@/hooks/usePortalContainer"
+import { common, FormattedMessage } from "@/i18n"
 import { cn } from "@/lib/utils"
 
 const Dialog = (props: React.ComponentProps<typeof DialogPrimitive.Root>) => (
@@ -58,7 +59,7 @@ const DialogContent = React.forwardRef<
         {!hideClose && (
           <DialogPrimitive.Close className="absolute right-4 top-4 rounded-sm p-2 -m-2 touch:p-3 touch:-m-3 opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none data-[state=open]:bg-accent data-[state=open]:text-muted-foreground">
             <X className="size-5" />
-            <span className="sr-only">Close</span>
+            <span className="sr-only"><FormattedMessage {...common.close} /></span>
           </DialogPrimitive.Close>
         )}
       </DialogPrimitive.Content>

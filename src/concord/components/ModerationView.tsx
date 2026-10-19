@@ -12,6 +12,7 @@ import {
   type ModerationPane,
 } from "@/concord/lib/moderationPanes";
 import type { Community } from "@/concord/lib/types";
+import { FormattedMessage } from "@/i18n";
 
 /** Moderation panel with tabs. A pane the viewer can't open is stated, not swapped, so the URL doesn't lie. */
 export function ModerationView({
@@ -40,7 +41,7 @@ export function ModerationView({
       </div>
       {!access[pane] ? (
         <p className="mx-auto w-full max-w-2xl p-4 text-sm text-muted-foreground">
-          You don't have permission to see this.
+          <FormattedMessage id="moderationView.noPermission" defaultMessage="You don't have permission to see this." />
         </p>
       ) : pane === "members" ? (
         <MembersView

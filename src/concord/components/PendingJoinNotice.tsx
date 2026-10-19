@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import type { PendingJoinState } from "@/concord/hooks/usePendingGuestbookJoin";
+import { common, FormattedMessage } from "@/i18n";
 
 /** A signer this quick never surfaces the notice. */
 const SIGNING_NOTICE_DELAY_MS = 1500;
@@ -26,14 +27,22 @@ export function PendingJoinNotice({ state, onRetry }: { state: PendingJoinState 
     <div className="flex items-center gap-2 px-3 py-2 text-xs border-t border-warning/20 bg-warning/10 text-warning">
       {signing ? <Loader2 className="size-4 shrink-0 animate-spin" /> : <UserX className="size-4 shrink-0" />}
       <span className="flex-1 min-w-0">
-        {signing
-          ? "Finishing your join: waiting for your signer to approve it. Other members won't see you until it does."
-          : "Other members can't see you here yet: your join hasn't been signed or reached the community's relays. Armada keeps retrying."}
+        {signing ? (
+          <FormattedMessage
+            id="pendingJoinNotice.signing"
+            defaultMessage="Finishing your join: waiting for your signer to approve it. Other members won't see you until it does."
+          />
+        ) : (
+          <FormattedMessage
+            id="pendingJoinNotice.failed"
+            defaultMessage="Other members can't see you here yet: your join hasn't been signed or reached the community's relays. Armada keeps retrying."
+          />
+        )}
       </span>
       {!signing && (
         <Button variant="secondary" size="sm" className="h-7 px-2.5 shrink-0 clip-corner-lg" onClick={onRetry}>
           <RotateCw className="size-3.5" />
-          Retry
+          <FormattedMessage {...common.retry} />
         </Button>
       )}
     </div>

@@ -3,6 +3,7 @@ import { useLocalParticipant, useRoomContext } from "@livekit/components-react";
 import { toast } from "@/hooks/useToast";
 import { playMuteSound, playUnmuteSound } from "@/lib/callSounds";
 import { requestPushToTalkOverride, usePushToTalkRuntime } from "@/lib/pushToTalk";
+import { t } from "@/i18n";
 
 /** The mic toggle shared by the in-call button and the Android call notification. */
 export function useMicToggle() {
@@ -37,9 +38,9 @@ export function useMicToggle() {
           await localParticipant.setMicrophoneEnabled(true);
         } catch (retryErr) {
           toast({
-            title: "Couldn't unmute",
+            title: t({ id: "useMicToggle.unmuteFailed", defaultMessage: "Couldn't unmute" }),
             description:
-              retryErr instanceof Error ? retryErr.message : "The microphone is unavailable.",
+              retryErr instanceof Error ? retryErr.message : t({ id: "useMicToggle.micUnavailable", defaultMessage: "The microphone is unavailable." }),
             variant: "destructive",
           });
         }

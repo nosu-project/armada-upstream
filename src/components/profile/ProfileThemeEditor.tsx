@@ -16,6 +16,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { usePublishProfileTheme } from "@/hooks/usePublishProfileTheme";
+import { defineMessages, FormattedMessage, t, useIntl, type MessageDescriptor } from "@/i18n";
 import { toast } from "@/hooks/useToast";
 import { loadThemeFont } from "@/lib/fontLoader";
 import { themeFontOptions, type ThemeFontCategory } from "@/lib/themeFonts";
@@ -23,13 +24,13 @@ import { themeFontOptions, type ThemeFontCategory } from "@/lib/themeFonts";
 import { builderStarterColors, type CoreThemeColors } from "@/themes";
 import type { DittoTheme, ThemeBackground } from "@/lib/themeEvent";
 
-const CATEGORY_LABELS: Record<ThemeFontCategory, string> = {
-  sans: "Sans serif",
-  serif: "Serif",
-  mono: "Monospace",
-  display: "Display",
-  handwriting: "Handwriting",
-};
+const CATEGORY_LABELS: Record<ThemeFontCategory, MessageDescriptor> = defineMessages({
+  sans: { id: "profileThemeEditor.category.sans", defaultMessage: "Sans serif" },
+  serif: { id: "profileThemeEditor.category.serif", defaultMessage: "Serif" },
+  mono: { id: "profileThemeEditor.category.mono", defaultMessage: "Monospace" },
+  display: { id: "profileThemeEditor.category.display", defaultMessage: "Display" },
+  handwriting: { id: "profileThemeEditor.category.handwriting", defaultMessage: "Handwriting" },
+});
 
 const FONT_CATEGORIES: ThemeFontCategory[] = ["sans", "serif", "mono", "display", "handwriting"];
 
@@ -46,9 +47,10 @@ export function ProfileThemeEditor({
   onOpenChange: (open: boolean) => void;
   current?: DittoTheme;
 }) {
+  const intl = useIntl();
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <ChromeDialogContent title="Profile theme">
+      <ChromeDialogContent title={intl.formatMessage({ id: "profileThemeEditor.title", defaultMessage: "Profile theme" })}>
         {open && <ThemeEditorForm current={current} onDone={() => onOpenChange(false)} />}
       </ChromeDialogContent>
     </Dialog>
@@ -81,7 +83,9 @@ function FontSelect({
           <SelectItem value={DEFAULT_FONT}>{placeholder}</SelectItem>
           {FONT_CATEGORIES.map((cat) => (
             <SelectGroup key={cat}>
-              <SelectLabel>{CATEGORY_LABELS[cat]}</SelectLabel>
+              <SelectLabel>
+                <FormattedMessage {...CATEGORY_LABELS[cat]} />
+              </SelectLabel>
               {themeFontOptions
                 .filter((f) => f.category === cat)
                 .map((f) => (
@@ -102,7 +106,9 @@ function FontSelect({
 }
 
 function ThemeEditorForm({ current, onDone }: { current?: DittoTheme; onDone: () => void }) {
+  const intl = useIntl();
   const { save, remove, isPending } = usePublishProfileTheme();
+  const defaultFont = intl.formatMessage({ id: "profileThemeEditor.defaultFont", defaultMessage: "Default" });
   const [uploading, setUploading] = useState(false);
 
   const [colors, setColors] = useState<CoreThemeColors>(current?.colors ?? builderStarterColors);
@@ -128,12 +134,12 @@ function ThemeEditorForm({ current, onDone }: { current?: DittoTheme; onDone: ()
         sourceRef: unchanged ? current?.sourceRef : undefined,
         source: unchanged ? current?.source : undefined,
       });
-      toast({ title: "Profile theme saved" });
+      toast({ title: t({ id: "profileThemeEditor.saved", defaultMessage: "Profile theme saved" }) });
       onDone();
     } catch (e) {
       toast({
-        title: "Couldn't save theme",
-        description: e instanceof Error ? e.message : "Publishing failed.",
+        title: t({ id: "profileThemeEditor.saveFailed", defaultMessage: "Couldn't save theme" }),
+        description: e instanceof Error ? e.message : t({ id: "profileThemeEditor.publishFailed", defaultMessage: "Publishing failed." }),
         variant: "destructive",
       });
     }
@@ -142,12 +148,12 @@ function ThemeEditorForm({ current, onDone }: { current?: DittoTheme; onDone: ()
   const doRemove = async () => {
     try {
       await remove();
-      toast({ title: "Profile theme removed" });
+      toast({ title: t({ id: "profileThemeEditor.removed", defaultMessage: "Profile theme removed" }) });
       onDone();
     } catch (e) {
       toast({
-        title: "Couldn't remove theme",
-        description: e instanceof Error ? e.message : "Publishing failed.",
+        title: t({ id: "profileThemeEditor.removeFailed", defaultMessage: "Couldn't remove theme" }),
+        description: e instanceof Error ? e.message : t({ id: "profileThemeEditor.publishFailed", defaultMessage: "Publishing failed." }),
         variant: "destructive",
       });
     }
@@ -156,8 +162,10 @@ function ThemeEditorForm({ current, onDone }: { current?: DittoTheme; onDone: ()
   return (
     <div className="flex flex-col gap-5">
       <p className="text-sm text-muted-foreground">
-        Anyone viewing your profile sees it in these colors, fonts, and
-        background. Published publicly (works in Ditto too).
+        <FormattedMessage
+          id="profileThemeEditor.description"
+          defaultMessage="Anyone viewing your profile sees it in these colors, fonts, and background. Published publicly (works in Ditto too)."
+        />
       </p>
 
       <ThemeBuilderFields
@@ -165,23 +173,23 @@ function ThemeEditorForm({ current, onDone }: { current?: DittoTheme; onDone: ()
         onColorsChange={setColors}
         title={title}
         onTitleChange={setTitle}
-        placeholder="My theme"
+        placeholder={intl.formatMessage({ id: "profileThemeEditor.titlePlaceholder", defaultMessage: "My theme" })}
       />
 
       <div className="flex gap-3">
         <FontSelect
           id="profile-theme-font"
-          label="Font"
+          label={intl.formatMessage({ id: "profileThemeEditor.font", defaultMessage: "Font" })}
           value={fontFamily}
           onChange={setFontFamily}
-          placeholder="Default"
+          placeholder={defaultFont}
         />
         <FontSelect
           id="profile-theme-title-font"
-          label="Name font"
+          label={intl.formatMessage({ id: "profileThemeEditor.nameFont", defaultMessage: "Name font" })}
           value={titleFontFamily}
           onChange={setTitleFontFamily}
-          placeholder={fontFamily || "Default"}
+          placeholder={fontFamily || defaultFont}
         />
       </div>
 
@@ -190,7 +198,7 @@ function ThemeEditorForm({ current, onDone }: { current?: DittoTheme; onDone: ()
       <div className="space-y-2">
         <Button className="w-full clip-corner-lg" onClick={doSave} disabled={isPending || uploading}>
           {isPending && <Loader2 className="size-4 animate-spin" />}
-          Save theme
+          <FormattedMessage id="profileThemeEditor.save" defaultMessage="Save theme" />
         </Button>
         {current && (
           <Button
@@ -199,7 +207,7 @@ function ThemeEditorForm({ current, onDone }: { current?: DittoTheme; onDone: ()
             onClick={doRemove}
             disabled={isPending}
           >
-            Remove theme
+            <FormattedMessage id="profileThemeEditor.remove" defaultMessage="Remove theme" />
           </Button>
         )}
       </div>
