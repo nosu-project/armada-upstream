@@ -14,7 +14,7 @@
  * so en.json exists for this check and for translators.
  */
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -90,9 +90,38 @@ function signature(message) {
   return [...found].sort().join(" ");
 }
 
+/**
+ * Descriptors written in the source that the extractor did not see: one called
+ * through an alias (`const m = intl.formatMessage`) or a bare object outside
+ * `defineMessage`. They type-check and render, but only ever in English.
+ */
+function unextracted(source) {
+  const found = [];
+  const descriptor = /\bid\s*:\s*["']([a-z][A-Za-z0-9]*(?:\.[A-Za-z0-9]+)+)["']\s*,\s*defaultMessage\s*:/g;
+  const walk = (dir) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) walk(path);
+      else if (/\.tsx?$/.test(entry.name) && !/\.test\.|\.d\.ts$/.test(entry.name)) {
+        for (const [, id] of readFileSync(path, "utf8").matchAll(descriptor)) {
+          if (!(id in source)) found.push(`${path.slice(root.length + 1)}: ${id}`);
+        }
+      }
+    }
+  };
+  walk(join(root, "src"));
+  return found;
+}
+
 function check() {
   const problems = [];
   const source = extract();
+  const hidden = unextracted(source);
+  if (hidden.length) {
+    problems.push(
+      `${hidden.length} message(s) the extractor cannot see — call intl.formatMessage/t() directly or wrap in defineMessage:\n  ${hidden.slice(0, 20).join("\n  ")}`,
+    );
+  }
   let committed = {};
   try {
     committed = readCatalog("en");

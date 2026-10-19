@@ -94,39 +94,38 @@ function useSettingsPages(): { pages: Partial<Record<SettingsPageId, PageDef>>; 
   const { user } = useCurrentUser();
   const intl = useIntl();
   return useMemo(() => {
-    const m = intl.formatMessage;
     const profiling = import.meta.env.VITE_PROFILE === "1";
     const pages: Partial<Record<SettingsPageId, PageDef>> = {
       account: {
-        title: m({ id: "settingsPage.account.title", defaultMessage: "Account" }),
+        title: intl.formatMessage({ id: "settingsPage.account.title", defaultMessage: "Account" }),
         icon: UserCircle,
         tone: "primary",
         summary: user
-          ? m({ id: "settingsPage.account.summary", defaultMessage: "Keys, sync and account standing" })
-          : m({ id: "settingsPage.account.summaryLoggedOut", defaultMessage: "Log in or create an account" }),
+          ? intl.formatMessage({ id: "settingsPage.account.summary", defaultMessage: "Keys, sync and account standing" })
+          : intl.formatMessage({ id: "settingsPage.account.summaryLoggedOut", defaultMessage: "Log in or create an account" }),
         render: () => <AccountSettings />,
       },
       notifications: {
-        title: m({ id: "settingsPage.notifications.title", defaultMessage: "Notifications" }),
+        title: intl.formatMessage({ id: "settingsPage.notifications.title", defaultMessage: "Notifications" }),
         icon: Bell,
         tone: "destructive",
-        summary: m({ id: "settingsPage.notifications.summary", defaultMessage: "Mentions, replies and messages" }),
+        summary: intl.formatMessage({ id: "settingsPage.notifications.summary", defaultMessage: "Mentions, replies and messages" }),
         render: () => <NotificationSettings />,
       },
       privacy: {
-        title: m({ id: "settingsPage.privacy.title", defaultMessage: "Privacy & safety" }),
+        title: intl.formatMessage({ id: "settingsPage.privacy.title", defaultMessage: "Privacy & safety" }),
         icon: ShieldCheck,
         tone: "accent2",
         summary: user
-          ? m({ id: "settingsPage.privacy.summary", defaultMessage: "Blocking, muted words and media" })
-          : m({ id: "settingsPage.privacy.summaryLoggedOut", defaultMessage: "Media, links and Discover" }),
+          ? intl.formatMessage({ id: "settingsPage.privacy.summary", defaultMessage: "Blocking, muted words and media" })
+          : intl.formatMessage({ id: "settingsPage.privacy.summaryLoggedOut", defaultMessage: "Media, links and Discover" }),
         render: () => <PrivacySettings />,
       },
       appearance: {
-        title: m({ id: "settingsPage.appearance.title", defaultMessage: "Appearance" }),
+        title: intl.formatMessage({ id: "settingsPage.appearance.title", defaultMessage: "Appearance" }),
         icon: Palette,
         tone: "primary",
-        summary: m({ id: "settingsPage.appearance.summary", defaultMessage: "Theme, language and text size" }),
+        summary: intl.formatMessage({ id: "settingsPage.appearance.summary", defaultMessage: "Theme, language and text size" }),
         render: () => (
           <>
             <SettingsGroup id="appearance">
@@ -134,7 +133,7 @@ function useSettingsPages(): { pages: Partial<Record<SettingsPageId, PageDef>>; 
                 <ThemeSelector />
               </SettingsRow>
             </SettingsGroup>
-            <SettingsGroup title={m({ id: "settingsPage.appearance.text", defaultMessage: "Text" })}>
+            <SettingsGroup title={intl.formatMessage({ id: "settingsPage.appearance.text", defaultMessage: "Text" })}>
               <LanguageSettings />
               <FontScaleSettings />
             </SettingsGroup>
@@ -142,42 +141,42 @@ function useSettingsPages(): { pages: Partial<Record<SettingsPageId, PageDef>>; 
         ),
       },
       chat: {
-        title: m({ id: "settingsPage.chat.title", defaultMessage: "Chats" }),
+        title: intl.formatMessage({ id: "settingsPage.chat.title", defaultMessage: "Chats" }),
         icon: MessageSquare,
         tone: "success",
-        summary: m({ id: "settingsPage.chat.summary", defaultMessage: "Sending, typing and reactions" }),
+        summary: intl.formatMessage({ id: "settingsPage.chat.summary", defaultMessage: "Sending, typing and reactions" }),
         render: () => <ChatSettings />,
       },
       dms: {
-        title: m({ id: "settingsPage.dms.title", defaultMessage: "Direct messages" }),
+        title: intl.formatMessage({ id: "settingsPage.dms.title", defaultMessage: "Direct messages" }),
         icon: MessageSquareLock,
         tone: "accent2",
-        summary: m({ id: "settingsPage.dms.summary", defaultMessage: "Requests and previews" }),
+        summary: intl.formatMessage({ id: "settingsPage.dms.summary", defaultMessage: "Requests and previews" }),
         render: () => <DirectMessageSettings />,
       },
       voice: {
-        title: m({ id: "settingsPage.voice.title", defaultMessage: "Voice" }),
+        title: intl.formatMessage({ id: "settingsPage.voice.title", defaultMessage: "Voice" }),
         icon: Mic,
         tone: "warning",
-        summary: m({ id: "settingsPage.voice.summary", defaultMessage: "Devices and noise filtering" }),
+        summary: intl.formatMessage({ id: "settingsPage.voice.summary", defaultMessage: "Devices and noise filtering" }),
         render: () => <VoiceSettings />,
       },
       relays: {
-        title: m({ id: "settingsPage.relays.title", defaultMessage: "Relays" }),
+        title: intl.formatMessage({ id: "settingsPage.relays.title", defaultMessage: "Relays" }),
         icon: Waypoints,
         tone: "accent2",
-        summary: m({ id: "settingsPage.relays.summary", defaultMessage: "Where your account and uploads live" }),
+        summary: intl.formatMessage({ id: "settingsPage.relays.summary", defaultMessage: "Where your account and uploads live" }),
         render: () => <RelaysSettings />,
       },
       support: {
-        title: m({ id: "settingsPage.support.title", defaultMessage: "Help & support" }),
+        title: intl.formatMessage({ id: "settingsPage.support.title", defaultMessage: "Help & support" }),
         icon: LifeBuoy,
         tone: "success",
-        summary: m({ id: "settingsPage.support.summary", defaultMessage: "Safety guide and contact" }),
+        summary: intl.formatMessage({ id: "settingsPage.support.summary", defaultMessage: "Safety guide and contact" }),
         render: () => <SupportSettings />,
       },
       about: {
-        title: m({ id: "settingsPage.about.title", defaultMessage: "About Armada" }),
+        title: intl.formatMessage({ id: "settingsPage.about.title", defaultMessage: "About Armada" }),
         icon: Info,
         tone: "muted",
         summary: appVersionLabel(),
@@ -186,7 +185,7 @@ function useSettingsPages(): { pages: Partial<Record<SettingsPageId, PageDef>>; 
     };
     if (user) {
       pages.profile = {
-        title: m({ id: "settingsPage.profile.title", defaultMessage: "Profile" }),
+        title: intl.formatMessage({ id: "settingsPage.profile.title", defaultMessage: "Profile" }),
         icon: UserRound,
         tone: "primary",
         render: () => (
@@ -198,20 +197,20 @@ function useSettingsPages(): { pages: Partial<Record<SettingsPageId, PageDef>>; 
         ),
       };
       pages.blocked = {
-        title: m({ id: "settingsPage.blocked.title", defaultMessage: "Blocked people" }),
+        title: intl.formatMessage({ id: "settingsPage.blocked.title", defaultMessage: "Blocked people" }),
         icon: UserX,
         tone: "destructive",
         render: () => (
           <SettingsGroup
             id="muted"
-            footer={m({ id: "settingsPage.blocked.footer", defaultMessage: "Hidden everywhere in Armada. They are never told." })}
+            footer={intl.formatMessage({ id: "settingsPage.blocked.footer", defaultMessage: "Hidden everywhere in Armada. They are never told." })}
           >
             <MutedPeopleSettings />
           </SettingsGroup>
         ),
       };
       pages["muted-words"] = {
-        title: m({ id: "settingsPage.mutedWords.title", defaultMessage: "Muted words" }),
+        title: intl.formatMessage({ id: "settingsPage.mutedWords.title", defaultMessage: "Muted words" }),
         icon: SpellCheck,
         tone: "warning",
         render: () => (
@@ -221,14 +220,14 @@ function useSettingsPages(): { pages: Partial<Record<SettingsPageId, PageDef>>; 
         ),
       };
       pages.emojis = {
-        title: m({ id: "settingsPage.emojis.title", defaultMessage: "Emoji packs" }),
+        title: intl.formatMessage({ id: "settingsPage.emojis.title", defaultMessage: "Emoji packs" }),
         icon: Smile,
         tone: "warning",
-        summary: m({ id: "settingsPage.emojis.summary", defaultMessage: "Custom emoji you made or added" }),
+        summary: intl.formatMessage({ id: "settingsPage.emojis.summary", defaultMessage: "Custom emoji you made or added" }),
         render: () => (
           <SettingsGroup
             id="emojis"
-            footer={m({
+            footer={intl.formatMessage({
               id: "settingsPage.emojis.footer",
               defaultMessage: "Packs you publish or add show up in the emoji picker on every device.",
             })}
@@ -239,10 +238,10 @@ function useSettingsPages(): { pages: Partial<Record<SettingsPageId, PageDef>>; 
       };
       // Reachable even with zaps off, since its enable toggle lives inside.
       pages.wallet = {
-        title: m({ id: "settingsPage.wallet.title", defaultMessage: "Wallet" }),
+        title: intl.formatMessage({ id: "settingsPage.wallet.title", defaultMessage: "Wallet" }),
         icon: Zap,
         tone: "warning",
-        summary: m({ id: "settingsPage.wallet.summary", defaultMessage: "Lightning wallet and zaps" }),
+        summary: intl.formatMessage({ id: "settingsPage.wallet.summary", defaultMessage: "Lightning wallet and zaps" }),
         render: () => (
           <SettingsGroup id="wallet">
             <WalletSettings />
@@ -252,10 +251,10 @@ function useSettingsPages(): { pages: Partial<Record<SettingsPageId, PageDef>>; 
     }
     if (isDesktop()) {
       pages.desktop = {
-        title: m({ id: "settingsPage.desktop.title", defaultMessage: "Desktop" }),
+        title: intl.formatMessage({ id: "settingsPage.desktop.title", defaultMessage: "Desktop" }),
         icon: Monitor,
         tone: "muted",
-        summary: m({ id: "settingsPage.desktop.summary", defaultMessage: "Startup and the tray" }),
+        summary: intl.formatMessage({ id: "settingsPage.desktop.summary", defaultMessage: "Startup and the tray" }),
         render: () => (
           <SettingsGroup id="desktop">
             <DesktopSettings />
@@ -265,10 +264,10 @@ function useSettingsPages(): { pages: Partial<Record<SettingsPageId, PageDef>>; 
     }
     if (profiling) {
       pages.diagnostics = {
-        title: m({ id: "settingsPage.diagnostics.title", defaultMessage: "Diagnostics" }),
+        title: intl.formatMessage({ id: "settingsPage.diagnostics.title", defaultMessage: "Diagnostics" }),
         icon: Activity,
         tone: "muted",
-        summary: m({ id: "settingsPage.diagnostics.summary", defaultMessage: "Profiling build tools" }),
+        summary: intl.formatMessage({ id: "settingsPage.diagnostics.summary", defaultMessage: "Profiling build tools" }),
         render: () => (
           <SettingsGroup id="diagnostics">
             <DiagnosticsSettings />

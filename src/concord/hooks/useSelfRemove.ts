@@ -12,7 +12,7 @@ import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useRemoveRailKey } from "@/hooks/useRemoveRailKey";
 import { toast } from "@/hooks/useToast";
 import { logSync } from "@/lib/syncLog";
-import { defineMessages, t, type MessageDescriptor } from "@/i18n";
+import { defineMessage, defineMessages, t, type MessageDescriptor } from "@/i18n";
 
 /**
  * Compliant self-removal (CORD-04 §4/§6): a client that finds a removal against
@@ -122,13 +122,13 @@ const REMOVAL_TITLE = defineMessages({
 const REMOVAL_TOAST: Record<SelfRemovalVerdict, { title: MessageDescriptor; description: MessageDescriptor }> = {
   ban: {
     title: REMOVAL_TITLE.removed,
-    description: { id: "useSelfRemove.banned.description", defaultMessage: "You no longer have access to this community." },
+    description: defineMessage({ id: "useSelfRemove.banned.description", defaultMessage: "You no longer have access to this community." }),
   },
   kick: {
     title: REMOVAL_TITLE.removed,
-    description: {
+    description: defineMessage({
       id: "useSelfRemove.kicked.description",
       defaultMessage: "A moderator removed you from this community. You can rejoin with a new invite.",
-    },
+    }),
   },
 };
