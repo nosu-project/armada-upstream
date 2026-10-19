@@ -25,6 +25,7 @@
  *   concord-idle    #general open, nobody touching anything
  *   concord-scroll  paging #general's history back
  *   concord-switch  hopping between the community's channels, heap per round
+ *                   (--switch-rounds <n>, 4; --heap-snapshot diffs round 1 against the last)
  *   concord-type    composing in #general: per-keystroke cost to the next frame
  *   concord-type-touch  the same, phone-sized with touch emulation
  *   concord-walk    a community with only each channel's newest page on disk and
@@ -342,6 +343,16 @@ async function heapFloorMB(cdp) {
   await cdp.send("HeapProfiler.collectGarbage");
   const m = await metrics(cdp);
   return Math.round((m.JSHeapUsedSize / 1048576) * 10) / 10;
+}
+
+/** A heap snapshot into `perf-reports/<name>`, for DevTools → Memory → load. */
+async function writeHeapSnapshot(cdp, name) {
+  const chunks = [];
+  const onChunk = ({ chunk }) => chunks.push(chunk);
+  cdp.on("HeapProfiler.addHeapSnapshotChunk", onChunk);
+  await cdp.send("HeapProfiler.takeHeapSnapshot", { reportProgress: false });
+  cdp.off("HeapProfiler.addHeapSnapshotChunk", onChunk);
+  writeFileSync(resolve(OUT, name), chunks.join(""));
 }
 
 /** Main-thread cost between two metric snapshots, as a share of wall time. */
@@ -701,7 +712,7 @@ try {
       await resetCounters(page);
       const a = await metrics(cdp);
       const t = Date.now();
-      const rounds = 4;
+      const rounds = Number(opt("switch-rounds", "4"));
       const { hot } = await cpuProfile("concord-switch", async () => {
         for (let round = 0; round < rounds; round++) {
           for (let i = 1; i < concord.channelIds.length; i++) {
@@ -709,6 +720,10 @@ try {
             await page.waitForTimeout(600);
           }
           floors.push(await heapFloorMB(cdp));
+          // With --heap-snapshot: an early and a final snapshot, to diff what the rounds retained.
+          if (flag("heap-snapshot") && (round === 1 || round === rounds - 1)) {
+            await writeHeapSnapshot(cdp, `concord-switch-r${round}.heapsnapshot`);
+          }
         }
       });
       const b = await metrics(cdp);
@@ -842,15 +857,8 @@ try {
     // The same page once the walk has had its window: what it costs to sit there afterwards.
     const after = await measureIdle(page, cdp, Number(opt("walk-after-sec", "60")));
     const heapFloorAfterMB = await heapFloorMB(cdp);
-    if (flag("heap-snapshot")) {
-      // What the walk left retained, for DevTools → Memory → load.
-      const chunks = [];
-      const onChunk = ({ chunk }) => chunks.push(chunk);
-      cdp.on("HeapProfiler.addHeapSnapshotChunk", onChunk);
-      await cdp.send("HeapProfiler.takeHeapSnapshot", { reportProgress: false });
-      cdp.off("HeapProfiler.addHeapSnapshotChunk", onChunk);
-      writeFileSync(resolve(OUT, "concord-walk.heapsnapshot"), chunks.join(""));
-    }
+    // What the walk left retained, for DevTools → Memory → load.
+    if (flag("heap-snapshot")) await writeHeapSnapshot(cdp, "concord-walk.heapsnapshot");
     // Read the coverage from the seed page, which bundles the store's readers.
     await page.goto("/e2e/concordSeed.html");
     await page.waitForFunction(() => Boolean(window.__armadaConcordCoverage), null, { timeout: 60_000 });

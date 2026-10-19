@@ -495,8 +495,21 @@ const PickerToggleButton = memo(function PickerToggleButton({
  * Rich chat composer: mentions, shortcodes, pickers, uploads with NIP-92 imeta,
  * voice, NIP-88 polls, replies, NIP-18 quotes, drafts. With `sendOverride` it
  * doubles as a generic composer (DMs, Concord).
+ *
+ * Remounted per conversation (drafts carry the text across): a long-lived instance
+ * leaks. Every render's closures share one V8 context, so a memoized callback kept
+ * from an earlier render retains that render, and its kept callbacks the one before.
  */
-export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelReply, onJumpToReply, sealed = false, onSent, shareLabel, shareIconUrl, sendOverride, canSend, mentionPubkeys, canMentionEveryone = false, placeholder, draftScope, shareRoute, onOptimisticInsert, onOptimisticSent, onOptimisticFailed, canModerate = false, autoFocus = false, onTyping, onSlashAction, encryptAttachments = false, disappearingTimer, botCommands = false, botDmPeer, recentAuthors, conversationRelays, pollsEnabled = true, onPollSubmit, messageKind = KIND_GROUP_CHAT, onEditLast, layout = "bar", documentEnterSends = false, submitLabel, onCancel }: ChatComposerProps) {
+export function ChatComposer(props: ChatComposerProps) {
+  return <ChatComposerBody key={composerDraftKey(props)} {...props} />;
+}
+
+/** No prefix in the id: the cache adds `draft:`. */
+function composerDraftKey({ relayUrl, groupId, draftScope }: Pick<ChatComposerProps, "relayUrl" | "groupId" | "draftScope">): string {
+  return `${relayUrl}:${groupId}${draftScope ? `:${draftScope}` : ""}`;
+}
+
+function ChatComposerBody({ relayUrl, groupId, messages, replyTo, onCancelReply, onJumpToReply, sealed = false, onSent, shareLabel, shareIconUrl, sendOverride, canSend, mentionPubkeys, canMentionEveryone = false, placeholder, draftScope, shareRoute, onOptimisticInsert, onOptimisticSent, onOptimisticFailed, canModerate = false, autoFocus = false, onTyping, onSlashAction, encryptAttachments = false, disappearingTimer, botCommands = false, botDmPeer, recentAuthors, conversationRelays, pollsEnabled = true, onPollSubmit, messageKind = KIND_GROUP_CHAT, onEditLast, layout = "bar", documentEnterSends = false, submitLabel, onCancel }: ChatComposerProps) {
   const isDocument = layout === "document";
   // Forum posts and comments (the document layout) have no length cap.
   const maxChars = isDocument ? Infinity : MAX_CHARS;
@@ -543,8 +556,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     return caps;
   }, [sendOverride, pollsEnabled, onPollSubmit, onSlashAction, canModerate]);
 
-  // No prefix in the id: the cache adds `draft:`.
-  const draftKey = `${relayUrl}:${groupId}${draftScope ? `:${draftScope}` : ""}`;
+  const draftKey = composerDraftKey({ relayUrl, groupId, draftScope });
 
   const [content, setContent] = useState(() => readDraft(draftKey).content);
 
@@ -707,16 +719,6 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
   }, []);
 
   useEffect(() => {
-    const draft = readDraft(draftKey);
-    setContent(draft.content);
-    setUploadedFileGroups(new Map(draft.attachments));
-    setRemovedEmbeds(new Set());
-    setMode("post");
-    // A half-built command must not follow a channel switch (the composer isn't
-    // remounted) and fire its routing tag into the wrong conversation.
-    setBotCommand(null);
-    armedBotRef.current = undefined;
-
     // Fill in after the cache warms, but only untouched fields.
     let cancelled = false;
     void draftCache.ready().then(() => {
@@ -833,18 +835,24 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
 
   // Debounced draft save. Encrypted attachments are dropped: their params live
   // only in memory, so a restored ciphertext URL would be undecryptable.
+  const pendingDraftRef = useRef<(() => void) | null>(null);
   useEffect(() => {
     // An empty composer writes a CLEAR, which would delete the draft still loading.
     if (!draftsReady) return;
-    const timer = setTimeout(() => {
+    const save = () => {
+      pendingDraftRef.current = null;
       // Keyed on having params, not this surface encrypting: forwards arrive encrypted.
       const persistable = new Map(
         [...uploadedFileGroups].filter(([url]) => !attachmentEncryption.current.has(url)),
       );
       writeDraft(draftKey, content, persistable);
-    }, 300);
+    };
+    pendingDraftRef.current = save;
+    const timer = setTimeout(save, 300);
     return () => clearTimeout(timer);
   }, [content, uploadedFileGroups, draftKey, draftsReady]);
+  // Leaving the conversation unmounts the composer: save what the debounce still holds.
+  useEffect(() => () => pendingDraftRef.current?.(), []);
 
   const detectedEmbeds = useMemo(() => {
     const embeds: DetectedEmbed[] = [];
