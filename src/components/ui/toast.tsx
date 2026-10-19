@@ -27,11 +27,12 @@ const toastVariants = cva(
   "vessel group pointer-events-auto relative flex w-full items-center justify-between gap-3 overflow-hidden py-3.5 pl-5 pr-10 text-popover-foreground transition-all data-[swipe=move]:transition-none " +
   "before:absolute before:left-px before:top-3 before:bottom-3 before:w-0.5 before:rounded-full before:bg-[hsl(var(--tone))] before:shadow-[0_0_8px_hsl(var(--tone)/0.7)] before:content-[''] " +
   "data-[state=open]:animate-in data-[state=closed]:animate-out data-[swipe=end]:animate-out data-[state=closed]:fade-out-80 " +
-  // Mobile (< md): top-positioned, swipe up.
-  "max-md:data-[swipe=cancel]:translate-y-0 max-md:data-[swipe=end]:translate-y-[var(--radix-toast-swipe-end-y)] max-md:data-[swipe=move]:translate-y-[var(--radix-toast-swipe-move-y)] " +
+  // Swipe left, right or up (see useToastSwipe); the exit slide follows the swipe.
+  "data-[swipe=move]:translate-x-[var(--toast-swipe-x)] data-[swipe=move]:translate-y-[var(--toast-swipe-y)] " +
+  "data-[swipe=end]:translate-x-[var(--toast-swipe-x)] data-[swipe=end]:translate-y-[var(--toast-swipe-y)] " +
+  // Mobile (< md): top-positioned.
   "max-md:data-[state=open]:slide-in-from-top-full max-md:data-[state=closed]:slide-out-to-top-full " +
-  // Desktop (md+): top-right, off the composer; swipe right.
-  "md:data-[swipe=cancel]:translate-x-0 md:data-[swipe=end]:translate-x-[var(--radix-toast-swipe-end-x)] md:data-[swipe=move]:translate-x-[var(--radix-toast-swipe-move-x)] " +
+  // Desktop (md+): top-right, off the composer.
   "md:data-[state=open]:slide-in-from-right-full md:data-[state=closed]:slide-out-to-right-full",
   {
     variants: {
@@ -49,16 +50,110 @@ const toastVariants = cva(
   }
 )
 
+const SWIPE_THRESHOLD = 30
+
+type SwipeHandlers = Pick<
+  React.ComponentPropsWithoutRef<typeof ToastPrimitives.Root>,
+  "onPointerDown" | "onPointerMove" | "onPointerUp" | "onPointerCancel"
+>
+
+/**
+ * Radix Toast swipes in one fixed direction, so the gesture is ours: left,
+ * right or up. `preventDefault` on pointerdown keeps Radix's own handler from
+ * starting a competing swipe (its handlers skip a prevented event).
+ */
+function useToastSwipe(
+  onDismiss: (() => void) | undefined,
+  { onPointerDown, onPointerMove, onPointerUp, onPointerCancel }: SwipeHandlers,
+): Required<SwipeHandlers> {
+  const startRef = React.useRef<{ x: number; y: number } | null>(null)
+  const axisRef = React.useRef<"x" | "y" | null>(null)
+  const deltaRef = React.useRef<{ x: number; y: number } | null>(null)
+  const dismissRef = React.useRef(onDismiss)
+  dismissRef.current = onDismiss
+
+  return React.useMemo(() => {
+    const finish = (event: React.PointerEvent<HTMLLIElement>, canDismiss: boolean) => {
+      const el = event.currentTarget
+      const delta = deltaRef.current
+      if (el.hasPointerCapture(event.pointerId)) el.releasePointerCapture(event.pointerId)
+      startRef.current = null
+      axisRef.current = null
+      deltaRef.current = null
+      if (!delta) return
+      // A swipe that ends over the close button or an action is not a click.
+      el.addEventListener("click", (e) => e.preventDefault(), { once: true })
+      if (canDismiss && (Math.abs(delta.x) >= SWIPE_THRESHOLD || -delta.y >= SWIPE_THRESHOLD)) {
+        el.setAttribute("data-swipe", "end")
+        el.style.setProperty("--tw-exit-translate-x", delta.x ? `${Math.sign(delta.x) * 100}%` : "0")
+        el.style.setProperty("--tw-exit-translate-y", delta.x ? "0" : "-100%")
+        dismissRef.current?.()
+      } else {
+        el.setAttribute("data-swipe", "cancel")
+        el.style.removeProperty("--toast-swipe-x")
+        el.style.removeProperty("--toast-swipe-y")
+      }
+    }
+
+    return {
+      onPointerDown: (event) => {
+        onPointerDown?.(event)
+        if (event.defaultPrevented || event.button !== 0) return
+        event.preventDefault()
+        startRef.current = { x: event.clientX, y: event.clientY }
+      },
+      onPointerMove: (event) => {
+        onPointerMove?.(event)
+        const start = startRef.current
+        if (!start) return
+        const dx = event.clientX - start.x
+        const dy = event.clientY - start.y
+        const el = event.currentTarget
+        if (!axisRef.current) {
+          const buffer = event.pointerType === "touch" ? 10 : 2
+          if (Math.abs(dx) <= buffer && Math.abs(dy) <= buffer) return
+          if (Math.abs(dx) > Math.abs(dy)) axisRef.current = "x"
+          else if (dy < 0) axisRef.current = "y"
+          else {
+            startRef.current = null
+            return
+          }
+          el.setPointerCapture(event.pointerId)
+        }
+        const delta = axisRef.current === "x" ? { x: dx, y: 0 } : { x: 0, y: Math.min(0, dy) }
+        deltaRef.current = delta
+        el.setAttribute("data-swipe", "move")
+        el.style.setProperty("--toast-swipe-x", `${delta.x}px`)
+        el.style.setProperty("--toast-swipe-y", `${delta.y}px`)
+      },
+      onPointerUp: (event) => {
+        onPointerUp?.(event)
+        finish(event, true)
+      },
+      onPointerCancel: (event) => {
+        onPointerCancel?.(event)
+        finish(event, false)
+      },
+    }
+  }, [onPointerDown, onPointerMove, onPointerUp, onPointerCancel])
+}
+
 const Toast = React.forwardRef<
   React.ElementRef<typeof ToastPrimitives.Root>,
   React.ComponentPropsWithoutRef<typeof ToastPrimitives.Root> &
     VariantProps<typeof toastVariants>
->(({ className, variant, ...props }, ref) => {
+>(({ className, variant, onOpenChange, onPointerDown, onPointerMove, onPointerUp, onPointerCancel, ...props }, ref) => {
+  const swipe = useToastSwipe(
+    onOpenChange && (() => onOpenChange(false)),
+    { onPointerDown, onPointerMove, onPointerUp, onPointerCancel },
+  )
   return (
     <ToastPrimitives.Root
       ref={ref}
       className={cn(toastVariants({ variant }), className)}
+      onOpenChange={onOpenChange}
       {...props}
+      {...swipe}
     />
   )
 })
