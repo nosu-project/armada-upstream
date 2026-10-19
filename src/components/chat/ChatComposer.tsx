@@ -49,6 +49,7 @@ import { useAndroidBack } from "@/hooks/useAndroidBack";
 import { useAppContext } from "@/hooks/useAppContext";
 import { primeAudioMetadata, primeAudioWaveform } from "@/hooks/useAudioMetadata";
 import { useAuthor } from "@/hooks/useAuthor";
+import { useMediaPolicy } from "@/hooks/useMediaPolicy";
 import { useApps } from "@/hooks/useApps";
 import { useChatScope } from "@/hooks/useChatScope";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
@@ -74,10 +75,12 @@ import { computeWaveform } from "@/lib/audioWaveform";
 import { KvPrefixCache } from "@/lib/db/kvCache";
 import { formatTime } from "@/lib/formatTime";
 import { extractHashtags } from "@/lib/hashtag";
+import { withoutCode } from "@/lib/markdown";
 import { collectEmojiTags } from "@/lib/customEmoji";
 import { completedShortcodeAt } from "@/lib/emojiShortcode";
 import { encryptFileForUpload, encryptFileWithParams, MAX_DECRYPT_BYTES, primeAttachment } from "@/lib/encryptedMedia";
 import { extForMime } from "@/lib/fileBytes";
+import { draggedImageSource, fetchDroppedImage } from "@/lib/droppedImage";
 import { galleryItemFile, hasMediaGallery, type GalleryItem } from "@/lib/mediaGallery";
 import { extractWebxdcMeta } from "@/lib/webxdcMeta";
 import { contentTagsFor, forwardedAttachment, stripUrlsFromText } from "@/lib/forwardMessage";
@@ -845,7 +848,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
 
   const detectedEmbeds = useMemo(() => {
     const embeds: DetectedEmbed[] = [];
-    const matches = content.matchAll(
+    const matches = withoutCode(content).matchAll(
       /(?:nostr:)?\b(nevent1|note1|naddr1)([023456789acdefghjklmnpqrstuvwxyz]+)\b/g,
     );
     for (const match of matches) {
@@ -1451,6 +1454,9 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
   // `dragDepth` tracks nested enter/leave so the overlay doesn't flicker.
   const [isDragging, setIsDragging] = useState(false);
   const dragDepth = useRef(0);
+  const mediaPolicy = useMediaPolicy();
+  const mediaPolicyRef = useRef(mediaPolicy);
+  mediaPolicyRef.current = mediaPolicy;
 
   const handleDragEnter = useCallback((e: React.DragEvent) => {
     if (!Array.from(e.dataTransfer.types).includes("Files")) return;
@@ -1475,7 +1481,16 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     const files = Array.from(e.dataTransfer.files ?? []);
     dragDepth.current = 0;
     setIsDragging(false);
-    if (files.length === 0) return;
+    if (files.length === 0) {
+      // An image dragged from a page arrives as its URL; upload it instead of
+      // letting the textarea insert that (often proxied) URL as text.
+      const src = draggedImageSource(e.dataTransfer);
+      if (!src) return;
+      e.preventDefault();
+      const policy = mediaPolicyRef.current;
+      handleFiles([{ name: "image", type: "image/*", load: () => fetchDroppedImage(src, policy) }]);
+      return;
+    }
     e.preventDefault();
     handleFiles(files);
   }, [handleFiles]);
@@ -1487,12 +1502,14 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     const tags: string[][] = [
       ["h", groupId],
     ];
+    // What renders as code is not a hashtag, mention or media link.
+    const prose = withoutCode(finalContent);
 
-    for (const t of new Set(extractHashtags(finalContent))) {
+    for (const t of new Set(extractHashtags(prose))) {
       tags.push(["t", t]);
     }
 
-    const mentionMatches = finalContent.matchAll(
+    const mentionMatches = prose.matchAll(
       /nostr:(npub1|nprofile1)([023456789acdefghjklmnpqrstuvwxyz]+)/g,
     );
     const mentionedPubkeys = new Set<string>();
@@ -1570,7 +1587,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     }
 
     // Typed/pasted media URLs get a basic extension-derived imeta.
-    const mediaUrlMatches = finalContent.matchAll(new RegExp(IMETA_MEDIA_URL_REGEX.source, "gi"));
+    const mediaUrlMatches = prose.matchAll(new RegExp(IMETA_MEDIA_URL_REGEX.source, "gi"));
     for (const match of mediaUrlMatches) {
       const url = match[0];
       if (processedUrls.has(url)) continue;

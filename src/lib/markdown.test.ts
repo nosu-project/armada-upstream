@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { parseInline, parseInlineRun, splitInlineCode, splitMarkdownBlocks, splitMarkdownLinks } from "./markdown";
+import { parseInline, parseInlineRun, splitInlineCode, splitMarkdownBlocks, splitMarkdownLinks, withoutCode } from "./markdown";
 
 describe("splitMarkdownBlocks", () => {
   it("passes plain text through as one block", () => {
@@ -380,6 +380,31 @@ describe("splitMarkdownLinks", () => {
   it("leaves non-http schemes literal", () => {
     expect(splitMarkdownLinks("[x](javascript:alert(1))")).toEqual([
       { type: "text", value: "[x](javascript:alert(1))" },
+    ]);
+  });
+});
+
+describe("withoutCode", () => {
+  it("blanks fenced and inline code, keeping offsets", () => {
+    const src = "see https://a.example\n```\nhttps://b.example/x.png\n```\nand `nostr:npub1x` #tag";
+    const out = withoutCode(src);
+    expect(out).toHaveLength(src.length);
+    expect(out).toContain("https://a.example");
+    expect(out).not.toContain("b.example");
+    expect(out).not.toContain("npub1x");
+    expect(out.indexOf("#tag")).toBe(src.indexOf("#tag"));
+  });
+
+  it("leaves an unclosed or empty fence as text, as it renders", () => {
+    expect(withoutCode("```\nhttps://a.example")).toBe("```\nhttps://a.example");
+    expect(withoutCode("`````` https://a.example")).toBe("`````` https://a.example");
+  });
+});
+
+describe("splitMarkdownBlocks single-line fence", () => {
+  it("takes no language without a newline", () => {
+    expect(splitMarkdownBlocks("```https://a.example/x```")).toEqual([
+      { type: "code", lang: undefined, code: "https://a.example/x" },
     ]);
   });
 });
