@@ -34,6 +34,7 @@ import { readStoredSeal } from "@/concord/lib/rumorStore";
 import type { OpenedEvent } from "@/concord/lib/stream";
 import type { Channel, Community } from "@/concord/lib/types";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { defineMessages, t } from "@/i18n";
 
 /** A pin as this client holds it: the entry, plus the id it was proven to carry. */
 interface HeldPin {
@@ -41,13 +42,25 @@ interface HeldPin {
   entry: PinEntry;
 }
 
-const PIN_FAILURE_MESSAGE: Record<PinBuildFailure, string> = {
-  "no-seal": "This message's original signature wasn't kept, so it can't be proven. Messages received from now on can be pinned.",
-  pending: "This message is still being sent. Try pinning it again in a moment.",
-  "not-encrypted": "Only chat messages can be pinned.",
-  "bad-payload": "This message is from an epoch whose keys you no longer hold.",
-  unverifiable: "This message failed verification, so pinning it would publish an unprovable claim.",
-};
+const PIN_FAILURE_MESSAGE = defineMessages<PinBuildFailure>({
+  "no-seal": {
+    id: "usePins.failure.noSeal",
+    defaultMessage: "This message's original signature wasn't kept, so it can't be proven. Messages received from now on can be pinned.",
+  },
+  pending: {
+    id: "usePins.failure.pending",
+    defaultMessage: "This message is still being sent. Try pinning it again in a moment.",
+  },
+  "not-encrypted": { id: "usePins.failure.notEncrypted", defaultMessage: "Only chat messages can be pinned." },
+  "bad-payload": {
+    id: "usePins.failure.badPayload",
+    defaultMessage: "This message is from an epoch whose keys you no longer hold.",
+  },
+  unverifiable: {
+    id: "usePins.failure.unverifiable",
+    defaultMessage: "This message failed verification, so pinning it would publish an unprovable claim.",
+  },
+});
 
 
 /**
@@ -177,7 +190,7 @@ export function usePins(
 
   /** Publish the list, replaced entire — the only write shape (§7). */
   const publish = async (held: HeldPin[]) => {
-    if (!user || !community || !channel || !eidHex) throw new Error("Not ready.");
+    if (!user || !community || !channel || !eidHex) throw new Error(t({ id: "usePins.notReady", defaultMessage: "Not ready." }));
     const entries = held.map((h) => h.entry);
     const content = channel.isPrivate
       ? serializeSealedPinList(entries, channel.current.group.convKey, channel.current.epoch)
@@ -210,10 +223,10 @@ export function usePins(
 
   const pin = useMutation<void, Error, { opened: OpenedEvent }>({
     mutationFn: ({ opened }) => serialize(async () => {
-      if (!channel) throw new Error("Not ready.");
+      if (!channel) throw new Error(t({ id: "usePins.notReady", defaultMessage: "Not ready." }));
       const current = currentPins();
       if (current.length >= PIN_MAX_ENTRIES) {
-        throw new Error(`This channel already has ${PIN_MAX_ENTRIES} pins. Unpin one first.`);
+        throw new Error(t({ id: "usePins.limitReached", defaultMessage: "This channel already has {max} pins. Unpin one first." }, { max: PIN_MAX_ENTRIES }));
       }
       // The epoch the message was written under.
       const epoch = epochOf(opened);
@@ -224,7 +237,7 @@ export function usePins(
         ? { ...opened, seal: community ? await readStoredSeal(community.idHex, opened.rumorId) : undefined }
         : opened;
       const { entry, reason } = buildPinEntryOrReason(withSeal, stream.group.convKey);
-      if (!entry) throw new Error(PIN_FAILURE_MESSAGE[reason ?? "unverifiable"]);
+      if (!entry) throw new Error(t(PIN_FAILURE_MESSAGE[reason ?? "unverifiable"]));
       if (current.some((h) => h.rumorId === opened.rumorId)) return; // already pinned
       await publish([{ rumorId: opened.rumorId, entry }, ...current]);
     }),

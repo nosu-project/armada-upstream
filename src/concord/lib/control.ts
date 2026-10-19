@@ -67,6 +67,7 @@ import { buildRumor, openWrap, sealRumor, wrapSeal, type OpenedEvent, type Strea
 import { readFoldedShared } from "@/lib/foldedCache";
 import type { NostrRumor } from "@/lib/nostrRumor";
 import { perfCount } from "@/lib/perf";
+import { t } from "@/i18n/intl";
 import {
   utf8Len,
   DESCRIPTION_MAX_BYTES,
@@ -129,7 +130,12 @@ export function currentControlWriteGroup(community: Community): GroupKey {
   const stream = currentControlGroup(community);
   const sk = stream.sk;
   if (sk === undefined) {
-    throw new Error("Only community staff hold this community's write key; ask a moderator to re-send it.");
+    throw new Error(
+      t({
+        id: "concordControl.noWriteKey",
+        defaultMessage: "Only community staff hold this community's write key; ask a moderator to re-send it.",
+      }),
+    );
   }
   return {
     sk,

@@ -2,6 +2,7 @@ import { useNostr } from "@nostrify/react";
 import { useMutation, type UseMutationResult } from "@tanstack/react-query";
 
 import { APP_NAME } from "@/lib/platform";
+import { t } from "@/i18n";
 import { publishSignedEventToRelays, uniqueRelayUrls } from "@/lib/nip65";
 import {
   PublishQueuedError,
@@ -48,9 +49,9 @@ export function useNostrPublish(): UseMutationResult<NostrEvent, Error, EventTem
   const eventStore = useEventStore();
 
   return useMutation({
-    mutationFn: async (t: EventTemplate) => {
+    mutationFn: async (request: EventTemplate) => {
       if (!user) {
-        throw new Error("User is not logged in");
+        throw new Error(t({ id: "useNostrPublish.notLoggedIn", defaultMessage: "User is not logged in" }));
       }
 
       const {
@@ -60,11 +61,11 @@ export function useNostrPublish(): UseMutationResult<NostrEvent, Error, EventTem
         inheritPendingTargets,
         onSigned,
         ...template
-      } = t;
+      } = request;
       if (relay && relays) throw new Error("Specify either relay or relays, not both");
       const exactRelays = relays ? uniqueRelayUrls(relays) : undefined;
       if (relays && exactRelays?.length === 0) {
-        throw new Error("Add at least one relay before publishing this account state");
+        throw new Error(t({ id: "useNostrPublish.noRelays", defaultMessage: "Add at least one relay before publishing this account state" }));
       }
       // NIP-89: always stamp this build; replaceable RMW often copies another app's `client` tag.
       const tags = [
@@ -93,7 +94,10 @@ export function useNostrPublish(): UseMutationResult<NostrEvent, Error, EventTem
 
       if (event.pubkey !== user.pubkey) {
         throw new Error(
-          "Signed event pubkey does not match the currently selected account. Please check your signer configuration.",
+          t({
+            id: "useNostrPublish.pubkeyMismatch",
+            defaultMessage: "Signed event pubkey does not match the currently selected account. Please check your signer configuration.",
+          }),
         );
       }
 
@@ -130,8 +134,14 @@ export function useNostrPublish(): UseMutationResult<NostrEvent, Error, EventTem
           if (result.rejected.length > 0) {
             throw new Error(
               result.accepted.length > 0
-                ? `Queued for ${result.rejected.length} relay${result.rejected.length === 1 ? "" : "s"} that did not accept it`
-                : "No requested relay accepted the event",
+                ? t(
+                  {
+                    id: "useNostrPublish.partiallyQueued",
+                    defaultMessage: "Queued for {count, plural, one {# relay} other {# relays}} that did not accept it",
+                  },
+                  { count: result.rejected.length },
+                )
+                : t({ id: "useNostrPublish.noneAccepted", defaultMessage: "No requested relay accepted the event" }),
             );
           }
         } else {
@@ -167,7 +177,7 @@ export function useRepublish(): UseMutationResult<
     mutationFn: async ({ event, relay }) => {
       // Store copies have `sig: ""`, which every relay rejects; fail loudly instead of looping.
       if (!event.sig) {
-        throw new Error("Cannot re-publish an unsigned event (its signature was not preserved).");
+        throw new Error(t({ id: "useNostrPublish.unsigned", defaultMessage: "Cannot re-publish an unsigned event (its signature was not preserved)." }));
       }
       await markOwnWebPushEvent(event.id);
       const timeout = publishTimeoutMs(user?.method);

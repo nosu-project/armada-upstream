@@ -4,6 +4,8 @@
  * so non-loopback `ws://` relays fail silently there.
  */
 
+import { t } from "@/i18n";
+
 /** The page protocol governing mixed-content rules (injectable for tests). */
 function pageProtocol(): string {
   return typeof window !== "undefined" ? window.location.protocol : "";
@@ -26,13 +28,16 @@ export function relayUsableHere(url: string, protocol: string = pageProtocol()):
 
 /** Why NONE of `relays` are usable here, or null — so join flows fail loudly. */
 export function unusableRelaysReason(relays: string[], protocol: string = pageProtocol()): string | null {
-  if (relays.length === 0) return "This community lists no relays.";
+  if (relays.length === 0) return t({ id: "relayUsability.noRelays", defaultMessage: "This community lists no relays." });
   if (relays.some((url) => relayUsableHere(url, protocol))) return null;
   const sample = relays[0];
-  return (
-    `None of this community's relays are reachable from this app: insecure ` +
-    `relays (like ${sample}) are blocked on this platform. Ask the community ` +
-    `owner to host it on a wss:// relay.`
+  return t(
+    {
+      id: "relayUsability.allInsecure",
+      defaultMessage:
+        "None of this community's relays are reachable from this app: insecure relays (like {sample}) are blocked on this platform. Ask the community owner to host it on a wss:// relay.",
+    },
+    { sample },
   );
 }
 

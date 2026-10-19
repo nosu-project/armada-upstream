@@ -9,7 +9,7 @@ import { describe, expect, it } from "vitest";
 import {
   assembleCIRuns,
   ciGroupsOutcome,
-  ciGroupsSummary,
+  ciGroupsCounts,
   ciRunOutcome,
   CI_JOB_RESULT_KIND,
   CI_PROGRESS_KIND,
@@ -244,7 +244,7 @@ describe("folding a stretch of runs", () => {
       run("desktop", "a".repeat(40), "success", 11),
     ]);
     expect(ciGroupsOutcome(groups)).toBe("failure");
-    expect(ciGroupsSummary(groups)).toBe("1 failing, 1 passing");
+    expect(ciGroupsCounts(groups)).toEqual({ failing: 1, running: 0, passing: 1 });
   });
 
   it("prefers a failure over work still in flight", () => {
@@ -255,7 +255,7 @@ describe("folding a stretch of runs", () => {
     }))!;
     const groups = groupCIRunsByWorkflow([run("test", "a".repeat(40), "failure", 10), progress]);
     expect(ciGroupsOutcome(groups)).toBe("failure");
-    expect(ciGroupsSummary(groups)).toBe("1 failing, 1 running");
+    expect(ciGroupsCounts(groups)).toEqual({ failing: 1, running: 1, passing: 0 });
   });
 
   it("orders workflows by how recently each last ran", () => {

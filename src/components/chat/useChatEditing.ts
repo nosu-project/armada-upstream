@@ -2,6 +2,7 @@ import { useCallback, useRef, useState } from "react";
 
 import { lastEditableOwnMessage, type ChatMsg } from "@/components/chat/transport";
 import { toast } from "@/hooks/useToast";
+import { t } from "@/i18n";
 
 /**
  * Inline message editing shared by every chat surface, including `editLast`
@@ -30,7 +31,11 @@ export function useChatEditing(input: {
     try {
       await latest.current.edit(original, trimmed);
     } catch {
-      toast({ title: "Edit failed", description: "Could not publish the edit.", variant: "destructive" });
+      toast({
+        title: t({ id: "useChatEditing.failedTitle", defaultMessage: "Edit failed" }),
+        description: t({ id: "useChatEditing.failedDescription", defaultMessage: "Could not publish the edit." }),
+        variant: "destructive",
+      });
     }
   }, []);
 

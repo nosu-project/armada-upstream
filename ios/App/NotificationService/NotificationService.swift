@@ -91,9 +91,11 @@ class NotificationService: UNNotificationServiceExtension {
             // silently still shows one. So the quietest available truth is
             // shown instead of the gateway's "New message", which would be a
             // notification about nothing. `passive` neither sounds nor lights
-            // the screen; it lands in Notification Center and no further.
-            content.title = "Armada"
-            content.body = "Messages synced"
+            // the screen; it lands in Notification Center and no further. The
+            // text ("Armada" / "Messages synced") comes worded in the config's
+            // language.
+            content.title = prepared.title
+            content.body = prepared.body
             content.sound = nil
             content.interruptionLevel = .passive
             return deliver(content)

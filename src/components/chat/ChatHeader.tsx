@@ -4,6 +4,7 @@ import { forwardRef, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { FormattedMessage, useIntl } from "@/i18n";
 import { cn } from "@/lib/utils";
 
 /** The chat pane's top bar, shared by Concord and NIP-29 so both read the same. */
@@ -24,11 +25,12 @@ export const ChatHeader = forwardRef<HTMLElement, { className?: string; children
 );
 
 export function ChatHeaderBack({ onClick }: { onClick: () => void }) {
+  const intl = useIntl();
   return (
     <Button
       variant="ghost"
       size="icon"
-      aria-label="Back to channels"
+      aria-label={intl.formatMessage({ id: "chatHeader.back", defaultMessage: "Back to channels" })}
       className="size-9 touch:size-11 shrink-0 sidebar:hidden"
       onClick={onClick}
     >
@@ -170,12 +172,13 @@ export function ChatHeaderAction({
 
 /** The ⋮ trigger; render inside a `DropdownMenu`. */
 export function ChatHeaderMenuTrigger() {
+  const intl = useIntl();
   return (
     <DropdownMenuTrigger asChild>
       <Button
         variant="ghost"
         size="icon"
-        aria-label="More options"
+        aria-label={intl.formatMessage({ id: "chatHeader.moreOptions", defaultMessage: "More options" })}
         className="size-8 touch:size-11 shrink-0 text-muted-foreground"
       >
         <MoreVertical className="size-4" />
@@ -204,16 +207,20 @@ export function ChatHeaderViewItems({
       {onSearch && (
         <DropdownMenuItem className="sidebar:hidden" onClick={onSearch}>
           <Search className="size-4" />
-          Search messages
+          <FormattedMessage id="chatHeader.searchMessages" defaultMessage="Search messages" />
         </DropdownMenuItem>
       )}
       <DropdownMenuItem className="sidebar:hidden" onClick={onMembers}>
         <Users className="size-4" />
-        Members
+        <FormattedMessage id="chatHeader.members" defaultMessage="Members" />
       </DropdownMenuItem>
       <DropdownMenuItem className="hidden sidebar:flex" onClick={onToggleMembers}>
         <Users className="size-4" />
-        {membersVisible ? "Hide members" : "Show members"}
+        {membersVisible ? (
+          <FormattedMessage id="chatHeader.hideMembers" defaultMessage="Hide members" />
+        ) : (
+          <FormattedMessage id="chatHeader.showMembers" defaultMessage="Show members" />
+        )}
       </DropdownMenuItem>
     </>
   );

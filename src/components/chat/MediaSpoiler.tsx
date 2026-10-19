@@ -1,12 +1,14 @@
 import { EyeOff } from "lucide-react";
 
 import { cn } from "@/lib/utils";
+import { FormattedMessage, useIntl } from "@/i18n";
 
 /**
  * Spoiler cover inside the media's `relative` box; the reveal click does nothing
  * else. A span, not a button, since the covered image is usually a button.
  */
 export function MediaSpoilerCover({ onReveal, compact = false }: { onReveal: () => void; compact?: boolean }) {
+  const intl = useIntl();
   const reveal = (e: React.SyntheticEvent) => {
     e.preventDefault();
     e.stopPropagation();
@@ -16,7 +18,7 @@ export function MediaSpoilerCover({ onReveal, compact = false }: { onReveal: () 
     <span
       role="button"
       tabIndex={0}
-      aria-label="Reveal spoiler"
+      aria-label={intl.formatMessage({ id: "lightbox.revealSpoiler", defaultMessage: "Reveal spoiler" })}
       onClick={reveal}
       // Swallow the press so long-press menus and video handlers never see it.
       onPointerDown={(e) => e.stopPropagation()}
@@ -32,7 +34,7 @@ export function MediaSpoilerCover({ onReveal, compact = false }: { onReveal: () 
         )}
       >
         {!compact && <EyeOff className="size-3.5" />}
-        SPOILER
+        <FormattedMessage id="lightbox.spoiler" defaultMessage="SPOILER" />
       </span>
     </span>
   );

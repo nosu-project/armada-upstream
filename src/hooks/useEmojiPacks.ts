@@ -18,6 +18,7 @@ import { sanitizeImageSrc } from "@/lib/sanitizeUrl";
 import { KIND_USER_EMOJIS } from "@/lib/selfSyncKinds";
 
 import type { NostrRumor } from "@/lib/nostrRumor";
+import { t } from "@/i18n";
 
 export const KIND_EMOJI_SET = 30030;
 
@@ -131,7 +132,7 @@ export function useAddEmojiPack(): UseMutationResult<
 
   return useMutation({
     mutationFn: async ({ pubkey, identifier, relay }) => {
-      if (!user) throw new Error("Sign in to add an emoji pack.");
+      if (!user) throw new Error(t({ id: "useEmojiPacks.signInToAdd", defaultMessage: "Sign in to add an emoji pack." }));
 
       const coord = emojiPackCoord(pubkey, identifier);
       const store = await eventStore;
@@ -157,7 +158,7 @@ export function useAddEmojiPack(): UseMutationResult<
           (knownEmojis?.length ?? 0) > 0 ||
           hasDurableEmojis(user.pubkey);
         if (!conclusive || seenAList) {
-          throw new Error("Couldn't read your emoji list. Check your connection and try again.");
+          throw new Error(t({ id: "useEmojiPacks.readFailed", defaultMessage: "Couldn't read your emoji list. Check your connection and try again." }));
         }
         // base stays null → create the user's first list from scratch.
       }
@@ -196,7 +197,7 @@ export function useRemoveEmojiPack(): UseMutationResult<void, Error, { coord: st
 
   return useMutation({
     mutationFn: async ({ coord }) => {
-      if (!user) throw new Error("Sign in to manage emoji packs.");
+      if (!user) throw new Error(t({ id: "useEmojiPacks.signInToManage", defaultMessage: "Sign in to manage emoji packs." }));
 
       const store = await eventStore;
 
@@ -218,7 +219,7 @@ export function useRemoveEmojiPack(): UseMutationResult<void, Error, { coord: st
           (knownEmojis?.length ?? 0) > 0 ||
           hasDurableEmojis(user.pubkey);
         if (!conclusive || seenAList) {
-          throw new Error("Couldn't read your emoji list. Check your connection and try again.");
+          throw new Error(t({ id: "useEmojiPacks.readFailed", defaultMessage: "Couldn't read your emoji list. Check your connection and try again." }));
         }
         return; // genuinely nothing to remove
       }
@@ -369,7 +370,7 @@ export function emojiPackName(event: NostrRumor): string {
     event.tags.find((t) => t[0] === "title")?.[1] ||
     event.tags.find((t) => t[0] === "name")?.[1] ||
     event.tags.find((t) => t[0] === "d")?.[1] ||
-    "Emoji pack"
+    t({ id: "useEmojiPacks.fallbackName", defaultMessage: "Emoji pack" })
   );
 }
 

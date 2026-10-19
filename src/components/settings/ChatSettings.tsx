@@ -6,10 +6,12 @@ import { Switch } from "@/components/ui/switch";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useIsTouch } from "@/hooks/useIsMobile";
+import { useIntl } from "@/i18n";
 import { sendsOnEnter } from "@/lib/sendOnEnter";
 
 /** Settings › Chats: composing, typing status and reactions, everywhere you chat. */
 export function ChatSettings() {
+  const intl = useIntl();
   const { config, updateConfig } = useAppContext();
   const { user } = useCurrentUser();
   const isTouch = useIsTouch();
@@ -27,11 +29,11 @@ export function ChatSettings() {
     <>
       <SettingsGroup id="chat">
         <SettingsRow
-          label="Send with Enter"
+          label={intl.formatMessage({ id: "chatSettings.sendWithEnter", defaultMessage: "Send with Enter" })}
           description={
             isTouch
-              ? "Enter sends the message. Off, Enter is a new line and you send with the button."
-              : "Enter sends; Shift+Enter for a new line. Off, Ctrl/Cmd+Enter sends."
+              ? intl.formatMessage({ id: "chatSettings.sendWithEnterTouch", defaultMessage: "Enter sends the message. Off, Enter is a new line and you send with the button." })
+              : intl.formatMessage({ id: "chatSettings.sendWithEnterDesktop", defaultMessage: "Enter sends; Shift+Enter for a new line. Off, Ctrl/Cmd+Enter sends." })
           }
         >
           <Switch
@@ -40,8 +42,8 @@ export function ChatSettings() {
           />
         </SettingsRow>
         <SettingsRow
-          label="Typing indicators"
-          description="Share and see typing status in DMs and channels."
+          label={intl.formatMessage({ id: "chatSettings.typingIndicators", defaultMessage: "Typing indicators" })}
+          description={intl.formatMessage({ id: "chatSettings.typingIndicatorsDescription", defaultMessage: "Share and see typing status in DMs and channels." })}
         >
           <Switch
             checked={config.dmTypingIndicators}
@@ -51,8 +53,8 @@ export function ChatSettings() {
         </SettingsRow>
         {!isTouch && (
           <SettingsRow
-            label="Message actions on hover"
-            description="Show reactions and actions when hovering a message. Off, right-click a message for them."
+            label={intl.formatMessage({ id: "chatSettings.hoverActions", defaultMessage: "Message actions on hover" })}
+            description={intl.formatMessage({ id: "chatSettings.hoverActionsDescription", defaultMessage: "Show reactions and actions when hovering a message. Off, right-click a message for them." })}
           >
             <Switch
               checked={config.messageHoverActions}
@@ -64,8 +66,8 @@ export function ChatSettings() {
         {Capacitor.getPlatform() === "android" && (
           // Per-device: leave the app vs. walk history from the revealed list pane.
           <SettingsRow
-            label="Back leaves the app"
-            description="Off, back switches between the channel list and the chat."
+            label={intl.formatMessage({ id: "chatSettings.backLeavesApp", defaultMessage: "Back leaves the app" })}
+            description={intl.formatMessage({ id: "chatSettings.backLeavesAppDescription", defaultMessage: "Off, back switches between the channel list and the chat." })}
           >
             <Switch
               checked={config.androidBackLeavesApp}

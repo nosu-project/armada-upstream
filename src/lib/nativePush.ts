@@ -99,6 +99,8 @@ export interface IosPushConfig {
   }>;
   /** Media policy for avatar fetches; absent = default policy. */
   mediaPolicy?: MediaPolicyConfig;
+  /** The app's language code; the extension words notifications in it (absent = English). */
+  locale?: string;
 }
 
 export async function writeIosPushConfig(config: IosPushConfig): Promise<void> {

@@ -34,6 +34,7 @@ import {
 import { useUploadFile } from "@/hooks/useUploadFile";
 import { toast } from "@/hooks/useToast";
 import { cn } from "@/lib/utils";
+import { common, FormattedMessage, t, useIntl } from "@/i18n";
 
 /**
  * One concern per step. Relays and voice servers share a step; the timer is
@@ -54,6 +55,7 @@ interface StagedImage {
  * unreadable orphaned blob).
  */
 export function CreateCommunityWizard({ onClose }: { onClose: () => void }) {
+  const intl = useIntl();
   const navigate = useNavigate();
   const { create, isCreating } = useCommunityActions();
   const { mutateAsync: uploadFile } = useUploadFile();
@@ -117,7 +119,9 @@ export function CreateCommunityWizard({ onClose }: { onClose: () => void }) {
       imageSrc: URL.createObjectURL(file),
       aspect: field === "icon" ? 1 : 3,
       field,
-      title: field === "icon" ? "Crop icon" : "Crop banner",
+      title: field === "icon"
+        ? t({ id: "createCommunityWizard.cropIcon", defaultMessage: "Crop icon" })
+        : t({ id: "createCommunityWizard.cropBanner", defaultMessage: "Crop banner" }),
     });
   };
 
@@ -140,14 +144,14 @@ export function CreateCommunityWizard({ onClose }: { onClose: () => void }) {
         new File([ciphertext], `${field}.enc`, { type: "application/octet-stream" }),
       );
       const url = tags[0]?.[1];
-      if (!url) throw new Error("Upload returned no URL.");
+      if (!url) throw new Error(t({ id: "createCommunityWizard.noUrl", defaultMessage: "Upload returned no URL." }));
       const preview = URL.createObjectURL(blob);
       objectUrls.current.push(preview);
       const staged: StagedImage = { pointer: { url, key, nonce, hash }, preview };
       if (field === "icon") setIcon(staged);
       else setBanner(staged);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Upload failed.");
+      setError(e instanceof Error ? e.message : t({ id: "createCommunityWizard.uploadFailed", defaultMessage: "Upload failed." }));
     } finally {
       setUploading(null);
     }
@@ -166,11 +170,11 @@ export function CreateCommunityWizard({ onClose }: { onClose: () => void }) {
         icon: icon?.pointer,
         banner: banner?.pointer,
       });
-      toast({ title: "Encrypted community ready", description: created });
+      toast({ title: t({ id: "createCommunityWizard.ready", defaultMessage: "Encrypted community ready" }), description: created });
       // Replace so going back can't mint a second community.
       navigate(`/c/${encodeURIComponent(communityId)}`, { replace: true });
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Couldn't create the community.");
+      setError(e instanceof Error ? e.message : t({ id: "createCommunityWizard.createFailed", defaultMessage: "Couldn't create the community." }));
     }
   };
 
@@ -195,8 +199,11 @@ export function CreateCommunityWizard({ onClose }: { onClose: () => void }) {
           <ArmadaCrest size={84} />
 
           <StepHeading
-            title="name your community"
-            description="Serverless and end-to-end-encrypted. No host can read it, and you become the owner."
+            title={intl.formatMessage({ id: "createCommunityWizard.name.title", defaultMessage: "name your community" })}
+            description={intl.formatMessage({
+              id: "createCommunityWizard.name.description",
+              defaultMessage: "Serverless and end-to-end-encrypted. No host can read it, and you become the owner.",
+            })}
           />
 
           <div className="w-full space-y-3">
@@ -209,15 +216,19 @@ export function CreateCommunityWizard({ onClose }: { onClose: () => void }) {
                   setStep("look");
                 }
               }}
-              placeholder="e.g. Midnight Fleet"
-              aria-label="Community name"
+              placeholder={intl.formatMessage({ id: "createCommunityWizard.name.placeholder", defaultMessage: "e.g. Midnight Fleet" })}
+              aria-label={intl.formatMessage({ id: "createCommunityWizard.name.label", defaultMessage: "Community name" })}
               autoComplete="off"
               autoFocus
               className="h-12 text-base"
             />
             {nameTooLong && (
               <p className="text-left text-xs text-destructive">
-                Names are capped at {NAME_MAX_BYTES} bytes. Shorten it to continue.
+                <FormattedMessage
+                  id="createCommunityWizard.name.tooLong"
+                  defaultMessage="Names are capped at {max} bytes. Shorten it to continue."
+                  values={{ max: NAME_MAX_BYTES }}
+                />
               </p>
             )}
             <Button
@@ -227,7 +238,7 @@ export function CreateCommunityWizard({ onClose }: { onClose: () => void }) {
               disabled={!name.trim() || nameTooLong}
               className="h-12 w-full clip-corner-lg text-base font-medium"
             >
-              Continue
+              <FormattedMessage {...common.continue} />
             </Button>
           </div>
         </div>
@@ -236,8 +247,11 @@ export function CreateCommunityWizard({ onClose }: { onClose: () => void }) {
       {step === "look" && (
         <div className="flex flex-col gap-6">
           <StepHeading
-            title="give it a face"
-            description="All optional. Images are encrypted before upload."
+            title={intl.formatMessage({ id: "createCommunityWizard.look.title", defaultMessage: "give it a face" })}
+            description={intl.formatMessage({
+              id: "createCommunityWizard.look.description",
+              defaultMessage: "All optional. Images are encrypted before upload.",
+            })}
           />
 
           {/* Live stand-in for the community header: icon overlapping the banner edge. */}
@@ -267,14 +281,18 @@ export function CreateCommunityWizard({ onClose }: { onClose: () => void }) {
             <Textarea
               value={description}
               onChange={(e) => setDescription(e.target.value)}
-              placeholder="What's this community about?"
-              aria-label="Community description"
+              placeholder={intl.formatMessage({ id: "createCommunityWizard.look.descriptionPlaceholder", defaultMessage: "What's this community about?" })}
+              aria-label={intl.formatMessage({ id: "createCommunityWizard.look.descriptionLabel", defaultMessage: "Community description" })}
               rows={3}
               className="resize-none"
             />
             {descriptionTooLong && (
               <p className="text-xs text-destructive">
-                Descriptions are capped at {DESCRIPTION_MAX_BYTES.toLocaleString()} bytes.
+                <FormattedMessage
+                  id="createCommunityWizard.look.descriptionTooLong"
+                  defaultMessage="Descriptions are capped at {max} bytes."
+                  values={{ max: DESCRIPTION_MAX_BYTES.toLocaleString(intl.locale) }}
+                />
               </p>
             )}
           </div>
@@ -293,9 +311,12 @@ export function CreateCommunityWizard({ onClose }: { onClose: () => void }) {
             className="h-12 w-full clip-corner-lg text-base font-medium"
           >
             {uploading ? (
-              <><Loader2 className="size-4 mr-2 animate-spin" /> Uploading...</>
+              <>
+                <Loader2 className="size-4 mr-2 animate-spin" />{" "}
+                <FormattedMessage id="createCommunityWizard.uploading" defaultMessage="Uploading..." />
+              </>
             ) : (
-              "Continue"
+              <FormattedMessage {...common.continue} />
             )}
           </Button>
         </div>
@@ -304,31 +325,40 @@ export function CreateCommunityWizard({ onClose }: { onClose: () => void }) {
       {step === "relays" && (
         <div className="flex flex-col gap-6">
           <StepHeading
-            title="where it lives"
-            description="Messages live on the relays; calls run through the voice servers. Pick relays that will let you post."
+            title={intl.formatMessage({ id: "createCommunityWizard.relays.title", defaultMessage: "where it lives" })}
+            description={intl.formatMessage({
+              id: "createCommunityWizard.relays.description",
+              defaultMessage: "Messages live on the relays; calls run through the voice servers. Pick relays that will let you post.",
+            })}
           />
 
           <div className="space-y-2">
             <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-              Relays
+              <FormattedMessage id="createCommunityWizard.relays.relays" defaultMessage="Relays" />
             </p>
             <RelayListEditor
               relays={effectiveRelays}
               onChange={setRelays}
               onReset={() => setRelays(candidates)}
-              emptyText="Add at least one relay to host this community."
+              emptyText={intl.formatMessage({ id: "createCommunityWizard.relays.empty", defaultMessage: "Add at least one relay to host this community." })}
             />
           </div>
 
           <div className="space-y-2">
             <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-              Voice servers
+              <FormattedMessage id="createCommunityWizard.relays.voiceServers" defaultMessage="Voice servers" />
             </p>
             <VoiceServerListEditor servers={avBrokers} onChange={setAvBrokers} />
             <p className="text-xs text-muted-foreground">
               {avBrokers.length > 0
-                ? "Every call in this community runs through these. They never see the calls themselves, which are encrypted end to end, but they do see who connects and when."
-                : "With none set, every member calls through whatever voice server they've set themselves."}
+                ? <FormattedMessage
+                  id="createCommunityWizard.relays.voiceHint"
+                  defaultMessage="Every call in this community runs through these. They never see the calls themselves, which are encrypted end to end, but they do see who connects and when."
+                />
+                : <FormattedMessage
+                  id="createCommunityWizard.relays.voiceNone"
+                  defaultMessage="With none set, every member calls through whatever voice server they've set themselves."
+                />}
             </p>
           </div>
 
@@ -339,7 +369,7 @@ export function CreateCommunityWizard({ onClose }: { onClose: () => void }) {
             disabled={effectiveRelays.length === 0}
             className="h-12 w-full clip-corner-lg text-base font-medium"
           >
-            Continue
+            <FormattedMessage {...common.continue} />
           </Button>
         </div>
       )}
@@ -347,12 +377,15 @@ export function CreateCommunityWizard({ onClose }: { onClose: () => void }) {
       {step === "rules" && (
         <div className="flex flex-col gap-6">
           <StepHeading
-            title="disappearing messages"
-            description="Messages delete for everyone this long after they're sent. Changeable later."
+            title={intl.formatMessage({ id: "createCommunityWizard.rules.title", defaultMessage: "disappearing messages" })}
+            description={intl.formatMessage({
+              id: "createCommunityWizard.rules.description",
+              defaultMessage: "Messages delete for everyone this long after they're sent. Changeable later.",
+            })}
           />
 
           <Select value={String(expiration)} onValueChange={(v) => setExpiration(Number(v))}>
-            <SelectTrigger className="h-12 w-full text-base" aria-label="Disappearing messages timer">
+            <SelectTrigger className="h-12 w-full text-base" aria-label={intl.formatMessage({ id: "createCommunityWizard.rules.timer", defaultMessage: "Disappearing messages timer" })}>
               <SelectValue />
             </SelectTrigger>
             <SelectContent className="z-[260]">
@@ -378,9 +411,15 @@ export function CreateCommunityWizard({ onClose }: { onClose: () => void }) {
             className="h-12 w-full clip-corner-lg text-base font-medium"
           >
             {isCreating ? (
-              <><Loader2 className="size-4 mr-2 animate-spin" /> Creating...</>
+              <>
+                <Loader2 className="size-4 mr-2 animate-spin" />{" "}
+                <FormattedMessage id="createCommunityWizard.creating" defaultMessage="Creating..." />
+              </>
             ) : (
-              <><ShieldCheck className="size-4 mr-2" /> Create encrypted community</>
+              <>
+                <ShieldCheck className="size-4 mr-2" />{" "}
+                <FormattedMessage id="createCommunityWizard.create" defaultMessage="Create encrypted community" />
+              </>
             )}
           </Button>
         </div>
@@ -420,6 +459,7 @@ function VoiceServerListEditor({
   servers: string[];
   onChange: (servers: string[]) => void;
 }) {
+  const intl = useIntl();
   const [draft, setDraft] = useState("");
 
   const handleAdd = () => {
@@ -428,14 +468,14 @@ function VoiceServerListEditor({
     const origin = canonicalOrigin(/^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : `https://${raw}`);
     if (!origin) {
       toast({
-        title: "Invalid voice server",
-        description: "Enter an https address, like voice.example.com.",
+        title: t({ id: "createCommunityWizard.voice.invalid", defaultMessage: "Invalid voice server" }),
+        description: t({ id: "createCommunityWizard.voice.invalidHint", defaultMessage: "Enter an https address, like voice.example.com." }),
         variant: "destructive",
       });
       return;
     }
     if (servers.includes(origin)) {
-      toast({ title: "Already in the list", description: origin });
+      toast({ title: t({ id: "createCommunityWizard.voice.duplicate", defaultMessage: "Already in the list" }), description: origin });
       setDraft("");
       return;
     }
@@ -459,7 +499,7 @@ function VoiceServerListEditor({
             <Button
               variant="ghost"
               size="icon"
-              aria-label={`Remove ${origin}`}
+              aria-label={intl.formatMessage({ id: "createCommunityWizard.voice.remove", defaultMessage: "Remove {origin}" }, { origin })}
               className="size-7 shrink-0 text-muted-foreground hover:text-destructive"
               onClick={() => onChange(servers.filter((s) => s !== origin))}
             >
@@ -471,7 +511,7 @@ function VoiceServerListEditor({
 
       {servers.length === 0 && (
         <p className="py-1 text-sm text-muted-foreground">
-          No voice servers. Members will use their own.
+          <FormattedMessage id="createCommunityWizard.voice.none" defaultMessage="No voice servers. Members will use their own." />
         </p>
       )}
 
@@ -487,12 +527,12 @@ function VoiceServerListEditor({
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             placeholder="voice.example.com"
-            aria-label="Add voice server"
+            aria-label={intl.formatMessage({ id: "createCommunityWizard.voice.add", defaultMessage: "Add voice server" })}
             autoComplete="off"
             className="bg-background/40 border-transparent text-base md:text-sm"
           />
           <Button type="submit" disabled={!draft.trim()} className="clip-corner-lg shrink-0">
-            <Plus className="size-4 mr-1.5" /> Add
+            <Plus className="size-4 mr-1.5" /> <FormattedMessage {...common.add} />
           </Button>
         </form>
       )}
@@ -523,6 +563,7 @@ function ImageSlot({
   busy: boolean;
   onPick: () => void;
 }) {
+  const intl = useIntl();
   const isIcon = variant === "icon";
   return (
     <div className={cn("relative", isIcon ? "w-fit" : "w-full")}>
@@ -537,7 +578,13 @@ function ImageSlot({
         )}
         onClick={onPick}
         disabled={busy}
-        aria-label={image ? `Change ${variant}` : `Add ${variant}`}
+        aria-label={isIcon
+          ? image
+            ? intl.formatMessage({ id: "createCommunityWizard.changeIcon", defaultMessage: "Change icon" })
+            : intl.formatMessage({ id: "createCommunityWizard.addIcon", defaultMessage: "Add icon" })
+          : image
+            ? intl.formatMessage({ id: "createCommunityWizard.changeBanner", defaultMessage: "Change banner" })
+            : intl.formatMessage({ id: "createCommunityWizard.addBanner", defaultMessage: "Add banner" })}
       >
         {image ? (
           <img src={image.preview} alt="" className="size-full object-cover" />

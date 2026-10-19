@@ -6,6 +6,7 @@ import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useEventStore } from "@/hooks/useEventStore";
 import { useNostrPublish } from "@/hooks/useNostrPublish";
+import { t } from "@/i18n";
 import {
   newestCanonicalSelfList,
   readStoredCanonicalSelfLists,
@@ -73,7 +74,7 @@ export function useSearchRelayList() {
 
   const publish = useMutation({
     mutationFn: async (input: string[]) => {
-      if (!user) throw new Error("Not logged in");
+      if (!user) throw new Error(t({ id: "useSearchRelayList.notLoggedIn", defaultMessage: "Not logged in" }));
       const desired = [...new Set(input
         .map((relay) => normalizeRelayUrl(relay))
         .filter((relay): relay is string => Boolean(relay)))];
@@ -95,9 +96,7 @@ export function useSearchRelayList() {
         ),
       ]);
       if (response.answered.length === 0) {
-        throw new Error(
-          "Could not confirm your current search-relay list; no changes were published",
-        );
+throw new Error(t({ id: "useSearchRelayList.unconfirmed", defaultMessage: "Could not confirm your current search-relay list; no changes were published" }));
       }
       const cached = queryClient.getQueryData<SearchRelayListQuery>(queryKey);
       const prev = newestCanonicalSelfList(
@@ -112,7 +111,7 @@ export function useSearchRelayList() {
 
       const current = await readSearchRelayList(prev, user.signer);
       if (current.decryptFailed) {
-        throw new Error("Your private search-relay list could not be decrypted; no changes were published");
+        throw new Error(t({ id: "useSearchRelayList.decryptFailed", defaultMessage: "Your private search-relay list could not be decrypted; no changes were published" }));
       }
 
       const oldPublic = new Set(current.publicRelays);

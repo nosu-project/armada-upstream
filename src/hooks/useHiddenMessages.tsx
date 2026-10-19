@@ -9,6 +9,7 @@ import {
   subscribeHiddenMessages,
   unhideMessageId,
 } from "@/lib/hiddenMessages";
+import { t } from "@/i18n";
 
 export interface HiddenMessages {
   hiddenIds: ReadonlySet<string>;
@@ -35,11 +36,14 @@ export function useHiddenMessages(): HiddenMessages {
       if (!pubkey) return;
       hideMessageId(pubkey, id);
       toast({
-        title: "Message hidden",
-        description: "Removed from your view on this device.",
+        title: t({ id: "useHiddenMessages.hidden.title", defaultMessage: "Message hidden" }),
+        description: t({ id: "useHiddenMessages.hidden.description", defaultMessage: "Removed from your view on this device." }),
         action: (
-          <ToastAction altText="Undo hiding this message" onClick={() => unhideMessageId(pubkey, id)}>
-            Undo
+          <ToastAction
+            altText={t({ id: "useHiddenMessages.undoAlt", defaultMessage: "Undo hiding this message" })}
+            onClick={() => unhideMessageId(pubkey, id)}
+          >
+            {t({ id: "useHiddenMessages.undo", defaultMessage: "Undo" })}
           </ToastAction>
         ),
       });

@@ -3,6 +3,7 @@ import { useAuthor } from "@/hooks/useAuthor";
 import { useMutedPubkeys } from "@/hooks/useMuteList";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { getAvatarShape } from "@/lib/avatarShape";
+import { useIntl } from "@/i18n";
 
 /** Cap the avatar stack so an unbounded typer list doesn't resolve unbounded profiles. */
 const MAX_AVATARS = 3;
@@ -24,6 +25,7 @@ function TypingAvatar({ pubkey }: { pubkey: string }) {
 /** Signal-style typing indicator: avatar stack (capped, then "+N") beside pulsing dots. */
 export function TypingIndicator({ pubkeys: allPubkeys }: { pubkeys: string[] }) {
   // Filtered here, the one component all three typing producers render through.
+  const intl = useIntl();
   const { mutedPubkeys } = useMutedPubkeys();
   const pubkeys = mutedPubkeys.size === 0
     ? allPubkeys
@@ -32,7 +34,7 @@ export function TypingIndicator({ pubkeys: allPubkeys }: { pubkeys: string[] }) 
   const shown = pubkeys.slice(0, MAX_AVATARS);
   const overflow = pubkeys.length - shown.length;
   return (
-    <div className="flex items-center gap-2 px-4 pb-1" role="status" aria-label="Someone is typing">
+    <div className="flex items-center gap-2 px-4 pb-1" role="status" aria-label={intl.formatMessage({ id: "typingIndicator.someoneTyping", defaultMessage: "Someone is typing" })}>
       <div className="flex -space-x-1.5">
         {shown.map((pk) => (
           <TypingAvatar key={pk} pubkey={pk} />

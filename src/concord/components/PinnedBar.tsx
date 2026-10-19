@@ -13,6 +13,7 @@ import { useAuthor } from "@/hooks/useAuthor";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { shortTimeAgo } from "@/lib/formatTime";
 import { cn } from "@/lib/utils";
+import { FormattedMessage, useIntl } from "@/i18n";
 
 type BarPin = VerifiedPin & { staleEdit?: boolean };
 
@@ -60,8 +61,10 @@ function PinRow({
               <ShieldCheck className="size-3 shrink-0 text-success" />
             </TooltipTrigger>
             <TooltipContent className="max-w-56 text-xs">
-              Proven: this author signed exactly these words. Verified from the pin itself, with no
-              history and no old keys.
+              <FormattedMessage
+                id="pinnedBar.proven"
+                defaultMessage="Proven: this author signed exactly these words. Verified from the pin itself, with no history and no old keys."
+              />
             </TooltipContent>
           </Tooltip>
           <span className="shrink-0 text-3xs tabular-nums text-muted-foreground">
@@ -70,12 +73,22 @@ function PinRow({
           {pin.edited && (
             <Tooltip>
               <TooltipTrigger asChild>
-                <span className="shrink-0 text-3xs text-muted-foreground">(edited)</span>
+                <span className="shrink-0 text-3xs text-muted-foreground">
+                  <FormattedMessage id="pinnedBar.edited" defaultMessage="(edited)" />
+                </span>
               </TooltipTrigger>
               <TooltipContent className="max-w-56 text-xs">
-                {pin.staleEdit
-                  ? "The author revised this. You can read the revision; members who joined later still see the original until an admin refreshes the pin."
-                  : "The author revised this, and the revision is proven for everyone."}
+                {pin.staleEdit ? (
+                  <FormattedMessage
+                    id="pinnedBar.staleEdit"
+                    defaultMessage="The author revised this. You can read the revision; members who joined later still see the original until an admin refreshes the pin."
+                  />
+                ) : (
+                  <FormattedMessage
+                    id="pinnedBar.provenEdit"
+                    defaultMessage="The author revised this, and the revision is proven for everyone."
+                  />
+                )}
               </TooltipContent>
             </Tooltip>
           )}
@@ -97,7 +110,7 @@ function PinRow({
           className={cn("h-6 touch:h-9 shrink-0 px-2 touch:px-3 text-2xs touch:text-xs text-muted-foreground hover:text-destructive opacity-0 group-hover/pin:opacity-100 touch:opacity-100 focus-visible:opacity-100 transition-opacity", busy && "opacity-100")}
           onClick={() => onUnpin(pin.rumorId)}
         >
-          {busy ? <Loader2 className="size-3.5 animate-spin" /> : "Unpin"}
+          {busy ? <Loader2 className="size-3.5 animate-spin" /> : <FormattedMessage id="pinnedBar.unpin" defaultMessage="Unpin" />}
         </Button>
       )}
     </div>
@@ -133,6 +146,7 @@ export function PinnedBar({
   onUnpin: (rumorId: string) => void;
   onClose: () => void;
 }) {
+  const intl = useIntl();
   const expanded = open && (pins.length > 0 || dark);
 
   // One gallery for the whole bar so swipes cross pins.
@@ -169,13 +183,13 @@ export function PinnedBar({
         <div className="flex items-center justify-between gap-2 mb-1.5">
           <span className="flex items-center gap-1.5 text-2xs font-semibold uppercase tracking-wide text-muted-foreground/80">
             <Pin className="size-3 text-amber-500" />
-            Pinned messages
+            <FormattedMessage id="pinnedBar.title" defaultMessage="Pinned messages" />
             {pins.length > 0 && <span className="tabular-nums text-muted-foreground/60">{pins.length}</span>}
           </span>
           <Button
             variant="ghost"
             size="icon"
-            aria-label="Close pinned messages"
+            aria-label={intl.formatMessage({ id: "pinnedBar.close", defaultMessage: "Close pinned messages" })}
             className="size-6 touch:size-10 text-muted-foreground"
             onClick={onClose}
           >
@@ -191,17 +205,32 @@ export function PinnedBar({
             className="mb-1.5 flex w-full items-center gap-2 clip-corner-lg bg-foreground/5 px-2 py-1.5 text-left text-2xs text-muted-foreground disabled:opacity-60"
           >
             <Loader2 className={cn("size-3 shrink-0", isRefreshingEdits && "animate-spin")} />
-            {isRefreshingEdits
-              ? "Publishing the revision so later members see it too…"
-              : `${staleEdits} pin${staleEdits === 1 ? "" : "s"} edited. Publishing the revision shortly.`}
-            {!isRefreshingEdits && <span className="ml-auto shrink-0 underline">Now</span>}
+            {isRefreshingEdits ? (
+              <FormattedMessage
+                id="pinnedBar.publishingRevision"
+                defaultMessage="Publishing the revision so later members see it too…"
+              />
+            ) : (
+              <FormattedMessage
+                id="pinnedBar.staleEdits"
+                defaultMessage="{count, plural, one {# pin edited. Publishing the revision shortly.} other {# pins edited. Publishing the revision shortly.}}"
+                values={{ count: staleEdits }}
+              />
+            )}
+            {!isRefreshingEdits && (
+              <span className="ml-auto shrink-0 underline">
+                <FormattedMessage id="pinnedBar.now" defaultMessage="Now" />
+              </span>
+            )}
           </button>
         )}
         {dark && pins.length === 0 ? (
           <p className="flex items-center gap-2 px-2 py-3 text-xs text-muted-foreground">
             <Lock className="size-3.5 shrink-0" />
-            This channel has pins from before you joined. They were sealed with keys you don't hold.
-            An admin can republish them to bring them back.
+            <FormattedMessage
+              id="pinnedBar.darkPins"
+              defaultMessage="This channel has pins from before you joined. They were sealed with keys you don't hold. An admin can republish them to bring them back."
+            />
           </p>
         ) : (
           <div className="max-h-56 overflow-y-auto space-y-0.5 pr-0.5">

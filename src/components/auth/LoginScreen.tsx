@@ -32,6 +32,7 @@ import { shareOrigin } from '@/lib/shareOrigin';
 import { withConnectPerms } from "@/lib/nostrConnectPerms";
 import { toast } from '@/hooks/useToast';
 import { writeClipboardText } from '@/lib/clipboard';
+import { common, FormattedMessage, t, useIntl, type IntlShape } from '@/i18n';
 
 interface LoginScreenProps {
   isOpen: boolean;
@@ -48,8 +49,8 @@ const validateNsec = (nsec: string) => {
 // Input starting with nsec1 is almost always a truncated paste; say so.
 const nsecRejectionMessage = (input: string) => {
   return input.startsWith('nsec1')
-    ? "That doesn't look like a complete secret key. Check you copied the whole nsec."
-    : 'Enter a secret key starting with nsec1, or a bunker:// URI.';
+    ? t({ id: "loginScreen.incompleteNsec", defaultMessage: "That doesn't look like a complete secret key. Check you copied the whole nsec." })
+    : t({ id: "loginScreen.enterKey", defaultMessage: "Enter a secret key starting with nsec1, or a bunker:// URI." });
 };
 
 // A phone's browser is backgrounded while the signer runs, and it has a callback
@@ -62,12 +63,12 @@ const validateBunkerUri = (uri: string) => {
   return uri.startsWith('bunker://');
 };
 
-const connectStatusLabel = (status: NostrConnectStatus | null): string => {
+const connectStatusLabel = (intl: IntlShape, status: NostrConnectStatus | null): string => {
   switch (status) {
     case 'awaiting-connect':
-      return 'Waiting for signer connection…';
+      return intl.formatMessage({ id: "loginScreen.awaitingConnect", defaultMessage: "Waiting for signer connection…" });
     case 'getting-public-key':
-      return 'Getting public key…';
+      return intl.formatMessage({ id: "loginScreen.gettingPublicKey", defaultMessage: "Getting public key…" });
     default:
       return '';
   }
@@ -84,6 +85,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ isOpen, onClose, onLogin, onS
   // On the APK the WebView origin is unreachable from the signer's browser, so
   // use the public deployment; its verified App Link reopens the app (#44).
   const callbackOrigin = shareOrigin();
+  const intl = useIntl();
   const [isLoading, setIsLoading] = useState(false);
   const [isFileLoading, setIsFileLoading] = useState(false);
   const [loginInput, setLoginInput] = useState('');
@@ -224,11 +226,14 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ isOpen, onClose, onLogin, onS
       setCopiedConnectUri(true);
       clearTimeout(copiedTimerRef.current);
       copiedTimerRef.current = setTimeout(() => setCopiedConnectUri(false), 2000);
-      toast({ title: 'Link copied', description: 'Paste it into your signer app.' });
+      toast({
+        title: t({ id: "loginScreen.linkCopied", defaultMessage: "Link copied" }),
+        description: t({ id: "loginScreen.linkCopiedDescription", defaultMessage: "Paste it into your signer app." }),
+      });
     } catch {
       toast({
-        title: 'Copy failed',
-        description: 'Could not copy to the clipboard. Select the link and copy it manually.',
+        title: t({ id: "loginScreen.copyFailed", defaultMessage: "Copy failed" }),
+        description: t({ id: "loginScreen.copyFailedDescription", defaultMessage: "Could not copy to the clipboard. Select the link and copy it manually." }),
         variant: 'destructive',
       });
     }
@@ -240,7 +245,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ isOpen, onClose, onLogin, onS
 
     try {
       if (!('nostr' in window)) {
-        throw new Error('Nostr extension not found. Please install a NIP-07 extension.');
+        throw new Error(t({ id: "loginScreen.extensionMissing", defaultMessage: "Nostr extension not found. Please install a NIP-07 extension." }));
       }
       await login.extension();
       onLogin();
@@ -248,7 +253,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ isOpen, onClose, onLogin, onS
     } catch (e: unknown) {
       const error = e as Error;
       console.error('Extension login failed:', error);
-      setExtensionError(error instanceof Error ? error.message : 'Extension login failed');
+      setExtensionError(error instanceof Error ? error.message : t({ id: "loginScreen.extensionFailed", defaultMessage: "Extension login failed" }));
     } finally {
       setIsLoading(false);
     }
@@ -265,7 +270,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ isOpen, onClose, onLogin, onS
         onLogin();
         onClose();
       } catch {
-        setLoginError("Failed to login with this key. Please check that it's correct.");
+        setLoginError(t({ id: "loginScreen.nsecFailed", defaultMessage: "Failed to login with this key. Please check that it's correct." }));
         setIsLoading(false);
       }
     }, 50);
@@ -275,7 +280,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ isOpen, onClose, onLogin, onS
   const handleLogin = async () => {
     const input = loginInput.trim();
     if (!input) {
-      setLoginError('Please enter your secret key or bunker URI');
+      setLoginError(t({ id: "loginScreen.enterKeyOrBunker", defaultMessage: "Please enter your secret key or bunker URI" }));
       return;
     }
 
@@ -289,7 +294,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ isOpen, onClose, onLogin, onS
         // Clear the URI from memory
         setLoginInput('');
       } catch {
-        setLoginError('Failed to connect. Check the bunker URI.');
+        setLoginError(t({ id: "loginScreen.bunkerFailed", defaultMessage: "Failed to connect. Check the bunker URI." }));
       } finally {
         setIsLoading(false);
       }
@@ -318,14 +323,14 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ isOpen, onClose, onLogin, onS
       if (trimmedContent && validateNsec(trimmedContent)) {
         executeLogin(trimmedContent);
       } else if (trimmedContent) {
-        setLoginError('File does not contain a valid secret key.');
+        setLoginError(t({ id: "loginScreen.fileInvalid", defaultMessage: "File does not contain a valid secret key." }));
       } else {
-        setLoginError('Could not read file content.');
+        setLoginError(t({ id: "loginScreen.fileUnreadable", defaultMessage: "Could not read file content." }));
       }
     };
     reader.onerror = () => {
       setIsFileLoading(false);
-      setLoginError('Failed to read file.');
+      setLoginError(t({ id: "loginScreen.fileReadFailed", defaultMessage: "Failed to read file." }));
     };
     reader.readAsText(file);
   };
@@ -374,11 +379,15 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ isOpen, onClose, onLogin, onS
 
         <div className="space-y-2.5">
           <h1 className="font-mono text-2xl font-bold lowercase tracking-tight text-foreground">
-            {joinMode ? `join ${APP_NAME.toLowerCase()}` : 'log in'}
+            {joinMode ? (
+              <FormattedMessage id="loginScreen.joinTitle" defaultMessage="join {app}" values={{ app: APP_NAME.toLowerCase() }} />
+            ) : (
+              <FormattedMessage id="loginScreen.logInTitle" defaultMessage="log in" />
+            )}
           </h1>
           {joinMode && (
             <p className="text-sm leading-relaxed text-muted-foreground">
-              Create a new account, or log in with a key you already have.
+              <FormattedMessage id="loginScreen.joinDescription" defaultMessage="Create a new account, or log in with a key you already have." />
             </p>
           )}
         </div>
@@ -388,21 +397,21 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ isOpen, onClose, onLogin, onS
             <div className='flex flex-col items-center space-y-3 py-4'>
               <p className='text-sm text-destructive text-center'>{connectError}</p>
               <Button variant='outline' onClick={handleConnectCancel} className='clip-corner-lg'>
-                Try again
+                <FormattedMessage {...common.tryAgain} />
               </Button>
             </div>
           ) : showProgressView ? (
             <div className='flex flex-col items-center space-y-4 py-6 w-full'>
               <Loader2 className='w-8 h-8 animate-spin text-primary' />
               <p className='text-sm text-muted-foreground text-center min-h-[1.25rem]'>
-                {connectStatusLabel(connectStatus) || 'Waiting for your signer…'}
+                {connectStatusLabel(intl, connectStatus) || intl.formatMessage({ id: "loginScreen.waitingForSigner", defaultMessage: "Waiting for your signer…" })}
               </p>
               <button
                 type='button'
                 onClick={handleConnectCancel}
                 className='text-sm text-primary hover:underline underline-offset-4 font-medium'
               >
-                Cancel
+                <FormattedMessage {...common.cancel} />
               </button>
             </div>
           ) : showQr ? (
@@ -417,14 +426,14 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ isOpen, onClose, onLogin, onS
                 </div>
               )}
               <p className='text-sm text-muted-foreground text-center'>
-                Scan with a signer app to log in, or copy the link if your signer is on this device.
+                <FormattedMessage id="loginScreen.scanQr" defaultMessage="Scan with a signer app to log in, or copy the link if your signer is on this device." />
               </p>
               {nostrConnectUri && (
                 <div className='relative w-full'>
                   <Input
                     readOnly
                     value={nostrConnectUri}
-                    aria-label='Signer connect link'
+                    aria-label={intl.formatMessage({ id: "loginScreen.connectLink", defaultMessage: "Signer connect link" })}
                     className='pr-12 font-mono text-xs bg-background border-transparent clip-corner-lg'
                   />
                   <Button
@@ -433,8 +442,8 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ isOpen, onClose, onLogin, onS
                     size='icon'
                     className='absolute right-0 top-0 h-full w-10 touch:w-11 clip-corner-lg text-muted-foreground hover:bg-muted/60'
                     onClick={copyConnectUri}
-                    aria-label={copiedConnectUri ? 'Link copied' : 'Copy link'}
-                    title={copiedConnectUri ? 'Copied' : 'Copy link'}
+                    aria-label={copiedConnectUri ? intl.formatMessage({ id: "loginScreen.linkCopied", defaultMessage: "Link copied" }) : intl.formatMessage(common.copyLink)}
+                    title={copiedConnectUri ? intl.formatMessage(common.copied) : intl.formatMessage(common.copyLink)}
                   >
                     {copiedConnectUri ? (
                       <Check className='size-4 text-success' />
@@ -449,7 +458,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ isOpen, onClose, onLogin, onS
                 onClick={handleConnectCancel}
                 className='text-sm text-muted-foreground hover:text-foreground'
               >
-                Back
+                <FormattedMessage {...common.back} />
               </button>
             </div>
           ) : (
@@ -462,12 +471,12 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ isOpen, onClose, onLogin, onS
                     className='h-12 w-full clip-corner-lg text-base font-medium'
                     onClick={() => { onClose(); onSignupClick(); }}
                   >
-                    Create account
+                    <FormattedMessage id="loginScreen.createAccount" defaultMessage="Create account" />
                   </Button>
                   <div className='flex items-center gap-3'>
                     <div className='h-px flex-1 bg-border' />
                     <span className='text-xs uppercase tracking-wider text-muted-foreground'>
-                      or log in
+                      <FormattedMessage id="loginScreen.orLogIn" defaultMessage="or log in" />
                     </span>
                     <div className='h-px flex-1 bg-border' />
                   </div>
@@ -491,11 +500,11 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ isOpen, onClose, onLogin, onS
                     onClick={handleExtensionLogin}
                     disabled={isLoading}
                   >
-                    {isLoading ? 'Logging in...' : 'Log in with Extension'}
+                    {isLoading ? <FormattedMessage id="loginScreen.loggingInDots" defaultMessage="Logging in..." /> : <FormattedMessage id="loginScreen.logInWithExtension" defaultMessage="Log in with Extension" />}
                   </Button>
                   <div className="flex items-center gap-3">
                     <div className="h-px flex-1 bg-border" />
-                    <span className="text-xs uppercase tracking-wider text-muted-foreground">or</span>
+                    <span className="text-xs uppercase tracking-wider text-muted-foreground"><FormattedMessage id="loginScreen.or" defaultMessage="or" /></span>
                     <div className="h-px flex-1 bg-border" />
                   </div>
                 </div>
@@ -510,7 +519,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ isOpen, onClose, onLogin, onS
                       setLoginInput(e.target.value);
                       if (loginError) setLoginError('');
                     }}
-                    placeholder='nsec1… or bunker://…'
+                    placeholder={intl.formatMessage({ id: "loginScreen.inputPlaceholder", defaultMessage: "nsec1… or bunker://…" })}
                     autoComplete='off'
                     className={`pr-12 clip-corner-lg bg-background border-transparent ${
                       loginError ? 'border-destructive focus-visible:ring-destructive' : ''
@@ -530,8 +539,8 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ isOpen, onClose, onLogin, onS
                         variant='ghost'
                         size='icon'
                         className='absolute right-0 top-0 h-full w-10 touch:w-11 clip-corner-lg text-muted-foreground hover:bg-muted/60'
-                        title='More login options'
-                        aria-label='More login options'
+                        title={intl.formatMessage({ id: "loginScreen.moreOptions", defaultMessage: "More login options" })}
+                        aria-label={intl.formatMessage({ id: "loginScreen.moreOptions", defaultMessage: "More login options" })}
                       >
                         <ChevronDown className='h-4 w-4 text-muted-foreground' />
                       </Button>
@@ -543,7 +552,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ isOpen, onClose, onLogin, onS
                         className='flex items-center gap-2 cursor-pointer'
                       >
                         <FileUp className='h-4 w-4' />
-                        Select key file
+                        <FormattedMessage id="loginScreen.selectKeyFile" defaultMessage="Select key file" />
                       </DropdownMenuItem>
                       {/* Both hand-offs are offered everywhere: desktop signers
                           (e.g. Opal, which registers the nostrconnect:// scheme)
@@ -553,14 +562,14 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ isOpen, onClose, onLogin, onS
                         className='flex items-center gap-2 cursor-pointer'
                       >
                         <QrCode className='h-4 w-4' />
-                        Connect remote signer
+                        <FormattedMessage id="loginScreen.connectRemoteSigner" defaultMessage="Connect remote signer" />
                       </DropdownMenuItem>
                       <DropdownMenuItem
                         onSelect={handleOpenSignerApp}
                         className='flex items-center gap-2 cursor-pointer'
                       >
                         <ExternalLink className='h-4 w-4' />
-                        Open signer app
+                        <FormattedMessage id="loginScreen.openSignerApp" defaultMessage="Open signer app" />
                       </DropdownMenuItem>
                     </DropdownMenuContent>
                   </DropdownMenu>
@@ -575,12 +584,12 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ isOpen, onClose, onLogin, onS
                   disabled={isLoading || isFileLoading || !loginInput.trim()}
                   className='w-full clip-corner-lg'
                 >
-                  {isLoading ? 'Logging in…' : 'Log in'}
+                  {isLoading ? <FormattedMessage id="loginScreen.loggingIn" defaultMessage="Logging in…" /> : <FormattedMessage id="loginScreen.logIn" defaultMessage="Log in" />}
                 </Button>
               </form>
 
               {/* Covers every method above: signer app, extension, key and Create account. */}
-              <SignupTerms action={joinMode ? 'continuing' : 'logging in'} />
+              <SignupTerms action={joinMode ? 'continue' : 'login'} />
             </>
           )}
         </div>

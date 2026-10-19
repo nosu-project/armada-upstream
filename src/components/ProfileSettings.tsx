@@ -48,6 +48,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { isValidAvatarShape } from '@/lib/avatarShape';
 import { isAnimatedImage, METADATA_SCAN_BYTES } from '@/lib/imageMetadata';
 import { isGifBytes } from '@/lib/runGifCrop';
+import { common, defineMessage, FormattedMessage, t, useIntl, type MessageDescriptor } from '@/i18n';
 
 const WALLET_TICKERS = [
   '$BTC', '$ETH', '$SOL', '$XMR', '$LTC', '$DOGE', '$ADA', '$DOT', '$XRP', '$MATIC',
@@ -58,54 +59,64 @@ const BARE_TICKERS = WALLET_TICKERS.map((t) => t.slice(1));
 
 interface FieldPreset {
   id: string;
-  label: string;
-  description: string;
+  label: MessageDescriptor;
+  description: MessageDescriptor;
   icon: React.ComponentType<{ className?: string }>;
+  /** Prefilled into the published field label; not translated. */
   defaultLabel: string;
   type: 'text' | 'wallet' | 'media';
   accept?: string;
   formatHint?: string;
-  valuePlaceholder?: string;
+  valuePlaceholder?: MessageDescriptor | string;
 }
 
 const FIELD_PRESETS: FieldPreset[] = [
   {
     id: 'music',
-    label: 'Music',
-    description: 'Upload a song or audio clip',
+    label: defineMessage({ id: 'profileSettings.preset.music.label', defaultMessage: 'Music' }),
+    description: defineMessage({ id: 'profileSettings.preset.music.description', defaultMessage: 'Upload a song or audio clip' }),
     icon: Music,
     defaultLabel: '\u{1F3B6}',
     type: 'media',
     accept: 'audio/*',
     formatHint: 'MP3, OGG, WAV, FLAC, AAC, M4A, Opus',
-    valuePlaceholder: 'Upload audio or paste direct file link',
+    valuePlaceholder: defineMessage({
+      id: 'profileSettings.preset.music.placeholder',
+      defaultMessage: 'Upload audio or paste direct file link',
+    }),
   },
   {
     id: 'photo',
-    label: 'Photo',
-    description: 'Upload an image',
+    label: defineMessage({ id: 'profileSettings.preset.photo.label', defaultMessage: 'Photo' }),
+    description: defineMessage({ id: 'profileSettings.preset.photo.description', defaultMessage: 'Upload an image' }),
     icon: ImageIcon,
     defaultLabel: '\u{1F4F8}',
     type: 'media',
     accept: 'image/*',
     formatHint: 'JPG, PNG, GIF, WebP, SVG, AVIF',
-    valuePlaceholder: 'Upload image or paste direct file link',
+    valuePlaceholder: defineMessage({
+      id: 'profileSettings.preset.photo.placeholder',
+      defaultMessage: 'Upload image or paste direct file link',
+    }),
   },
   {
     id: 'video',
-    label: 'Video',
-    description: 'Upload a video clip',
+    label: defineMessage({ id: 'profileSettings.preset.video.label', defaultMessage: 'Video' }),
+    description: defineMessage({ id: 'profileSettings.preset.video.description', defaultMessage: 'Upload a video clip' }),
     icon: Film,
     defaultLabel: '\u{1F3AC}',
     type: 'media',
     accept: 'video/*',
     formatHint: 'MP4, WebM, MOV',
-    valuePlaceholder: 'Upload video or paste direct file link',
+    valuePlaceholder: defineMessage({
+      id: 'profileSettings.preset.video.placeholder',
+      defaultMessage: 'Upload video or paste direct file link',
+    }),
   },
   {
     id: 'email',
-    label: 'Email',
-    description: 'Contact email address',
+    label: defineMessage({ id: 'profileSettings.preset.email.label', defaultMessage: 'Email' }),
+    description: defineMessage({ id: 'profileSettings.preset.email.description', defaultMessage: 'Contact email address' }),
     icon: Mail,
     defaultLabel: 'Email',
     type: 'text',
@@ -113,17 +124,23 @@ const FIELD_PRESETS: FieldPreset[] = [
   },
   {
     id: 'wallet',
-    label: 'Wallet',
-    description: 'Cryptocurrency wallet address',
+    label: defineMessage({ id: 'profileSettings.preset.wallet.label', defaultMessage: 'Wallet' }),
+    description: defineMessage({
+      id: 'profileSettings.preset.wallet.description',
+      defaultMessage: 'Cryptocurrency wallet address',
+    }),
     icon: Wallet,
     defaultLabel: '$BTC',
     type: 'wallet',
-    valuePlaceholder: 'Address',
+    valuePlaceholder: defineMessage({ id: 'profileSettings.address', defaultMessage: 'Address' }),
   },
   {
     id: 'link',
-    label: 'Link',
-    description: 'Link to any website or profile',
+    label: defineMessage({ id: 'profileSettings.preset.link.label', defaultMessage: 'Link' }),
+    description: defineMessage({
+      id: 'profileSettings.preset.link.description',
+      defaultMessage: 'Link to any website or profile',
+    }),
     icon: Link2,
     defaultLabel: '',
     type: 'text',
@@ -133,12 +150,12 @@ const FIELD_PRESETS: FieldPreset[] = [
 
 const CUSTOM_PRESET: FieldPreset = {
   id: 'custom',
-  label: 'Custom',
-  description: 'Create any custom field',
+  label: defineMessage({ id: 'profileSettings.preset.custom.label', defaultMessage: 'Custom' }),
+  description: defineMessage({ id: 'profileSettings.preset.custom.description', defaultMessage: 'Create any custom field' }),
   icon: Pencil,
   defaultLabel: '',
   type: 'text',
-  valuePlaceholder: 'Value or URL',
+  valuePlaceholder: defineMessage({ id: 'profileSettings.valueOrUrl', defaultMessage: 'Value or URL' }),
 };
 
 function getFormatHintForAccept(accept: string | undefined): string | undefined {
@@ -161,7 +178,7 @@ const IMAGE_EXT = /\.(jpe?g|png|gif|webp|svg|avif)(\?.*)?$/i;
 const VIDEO_EXT = /\.(mp4|webm|mov|qt)(\?.*)?$/i;
 
 /** Warning when a pasted URL doesn't match the media field's accept type; undefined if fine or not a URL. */
-function getMediaMismatchWarning(value: string, accept: string | undefined): string | undefined {
+function getMediaMismatchWarning(value: string, accept: string | undefined): MessageDescriptor | undefined {
   const trimmed = value.trim();
   if (!trimmed) return undefined;
   if (!trimmed.startsWith('http://') && !trimmed.startsWith('https://')) return undefined;
@@ -176,28 +193,46 @@ function getMediaMismatchWarning(value: string, accept: string | undefined): str
 
   if (accept === 'audio/*') {
     if (hasKnownExt && !hasAudioExt) {
-      return 'This URL doesn\u2019t point to an audio file. Upload an audio file or use a direct link ending in .mp3, .ogg, .wav, etc.';
+      return defineMessage({
+        id: 'profileSettings.mediaWarning.audioMismatch',
+        defaultMessage: 'This URL doesn’t point to an audio file. Upload an audio file or use a direct link ending in .mp3, .ogg, .wav, etc.',
+      });
     }
     if (!hasKnownExt) {
-      return 'This URL may not work as an audio player. For best results, upload a file using the button or paste a direct link to an audio file.';
+      return defineMessage({
+        id: 'profileSettings.mediaWarning.audioUnknown',
+        defaultMessage: 'This URL may not work as an audio player. For best results, upload a file using the button or paste a direct link to an audio file.',
+      });
     }
   }
 
   if (accept === 'image/*') {
     if (hasKnownExt && !hasImageExt) {
-      return 'This URL doesn\u2019t point to an image. Upload an image or use a direct link ending in .jpg, .png, .webp, etc.';
+      return defineMessage({
+        id: 'profileSettings.mediaWarning.imageMismatch',
+        defaultMessage: 'This URL doesn’t point to an image. Upload an image or use a direct link ending in .jpg, .png, .webp, etc.',
+      });
     }
     if (!hasKnownExt) {
-      return 'This URL may not display as an image. For best results, upload a file using the button or paste a direct link to an image file.';
+      return defineMessage({
+        id: 'profileSettings.mediaWarning.imageUnknown',
+        defaultMessage: 'This URL may not display as an image. For best results, upload a file using the button or paste a direct link to an image file.',
+      });
     }
   }
 
   if (accept === 'video/*') {
     if (hasKnownExt && !hasVideoExt) {
-      return 'This URL doesn\u2019t point to a video. Upload a video or use a direct link ending in .mp4, .webm, .mov, etc.';
+      return defineMessage({
+        id: 'profileSettings.mediaWarning.videoMismatch',
+        defaultMessage: 'This URL doesn’t point to a video. Upload a video or use a direct link ending in .mp4, .webm, .mov, etc.',
+      });
     }
     if (!hasKnownExt) {
-      return 'This URL may not display as a video. For best results, upload a file using the button or paste a direct link to a video file.';
+      return defineMessage({
+        id: 'profileSettings.mediaWarning.videoUnknown',
+        defaultMessage: 'This URL may not display as a video. For best results, upload a file using the button or paste a direct link to a video file.',
+      });
     }
   }
 
@@ -231,7 +266,6 @@ type CropState = {
   imageSrc: string;
   aspect: number;
   field: 'picture' | 'banner';
-  title: string;
 };
 
 interface FieldRowProps {
@@ -254,6 +288,7 @@ function FieldRow({
   index, type, accept, valuePlaceholder, isUploading: fieldUploading, control,
   canMoveUp, canMoveDown, onRemove, onMoveUp, onMoveDown, onMediaPick, onTickerChange,
 }: FieldRowProps) {
+  const intl = useIntl();
   const formatHint = type === 'media' ? getFormatHintForAccept(accept) : undefined;
 
   return (
@@ -266,7 +301,7 @@ function FieldRow({
           className="h-[18px] w-6 touch:h-11 touch:w-9 text-muted-foreground disabled:opacity-30"
           disabled={!canMoveUp}
           onClick={onMoveUp}
-          aria-label="Move field up"
+          aria-label={intl.formatMessage({ id: 'profileSettings.moveUp', defaultMessage: 'Move field up' })}
         >
           <ChevronUp className="size-3.5" />
         </Button>
@@ -277,7 +312,7 @@ function FieldRow({
           className="h-[18px] w-6 touch:h-11 touch:w-9 text-muted-foreground disabled:opacity-30"
           disabled={!canMoveDown}
           onClick={onMoveDown}
-          aria-label="Move field down"
+          aria-label={intl.formatMessage({ id: 'profileSettings.moveDown', defaultMessage: 'Move field down' })}
         >
           <ChevronDown className="size-3.5" />
         </Button>
@@ -292,7 +327,7 @@ function FieldRow({
               <Select value={field.value} onValueChange={(v) => { field.onChange(v); onTickerChange(v); }}>
                 <FormControl>
                   <SelectTrigger className="h-9">
-                    <SelectValue placeholder="Ticker" />
+                    <SelectValue placeholder={intl.formatMessage({ id: 'profileSettings.ticker', defaultMessage: 'Ticker' })} />
                   </SelectTrigger>
                 </FormControl>
                 <SelectContent>
@@ -312,7 +347,11 @@ function FieldRow({
           render={({ field }) => (
             <FormItem>
               <FormControl>
-                <Input placeholder="Label" {...field} className="h-9" />
+                <Input
+                  placeholder={intl.formatMessage({ id: 'profileSettings.label', defaultMessage: 'Label' })}
+                  {...field}
+                  className="h-9"
+                />
               </FormControl>
               <FormMessage />
             </FormItem>
@@ -330,7 +369,17 @@ function FieldRow({
               <FormItem>
                 <div className="flex gap-1.5">
                   <FormControl>
-                    <Input placeholder={valuePlaceholder || 'Upload file or paste direct file link'} {...field} className="h-9 flex-1 min-w-0" />
+                    <Input
+                      placeholder={
+                        valuePlaceholder ||
+                        intl.formatMessage({
+                          id: 'profileSettings.uploadPlaceholder',
+                          defaultMessage: 'Upload file or paste direct file link',
+                        })
+                      }
+                      {...field}
+                      className="h-9 flex-1 min-w-0"
+                    />
                   </FormControl>
                   {fieldUploading ? (
                     <div className="flex items-center justify-center h-9 w-9 shrink-0">
@@ -351,9 +400,15 @@ function FieldRow({
                       </TooltipTrigger>
                       <TooltipContent side="top" className="text-xs max-w-52">
                         {formatHint ? (
-                          <span>Choose file to upload<br /><span className="text-muted-foreground">{formatHint}</span></span>
+                          <span>
+                            <FormattedMessage id="profileSettings.chooseFile" defaultMessage="Choose file to upload" />
+                            <br />
+                            <span className="text-muted-foreground">{formatHint}</span>
+                          </span>
                         ) : (
-                          <span>Choose a media file to upload</span>
+                          <span>
+                            <FormattedMessage id="profileSettings.chooseMedia" defaultMessage="Choose a media file to upload" />
+                          </span>
                         )}
                       </TooltipContent>
                     </Tooltip>
@@ -362,7 +417,7 @@ function FieldRow({
                 {mismatchWarning && (
                   <p className="flex items-start gap-1.5 text-xs text-warning mt-1 leading-snug">
                     <AlertTriangle className="size-3.5 shrink-0 mt-0.5" />
-                    <span>{mismatchWarning}</span>
+                    <span>{intl.formatMessage(mismatchWarning)}</span>
                   </p>
                 )}
                 <FormMessage />
@@ -377,7 +432,15 @@ function FieldRow({
           render={({ field }) => (
             <FormItem>
               <FormControl>
-                <Input placeholder={type === 'wallet' ? 'Address' : 'Value or URL'} {...field} className="h-9" />
+                <Input
+                  placeholder={
+                    type === 'wallet'
+                      ? intl.formatMessage({ id: 'profileSettings.address', defaultMessage: 'Address' })
+                      : intl.formatMessage({ id: 'profileSettings.valueOrUrl', defaultMessage: 'Value or URL' })
+                  }
+                  {...field}
+                  className="h-9"
+                />
               </FormControl>
               <FormMessage />
             </FormItem>
@@ -417,6 +480,7 @@ export function ProfileSettings({ onSaved, saveLabel, centerSave, showNip05 = tr
   // imeta for each picture/banner uploaded this session, offered to the kind 0 on save.
   const uploadedImeta = useRef<string[][]>([]);
   const { toast } = useToast();
+  const intl = useIntl();
 
   const [cropState, setCropState] = useState<CropState | null>(null);
   // Revoked when replaced, dismissed or unmounted: the URL pins the whole file.
@@ -493,9 +557,16 @@ export function ProfileSettings({ onSaved, saveLabel, centerSave, showNip05 = tr
     try {
       const [[, url]] = await uploadFile(file);
       form.setValue(`fields.${index}.value`, url, { shouldDirty: true });
-      toast({ title: 'Uploaded', description: 'Media file uploaded' });
+      toast({
+        title: t({ id: 'profileSettings.uploaded', defaultMessage: 'Uploaded' }),
+        description: t({ id: 'profileSettings.mediaUploaded', defaultMessage: 'Media file uploaded' }),
+      });
     } catch {
-      toast({ title: 'Upload failed', description: 'Please try again.', variant: 'destructive' });
+      toast({
+        title: t({ id: 'profileSettings.uploadFailed', defaultMessage: 'Upload failed' }),
+        description: t({ id: 'profileSettings.pleaseTryAgain', defaultMessage: 'Please try again.' }),
+        variant: 'destructive',
+      });
     } finally {
       setUploadingFieldIndex(-1);
     }
@@ -553,9 +624,18 @@ export function ProfileSettings({ onSaved, saveLabel, centerSave, showNip05 = tr
       const { url, imeta } = await uploadProfileImage(file);
       uploadedImeta.current.unshift(imeta);
       form.setValue(field, url, { shouldDirty: true });
-      toast({ title: 'Uploaded', description: `${field === 'picture' ? 'Profile picture' : 'Banner'} updated` });
+      toast({
+        title: t({ id: 'profileSettings.uploaded', defaultMessage: 'Uploaded' }),
+        description: field === 'picture'
+          ? t({ id: 'profileSettings.pictureUpdated', defaultMessage: 'Profile picture updated' })
+          : t({ id: 'profileSettings.bannerUpdated', defaultMessage: 'Banner updated' }),
+      });
     } catch {
-      toast({ title: 'Upload failed', description: 'Please try again.', variant: 'destructive' });
+      toast({
+        title: t({ id: 'profileSettings.uploadFailed', defaultMessage: 'Upload failed' }),
+        description: t({ id: 'profileSettings.pleaseTryAgain', defaultMessage: 'Please try again.' }),
+        variant: 'destructive',
+      });
     }
   };
 
@@ -576,7 +656,6 @@ export function ProfileSettings({ onSaved, saveLabel, centerSave, showNip05 = tr
       imageSrc: URL.createObjectURL(file),
       aspect: field === 'picture' ? 1 : 3,
       field,
-      title: field === 'picture' ? 'Crop Profile Picture' : 'Crop Banner',
     });
   };
 
@@ -584,8 +663,8 @@ export function ProfileSettings({ onSaved, saveLabel, centerSave, showNip05 = tr
     if (!cropState) return;
     const { field } = cropState;
     setCropState(null);
-    const gif = blob.type === 'image/gif';
-    const file = new File([blob], `${field}.${gif ? 'gif' : 'jpg'}`, { type: gif ? 'image/gif' : 'image/jpeg' });
+    const ext = blob.type === 'image/gif' ? 'gif' : blob.type === 'image/png' ? 'png' : 'jpg';
+    const file = new File([blob], `${field}.${ext}`, { type: blob.type || 'image/jpeg' });
     await uploadImage(file, field);
   };
 
@@ -599,7 +678,9 @@ export function ProfileSettings({ onSaved, saveLabel, centerSave, showNip05 = tr
       value: '',
       type: preset.type,
       accept: preset.accept,
-      placeholder: preset.valuePlaceholder,
+      placeholder: typeof preset.valuePlaceholder === 'object'
+        ? intl.formatMessage(preset.valuePlaceholder)
+        : preset.valuePlaceholder,
     });
   };
 
@@ -610,7 +691,11 @@ export function ProfileSettings({ onSaved, saveLabel, centerSave, showNip05 = tr
 
   const onSubmit = async (values: FormValues) => {
     if (!user) {
-      toast({ title: 'Error', description: 'You must be logged in to update your profile.', variant: 'destructive' });
+      toast({
+        title: t(common.error),
+        description: t({ id: 'profileSettings.loggedOut', defaultMessage: 'You must be logged in to update your profile.' }),
+        variant: 'destructive',
+      });
       return;
     }
     try {
@@ -643,10 +728,14 @@ export function ProfileSettings({ onSaved, saveLabel, centerSave, showNip05 = tr
       const targetsSaved = (await paymentTargetsRef.current?.save()) ?? true;
       if (!targetsSaved) return;
 
-      toast({ title: 'Profile saved' });
+      toast({ title: t({ id: 'profileSettings.saved', defaultMessage: 'Profile saved' }) });
       onSaved?.();
     } catch {
-      toast({ title: 'Error', description: 'Failed to save profile.', variant: 'destructive' });
+      toast({
+        title: t(common.error),
+        description: t({ id: 'profileSettings.saveFailed', defaultMessage: 'Failed to save profile.' }),
+        variant: 'destructive',
+      });
     }
   };
 
@@ -656,7 +745,7 @@ export function ProfileSettings({ onSaved, saveLabel, centerSave, showNip05 = tr
   if (!user) {
     return (
       <p className="text-sm text-muted-foreground">
-        Log in to edit your profile.
+        <FormattedMessage id="profileSettings.logIn" defaultMessage="Log in to edit your profile." />
       </p>
     );
   }
@@ -683,7 +772,11 @@ export function ProfileSettings({ onSaved, saveLabel, centerSave, showNip05 = tr
           open
           imageSrc={cropState.imageSrc}
           aspect={cropState.aspect}
-          title={cropState.title}
+          title={
+            cropState.field === 'picture'
+              ? intl.formatMessage({ id: 'profileSettings.cropPicture', defaultMessage: 'Crop Profile Picture' })
+              : intl.formatMessage({ id: 'profileSettings.cropBanner', defaultMessage: 'Crop Banner' })
+          }
           onCancel={handleCropCancel}
           onCrop={handleCropConfirm}
         />
@@ -706,14 +799,16 @@ export function ProfileSettings({ onSaved, saveLabel, centerSave, showNip05 = tr
           {isUploading && (
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
               <Loader2 className="size-3.5 animate-spin" />
-              Uploading…
+              <FormattedMessage id="profileSettings.uploading" defaultMessage="Uploading…" />
             </div>
           )}
 
           <Collapsible open={showAdvanced} onOpenChange={setShowAdvanced}>
             <CollapsibleTrigger asChild>
               <Button type="button" variant="ghost" className="w-full justify-start gap-1.5 px-0 py-1 h-auto text-muted-foreground hover:bg-transparent hover:text-foreground">
-                <span className="text-xs font-medium">More</span>
+                <span className="text-xs font-medium">
+                  <FormattedMessage id="profileSettings.more" defaultMessage="More" />
+                </span>
                 <ChevronDown className="size-3.5 text-muted-foreground transition-transform duration-200 [[data-state=open]_&]:rotate-180" strokeWidth={4} />
               </Button>
             </CollapsibleTrigger>
@@ -721,7 +816,9 @@ export function ProfileSettings({ onSaved, saveLabel, centerSave, showNip05 = tr
             <CollapsibleContent className="overflow-hidden data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down">
               <div className="pt-3 space-y-4">
                 <div>
-                  <h2 className="text-sm font-medium py-2">Profile Fields</h2>
+                  <h2 className="text-sm font-medium py-2">
+                    <FormattedMessage id="profileSettings.fields" defaultMessage="Profile Fields" />
+                  </h2>
 
                   <div className="space-y-3 pt-1">
                     <FormField
@@ -731,7 +828,9 @@ export function ProfileSettings({ onSaved, saveLabel, centerSave, showNip05 = tr
                         <div className="grid grid-cols-[auto,1fr,2fr,auto] gap-2 items-center">
                           <div className="w-6" />
                           <div className="flex items-center h-9 px-3 text-sm text-muted-foreground">
-                            <span>Website</span>
+                            <span>
+                              <FormattedMessage id="profileSettings.website" defaultMessage="Website" />
+                            </span>
                           </div>
                           <Input placeholder="https://yourwebsite.com" {...field} className="h-9" />
                           <div className="size-9" />
@@ -804,11 +903,11 @@ export function ProfileSettings({ onSaved, saveLabel, centerSave, showNip05 = tr
                               >
                                 <Plus className="size-3 text-muted-foreground" />
                                 <Icon className="size-3.5 text-muted-foreground" />
-                                {preset.label}
+                                <FormattedMessage {...preset.label} />
                               </Button>
                             </TooltipTrigger>
                             <TooltipContent side="bottom" className="text-xs">
-                              {preset.description}
+                              <FormattedMessage {...preset.description} />
                             </TooltipContent>
                           </Tooltip>
                         );
@@ -823,8 +922,12 @@ export function ProfileSettings({ onSaved, saveLabel, centerSave, showNip05 = tr
                   render={({ field }) => (
                     <FormItem className="flex items-center justify-between clip-hairline-lg [--edge:var(--border)/0.5] [--fill:var(--card)] [--fill-hover:var(--card)] p-3">
                       <div>
-                        <FormLabel className="text-sm">Bot Account</FormLabel>
-                        <FormDescription className="text-xs">Mark this account as automated</FormDescription>
+                        <FormLabel className="text-sm">
+                          <FormattedMessage id="profileSettings.bot" defaultMessage="Bot Account" />
+                        </FormLabel>
+                        <FormDescription className="text-xs">
+                          <FormattedMessage id="profileSettings.botDescription" defaultMessage="Mark this account as automated" />
+                        </FormDescription>
                       </div>
                       <FormControl>
                         <Switch checked={field.value} onCheckedChange={field.onChange} />
@@ -840,7 +943,16 @@ export function ProfileSettings({ onSaved, saveLabel, centerSave, showNip05 = tr
 
           <div className={centerSave ? 'flex justify-center' : undefined}>
             <Button type="submit" disabled={busy} className="w-full sm:w-auto clip-corner-lg">
-              {busy ? <><Loader2 className="size-4 mr-2 animate-spin" /> Saving…</> : <><Save className="size-4 mr-2" /> {saveLabel ?? 'Save Profile'}</>}
+              {busy ? (
+                <>
+                  <Loader2 className="size-4 mr-2 animate-spin" /> <FormattedMessage {...common.saving} />
+                </>
+              ) : (
+                <>
+                  <Save className="size-4 mr-2" />{' '}
+                  {saveLabel ?? <FormattedMessage id="profileSettings.save" defaultMessage="Save Profile" />}
+                </>
+              )}
             </Button>
           </div>
 

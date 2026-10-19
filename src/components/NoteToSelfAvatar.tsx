@@ -5,9 +5,10 @@
 
 import type { CSSProperties } from "react";
 
+import { defineMessage, useIntl } from "@/i18n";
 import { cn } from "@/lib/utils";
 
-export const NOTE_TO_SELF_NAME = "Note to Self";
+export const NOTE_TO_SELF_NAME = defineMessage({ id: "noteToSelfAvatar.label", defaultMessage: "Note to Self" });
 
 /** Matches the app's other avatar fallbacks. */
 const ICON_TO_BACKGROUND_SCALE = 0.625;
@@ -67,13 +68,14 @@ export function NoteToSelfAvatar({
   sizePx: number;
   className?: string;
 }) {
+  const intl = useIntl();
   return (
     <span
       className={cn(
         "flex shrink-0 items-center justify-center rounded-full bg-primary/20 text-primary",
         className,
       )}
-      aria-label={NOTE_TO_SELF_NAME}
+      aria-label={intl.formatMessage(NOTE_TO_SELF_NAME)}
     >
       <NoteToSelfIcon
         sizePx={sizePx}

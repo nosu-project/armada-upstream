@@ -5,6 +5,8 @@
  * clock starts at SEND time, since NIP-40 only carries an absolute deadline.
  */
 
+import { defineMessage, defineMessages, t, type MessageDescriptor } from "@/i18n";
+
 const MINUTE = 60;
 const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;
@@ -16,21 +18,36 @@ export interface DisappearingPreset {
   label: string;
 }
 
+const presetOf = (seconds: number, message: MessageDescriptor): DisappearingPreset => ({
+  seconds,
+  get label() {
+    return t(message);
+  },
+});
+
 /** Signal's set, longest first; "Off" leads. */
 export const DISAPPEARING_PRESETS: readonly DisappearingPreset[] = [
-  { seconds: 0, label: "Off" },
-  { seconds: 4 * WEEK, label: "4 weeks" },
-  { seconds: WEEK, label: "1 week" },
-  { seconds: DAY, label: "1 day" },
-  { seconds: 8 * HOUR, label: "8 hours" },
-  { seconds: HOUR, label: "1 hour" },
-  { seconds: 5 * MINUTE, label: "5 minutes" },
-  { seconds: 30, label: "30 seconds" },
+  presetOf(0, defineMessage({ id: "nip17Disappearing.preset.off", defaultMessage: "Off" })),
+  presetOf(4 * WEEK, defineMessage({ id: "nip17Disappearing.preset.fourWeeks", defaultMessage: "4 weeks" })),
+  presetOf(WEEK, defineMessage({ id: "nip17Disappearing.preset.oneWeek", defaultMessage: "1 week" })),
+  presetOf(DAY, defineMessage({ id: "nip17Disappearing.preset.oneDay", defaultMessage: "1 day" })),
+  presetOf(8 * HOUR, defineMessage({ id: "nip17Disappearing.preset.eightHours", defaultMessage: "8 hours" })),
+  presetOf(HOUR, defineMessage({ id: "nip17Disappearing.preset.oneHour", defaultMessage: "1 hour" })),
+  presetOf(5 * MINUTE, defineMessage({ id: "nip17Disappearing.preset.fiveMinutes", defaultMessage: "5 minutes" })),
+  presetOf(30, defineMessage({ id: "nip17Disappearing.preset.thirtySeconds", defaultMessage: "30 seconds" })),
 ];
+
+const UNIT_MESSAGES = defineMessages({
+  week: { id: "nip17Disappearing.unit.week", defaultMessage: "{count, plural, one {# week} other {# weeks}}" },
+  day: { id: "nip17Disappearing.unit.day", defaultMessage: "{count, plural, one {# day} other {# days}}" },
+  hour: { id: "nip17Disappearing.unit.hour", defaultMessage: "{count, plural, one {# hour} other {# hours}}" },
+  minute: { id: "nip17Disappearing.unit.minute", defaultMessage: "{count, plural, one {# minute} other {# minutes}}" },
+  second: { id: "nip17Disappearing.unit.second", defaultMessage: "{count, plural, one {# second} other {# seconds}}" },
+});
 
 /** Duration in words; composes units for non-preset values set by other clients. */
 export function formatDisappearingDuration(seconds: number): string {
-  if (seconds <= 0) return "off";
+  if (seconds <= 0) return t({ id: "nip17Disappearing.off", defaultMessage: "off" });
   const preset = DISAPPEARING_PRESETS.find((p) => p.seconds === seconds);
   if (preset && preset.seconds > 0) return preset.label;
 
@@ -38,10 +55,11 @@ export function formatDisappearingDuration(seconds: number): string {
   let left = Math.floor(seconds);
   for (const [unit, size] of [["week", WEEK], ["day", DAY], ["hour", HOUR], ["minute", MINUTE], ["second", 1]] as const) {
     const n = Math.floor(left / size);
-    if (n > 0) parts.push(`${n} ${unit}${n === 1 ? "" : "s"}`);
+    if (n > 0) parts.push(t(UNIT_MESSAGES[unit], { count: n }));
     left -= n * size;
   }
-  return parts.slice(0, 2).join(" ");
+  if (parts.length < 2) return parts[0] ?? "";
+  return t({ id: "nip17Disappearing.twoUnits", defaultMessage: "{first} {second}" }, { first: parts[0], second: parts[1] });
 }
 
 /**
@@ -50,16 +68,21 @@ export function formatDisappearingDuration(seconds: number): string {
  */
 export function formatTimeLeft(expiresAt: number, nowSecs = Math.floor(Date.now() / 1000)): string {
   const left = expiresAt - nowSecs;
-  if (left <= 0) return "0s";
-  if (left >= DAY) return `${Math.ceil(left / DAY)}d`;
-  if (left >= HOUR) return `${Math.ceil(left / HOUR)}h`;
-  if (left >= MINUTE) return `${Math.ceil(left / MINUTE)}m`;
-  return `${left}s`;
+  if (left >= DAY) return t({ id: "nip17Disappearing.left.days", defaultMessage: "{count}d" }, { count: Math.ceil(left / DAY) });
+  if (left >= HOUR) return t({ id: "nip17Disappearing.left.hours", defaultMessage: "{count}h" }, { count: Math.ceil(left / HOUR) });
+  if (left >= MINUTE) return t({ id: "nip17Disappearing.left.minutes", defaultMessage: "{count}m" }, { count: Math.ceil(left / MINUTE) });
+  return t({ id: "nip17Disappearing.left.seconds", defaultMessage: "{count}s" }, { count: Math.max(0, left) });
 }
 
 /** Timer-change notice phrased Signal-style ("You set…" / "Alice set…"). */
 export function disappearingNotice(seconds: number, byMe: boolean, name: string): string {
-  const who = byMe ? "You" : name;
-  if (seconds <= 0) return `${who} turned off disappearing messages.`;
-  return `${who} set disappearing messages to ${formatDisappearingDuration(seconds)}.`;
+  if (seconds <= 0) {
+    return byMe
+      ? t({ id: "nip17Disappearing.notice.youOff", defaultMessage: "You turned off disappearing messages." })
+      : t({ id: "nip17Disappearing.notice.otherOff", defaultMessage: "{name} turned off disappearing messages." }, { name });
+  }
+  const duration = formatDisappearingDuration(seconds);
+  return byMe
+    ? t({ id: "nip17Disappearing.notice.youSet", defaultMessage: "You set disappearing messages to {duration}." }, { duration })
+    : t({ id: "nip17Disappearing.notice.otherSet", defaultMessage: "{name} set disappearing messages to {duration}." }, { name, duration });
 }

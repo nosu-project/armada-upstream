@@ -8,6 +8,7 @@ import { ServerRail } from "@/components/layout/ServerRail";
 import { SwipeReveal } from "@/components/layout/SwipeReveal";
 import { ServerScopeProvider } from "@/components/ServerScopeProvider";
 import { Button } from "@/components/ui/button";
+import { FormattedMessage, useIntl } from "@/i18n";
 import { routeParamToRelay } from "@/lib/platform";
 
 /**
@@ -15,6 +16,7 @@ import { routeParamToRelay } from "@/lib/platform";
  * and channel list like GroupPage.
  */
 export function ProjectsPage() {
+  const intl = useIntl();
   const { server } = useParams<{ server: string }>();
   const relayUrl = server ? routeParamToRelay(server) : undefined;
   const [channelsOpen, setChannelsOpen] = useState(false);
@@ -45,7 +47,7 @@ export function ProjectsPage() {
             <Button
               variant="ghost"
               size="icon"
-              aria-label="Back to channels"
+              aria-label={intl.formatMessage({ id: "projectsPage.backToChannels", defaultMessage: "Back to channels" })}
               className="size-9 touch:size-11 shrink-0 sidebar:hidden"
               onClick={() => setChannelsOpen(true)}
             >
@@ -53,7 +55,9 @@ export function ProjectsPage() {
             </Button>
             <FolderGit2 className="size-5 text-muted-foreground shrink-0" />
             <div className="min-w-0 flex-1">
-              <h1 className="font-semibold truncate leading-tight">Projects</h1>
+              <h1 className="font-semibold truncate leading-tight">
+                <FormattedMessage id="projectsPage.title" defaultMessage="Projects" />
+              </h1>
             </div>
           </header>
 

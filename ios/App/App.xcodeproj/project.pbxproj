@@ -27,6 +27,7 @@
 		A2D8B0012C0100000000A104 /* ViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2D8B0012C0100000000A103 /* ViewController.swift */; };
 		A2D8B0012C0100000000A106 /* ArmadaDB in Frameworks */ = {isa = PBXBuildFile; productRef = A2D8B0012C0100000000A105 /* ArmadaDB */; };
 		A2D8B0012C0100000000A109 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = A2D8B0012C0100000000A108 /* PrivacyInfo.xcprivacy */; };
+		A2D8B0012C0100000000D002 /* InfoPlist.strings in Resources */ = {isa = PBXBuildFile; fileRef = A2D8B0012C0100000000D001 /* InfoPlist.strings */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -52,6 +53,13 @@
 		A2D8B0012C0100000000A10C /* ArmadaYouTubePlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArmadaYouTubePlugin.swift; sourceTree = "<group>"; };
 		A2D8B0012C0100000000A103 /* ViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ViewController.swift; sourceTree = "<group>"; };
 		A2D8B0012C0100000000A108 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
+		A2D8B0012C0100000000D010 /* en */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = en; path = en.lproj/InfoPlist.strings; sourceTree = "<group>"; };
+		A2D8B0012C0100000000D011 /* de */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = de; path = de.lproj/InfoPlist.strings; sourceTree = "<group>"; };
+		A2D8B0012C0100000000D012 /* es */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = es; path = es.lproj/InfoPlist.strings; sourceTree = "<group>"; };
+		A2D8B0012C0100000000D013 /* fr */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = fr; path = fr.lproj/InfoPlist.strings; sourceTree = "<group>"; };
+		A2D8B0012C0100000000D014 /* it */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = it; path = it.lproj/InfoPlist.strings; sourceTree = "<group>"; };
+		A2D8B0012C0100000000D015 /* nl */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = nl; path = nl.lproj/InfoPlist.strings; sourceTree = "<group>"; };
+		A2D8B0012C0100000000D016 /* ja */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = ja; path = ja.lproj/InfoPlist.strings; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -134,6 +142,7 @@
 				504EC30E1FED79650016851F /* Assets.xcassets */,
 				504EC3101FED79650016851F /* LaunchScreen.storyboard */,
 				504EC3131FED79650016851F /* Info.plist */,
+				A2D8B0012C0100000000D001 /* InfoPlist.strings */,
 				A2D8B0012C0100000000A108 /* PrivacyInfo.xcprivacy */,
 				A17E4C1B2B0100000000A001 /* App.entitlements */,
 				2FAD9762203C412B000D30F8 /* config.xml */,
@@ -226,6 +235,12 @@
 			knownRegions = (
 				en,
 				Base,
+				de,
+				es,
+				fr,
+				it,
+				nl,
+				ja,
 			);
 			mainGroup = 504EC2FB1FED79650016851F;
 			packageReferences = (
@@ -262,6 +277,7 @@
 				50379B232058CBB4000EE86E /* capacitor.config.json in Resources */,
 				504EC30D1FED79650016851F /* Main.storyboard in Resources */,
 				2FAD9763203C412B000D30F8 /* config.xml in Resources */,
+				A2D8B0012C0100000000D002 /* InfoPlist.strings in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -315,6 +331,20 @@
 				504EC3111FED79650016851F /* Base */,
 			);
 			name = LaunchScreen.storyboard;
+			sourceTree = "<group>";
+		};
+		A2D8B0012C0100000000D001 /* InfoPlist.strings */ = {
+			isa = PBXVariantGroup;
+			children = (
+				A2D8B0012C0100000000D010 /* en */,
+				A2D8B0012C0100000000D011 /* de */,
+				A2D8B0012C0100000000D012 /* es */,
+				A2D8B0012C0100000000D013 /* fr */,
+				A2D8B0012C0100000000D014 /* it */,
+				A2D8B0012C0100000000D015 /* nl */,
+				A2D8B0012C0100000000D016 /* ja */,
+			);
+			name = InfoPlist.strings;
 			sourceTree = "<group>";
 		};
 /* End PBXVariantGroup section */

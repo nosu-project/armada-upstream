@@ -7,17 +7,28 @@ import { useIsTouch } from "@/hooks/useIsMobile";
 import { getCaretCoordinates } from "@/lib/caretCoordinates";
 import type { FormatKind } from "@/lib/markdownFormat";
 import { cn } from "@/lib/utils";
+import { defineMessages, useIntl, type MessageDescriptor } from "@/i18n";
 
 const MOD = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.userAgent) ? "⌘" : "Ctrl+";
 
-const BUTTONS: ReadonlyArray<{ kind: FormatKind; label: string; keys: string; icon: LucideIcon }> = [
-  { kind: "bold", label: "Bold", keys: `${MOD}B`, icon: Bold },
-  { kind: "italic", label: "Italic", keys: `${MOD}I`, icon: Italic },
-  { kind: "underline", label: "Underline", keys: `${MOD}U`, icon: Underline },
-  { kind: "strike", label: "Strikethrough", keys: `${MOD}Shift+X`, icon: Strikethrough },
-  { kind: "code", label: "Code", keys: `${MOD}E`, icon: Code },
-  { kind: "spoiler", label: "Spoiler", keys: `${MOD}Shift+H`, icon: EyeOff },
-  { kind: "quote", label: "Quote", keys: `${MOD}Shift+>`, icon: Quote },
+const LABELS = defineMessages({
+  bold: { id: "formatToolbar.bold", defaultMessage: "Bold" },
+  italic: { id: "formatToolbar.italic", defaultMessage: "Italic" },
+  underline: { id: "formatToolbar.underline", defaultMessage: "Underline" },
+  strike: { id: "formatToolbar.strikethrough", defaultMessage: "Strikethrough" },
+  code: { id: "formatToolbar.code", defaultMessage: "Code" },
+  spoiler: { id: "formatToolbar.spoiler", defaultMessage: "Spoiler" },
+  quote: { id: "formatToolbar.quote", defaultMessage: "Quote" },
+});
+
+const BUTTONS: ReadonlyArray<{ kind: FormatKind; label: MessageDescriptor; keys: string; icon: LucideIcon }> = [
+  { kind: "bold", label: LABELS.bold, keys: `${MOD}B`, icon: Bold },
+  { kind: "italic", label: LABELS.italic, keys: `${MOD}I`, icon: Italic },
+  { kind: "underline", label: LABELS.underline, keys: `${MOD}U`, icon: Underline },
+  { kind: "strike", label: LABELS.strike, keys: `${MOD}Shift+X`, icon: Strikethrough },
+  { kind: "code", label: LABELS.code, keys: `${MOD}E`, icon: Code },
+  { kind: "spoiler", label: LABELS.spoiler, keys: `${MOD}Shift+H`, icon: EyeOff },
+  { kind: "quote", label: LABELS.quote, keys: `${MOD}Shift+>`, icon: Quote },
 ];
 
 interface ToolbarState {
@@ -39,6 +50,7 @@ function sameState(a: ToolbarState | null, b: ToolbarState | null): boolean {
 
 /** Discord-style formatting bar over a non-empty textarea selection. */
 export function FormatToolbar({ rich }: { rich: RichText }) {
+  const intl = useIntl();
   const [state, setState] = useState<ToolbarState | null>(null);
   const isTouch = useIsTouch();
   const { textareaRef, handle } = rich;
@@ -117,13 +129,14 @@ export function FormatToolbar({ rich }: { rich: RichText }) {
   return createPortal(
     <div
       role="toolbar"
-      aria-label="Text formatting"
+      aria-label={intl.formatMessage({ id: "formatToolbar.label", defaultMessage: "Text formatting" })}
       data-format-toolbar
       className="fixed z-[300] vessel-lift pointer-events-auto"
       style={{ top: state.top, left: state.left, transform: state.above ? "translateY(-100%)" : undefined }}
     >
       <div className="vessel flex items-center gap-0.5 p-1 animate-in fade-in-0 zoom-in-95 duration-100">
-        {BUTTONS.map(({ kind, label, keys, icon: Icon }) => {
+        {BUTTONS.map(({ kind, label: labelMessage, keys, icon: Icon }) => {
+          const label = intl.formatMessage(labelMessage);
           const pressed = state.active.has(kind);
           return (
             <button

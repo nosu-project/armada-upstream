@@ -1600,7 +1600,7 @@ public class NotificationRelayService extends Service {
     public void onCreate() {
         super.onCreate();
         instance = this;
-        createChannels();
+        createChannels(this);
         try {
             int type = Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE
                     ? ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
@@ -2151,13 +2151,13 @@ public class NotificationRelayService extends Service {
             for (int i = 0; i < arr.length(); i++) {
                 JSONObject sub = arr.optJSONObject(i);
                 if (sub == null) continue;
-                String community = sub.optString("communityName", "Community");
-                String channel = sub.optString("channelName", "channel");
+                String community = sub.optString("communityName", str(R.string.notif_community));
+                String channel = sub.optString("channelName", str(R.string.notif_channel));
                 String communityId = sub.optString("communityId", "");
                 String channelId = sub.optString("channelId", "");
                 if (communityId.isEmpty() || channelId.isEmpty()) continue;
                 boolean mentionOnly = sub.optBoolean("mentionOnly", false);
-                String name = community + " / #" + channel;
+                String name = str(R.string.notif_room_title, community, channel);
                 String url = "/c/" + uriEncode(communityId) + "/" + uriEncode(channelId);
                 JSONArray streams = sub.optJSONArray("streams");
                 JSONArray relays = sub.optJSONArray("relays");
@@ -4464,13 +4464,13 @@ public class NotificationRelayService extends Service {
                         }
                         final boolean group = convPeers.size() > 1;
                         final String preview =
-                                rumorKind == 15 ? "Sent a file" : messagePreview(rumor);
+                                rumorKind == 15 ? str(R.string.notif_sent_file) : messagePreview(rumor);
                         final long rts = rumor.optLong("created_at", 0);
                         final long fTs = (rts > 0 ? rts * 1000L : System.currentTimeMillis());
                         resolveAuthor(peer, relayUrl, profile -> {
-                            String name = displayName(profile);
+                            String name = authorName(profile);
                             String picture = profile != null ? profile.picture : null;
-                            String line = preview.isEmpty() ? "Sent you a direct message" : preview;
+                            String line = preview.isEmpty() ? str(R.string.notif_sent_direct_message) : preview;
                             if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFY dm17 (signer) from=" + name);
                             // A group's title is the room, not the last speaker
                             // — MessagingStyle already names the sender on the
@@ -4712,7 +4712,7 @@ public class NotificationRelayService extends Service {
         resolveAuthor(peer, relayUrl, profile -> {
             // Cancelled (or replaced) while the profile resolved.
             if (!callId.equals(ringingCallId)) return;
-            String name = displayName(profile);
+            String name = authorName(profile);
             Person caller = new Person.Builder().setKey(peer).setName(name).build();
 
             // Answer: deep-link into the conversation naming the call, and
@@ -4768,7 +4768,7 @@ public class NotificationRelayService extends Service {
             NotificationCompat.Builder b = new NotificationCompat.Builder(this, CALL_CHANNEL_ID)
                     .setSmallIcon(R.drawable.ic_stat_armada)
                     .setContentTitle(name)
-                    .setContentText("Incoming call")
+                    .setContentText(str(R.string.notif_incoming_call))
                     .setCategory(NotificationCompat.CATEGORY_CALL)
                     .setPriority(NotificationCompat.PRIORITY_MAX)
                     .setOngoing(true)
@@ -4837,10 +4837,10 @@ public class NotificationRelayService extends Service {
         if (freshActiveRoomKeys().contains("dm:" + peer)) return;
         if (callOwnedElsewhere(peer)) return;
         resolveAuthor(peer, relayUrl, profile -> {
-            String name = displayName(profile);
+            String name = authorName(profile);
             String picture = profile != null ? profile.picture : null;
             enqueueRoomMessage(/*community=*/null, "dm:" + peer, name, dmRoute(peer),
-                    peer, name, picture, "Missed call", tsMs, /*mention=*/true);
+                    peer, name, picture, str(R.string.notif_missed_call), tsMs, /*mention=*/true);
         });
     }
 
@@ -4957,9 +4957,9 @@ public class NotificationRelayService extends Service {
             if (roomKey.startsWith("dm:")) return;
         }
         if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFY dm17 (opaque)");
-        enqueueRoomMessage(/*community=*/null, "dm17:opaque", "Direct messages", "/dm",
-                /*senderPubkey=*/null, "Someone", /*picture=*/null,
-                "New direct message", System.currentTimeMillis(), /*mention=*/true);
+        enqueueRoomMessage(/*community=*/null, "dm17:opaque", str(R.string.notif_direct_messages), "/dm",
+                /*senderPubkey=*/null, str(R.string.notif_someone), /*picture=*/null,
+                str(R.string.notif_new_direct_message), System.currentTimeMillis(), /*mention=*/true);
     }
 
     /**
@@ -4977,9 +4977,10 @@ public class NotificationRelayService extends Service {
             if (roomKey.startsWith("dm:")) return;
         }
         if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFY dm17 (request)");
-        enqueueRoomMessage(/*community=*/null, "dm:requests", "Message requests", "/dm",
-                /*senderPubkey=*/null, "Message requests", /*picture=*/null,
-                "You have a new message request", timestampMs, /*mention=*/true);
+        String requests = str(R.string.notif_message_requests);
+        enqueueRoomMessage(/*community=*/null, "dm:requests", requests, "/dm",
+                /*senderPubkey=*/null, requests, /*picture=*/null,
+                str(R.string.notif_new_message_request), timestampMs, /*mention=*/true);
     }
 
     /**
@@ -5008,7 +5009,8 @@ public class NotificationRelayService extends Service {
      * private C2 metadata to a relay. Accepted raw events use the same bridge as
      * normal plaintext wire events, where IndexedDB de-dupes by event id. */
     private void handleGitActivity(JSONObject event, String relayUrl, String id, int kind) {
-        String address = null, ticketId = null, title = null, action = null;
+        String address = null, ticketId = null, title = null;
+        int action;
         GitRoot root = null;
         if (kind == 1618 || kind == 1621) {
             address = tagValue(event, "a");
@@ -5022,7 +5024,7 @@ public class NotificationRelayService extends Service {
                 // new root's child filters go live without a WebView.
                 persistGitRoot(address, root);
             }
-            title = tagValue(event, "subject"); action = kind == 1618 ? "opened a pull request" : "opened an issue";
+            title = tagValue(event, "subject"); action = kind == 1618 ? R.string.notif_git_pr : R.string.notif_git_issue;
             ticketId = id;
         } else {
             ticketId = kind == 1111 ? rootTag(event, "E") : rootTag(event, "e");
@@ -5034,12 +5036,12 @@ public class NotificationRelayService extends Service {
             if (root == null || address == null) return;
             if (kind == 1111) {
                 if (!validNip22Root(event, root)) return;
-                action = "commented on a ticket";
+                action = R.string.notif_git_comment;
             } else {
                 GitRepository repository = gitRepositories.get(address);
                 String author = event.optString("pubkey", "");
                 if (repository == null || !(author.equals(root.author) || author.equals(repository.owner) || repository.maintainers.contains(author))) return;
-                action = "changed a ticket status";
+                action = R.string.notif_git_status;
             }
         }
         GitRepository repository = gitRepositories.get(address);
@@ -5048,21 +5050,35 @@ public class NotificationRelayService extends Service {
         if (timestamp <= 0 || notifiedIds.contains(id)) return;
         rememberNotificationId(id);
         ArmadaNotificationPlugin.feedRelayEvent("git:" + address, event.toString(), relayUrl);
-        for (GitAttachment attachment : repository.attachments) {
-            if (!attachment.activeAt(timestamp)) continue;
-            String url = "/c/" + uriEncode(attachment.communityId) + "/" + uriEncode(attachment.channelId)
-                    + "?ticket=" + uriEncode(ticketId);
-            String line = action + (title != null && !title.trim().isEmpty() ? ": " + truncate(title) : "");
-            // Share the channel's own room, community and title with chat, so
-            // git activity appends to that conversation instead of opening a
-            // second notification with a conflicting name.
-            ConcordStream stream = streamForChannel(attachment.channelId);
-            enqueueRoomMessage(
-                    stream != null ? stream.community : null, "c2:" + attachment.channelId,
-                    stream != null ? stream.name : "Git activity", url,
-                    event.optString("pubkey", null), "Git activity", /*picture=*/null,
-                    line, timestamp * 1000L, /*mention=*/false);
-        }
+        // The repository as the web names it: the coordinate's identifier.
+        String[] coordinate = address.split(":", 3);
+        final String repoName = coordinate.length == 3 ? coordinate[2] : address;
+        final String author = event.optString("pubkey");
+        final String fTicketId = ticketId, fTitle = title;
+        final int fAction = action;
+        final GitRepository fRepository = repository;
+        resolveAuthor(author, relayUrl, profile -> {
+            String name = authorName(profile);
+            // One sentence per action, as `notification.gitActivity`; the ticket title follows it.
+            String activity = str(fAction, name, repoName);
+            String line = fTitle != null && !fTitle.trim().isEmpty()
+                    ? str(R.string.notif_attributed, activity, truncate(fTitle)) : activity;
+            for (GitAttachment attachment : fRepository.attachments) {
+                if (!attachment.activeAt(timestamp)) continue;
+                String url = "/c/" + uriEncode(attachment.communityId) + "/" + uriEncode(attachment.channelId)
+                        + "?ticket=" + uriEncode(fTicketId);
+                // Share the channel's own room, community and title with chat, so
+                // git activity appends to that conversation instead of opening a
+                // second notification with a conflicting name.
+                ConcordStream stream = streamForChannel(attachment.channelId);
+                String gitLabel = str(R.string.notif_git_activity);
+                enqueueRoomMessage(
+                        stream != null ? stream.community : null, "c2:" + attachment.channelId,
+                        stream != null ? stream.name : gitLabel, url,
+                        author, gitLabel, /*picture=*/null,
+                        line, timestamp * 1000L, /*mention=*/false);
+            }
+        });
     }
 
     /** The subscribed stream for a channel, if any; git activity borrows its
@@ -5394,8 +5410,8 @@ public class NotificationRelayService extends Service {
                 if (!wantsOpaqueResolvedGroupMessage(st.mentionOnly)) return;
                 enqueueRoomMessage(
                         st.community, "c2:" + st.channelId, st.name, st.url,
-                        /*senderPubkey=*/null, "Someone", /*picture=*/null,
-                        "New message", System.currentTimeMillis(), /*mention=*/false);
+                        /*senderPubkey=*/null, str(R.string.notif_someone), /*picture=*/null,
+                        str(R.string.notif_new_message), System.currentTimeMillis(), /*mention=*/false);
                 return;
             }
 
@@ -5459,7 +5475,7 @@ public class NotificationRelayService extends Service {
                     return;
                 }
                 final ConcordStream fStR = st;
-                final String reactionLine = "Reacted " + reactionEmoji(rumor) + " to your message";
+                final String reactionLine = str(R.string.notif_reacted, reactionEmoji(rumor));
                 final long rtsR = rumor.optLong("created_at", 0);
                 final long fTsR = (rtsR > 0 ? rtsR * 1000L : System.currentTimeMillis());
                 // Land on YOUR message the reaction points at (its `e` tag).
@@ -5470,7 +5486,7 @@ public class NotificationRelayService extends Service {
                     return;
                 }
                 resolveAuthor(author2, relayUrl, profile -> {
-                    String name = displayName(profile);
+                    String name = authorName(profile);
                     String picture = communityAvatarShown(author2) && profile != null ? profile.picture : null;
                     if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFY concord reaction: " + fStR.name + " / " + name);
                     enqueueRoomMessage(
@@ -5513,9 +5529,9 @@ public class NotificationRelayService extends Service {
                 return;
             }
             resolveAuthor(author2, relayUrl, profile -> {
-                String name = displayName(profile);
+                String name = authorName(profile);
                 String picture = communityAvatarShown(author2) && profile != null ? profile.picture : null;
-                String text = buildMessageText(preview2, fMention2, threadRoot2 != null);
+                String text = NotificationContent.messageText(labels(), preview2, threadRoot2 != null);
                 if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFY concord: " + fSt.name + " / " + name);
                 enqueueRoomMessage(
                         fSt.community, "c2:" + fSt.channelId, fSt.name,
@@ -5574,15 +5590,15 @@ public class NotificationRelayService extends Service {
         // MessagingStyle shows WHO via the sender Person, so the line is just the
         // message/verb; the room name is the conversation title.
         resolveAuthor(author, relayUrl, profile -> {
-            String name = displayName(profile);
+            String name = authorName(profile);
             final String picture = profile != null ? profile.picture : null;
             String line;
             String url;
             switch (kind) {
                 case 9: {
                     line = messagePreview(event);
-                    if (line.isEmpty()) line = "Sent a message";
-                    if (mention) line = "@you " + line;
+                    if (line.isEmpty()) line = str(R.string.notif_sent_message);
+                    if (mention) line = str(R.string.notif_mentioned_you, line);
                     url = nip29GroupId != null
                             ? "/s/" + relayToRouteParam(relayUrl) + "/" + uriEncode(nip29GroupId)
                             : "/";
@@ -5591,7 +5607,7 @@ public class NotificationRelayService extends Service {
                     break;
                 }
                 case 7: {
-                    line = "Reacted " + reactionEmoji(event) + " to your message";
+                    line = str(R.string.notif_reacted, reactionEmoji(event));
                     url = nip29GroupId != null
                             ? "/s/" + relayToRouteParam(relayUrl) + "/" + uriEncode(nip29GroupId)
                             : "/";
@@ -5600,7 +5616,7 @@ public class NotificationRelayService extends Service {
                     break;
                 }
                 case 1111: {
-                    line = buildMessageText(messagePreview(event), mention, true);
+                    line = NotificationContent.messageText(labels(), messagePreview(event), true);
                     url = nip29GroupId != null
                             ? "/s/" + relayToRouteParam(relayUrl) + "/" + uriEncode(nip29GroupId)
                             : "/";
@@ -5616,7 +5632,7 @@ public class NotificationRelayService extends Service {
                 }
                 case 4:
                     // kind-4 DMs are NIP-04 encrypted; the service has no key.
-                    line = "Sent you a direct message";
+                    line = str(R.string.notif_sent_direct_message);
                     url = appendMessageSegment(dmRoute(author), id);
                     break;
                 default:
@@ -5643,7 +5659,7 @@ public class NotificationRelayService extends Service {
             // conversation's avatar. A NIP-29 group is its own community (one
             // channel), so no per-message channel label is needed.
             resolveGroupName(nip29GroupId, relayUrl, groupName -> {
-                String roomTitle = (groupName != null && !groupName.isEmpty()) ? groupName : "Group";
+                String roomTitle = (groupName != null && !groupName.isEmpty()) ? groupName : str(R.string.notif_group);
                 CommunityRef community = new CommunityRef(
                         GROUP_PREFIX + "h:" + relayUrl + "|" + nip29GroupId,
                         roomTitle,
@@ -5687,17 +5703,28 @@ public class NotificationRelayService extends Service {
         return false;
     }
 
-    /**
-     * Build the notification line text for a message. Thread replies get a
-     * Signal-style "Replied in thread: <preview>" prefix instead of the bare
-     * content, so the notification makes sense without the parent message's
-     * context.
-     */
-    private static String buildMessageText(String preview, boolean mention, boolean isThreadReply) {
-        String text = !preview.isEmpty() ? preview : (isThreadReply ? "Replied in thread" : "Sent a message");
-        if (isThreadReply && !preview.isEmpty()) text = "Replied in thread: " + text;
-        return text;
+    /** A string resource in the app's language (see {@link AppLocale}). */
+    private String str(int id, Object... args) {
+        return AppLocale.string(this, id, args);
     }
+
+    /** The words {@link NotificationContent} builds lines from, in the app's language. */
+    private NotificationContent.Labels labels() {
+        String tag = AppLocale.get(this);
+        NotificationContent.Labels cached = labels;
+        if (cached != null && java.util.Objects.equals(tag, labelsLocale)) return cached;
+        cached = new NotificationContent.Labels(
+                str(R.string.notif_sent_gif), str(R.string.notif_sent_image),
+                str(R.string.notif_sent_video), str(R.string.notif_sent_voice),
+                str(R.string.notif_sent_game), str(R.string.notif_sent_message),
+                str(R.string.notif_replied_in_thread), str(R.string.notif_replied_in_thread_with));
+        labels = cached;
+        labelsLocale = tag;
+        return cached;
+    }
+
+    private volatile NotificationContent.Labels labels;
+    private volatile String labelsLocale;
 
     /**
      * Prepare an event's content for a notification body, mirroring the web
@@ -5722,8 +5749,8 @@ public class NotificationRelayService extends Service {
         String content = event.optString("content");
         String preview = truncate(cleanContent(content));
         if (!preview.isEmpty()) return preview;
-        String label = NotificationContent.mediaLabel(firstImetaMime(event), content);
-        return label != null ? "Sent " + label : "";
+        String sent = labels().sentMedia(NotificationContent.mediaKind(firstImetaMime(event), content));
+        return sent != null ? sent : "";
     }
 
     /** The {@code m <mime>} field of the event's first imeta tag carrying one, or null. */
@@ -5751,10 +5778,7 @@ public class NotificationRelayService extends Service {
      * which keeps its raw token: "@Anonymous" would name nobody.
      */
     private String mentionName(String pubkeyHex) {
-        Profile profile = cachedProfile(pubkeyHex);
-        if (profile == null) return null;
-        String name = displayName(profile);
-        return "Anonymous".equals(name) ? null : name;
+        return displayName(cachedProfile(pubkeyHex));
     }
 
     /** Synchronous profile lookup from cache/DB only; null when not held. */
@@ -5765,7 +5789,7 @@ public class NotificationRelayService extends Service {
             String raw = ServiceStore.profileRaw(this, pubkey);
             if (raw != null) return parseProfile(new JSONObject(raw));
         } catch (Exception ignored) {
-            // Unreadable row — treat as unknown ("Anonymous" fallback).
+            // Unreadable row — treat as unknown.
         }
         return null;
     }
@@ -5784,14 +5808,15 @@ public class NotificationRelayService extends Service {
      */
     private String dmGroupTitle(List<String> peers) {
         StringBuilder sb = new StringBuilder();
+        String joiner = str(R.string.notif_name_joiner);
         int shown = Math.min(peers.size(), TITLE_NAMES_MAX);
         for (int i = 0; i < shown; i++) {
-            if (i > 0) sb.append(", ");
-            sb.append(mentionName(peers.get(i)));
+            if (i > 0) sb.append(joiner);
+            String name = mentionName(peers.get(i));
+            sb.append(name != null ? name : str(R.string.notif_anonymous));
         }
         int rest = peers.size() - shown;
-        if (rest > 0) sb.append(" +").append(rest);
-        return sb.toString();
+        return rest > 0 ? str(R.string.notif_names_more, sb.toString(), rest) : sb.toString();
     }
 
     /** How many members a group DM's title names before it says "+N". */
@@ -5875,7 +5900,7 @@ public class NotificationRelayService extends Service {
                 && ServiceStore.dm17ConvPeers(roomKey.substring(3)).size() > 1;
     }
 
-    /** Display name from a resolved profile, falling back to "Anonymous". */
+    /** Display name from a resolved profile; null when it names nobody. */
     private static String displayName(Profile profile) {
         if (profile != null && profile.name != null && !profile.name.isEmpty()) {
             return profile.name;
@@ -5894,7 +5919,13 @@ public class NotificationRelayService extends Service {
             }
             if (!n.isEmpty()) return n;
         }
-        return "Anonymous";
+        return null;
+    }
+
+    /** A sender's display name, or the localized "Anonymous". */
+    private String authorName(Profile profile) {
+        String name = displayName(profile);
+        return name != null ? name : str(R.string.notif_anonymous);
     }
 
     /**
@@ -6269,7 +6300,7 @@ public class NotificationRelayService extends Service {
         }
 
         String sKey = senderPubkey != null ? senderPubkey : roomKey;
-        String sName = senderName != null ? senderName : "Someone";
+        String sName = senderName != null ? senderName : str(R.string.notif_someone);
         if (avatarRefresh) {
             // Attach the avatar to the line this refresh belongs to. Matched by
             // sender + timestamp + text (not "the last line") so a message that
@@ -6526,10 +6557,10 @@ public class NotificationRelayService extends Service {
         // send for, leaves Mark read alone.
         if (canReply(room)) {
             RemoteInput input = new RemoteInput.Builder(KEY_TEXT_REPLY)
-                    .setLabel("Reply")
+                    .setLabel(str(R.string.notif_reply))
                     .build();
             b.addAction(new NotificationCompat.Action.Builder(
-                    R.drawable.ic_stat_armada, "Reply", replyIntent(room))
+                    R.drawable.ic_stat_armada, str(R.string.notif_reply), replyIntent(room))
                     .addRemoteInput(input)
                     .setSemanticAction(NotificationCompat.Action.SEMANTIC_ACTION_REPLY)
                     .setShowsUserInterface(false)
@@ -6539,7 +6570,7 @@ public class NotificationRelayService extends Service {
         // "Mark read": dismiss this notification and advance the in-app read
         // state (applied by the WebView on its next open). Shown on every room.
         b.addAction(new NotificationCompat.Action.Builder(
-                R.drawable.ic_stat_armada, "Mark read", markReadIntent(room)).build());
+                R.drawable.ic_stat_armada, str(R.string.notif_mark_read), markReadIntent(room)).build());
         if (alert) {
             b.setVibrate(MSG_VIBRATION_PATTERN)
                     .setDefaults(NotificationCompat.DEFAULT_LIGHTS | NotificationCompat.DEFAULT_SOUND);
@@ -6548,8 +6579,8 @@ public class NotificationRelayService extends Service {
     }
 
     /** The conversation title shown for a room (and its shortcut label). */
-    private static String conversationTitle(RoomNotif room) {
-        return room.title != null && !room.title.isEmpty() ? room.title : "Chat";
+    private String conversationTitle(RoomNotif room) {
+        return room.title != null && !room.title.isEmpty() ? room.title : str(R.string.notif_chat);
     }
 
     /**
@@ -6559,15 +6590,12 @@ public class NotificationRelayService extends Service {
      * it reads only the warmed fields, so building a notification never waits
      * on a profile fetch or an avatar decode.
      *
-     * The fallback is "You", not {@link #displayName}'s "Anonymous" — an
-     * unnamed profile should read as the user, not as a stranger.
+     * The fallback is "You", not "Anonymous" — an unnamed profile should read
+     * as the user, not as a stranger.
      */
     private Person selfPerson() {
-        String name = "You";
-        if (selfProfile != null) {
-            String resolved = displayName(selfProfile);
-            if (!"Anonymous".equals(resolved)) name = resolved;
-        }
+        String resolved = displayName(selfProfile);
+        String name = resolved != null ? resolved : str(R.string.notif_you);
         Person.Builder pb = new Person.Builder()
                 .setName(name)
                 .setKey(userPubkey != null ? userPubkey : "self");
@@ -6800,7 +6828,7 @@ public class NotificationRelayService extends Service {
             room = new RoomNotif(roomKey, hashId(roomKey));
             roomNotifs.put(roomKey, room);
         }
-        MsgEntry entry = new MsgEntry(userPubkey != null ? userPubkey : "self", "You",
+        MsgEntry entry = new MsgEntry(userPubkey != null ? userPubkey : "self", str(R.string.notif_you),
                 /*avatar=*/null, text, System.currentTimeMillis(), /*fromSelf=*/true);
         room.messages.add(entry);
         while (room.messages.size() > MAX_MESSAGES_PER_ROOM) room.messages.remove(0);
@@ -6835,7 +6863,7 @@ public class NotificationRelayService extends Service {
      */
     private void finishReply(String roomKey, MsgEntry sent, boolean ok) {
         if (ok || sent == null) return;
-        sent.text = "⚠️ Not sent: " + sent.text;
+        sent.text = str(R.string.notif_not_sent, sent.text);
         RoomNotif room = roomNotifs.get(roomKey);
         if (room != null && room.messages.contains(sent)) repostRoom(room, true);
     }
@@ -7864,8 +7892,8 @@ public class NotificationRelayService extends Service {
                 this, 0, open,
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
         return new NotificationCompat.Builder(this, SVC_CHANNEL_ID)
-                .setContentTitle("Armada")
-                .setContentText("Connected for instant notifications")
+                .setContentTitle(str(R.string.app_name))
+                .setContentText(str(R.string.notif_connected))
                 .setSmallIcon(R.drawable.ic_stat_armada)
                 .setContentIntent(pi)
                 .setPriority(NotificationCompat.PRIORITY_LOW)
@@ -7874,9 +7902,24 @@ public class NotificationRelayService extends Service {
                 .build();
     }
 
-    private void createChannels() {
+    /**
+     * The app's language changed: re-word the channels (re-creating one updates
+     * its name and description) and the foreground row. Sockets are untouched.
+     */
+    static void onLocaleChanged(Context ctx) {
+        createChannels(ctx);
+        NotificationRelayService svc = instance;
+        if (svc == null) return;
+        svc.handler.post(() -> {
+            svc.labels = null;
+            NotificationManager m = (NotificationManager) svc.getSystemService(Context.NOTIFICATION_SERVICE);
+            if (m != null && instance == svc) m.notify(FOREGROUND_ID, svc.buildForegroundNotification());
+        });
+    }
+
+    static void createChannels(Context ctx) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return;
-        NotificationManager m = getSystemService(NotificationManager.class);
+        NotificationManager m = ctx.getSystemService(NotificationManager.class);
         if (m == null) return;
 
         // IMPORTANCE_MIN: no status bar icon, silent — just present enough for
@@ -7884,8 +7927,8 @@ public class NotificationRelayService extends Service {
         // no visible entry can still disable this channel, but the lower
         // intrusion means fewer do so accidentally.
         NotificationChannel svc = new NotificationChannel(
-                SVC_CHANNEL_ID, "Background connection", NotificationManager.IMPORTANCE_MIN);
-        svc.setDescription("Keeps Armada connected for instant notifications");
+                SVC_CHANNEL_ID, AppLocale.string(ctx, R.string.channel_service_name), NotificationManager.IMPORTANCE_MIN);
+        svc.setDescription(AppLocale.string(ctx, R.string.channel_service_description));
         svc.setShowBadge(false);
         m.createNotificationChannel(svc);
 
@@ -7899,8 +7942,8 @@ public class NotificationRelayService extends Service {
         }
 
         NotificationChannel msg = new NotificationChannel(
-                MSG_CHANNEL_ID, "Notifications", NotificationManager.IMPORTANCE_HIGH);
-        msg.setDescription("Mentions, replies, reactions and direct messages");
+                MSG_CHANNEL_ID, AppLocale.string(ctx, R.string.channel_messages_name), NotificationManager.IMPORTANCE_HIGH);
+        msg.setDescription(AppLocale.string(ctx, R.string.channel_messages_description));
         msg.enableVibration(true);
         msg.setVibrationPattern(MSG_VIBRATION_PATTERN);
         m.createNotificationChannel(msg);
@@ -7909,8 +7952,8 @@ public class NotificationRelayService extends Service {
         // stream, repeats per system behavior for CallStyle) plus a long,
         // insistent vibration — a call has to sound like a call, not a text.
         NotificationChannel calls = new NotificationChannel(
-                CALL_CHANNEL_ID, "Incoming calls", NotificationManager.IMPORTANCE_HIGH);
-        calls.setDescription("Voice call rings");
+                CALL_CHANNEL_ID, AppLocale.string(ctx, R.string.channel_calls_name), NotificationManager.IMPORTANCE_HIGH);
+        calls.setDescription(AppLocale.string(ctx, R.string.channel_calls_description));
         calls.enableVibration(true);
         calls.setVibrationPattern(new long[] { 0L, 800L, 400L, 800L, 400L, 800L });
         android.media.AudioAttributes ringAttrs = new android.media.AudioAttributes.Builder()

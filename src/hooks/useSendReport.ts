@@ -5,6 +5,7 @@ import { buildReportRumor, sealReport, wrapReport } from "@/concord/lib/report";
 import { publishToAnyRelay } from "@/concord/lib/relayPublish";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useNostrPublish } from "@/hooks/useNostrPublish";
+import { t } from "@/i18n";
 import {
   buildReportTags,
   KIND_REPORT,
@@ -34,7 +35,7 @@ export function useSendReport(): UseMutationResult<void, Error, SendReportArgs> 
 
   return useMutation<void, Error, SendReportArgs>({
     mutationFn: async ({ destination, target, reason, comment }) => {
-      if (!user) throw new Error("Sign in to report.");
+      if (!user) throw new Error(t({ id: "useSendReport.signIn", defaultMessage: "Sign in to report." }));
 
       switch (destination.kind) {
         case "concord": {
@@ -44,7 +45,7 @@ export function useSendReport(): UseMutationResult<void, Error, SendReportArgs> 
             nostr,
             destination.relays,
             wrapReport(seal, destination.controlPk),
-            "Couldn't reach this community's relays.",
+            t({ id: "useSendReport.unreachable", defaultMessage: "Couldn't reach this community's relays." }),
           );
           return;
         }

@@ -66,6 +66,7 @@ import { isBuzzMediaUrl } from "@/buzz/media";
 import { decryptAttachmentToObjectURL, peekPrimedAttachment } from "@/lib/encryptedMedia";
 import { captureLoadedMedia } from "@/lib/mediaCache";
 import { toast, useToast } from "@/hooks/useToast";
+import { common, defineMessage, FormattedMessage, t, useIntl } from "@/i18n";
 import { useWallet } from "@/hooks/useWallet";
 import { useChatImageMenu } from "@/contexts/ChatImageMenuContext";
 
@@ -1548,7 +1549,11 @@ function CollapsibleContent({ children }: { children: ReactNode }) {
           }}
           className="relative mt-1 text-xs touch:text-sm font-semibold text-primary hover:underline touch:py-1.5"
         >
-          {expanded ? "Show less" : "Read more"}
+          {expanded ? (
+            <FormattedMessage id="chatContent.showLess" defaultMessage="Show less" />
+          ) : (
+            <FormattedMessage id="chatContent.readMore" defaultMessage="Read more" />
+          )}
         </button>
       )}
     </div>
@@ -1601,10 +1606,12 @@ function getImetaField(tags: string[][], url: string, field: string): string | u
   return undefined;
 }
 
+const shareImageLabel = defineMessage({ id: "chatContent.shareImage", defaultMessage: "Share image" });
+
 function saveFailed(): void {
   toast({
-    title: "Couldn't load this image",
-    description: "Please try again.",
+    title: t({ id: "chatContent.loadFailedTitle", defaultMessage: "Couldn't load this image" }),
+    description: t({ id: "chatContent.loadFailedDescription", defaultMessage: "Please try again." }),
     variant: "destructive",
   });
 }
@@ -1615,16 +1622,16 @@ async function saveImage(src: string, image: ImageRef): Promise<void> {
     const result = await downloadUrl(src, { nameHint: image.url, mime: image.mime });
     toast(
       result.status === "downloaded"
-        ? { title: "Saved", description: savedDescription(result.location) }
+        ? { title: t({ id: "chatContent.saved", defaultMessage: "Saved" }), description: savedDescription(result.location) }
         : {
-            title: "Opened in a new tab",
-            description: "This image couldn't be saved directly, so it opened instead.",
+            title: t({ id: "chatContent.openedInTab", defaultMessage: "Opened in a new tab" }),
+            description: t({ id: "chatContent.openedInTabDescription", defaultMessage: "This image couldn't be saved directly, so it opened instead." }),
           },
     );
   } catch {
     toast({
-      title: "Download failed",
-      description: "Could not save this image. Please try again.",
+      title: t({ id: "chatContent.downloadFailed", defaultMessage: "Download failed" }),
+      description: t({ id: "chatContent.downloadFailedDescription", defaultMessage: "Could not save this image. Please try again." }),
       variant: "destructive",
     });
   }
@@ -1635,12 +1642,12 @@ async function shareImage(src: string, image: ImageRef): Promise<void> {
   const shared = await shareFile(src, {
     nameHint: image.url,
     mime: image.mime,
-    dialogTitle: "Share image",
+    dialogTitle: t(shareImageLabel),
   });
   if (!shared) {
     toast({
-      title: "Couldn't share this image",
-      description: "Try downloading it instead.",
+      title: t({ id: "chatContent.shareFailed", defaultMessage: "Couldn't share this image" }),
+      description: t({ id: "chatContent.shareFailedDescription", defaultMessage: "Try downloading it instead." }),
       variant: "destructive",
     });
   }
@@ -1649,11 +1656,11 @@ async function shareImage(src: string, image: ImageRef): Promise<void> {
 async function copyImage(src: string): Promise<void> {
   try {
     await writeClipboardImage(src);
-    toast({ title: "Copied", description: "The image is on your clipboard." });
+    toast({ title: t(common.copied), description: t({ id: "chatContent.copiedImage", defaultMessage: "The image is on your clipboard." }) });
   } catch {
     toast({
-      title: "Couldn't copy this image",
-      description: "Try saving or sharing it instead.",
+      title: t({ id: "chatContent.copyFailed", defaultMessage: "Couldn't copy this image" }),
+      description: t({ id: "chatContent.copyFailedDescription", defaultMessage: "Try saving or sharing it instead." }),
       variant: "destructive",
     });
   }
@@ -1672,22 +1679,23 @@ function useImageMenu(
   onActivate: () => void = onOpen,
 ) {
   const menu = useChatImageMenu();
+  const intl = useIntl();
 
   const actions = useMemo<MessageActionItem[]>(() => {
     const list: MessageActionItem[] = [
-      { id: "img-open", label: "Open image", icon: Expand, onSelect: onOpen },
+      { id: "img-open", label: intl.formatMessage({ id: "chatContent.openImage", defaultMessage: "Open image" }), icon: Expand, onSelect: onOpen },
     ];
     if (getSrc) {
       list.push({
         id: "img-save",
-        label: "Save image",
+        label: intl.formatMessage({ id: "chatContent.saveImage", defaultMessage: "Save image" }),
         icon: Download,
         onSelect: () => void getSrc().then((src) => saveImage(src, image), () => saveFailed()),
       });
       if (canShareFiles()) {
         list.push({
           id: "img-share",
-          label: "Share image",
+          label: intl.formatMessage(shareImageLabel),
           icon: Share2,
           onSelect: () => void getSrc().then((src) => shareImage(src, image), () => saveFailed()),
         });
@@ -1695,14 +1703,14 @@ function useImageMenu(
       if (canCopyImages()) {
         list.push({
           id: "img-copy",
-          label: "Copy image",
+          label: intl.formatMessage({ id: "chatContent.copyImage", defaultMessage: "Copy image" }),
           icon: Copy,
           onSelect: () => void getSrc().then(copyImage, () => saveFailed()),
         });
       }
     }
     return list;
-  }, [image, getSrc, onOpen]);
+  }, [image, getSrc, onOpen, intl]);
 
   // Touch only; the <button> IS the long-press target.
   const longPress = useLongPress(
@@ -1873,7 +1881,7 @@ function InlineImage({
 
   // Block-level: the tokenizer stripped the surrounding newlines expecting a block.
   if (failed) {
-    return <MediaFallback {...fallbackProps} label="Image" />;
+    return <MediaFallback {...fallbackProps} kind="image" />;
   }
 
   // The box never changes on load, or rows move under the reader. A known `dim`
@@ -2089,6 +2097,7 @@ function LightningInvoice({ invoice }: { invoice: string }) {
   useEffect(() => () => clearTimeout(disarmTimer.current), []);
   const { activeConnection, payWithNWC, webln } = useWallet();
   const { toast } = useToast();
+  const intl = useIntl();
   const amountSats = useMemo(() => bolt11AmountSats(invoice), [invoice]);
   const canPay = Boolean(activeConnection || webln) && amountSats !== null;
 
@@ -2112,10 +2121,10 @@ function LightningInvoice({ invoice }: { invoice: string }) {
         await webln!.sendPayment(invoice);
       }
       setPaid(true);
-      toast({ title: "Invoice paid" });
+      toast({ title: t({ id: "chatContent.invoicePaid", defaultMessage: "Invoice paid" }) });
     } catch (err) {
       toast({
-        title: "Payment failed",
+        title: t({ id: "chatContent.paymentFailed", defaultMessage: "Payment failed" }),
         description: err instanceof Error ? err.message : String(err),
         variant: "destructive",
       });
@@ -2136,13 +2145,15 @@ function LightningInvoice({ invoice }: { invoice: string }) {
             setTimeout(() => setCopied(false), 1500);
           }, () => undefined);
         }}
-        title="Copy lightning invoice"
+        title={intl.formatMessage({ id: "chatContent.copyInvoice", defaultMessage: "Copy lightning invoice" })}
       >
         <span aria-hidden>⚡</span>
         <span className="truncate font-mono">
-          {amountSats !== null ? `${formatSats(amountSats)} sats` : invoice.slice(0, 24) + "…"}
+          {amountSats !== null
+            ? intl.formatMessage({ id: "chatContent.sats", defaultMessage: "{amount} sats" }, { amount: formatSats(amountSats) })
+            : invoice.slice(0, 24) + "…"}
         </span>
-        <span className="shrink-0">{copied ? "Copied" : "Copy"}</span>
+        <span className="shrink-0">{copied ? intl.formatMessage(common.copied) : intl.formatMessage(common.copy)}</span>
       </button>
       {canPay && (
         <button
@@ -2155,15 +2166,15 @@ function LightningInvoice({ invoice }: { invoice: string }) {
           )}
           onClick={handlePay}
           disabled={paying || paid}
-          title="Pay with your connected wallet"
+          title={intl.formatMessage({ id: "chatContent.payWithWallet", defaultMessage: "Pay with your connected wallet" })}
         >
           {paid
-            ? "Paid ✓"
+            ? intl.formatMessage({ id: "chatContent.paid", defaultMessage: "Paid ✓" })
             : paying
-              ? "Paying…"
+              ? intl.formatMessage({ id: "chatContent.paying", defaultMessage: "Paying…" })
               : armed
-                ? `Confirm ${formatSats(amountSats!)} sats?`
-                : "Pay"}
+                ? intl.formatMessage({ id: "chatContent.confirmPay", defaultMessage: "Confirm {amount} sats?" }, { amount: formatSats(amountSats!) })
+                : intl.formatMessage({ id: "chatContent.pay", defaultMessage: "Pay" })}
         </button>
       )}
     </span>

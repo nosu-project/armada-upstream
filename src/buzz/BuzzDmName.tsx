@@ -1,4 +1,5 @@
 import { DisplayName } from "@/components/DisplayName";
+import { FormattedMessage } from "@/i18n";
 
 /**
  * A Buzz DM's title: the other participants' names (its 39000 carries no
@@ -15,7 +16,7 @@ export function BuzzDmName({
 }) {
   const others = members.filter((m) => m !== selfPubkey);
   const list = others.length > 0 ? others : selfPubkey ? [selfPubkey] : [];
-  if (list.length === 0) return <>Direct message</>;
+  if (list.length === 0) return <FormattedMessage id="buzzDmName.fallback" defaultMessage="Direct message" />;
   const shown = list.slice(0, max);
   return (
     <>
@@ -25,7 +26,12 @@ export function BuzzDmName({
           <DisplayName pubkey={pk} />
         </span>
       ))}
-      {list.length > shown.length && <> +{list.length - shown.length}</>}
+      {list.length > shown.length && (
+        <>
+          {" "}
+          <FormattedMessage id="buzzDmName.more" defaultMessage="+{count}" values={{ count: list.length - shown.length }} />
+        </>
+      )}
     </>
   );
 }

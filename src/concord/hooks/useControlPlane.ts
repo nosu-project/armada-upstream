@@ -33,6 +33,7 @@ import { logSync } from "@/lib/syncLog";
 import { onWireScopes } from "@/wire/bus";
 
 import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
+import { t } from "@/i18n";
 
 /**
  * The community's Control Plane, read from the opened-event store (wraps are
@@ -676,7 +677,7 @@ export async function publishEdition(
       throw new DissolvedError();
     }
   } catch (e) {
-    if (e instanceof DissolvedError) throw new Error("This community has been dissolved; it accepts no changes.");
+    if (e instanceof DissolvedError) throw new Error(t({ id: "useControlPlane.dissolved", defaultMessage: "This community has been dissolved; it accepts no changes." }));
   }
   // The WRITE key: on a split epoch it's the staff-held control_root (CORD-02 §2);
   // non-staff fail here with a readable error.
@@ -696,7 +697,7 @@ export async function publishEdition(
     results = await attempt();
   }
   if (!results.some((r) => r.status === "fulfilled")) {
-    if (urls.length === 0) throw new Error("No relay accepted the change: the community has no relays configured.");
+    if (urls.length === 0) throw new Error(t({ id: "useControlPlane.noRelaysConfigured", defaultMessage: "No relay accepted the change: the community has no relays configured." }));
     const reasons = [
       ...new Set(
         results
@@ -704,7 +705,14 @@ export async function publishEdition(
           .filter(Boolean),
       ),
     ];
-    throw new Error(`No relay accepted the change${reasons.length ? `: ${reasons.slice(0, 2).join("; ")}` : "."}`);
+    throw new Error(
+      reasons.length
+        ? t(
+            { id: "useControlPlane.noRelayAcceptedWithReasons", defaultMessage: "No relay accepted the change: {reasons}" },
+            { reasons: reasons.slice(0, 2).join("; ") },
+          )
+        : t({ id: "useControlPlane.noRelayAccepted", defaultMessage: "No relay accepted the change." }),
+    );
   }
   // Write our own edition to the store now, so the publisher's fold sees it even
   // if no relay echoes it back (or the `since` cursor skips it).

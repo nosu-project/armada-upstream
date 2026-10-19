@@ -1,4 +1,5 @@
 import type { OpenedChat } from "@/concord/lib/chat";
+import { t } from "@/i18n/intl";
 
 /**
  * How far ahead of the local clock a message must be dated to be REPORTED as a
@@ -69,21 +70,25 @@ function sampleOf(content: string): string {
 /** A rounded phrase for how far ahead ("3 minutes", "2 hours"); at least "a minute". */
 export function describeAhead(aheadMs: number): string {
   const secs = Math.round(aheadMs / 1000);
-  if (secs < 90) return "a minute";
+  if (secs < 90) return t({ id: "timeTravelers.ahead.aMinute", defaultMessage: "a minute" });
   const mins = Math.round(secs / 60);
-  if (mins < 90) return `${mins} minutes`;
+  if (mins < 90) {
+    return t({ id: "timeTravelers.ahead.minutes", defaultMessage: "{count, plural, one {# minute} other {# minutes}}" }, { count: mins });
+  }
   const hours = Math.round(mins / 60);
-  if (hours < 36) return `${hours} hours`;
+  if (hours < 36) {
+    return t({ id: "timeTravelers.ahead.hours", defaultMessage: "{count, plural, one {# hour} other {# hours}}" }, { count: hours });
+  }
   const days = Math.round(hours / 24);
-  return `${days} days`;
+  return t({ id: "timeTravelers.ahead.days", defaultMessage: "{count, plural, one {# day} other {# days}}" }, { count: days });
 }
 
 /** A tongue-in-cheek "clearance level" badge scaling with how far ahead. */
 export function travelerRank(aheadMs: number): string {
   const mins = aheadMs / 60_000;
-  if (mins < 10) return "Slightly ahead of schedule";
-  if (mins < 60) return "Chrono-drifter";
-  if (mins < 24 * 60) return "Temporal tourist";
-  if (mins < 7 * 24 * 60) return "Certified time traveler";
-  return "Escaped the timeline";
+  if (mins < 10) return t({ id: "timeTravelers.rank.slightlyAhead", defaultMessage: "Slightly ahead of schedule" });
+  if (mins < 60) return t({ id: "timeTravelers.rank.chronoDrifter", defaultMessage: "Chrono-drifter" });
+  if (mins < 24 * 60) return t({ id: "timeTravelers.rank.temporalTourist", defaultMessage: "Temporal tourist" });
+  if (mins < 7 * 24 * 60) return t({ id: "timeTravelers.rank.certified", defaultMessage: "Certified time traveler" });
+  return t({ id: "timeTravelers.rank.escaped", defaultMessage: "Escaped the timeline" });
 }

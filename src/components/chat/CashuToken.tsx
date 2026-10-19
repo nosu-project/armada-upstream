@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { common, defineMessage, FormattedMessage, useIntl } from "@/i18n";
 import {
   cashuMintLabel,
   type CashuTokenInfo,
@@ -25,6 +26,8 @@ export function CashuToken({ raw, className }: { raw: string; className?: string
   return <CashuTokenCard info={info} token={stripCashuScheme(raw)} className={className} />;
 }
 
+const copyToken = defineMessage({ id: "cashuToken.copyToken", defaultMessage: "Copy token" });
+
 type CheckStatus = "checking" | "error" | CashuTokenState;
 
 function CashuTokenCard({
@@ -38,6 +41,7 @@ function CashuTokenCard({
 }) {
   const [copied, setCopied] = useState(false);
   const [status, setStatus] = useState<CheckStatus>("checking");
+  const intl = useIntl();
 
   // NUT-07 spendability check: read-only, to a URL from the message (the same
   // exposure as inline images).
@@ -75,19 +79,19 @@ function CashuTokenCard({
           <button
             type="button"
             className="absolute right-1 top-1 inline-flex size-8 touch:size-11 items-center justify-center clip-corner-lg text-muted-foreground transition-colors hover:bg-background/40 hover:text-foreground"
-            aria-label="About this token"
+            aria-label={intl.formatMessage({ id: "cashuToken.about", defaultMessage: "About this token" })}
           >
             <span aria-hidden className="text-sm leading-none">🥜</span>
           </button>
         </PopoverTrigger>
         <PopoverContent align="end" className="space-y-3">
           <p className="text-center text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-            Cashu ecash
+            <FormattedMessage id="cashuToken.title" defaultMessage="Cashu ecash" />
           </p>
 
           <div className="space-y-0.5">
             <p className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground">
-              Mint
+              <FormattedMessage id="cashuToken.mint" defaultMessage="Mint" />
             </p>
             <p className="text-sm break-all" title={info.mint || undefined}>
               {cashuMintLabel(info.mint)}
@@ -96,15 +100,15 @@ function CashuTokenCard({
 
           <div className="space-y-0.5">
             <p className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground">
-              Token
+              <FormattedMessage id="cashuToken.token" defaultMessage="Token" />
             </p>
             <button
               type="button"
               className="block w-full truncate text-left font-mono text-xs"
               onClick={copy}
-              title="Copy token"
+              title={intl.formatMessage(copyToken)}
             >
-              {copied ? "Copied" : token}
+              {copied ? intl.formatMessage(common.copied) : token}
             </button>
           </div>
         </PopoverContent>
@@ -118,7 +122,7 @@ function CashuTokenCard({
           </span>
           {info.proofs > 1 && (
             <span className="text-xs text-muted-foreground shrink-0">
-              {info.proofs} proofs
+              <FormattedMessage id="cashuToken.proofs" defaultMessage="{count} proofs" values={{ count: info.proofs }} />
             </span>
           )}
         </div>
@@ -132,9 +136,13 @@ function CashuTokenCard({
           className="w-full px-2.5 py-2 touch:py-2.5 clip-corner-lg bg-amber-500/20 text-amber-500 text-xs font-medium transition-colors hover:bg-amber-500/30 disabled:bg-destructive/20 disabled:text-destructive disabled:hover:bg-destructive/20"
           onClick={copy}
           disabled={spent}
-          title={spent ? undefined : "Copy the token to redeem it in an ecash wallet"}
+          title={spent ? undefined : intl.formatMessage({ id: "cashuToken.copyHint", defaultMessage: "Copy the token to redeem it in an ecash wallet" })}
         >
-          {spent ? "Already redeemed" : copied ? "Copied" : "Copy token"}
+          {spent
+            ? intl.formatMessage({ id: "cashuToken.redeemed", defaultMessage: "Already redeemed" })
+            : copied
+              ? intl.formatMessage(common.copied)
+              : intl.formatMessage(copyToken)}
         </button>
       </div>
     </div>

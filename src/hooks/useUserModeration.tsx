@@ -15,6 +15,7 @@ import { useChatScope } from "@/hooks/useChatScope";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useMemberActions, useMemberRolePicker } from "@/hooks/useMemberActions";
 import { useMuteToggle } from "@/hooks/useMuteList";
+import { common, FormattedMessage, useIntl } from "@/i18n";
 import { reportDestination } from "@/lib/report";
 import { cn } from "@/lib/utils";
 
@@ -38,6 +39,7 @@ export function useUserModeration(
   pubkey: string | undefined,
   { report = true }: { report?: boolean } = {},
 ): UserModeration {
+  const intl = useIntl();
   const { user } = useCurrentUser();
   const staff = useMemberActions(pubkey);
   const rolePicker = useMemberRolePicker(pubkey);
@@ -54,7 +56,9 @@ export function useUserModeration(
     if (mute.canMute) {
       out.push({
         id: "mute",
-        label: mute.muted ? "Unblock person" : "Block person",
+        label: mute.muted
+          ? intl.formatMessage({ id: "useUserModeration.unblock", defaultMessage: "Unblock person" })
+          : intl.formatMessage({ id: "useUserModeration.block", defaultMessage: "Block person" }),
         icon: mute.muted ? UserCheck : UserX,
         // Unblocking restores someone, so it isn't styled destructive.
         destructive: !mute.muted,
@@ -63,10 +67,16 @@ export function useUserModeration(
       });
     }
     if (canReport) {
-      out.push({ id: "report", label: "Report person", icon: Flag, destructive: true, onSelect: () => setReportOpen(true) });
+      out.push({
+        id: "report",
+        label: intl.formatMessage({ id: "useUserModeration.report", defaultMessage: "Report person" }),
+        icon: Flag,
+        destructive: true,
+        onSelect: () => setReportOpen(true),
+      });
     }
     return out;
-  }, [staff, mute.canMute, mute.muted, mute.pending, toggleMute, canReport]);
+  }, [intl, staff, mute.canMute, mute.muted, mute.pending, toggleMute, canReport]);
 
   const confirm = confirming?.confirm;
   const dialogs = (
@@ -99,7 +109,7 @@ export function useUserModeration(
               </AlertDialogDescription>
             </div>
             <AlertDialogFooter>
-              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogCancel><FormattedMessage {...common.cancel} /></AlertDialogCancel>
               <AlertDialogAction
                 className={cn(confirming.destructive && "bg-destructive text-destructive-foreground hover:bg-destructive/90")}
                 onClick={() => confirming.onSelect()}

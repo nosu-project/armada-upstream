@@ -152,6 +152,11 @@ export interface ArmadaNotificationPlugin {
   /** Configure and start/stop the service; `enabled: false` or no pubkey/relays stops it and clears config. */
   configure(options: {
     enabled: boolean;
+    /**
+     * The app's language (one of the shipped locale codes), which every native
+     * string follows. Kept across disable/logout; absent = the device's.
+     */
+    locale?: string;
     userPubkey?: string;
     /**
      * Per-plane authority: `false` merges into last-good same-account data, `true`

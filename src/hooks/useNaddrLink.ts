@@ -7,6 +7,7 @@ import { eventNaddr, naddrShareUrl } from "@/lib/naddrLink";
 import { normalizeRelayUrl } from "@/lib/platform";
 
 import type { NostrRumor } from "@/lib/nostrRumor";
+import { t } from "@/i18n";
 
 /** The app relays as naddr hints — where Discover finds addressable events. */
 function useAppRelayHints(): string[] {
@@ -33,7 +34,7 @@ export function useNaddrLink(event: NostrRumor) {
     if (!naddr) return;
     writeClipboardText(naddrShareUrl(naddr)).then(
       () => setCopied(true),
-      () => toast({ title: "Copy failed", variant: "destructive" }),
+      () => toast({ title: t({ id: "useNaddrLink.copyFailed", defaultMessage: "Copy failed" }), variant: "destructive" }),
     );
   }, [naddr]);
 
@@ -50,8 +51,8 @@ export function useCopyNaddrLink() {
       const url = naddrShareUrl(naddr);
       return () => {
         writeClipboardText(url).then(
-          () => toast({ title: "Link copied" }),
-          () => toast({ title: "Copy failed", variant: "destructive" }),
+          () => toast({ title: t({ id: "useNaddrLink.linkCopied", defaultMessage: "Link copied" }) }),
+          () => toast({ title: t({ id: "useNaddrLink.copyFailed", defaultMessage: "Copy failed" }), variant: "destructive" }),
         );
       };
     },

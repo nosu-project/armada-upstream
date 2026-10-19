@@ -6,6 +6,7 @@
  */
 
 import { buzzHttpPost } from "@/buzz/http";
+import { t } from "@/i18n";
 import { normalizeRelayUrl, relayToHttpUrl } from "@/lib/platform";
 
 import type { NostrSigner } from "@nostrify/nostrify";
@@ -123,7 +124,7 @@ export async function claimBuzzInvite(
       }),
       signal: AbortSignal.timeout(10_000),
     });
-    if (!res.ok) throw new Error("The server rejected the policy acceptance.");
+    if (!res.ok) throw new Error(t({ id: "buzzInvite.policyRejected", defaultMessage: "The server rejected the policy acceptance." }));
     const json = (await res.json()) as { receipt?: string };
     policyReceipt = json.receipt;
   }

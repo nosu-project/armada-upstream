@@ -7,6 +7,7 @@ import { deriveUrlTopicId } from "@/lib/webxdcRealtime";
 import { appScopeKey } from "@/contexts/AppsContext";
 import type { ImetaEntry } from "@/lib/imeta";
 import { sanitizeImageSrc } from "@/lib/sanitizeUrl";
+import { FormattedMessage, useIntl } from "@/i18n";
 
 /**
  * A `.xdc` attachment: launches in the app stage, joined to the session keyed by
@@ -24,9 +25,10 @@ export function XdcAttachment({
   /** The sender's icon is held (`mediaHold.ts`); the app still opens on request. */
   hideIcon?: boolean;
 }) {
+  const intl = useIntl();
   const scope = useChatScope();
   const { activeApp, launchApp } = useApps();
-  const name = imeta?.summary || "Webxdc app";
+  const name = imeta?.summary || intl.formatMessage({ id: "xdcAttachment.defaultName", defaultMessage: "Webxdc app" });
   // A pasted link has no minted topic, so every client derives the same one from
   // the URL and message id; otherwise each client gets a solo session.
   const sessionId = imeta?.webxdc ?? (messageId ? deriveUrlTopicId(url, messageId) : undefined);
@@ -61,11 +63,15 @@ export function XdcAttachment({
       </div>
       <div className="min-w-0 flex-1">
         <p className="text-sm font-semibold truncate">{name}</p>
-        <p className="text-xs text-muted-foreground">Webxdc app</p>
+        <p className="text-xs text-muted-foreground">
+          <FormattedMessage id="xdcAttachment.kind" defaultMessage="Webxdc app" />
+        </p>
       </div>
       {scope ? (
         <Button size="sm" className="h-8 shrink-0" onClick={handleLaunch} disabled={openHere}>
-          {openHere ? "Open" : "Launch"}
+          {openHere
+            ? intl.formatMessage({ id: "xdcAttachment.open", defaultMessage: "Open" })
+            : intl.formatMessage({ id: "xdcAttachment.launch", defaultMessage: "Launch" })}
         </Button>
       ) : (
         <a
@@ -74,7 +80,7 @@ export function XdcAttachment({
           rel="noopener noreferrer"
           className="text-sm text-primary hover:underline shrink-0"
         >
-          Download
+          <FormattedMessage id="xdcAttachment.download" defaultMessage="Download" />
         </a>
       )}
     </div>

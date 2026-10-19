@@ -12,6 +12,7 @@ import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useRemoveRailKey } from "@/hooks/useRemoveRailKey";
 import { toast } from "@/hooks/useToast";
 import { logSync } from "@/lib/syncLog";
+import { defineMessage, defineMessages, t, type MessageDescriptor } from "@/i18n";
 
 /**
  * Compliant self-removal (CORD-04 §4/§6): a client that finds a removal against
@@ -86,7 +87,7 @@ export function useSelfRemove(community: Community | undefined, onRemoved?: () =
     void forgetPendingJoin(user.pubkey, community.idHex);
     removeRailKey(`c2:${community.idHex}`);
     queryClient.removeQueries({ queryKey: ["concord", key] });
-    toast(REMOVAL_TOAST[verdict]);
+    toast({ title: t(REMOVAL_TOAST[verdict].title), description: t(REMOVAL_TOAST[verdict].description) });
     onRemoved?.();
     updateList({ type: "remove", communityId: community.idHex, removedAt }).catch(() => {
       // Vault write failed: the local tombstone stands and the next sync republishes
@@ -115,13 +116,19 @@ export function useSelfRemove(community: Community | undefined, onRemoved?: () =
 }
 
 /** A kick is re-joinable and a ban is not; the notice says which. */
-const REMOVAL_TOAST: Record<SelfRemovalVerdict, { title: string; description: string }> = {
+const REMOVAL_TITLE = defineMessages({
+  removed: { id: "useSelfRemove.removed.title", defaultMessage: "Removed from community" },
+});
+const REMOVAL_TOAST: Record<SelfRemovalVerdict, { title: MessageDescriptor; description: MessageDescriptor }> = {
   ban: {
-    title: "Removed from community",
-    description: "You no longer have access to this community.",
+    title: REMOVAL_TITLE.removed,
+    description: defineMessage({ id: "useSelfRemove.banned.description", defaultMessage: "You no longer have access to this community." }),
   },
   kick: {
-    title: "Removed from community",
-    description: "A moderator removed you from this community. You can rejoin with a new invite.",
+    title: REMOVAL_TITLE.removed,
+    description: defineMessage({
+      id: "useSelfRemove.kicked.description",
+      defaultMessage: "A moderator removed you from this community. You can rejoin with a new invite.",
+    }),
   },
 };

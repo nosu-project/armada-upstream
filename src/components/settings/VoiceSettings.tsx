@@ -3,6 +3,7 @@ import { useState } from "react";
 import { SettingsGroup, SettingsRow } from "@/components/settings/SettingsSection";
 import { VoiceDeviceSettings } from "@/components/VoiceDeviceSettings";
 import { Switch } from "@/components/ui/switch";
+import { useIntl } from "@/i18n";
 import { rnnoiseSupported } from "@/lib/rnnoiseSupport";
 import {
   getAudioProcessing,
@@ -12,6 +13,7 @@ import {
 
 /** Settings › Voice: devices, push to talk, the voice server, and mic processing. */
 export function VoiceSettings() {
+  const intl = useIntl();
   // Mic-processing prefs are device-local (localStorage), not synced AppConfig.
   const [voiceProcessing, setVoiceProcessing] = useState<AudioProcessingPrefs>(() =>
     getAudioProcessing(),
@@ -26,17 +28,18 @@ export function VoiceSettings() {
 
   return (
     <>
-      <SettingsGroup id="voice" title="Devices">
+      <SettingsGroup id="voice" title={intl.formatMessage({ id: "voiceSettings.devices", defaultMessage: "Devices" })}>
         <SettingsRow>
           <VoiceDeviceSettings />
         </SettingsRow>
       </SettingsGroup>
 
-      <SettingsGroup title="Microphone processing" footer="Changes apply to your next call.">
+      <SettingsGroup title={intl.formatMessage({ id: "voiceSettings.micProcessing", defaultMessage: "Microphone processing" })}
+        footer={intl.formatMessage({ id: "voiceSettings.micProcessingFooter", defaultMessage: "Changes apply to your next call." })}>
         {rnnoiseSupported() && (
           <SettingsRow
-            label="Noise cancellation"
-            description="Filters out keyboards, fans and chatter (RNNoise)."
+            label={intl.formatMessage({ id: "voiceSettings.noiseCancellation", defaultMessage: "Noise cancellation" })}
+            description={intl.formatMessage({ id: "voiceSettings.noiseCancellationDescription", defaultMessage: "Filters out keyboards, fans and chatter (RNNoise)." })}
           >
             <Switch
               checked={voiceProcessing.rnnoise}
@@ -45,8 +48,8 @@ export function VoiceSettings() {
           </SettingsRow>
         )}
         <SettingsRow
-          label="Noise suppression"
-          description="Filter out background hum and keyboard noise."
+          label={intl.formatMessage({ id: "voiceSettings.noiseSuppression", defaultMessage: "Noise suppression" })}
+          description={intl.formatMessage({ id: "voiceSettings.noiseSuppressionDescription", defaultMessage: "Filter out background hum and keyboard noise." })}
         >
           <Switch
             checked={voiceProcessing.noiseSuppression}
@@ -54,8 +57,8 @@ export function VoiceSettings() {
           />
         </SettingsRow>
         <SettingsRow
-          label="Echo cancellation"
-          description="Stop your speakers from echoing back into the mic."
+          label={intl.formatMessage({ id: "voiceSettings.echoCancellation", defaultMessage: "Echo cancellation" })}
+          description={intl.formatMessage({ id: "voiceSettings.echoCancellationDescription", defaultMessage: "Stop your speakers from echoing back into the mic." })}
         >
           <Switch
             checked={voiceProcessing.echoCancellation}
@@ -63,8 +66,8 @@ export function VoiceSettings() {
           />
         </SettingsRow>
         <SettingsRow
-          label="Auto gain control"
-          description="Even out your volume automatically."
+          label={intl.formatMessage({ id: "voiceSettings.autoGain", defaultMessage: "Auto gain control" })}
+          description={intl.formatMessage({ id: "voiceSettings.autoGainDescription", defaultMessage: "Even out your volume automatically." })}
         >
           <Switch
             checked={voiceProcessing.autoGainControl}

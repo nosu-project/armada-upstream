@@ -7,6 +7,8 @@
 import { sha256 } from "@noble/hashes/sha2.js";
 import { bytesToHex, concatBytes } from "@noble/hashes/utils.js";
 
+import { getLocale } from "@/i18n";
+
 /**
  * Serialized token, optionally behind `cashu:`. Callers may apply the `i` flag;
  * `parseCashuToken` re-validates.
@@ -351,12 +353,12 @@ export async function checkCashuTokenState(
 }
 
 export function formatCashuAmount(amount: number, unit: string): string {
-  if (unit === "sat") return `${amount.toLocaleString()} sat`;
-  if (unit === "msat") return `${amount.toLocaleString()} msat`;
+  if (unit === "sat") return `${amount.toLocaleString(getLocale())} sat`;
+  if (unit === "msat") return `${amount.toLocaleString(getLocale())} msat`;
   if (unit === "usd" || unit === "eur") {
     // Fiat units are denominated in cents.
     const symbol = unit === "usd" ? "$" : "€";
     return `${symbol}${(amount / 100).toFixed(2)}`;
   }
-  return `${amount.toLocaleString()} ${unit}`;
+  return `${amount.toLocaleString(getLocale())} ${unit}`;
 }

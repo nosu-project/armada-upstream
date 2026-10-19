@@ -1,4 +1,5 @@
-import { firstImetaMime, isThreadReply } from "@/lib/notificationPreview";
+import { t } from "@/i18n/intl";
+import { firstImetaMime, isThreadReply, notificationMessages } from "@/lib/notificationPreview";
 import { KIND_DM_CHAT, KIND_DM_FILE, type OpenedDm } from "@/lib/nip17/protocol";
 import { dmConvKey } from "@/lib/nip17/conversation";
 import { chatRoute } from "@/lib/routes";
@@ -11,6 +12,9 @@ import { chatRoute } from "@/lib/routes";
  */
 
 /** A candidate the notifier may surface, normalized across planes. */
+/** What a Git event did, worded by the notifier. */
+export type GitNotifyAction = "issue" | "pr" | "comment" | "status";
+
 export interface NotifyCandidate {
   plane: "nip29" | "dm" | "c2";
   author: string;
@@ -49,7 +53,7 @@ export interface NotifyCandidate {
   /** DM conversation key (`plane === "dm"`); see `dmConvKey`. */
   peer?: string;
   /** Git activity details, when this is a repository event routed into a C2 channel. */
-  git?: { action: string; repository: string; ticketId?: string; ticketTitle?: string };
+  git?: { action: GitNotifyAction; repository: string; ticketId?: string; ticketTitle?: string };
   /** Stable source event id, used to dedupe distinct same-second Git activity. */
   eventId?: string;
 }
@@ -71,7 +75,7 @@ export function dm17NotifyCandidates(opened: OpenedDm[], self: string): NotifyCa
       createdAt: dm.createdAt,
       mention: true,
       kind: dm.kind,
-      body: dm.kind === KIND_DM_FILE ? "Sent a file" : dm.content,
+      body: dm.kind === KIND_DM_FILE ? t(notificationMessages.sentFile) : dm.content,
       content: dm.content,
       imetaMime: firstImetaMime(dm.tags),
       threadReply: isThreadReply(dm.kind, dm.tags),

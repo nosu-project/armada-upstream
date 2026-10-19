@@ -11,6 +11,7 @@ import { ServerRail } from "@/components/layout/ServerRail";
 import { useRegisterAllStreamKeys } from "@/concord/hooks/useStreamAuth";
 import { useAndroidBack } from "@/hooks/useAndroidBack";
 import { useShareShortcuts } from "@/hooks/useShareShortcuts";
+import { common, useIntl } from "@/i18n";
 import { ProfileOverlayContext } from "@/lib/profileOverlay";
 import { SettingsOverlayContext } from "@/lib/settingsOverlay";
 import { lazyWithReload } from "@/lib/chunkReload";
@@ -42,11 +43,12 @@ function ProfileOverlayFallback({ onDismiss }: { onDismiss?: () => void }) {
 
 /** Route chunk fallback inside the main pane, so the shell (rail, call providers) stays mounted. */
 function RoutePaneFallback() {
+  const intl = useIntl();
   return (
     <div
       className="absolute inset-0 flex items-center justify-center bg-background"
       role="status"
-      aria-label="Loading page"
+      aria-label={intl.formatMessage({ id: "mainLayout.loadingPage", defaultMessage: "Loading page" })}
     >
       <Loader2 className="size-8 animate-spin text-muted-foreground" />
     </div>
@@ -59,6 +61,7 @@ function RoutePaneFallback() {
  * restores it on close, and handles Escape after stacked dialogs.
  */
 function SettingsOverlayPanel({ onClose, children }: { onClose: () => void; children: ReactNode }) {
+  const intl = useIntl();
   const panelRef = useRef<HTMLDivElement>(null);
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
@@ -99,7 +102,7 @@ function SettingsOverlayPanel({ onClose, children }: { onClose: () => void; chil
       ref={panelRef}
       role="dialog"
       aria-modal="true"
-      aria-label="Settings"
+      aria-label={intl.formatMessage(common.settings)}
       tabIndex={-1}
       className="absolute inset-0 z-20 flex bg-background outline-none"
     >

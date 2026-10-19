@@ -1,17 +1,19 @@
 import { useState } from "react";
 
 import { cn } from "@/lib/utils";
+import { useIntl } from "@/i18n";
 
 import type { ReactNode } from "react";
 
 /** Discord-style `||spoiler||`: covered until clicked. */
 export function Spoiler({ children }: { children: ReactNode }) {
   const [revealed, setRevealed] = useState(false);
+  const intl = useIntl();
   return (
     <span
       role={revealed ? undefined : "button"}
       tabIndex={revealed ? undefined : 0}
-      aria-label={revealed ? undefined : "Reveal spoiler"}
+      aria-label={revealed ? undefined : intl.formatMessage({ id: "spoiler.reveal", defaultMessage: "Reveal spoiler" })}
       // Capture, and its content takes no pointer events while covered: the first
       // click reveals, rather than following a link or opening a profile inside.
       onClickCapture={(e) => {

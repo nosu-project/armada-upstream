@@ -1,4 +1,5 @@
 import { isDesktop } from "@/lib/desktop";
+import { t } from "@/i18n";
 
 /**
  * "Press Esc to exit full screen" for embeds (e.g. Mini Apps) taking the desktop
@@ -17,7 +18,6 @@ function hintElement(): HTMLElement {
   const el = document.createElement("div");
   el.setAttribute("popover", "manual");
   el.setAttribute("role", "status");
-  el.textContent = "Press Esc to exit full screen";
   Object.assign(el.style, {
     inset: "24px auto auto 50%",
     transform: "translateX(-50%)",
@@ -47,6 +47,7 @@ export function syncFullscreenHint(): void {
   if (!(document.fullscreenElement instanceof HTMLIFrameElement)) return;
   const el = hintElement();
   if (typeof el.showPopover !== "function") return;
+  el.textContent = t({ id: "fullscreenHint.exit", defaultMessage: "Press Esc to exit full screen" });
   el.showPopover();
   timer = setTimeout(hideHint, HINT_MS);
 }

@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { z } from "zod";
 
+import { useIntl } from "@/i18n";
 import { linkPreviewUrl } from "@/lib/platform";
 import {
   BlueskyPostSchema,
@@ -171,8 +172,10 @@ async function fetchRichEmbed(url: string, signal?: AbortSignal): Promise<RichEm
 }
 
 export function useRichEmbed(url: string | null) {
+  // The embed's field names and states are worded at fetch, so they're cached per language.
+  const { locale } = useIntl();
   return useQuery({
-    queryKey: ["rich-embed", url],
+    queryKey: ["rich-embed", url, locale],
     queryFn: ({ signal }) => fetchRichEmbed(url!, signal),
     enabled: !!url,
     // Counts move; the generic preview's hour would show a stale like count.

@@ -43,9 +43,31 @@ import {
   type SlashCommandHandlers,
 } from "@/lib/slashCommands";
 import { cn } from "@/lib/utils";
+import { common, defineMessages, FormattedMessage, t, useIntl, type IntlShape } from "@/i18n";
 
 import type { ChatTransport } from "@/components/chat/transport";
 import type { MeshPeer } from "@/lib/bluetoothMesh";
+
+const m = defineMessages({
+  nearbyMesh: { id: "meshPage.nearbyMesh", defaultMessage: "nearby mesh" },
+  turnOn: { id: "meshPage.turnOn", defaultMessage: "Turn on mesh chat" },
+  noDevices: {
+    id: "meshPage.noDevices",
+    defaultMessage: "No nearby devices yet. Armada or bitchat devices in Bluetooth range appear here.",
+  },
+  starting: { id: "meshPage.starting", defaultMessage: "Starting Bluetooth mesh…" },
+  androidOnly: { id: "meshPage.androidOnly", defaultMessage: "Mesh chat runs on the Armada Android app." },
+  hideNearby: { id: "meshPage.hideNearby", defaultMessage: "Hide nearby" },
+});
+
+/** "Nearby", with the peer count once there is one. */
+function NearbyHeading({ count }: { count: number }) {
+  return count > 0 ? (
+    <FormattedMessage id="meshPage.nearbyCount" defaultMessage="Nearby · {count}" values={{ count }} />
+  ) : (
+    <FormattedMessage id="meshPage.nearby" defaultMessage="Nearby" />
+  );
+}
 
 /** What the chat pane shows; `null` is the nothing-selected landing state. */
 type MeshView =
@@ -59,6 +81,7 @@ type MeshView =
  * rows open native Noise XX DMs.
  */
 export function MeshPage() {
+  const intl = useIntl();
   const { user } = useCurrentUser();
   const { config } = useAppContext();
   const isTouch = useIsTouch();
@@ -170,7 +193,11 @@ export function MeshPage() {
     openMention: openMentionPicker,
     clearDraft: () => setDraft(""),
     onError: (message) =>
-      toast({ title: "Command unavailable", description: message, variant: "destructive" }),
+      toast({
+        title: t({ id: "meshPage.commandUnavailable", defaultMessage: "Command unavailable" }),
+        description: message,
+        variant: "destructive",
+      }),
     isAllowed: isMeshSlashCommand,
   };
 
@@ -310,13 +337,13 @@ export function MeshPage() {
                         }
                       }}
                       rows={1}
-                      placeholder={composerPlaceholder(view, mesh.started, selectedPeer)}
+                      placeholder={composerPlaceholder(intl, view, mesh.started, selectedPeer)}
                       disabled={!mesh.started || (view.type === "dm" && !selectedPeer)}
                       className="block w-full resize-none bg-transparent border-0 outline-none px-1 py-2 leading-5 text-base md:text-sm placeholder:text-muted-foreground disabled:opacity-50 max-h-40 overflow-y-auto"
                     />
                     <Button
                       size="icon"
-                      aria-label="Send"
+                      aria-label={intl.formatMessage(common.send)}
                       disabled={!mesh.started || !draft.trim() || (view.type === "dm" && !selectedPeer)}
                       onClick={() => void onSend()}
                       className="size-9 shrink-0"
@@ -381,10 +408,11 @@ function MeshSidebar({
   onOpenDM: (peerID: string) => void;
   className?: string;
 }) {
+  const intl = useIntl();
   return (
     <ChannelSidebarView
       className={className}
-      title="Mesh"
+      title={intl.formatMessage({ id: "meshPage.title", defaultMessage: "Mesh" })}
       addChannelDisabled
       footer={
         <div className="px-3 pb-safe shrink-0 space-y-2">
@@ -397,7 +425,7 @@ function MeshSidebar({
                 onClick={() => onSetEnabled(false)}
               >
                 <Power className="size-4" />
-                Turn off mesh chat
+                <FormattedMessage id="meshPage.turnOff" defaultMessage="Turn off mesh chat" />
               </Button>
             ) : (
               <Button
@@ -406,7 +434,7 @@ function MeshSidebar({
                 onClick={() => onSetEnabled(true)}
               >
                 <Bluetooth className="size-4" />
-                Turn on mesh chat
+                <FormattedMessage {...m.turnOn} />
               </Button>
             )
           )}
@@ -416,7 +444,7 @@ function MeshSidebar({
     >
       <ChannelRow
         icon={<Hash className="size-4 shrink-0" />}
-        label="nearby mesh"
+        label={intl.formatMessage(m.nearbyMesh)}
         active={view?.type === "broadcast"}
         onClick={onOpenBroadcast}
         trailing={
@@ -431,23 +459,28 @@ function MeshSidebar({
         <div className="px-4 py-2 text-xs text-destructive">
           {error}{" "}
           <button className="underline" onClick={onRetry}>
-            Retry
+            <FormattedMessage {...common.retry} />
           </button>
         </div>
       )}
 
       <h3 className="px-4 pt-3 pb-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-        Nearby{peers.length > 0 ? ` · ${peers.length}` : ""}
+        <NearbyHeading count={peers.length} />
       </h3>
       {peers.length === 0 ? (
         <p className="px-4 py-1 text-xs text-muted-foreground/70">
           {available
             ? enabled
               ? started
-                ? "No nearby devices yet. Armada or bitchat devices in Bluetooth range appear here."
-                : "Starting Bluetooth mesh…"
-              : "Mesh chat is off. Turn it on to find nearby devices."
-            : "Mesh chat runs on the Armada Android app."}
+                ? <FormattedMessage {...m.noDevices} />
+                : <FormattedMessage {...m.starting} />
+              : (
+                <FormattedMessage
+                  id="meshPage.offHint"
+                  defaultMessage="Mesh chat is off. Turn it on to find nearby devices."
+                />
+              )
+            : <FormattedMessage {...m.androidOnly} />}
         </p>
       ) : (
         peers.map((peer) => (
@@ -548,9 +581,12 @@ function ChatHeader({
   membersOpen: boolean;
   onToggleMembers: () => void;
 }) {
+  const intl = useIntl();
   const isDm = view.type === "dm";
   const dmIdentity = isDm && peer ? meshIdentity(peer.peerID, peer.nickname) : null;
-  const title = isDm ? dmIdentity?.name ?? "Mesh DM" : "nearby mesh";
+  const title = isDm
+    ? dmIdentity?.name ?? intl.formatMessage({ id: "meshPage.dmTitle", defaultMessage: "Mesh DM" })
+    : intl.formatMessage(m.nearbyMesh);
   const membersShown = membersVisible || membersOpen;
 
   return (
@@ -558,7 +594,7 @@ function ChatHeader({
       <Button
         variant="ghost"
         size="icon"
-        aria-label="Back to mesh"
+        aria-label={intl.formatMessage({ id: "meshPage.backToMesh", defaultMessage: "Back to mesh" })}
         className="size-9 touch:size-11 shrink-0 sidebar:hidden"
         onClick={onBack}
       >
@@ -585,7 +621,9 @@ function ChatHeader({
             <Button
               variant="ghost"
               size="icon"
-              aria-label={membersShown ? "Hide nearby" : "Show nearby"}
+              aria-label={membersShown
+                ? intl.formatMessage(m.hideNearby)
+                : intl.formatMessage({ id: "meshPage.showNearby", defaultMessage: "Show nearby" })}
               aria-pressed={membersShown}
               className={cn(
                 "size-8 touch:size-11 shrink-0",
@@ -596,7 +634,13 @@ function ChatHeader({
               <Users className="size-4" />
             </Button>
           </TooltipTrigger>
-          <TooltipContent>{membersShown ? "Hide nearby" : `Nearby · ${peerCount}`}</TooltipContent>
+          <TooltipContent>
+            {membersShown ? (
+              <FormattedMessage {...m.hideNearby} />
+            ) : (
+              <FormattedMessage id="meshPage.nearbyCount" defaultMessage="Nearby · {count}" values={{ count: peerCount }} />
+            )}
+          </TooltipContent>
         </Tooltip>
       )}
       {/* Incognito ON (default) announces an anon name; OFF reveals the display name. */}
@@ -605,7 +649,12 @@ function ChatHeader({
           <Button
             variant="ghost"
             size="icon"
-            aria-label={incognito ? "Incognito on, showing an anonymous name" : "Incognito off, showing your name"}
+            aria-label={incognito
+              ? intl.formatMessage({
+                id: "meshPage.incognitoOnLabel",
+                defaultMessage: "Incognito on, showing an anonymous name",
+              })
+              : intl.formatMessage({ id: "meshPage.incognitoOffLabel", defaultMessage: "Incognito off, showing your name" })}
             aria-pressed={incognito}
             className={cn(
               "size-8 touch:size-11 shrink-0",
@@ -617,7 +666,11 @@ function ChatHeader({
           </Button>
         </TooltipTrigger>
         <TooltipContent>
-          {incognito ? "Incognito on · tap to show your name" : "Incognito off · tap to go anonymous"}
+          {incognito ? (
+            <FormattedMessage id="meshPage.incognitoOnHint" defaultMessage="Incognito on · tap to show your name" />
+          ) : (
+            <FormattedMessage id="meshPage.incognitoOffHint" defaultMessage="Incognito off · tap to go anonymous" />
+          )}
         </TooltipContent>
       </Tooltip>
       {started ? (
@@ -649,6 +702,7 @@ function MeshMemberPanel({
   onOpenDM: (peerID: string) => void;
   onClose: () => void;
 }) {
+  const intl = useIntl();
   return (
     <div
       className={cn(
@@ -669,22 +723,27 @@ function MeshMemberPanel({
         <div aria-hidden className="absolute inset-0 -z-10 bg-background sidebar:hidden" />
         <aside className="flex flex-col h-full w-full sidebar:w-[16.5rem] mx-gutter mt-3 mb-2 clip-corner-lg bg-chrome overflow-hidden">
           <div className="flex items-center justify-between px-4 h-12 shrink-0 sidebar:hidden">
-            <span className="text-sm font-semibold">Nearby</span>
-            <Button variant="ghost" size="icon" aria-label="Close nearby" className="size-8 touch:size-11" onClick={onClose}>
+            <span className="text-sm font-semibold">
+              <FormattedMessage id="meshPage.nearby" defaultMessage="Nearby" />
+            </span>
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label={intl.formatMessage({ id: "meshPage.closeNearby", defaultMessage: "Close nearby" })} className="size-8 touch:size-11" onClick={onClose}>
               <X className="size-4" />
             </Button>
           </div>
           <div className="flex-1 min-h-0 overflow-y-auto scrollbar-stable pb-safe">
             <h3 className="px-4 pt-3 pb-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-              Nearby{peers.length > 0 ? ` · ${peers.length}` : ""}
+              <NearbyHeading count={peers.length} />
             </h3>
             {peers.length === 0 ? (
               <p className="px-4 py-1 text-xs text-muted-foreground/70">
                 {available
                   ? started
-                    ? "No nearby devices yet. Armada or bitchat devices in Bluetooth range appear here."
-                    : "Starting Bluetooth mesh…"
-                  : "Mesh chat runs on the Armada Android app."}
+                    ? <FormattedMessage {...m.noDevices} />
+                    : <FormattedMessage {...m.starting} />
+                  : <FormattedMessage {...m.androidOnly} />}
               </p>
             ) : (
               peers.map((peer) => (
@@ -713,7 +772,14 @@ function SelectState({ started }: { started: boolean }) {
           <Loader2 className="size-10 animate-spin opacity-40" />
         )}
         <p className="text-sm">
-          {started ? "Open #nearby mesh, or pick a participant to start a DM" : "Starting Bluetooth mesh…"}
+          {started ? (
+            <FormattedMessage
+              id="meshPage.selectHint"
+              defaultMessage="Open #nearby mesh, or pick a participant to start a DM"
+            />
+          ) : (
+            <FormattedMessage {...m.starting} />
+          )}
         </p>
       </div>
     </div>
@@ -725,9 +791,14 @@ function UnavailableState() {
     <div className="flex flex-1 items-center justify-center text-muted-foreground">
       <div className="flex flex-col items-center gap-3 max-w-xs text-center px-6">
         <BluetoothOff className="size-12 opacity-30" />
-        <p className="text-sm font-medium">Mesh chat isn't available here</p>
+        <p className="text-sm font-medium">
+          <FormattedMessage id="meshPage.unavailable.title" defaultMessage="Mesh chat isn't available here" />
+        </p>
         <p className="text-xs text-muted-foreground/70">
-          Nearby Bluetooth chat runs on the Armada Android app, which talks to other devices directly over Bluetooth.
+          <FormattedMessage
+            id="meshPage.unavailable.description"
+            defaultMessage="Nearby Bluetooth chat runs on the Armada Android app, which talks to other devices directly over Bluetooth."
+          />
         </p>
       </div>
     </div>
@@ -743,15 +814,18 @@ function DisabledState({ onEnable }: { onEnable: () => void }) {
     <div className="flex flex-1 items-center justify-center text-muted-foreground">
       <div className="flex flex-col items-center gap-3 max-w-xs text-center px-6">
         <Bluetooth className="size-12 opacity-30" />
-        <p className="text-sm font-medium text-foreground">Mesh chat is off</p>
+        <p className="text-sm font-medium text-foreground">
+          <FormattedMessage id="meshPage.disabled.title" defaultMessage="Mesh chat is off" />
+        </p>
         <p className="text-xs text-muted-foreground/70">
-          Chat with nearby Armada and bitchat devices over Bluetooth, without the
-          internet. Turning it on asks for Bluetooth permission and keeps a
-          background connection (with a persistent notification) while active.
+          <FormattedMessage
+            id="meshPage.disabled.description"
+            defaultMessage="Chat with nearby Armada and bitchat devices over Bluetooth, without the internet. Turning it on asks for Bluetooth permission and keeps a background connection (with a persistent notification) while active."
+          />
         </p>
         <Button className="mt-2 clip-corner-lg" onClick={onEnable}>
           <Bluetooth className="size-4" />
-          Turn on mesh chat
+          <FormattedMessage {...m.turnOn} />
         </Button>
       </div>
     </div>
@@ -762,8 +836,15 @@ function EmptyBroadcast() {
   return (
     <div className="flex flex-col items-center justify-center py-16 text-center">
       <Radio className="size-10 text-muted-foreground/40 mb-3" />
-      <p className="text-sm text-muted-foreground">No messages nearby yet</p>
-      <p className="text-xs text-muted-foreground/60 mt-1">Messages appear when another Armada or bitchat device is in range.</p>
+      <p className="text-sm text-muted-foreground">
+        <FormattedMessage id="meshPage.emptyBroadcast.title" defaultMessage="No messages nearby yet" />
+      </p>
+      <p className="text-xs text-muted-foreground/60 mt-1">
+        <FormattedMessage
+          id="meshPage.emptyBroadcast.description"
+          defaultMessage="Messages appear when another Armada or bitchat device is in range."
+        />
+      </p>
     </div>
   );
 }
@@ -772,18 +853,32 @@ function EmptyDM({ peer }: { peer: MeshPeer | null }) {
   return (
     <div className="flex flex-col items-center justify-center py-16 text-center">
       <MessageCircle className="size-10 text-muted-foreground/40 mb-3" />
-      <p className="text-sm text-muted-foreground">No mesh DMs yet</p>
+      <p className="text-sm text-muted-foreground">
+        <FormattedMessage id="meshPage.emptyDm.title" defaultMessage="No mesh DMs yet" />
+      </p>
       <p className="text-xs text-muted-foreground/60 mt-1">
-        {peer ? `Messages to ${peer.nickname} use bitchat Noise XX encryption.` : "This participant is no longer active."}
+        {peer ? (
+          <FormattedMessage
+            id="meshPage.emptyDm.description"
+            defaultMessage="Messages to {name} use bitchat Noise XX encryption."
+            values={{ name: peer.nickname }}
+          />
+        ) : (
+          <FormattedMessage id="meshPage.emptyDm.inactive" defaultMessage="This participant is no longer active." />
+        )}
       </p>
     </div>
   );
 }
 
-function composerPlaceholder(view: NonNullable<MeshView>, started: boolean, peer: MeshPeer | null) {
-  if (!started) return "Starting mesh…";
-  if (view.type === "dm") return peer ? `Message ${peer.nickname}…` : "Participant unavailable";
-  return "Message nearby devices…";
+function composerPlaceholder(intl: IntlShape, view: NonNullable<MeshView>, started: boolean, peer: MeshPeer | null) {
+  if (!started) return intl.formatMessage({ id: "meshPage.composer.starting", defaultMessage: "Starting mesh…" });
+  if (view.type === "dm") {
+    return peer
+      ? intl.formatMessage({ id: "meshPage.composer.dm", defaultMessage: "Message {name}…" }, { name: peer.nickname })
+      : intl.formatMessage({ id: "meshPage.composer.unavailable", defaultMessage: "Participant unavailable" });
+  }
+  return intl.formatMessage({ id: "meshPage.composer.broadcast", defaultMessage: "Message nearby devices…" });
 }
 
 export default MeshPage;

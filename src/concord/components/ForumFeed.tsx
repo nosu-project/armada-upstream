@@ -13,8 +13,9 @@ import { useAuthor } from "@/hooks/useAuthor";
 import { useMediaWithFallback } from "@/hooks/useMediaWithFallback";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { forumImages, type ForumImage, type ForumPost, type ForumSort } from "@/concord/lib/forum";
+import { defineMessages, FormattedMessage, useIntl } from "@/i18n";
 import { getAvatarShape } from "@/lib/avatarShape";
-import { fullDateTime, shortTimeAgo } from "@/lib/formatTime";
+import { fullDateTime, shortTimeAgo, shortTimeAgoPhrase } from "@/lib/formatTime";
 import { mediaHost } from "@/lib/mediaPolicy";
 import { cn } from "@/lib/utils";
 
@@ -23,10 +24,10 @@ import type { ReactNode } from "react";
 /** Pages the sentinel auto-loads before handing over to its button. */
 const MAX_AUTO_PAGES = 8;
 
-const SORT_TABS: readonly PillTab<ForumSort>[] = [
-  { id: "active", label: "Active", icon: Flame },
-  { id: "newest", label: "Newest", icon: Clock },
-];
+const sortLabels = defineMessages({
+  active: { id: "forumFeed.sort.active", defaultMessage: "Active" },
+  newest: { id: "forumFeed.sort.newest", defaultMessage: "Newest" },
+});
 
 function AuthorAvatar({ pubkey, className }: { pubkey: string; className?: string }) {
   const author = useAuthor(pubkey);
@@ -62,6 +63,7 @@ const ForumPostRow = memo(function ForumPostRow({
   isNew: boolean;
   onOpen: (post: ForumPost) => void;
 }) {
+  const intl = useIntl();
   const hasComments = post.replyCount > 0;
   const images = useMemo(() => forumImages(post.root), [post.root]);
   const revealed = useMessageRevealed(post.root.id);
@@ -88,7 +90,7 @@ const ForumPostRow = memo(function ForumPostRow({
           <AuthorAvatar pubkey={post.root.pubkey} className="shrink-0" />
           <span className="min-w-0 flex-1">
             <span className="flex items-center gap-1.5">
-              {isNew && <span className="size-1.5 shrink-0 rounded-full bg-primary" aria-label="New activity" />}
+              {isNew && <span className="size-1.5 shrink-0 rounded-full bg-primary" aria-label={intl.formatMessage({ id: "forumFeed.newActivity", defaultMessage: "New activity" })} />}
               <span className={cn("truncate text-sm leading-5 text-foreground", isNew ? "font-bold" : "font-semibold")}>
                 {post.title}
               </span>
@@ -97,7 +99,14 @@ const ForumPostRow = memo(function ForumPostRow({
               <DisplayName pubkey={post.root.pubkey} />
               <span title={fullDateTime(post.root.created_at)}> · {shortTimeAgo(post.root.created_at)}</span>
               {hasComments && (
-                <span title={fullDateTime(post.lastActivityAt)}> · active {shortTimeAgo(post.lastActivityAt)}</span>
+                <span title={fullDateTime(post.lastActivityAt)}>
+                  {" "}
+                  <FormattedMessage
+                    id="forumFeed.activeAgo"
+                    defaultMessage="· active {time}"
+                    values={{ time: shortTimeAgoPhrase(post.lastActivityAt) }}
+                  />
+                </span>
               )}
             </span>
           </span>
@@ -169,7 +178,7 @@ function ForumImageTile(props: {
           {image.blurhash && <BlurhashCanvas hash={image.blurhash} className="absolute inset-0" />}
           <span className="absolute inset-0 flex items-center justify-center gap-1.5 bg-black/40 text-xs font-medium text-white">
             <EyeOff className="size-3.5" />
-            Spoiler
+            <FormattedMessage id="forumFeed.spoiler" defaultMessage="Spoiler" />
           </span>
         </>
       ) : (
@@ -287,6 +296,11 @@ export function ForumFeed({
   banner?: ReactNode;
   className?: string;
 }) {
+  const intl = useIntl();
+  const sortTabs = useMemo<readonly PillTab<ForumSort>[]>(() => [
+    { id: "active", label: intl.formatMessage(sortLabels.active), icon: Flame },
+    { id: "newest", label: intl.formatMessage(sortLabels.newest), icon: Clock },
+  ], [intl]);
   // Auto-page older history with a bounded sentinel: a page with no titled post
   // leaves it in view, so unbounded it'd walk a chatty channel's whole history.
   const sentinelRef = useRef<HTMLDivElement | null>(null);
@@ -322,11 +336,11 @@ export function ForumFeed({
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain scrollbar-stable">
         <div className="mx-auto w-full max-w-2xl px-3 py-4 sm:px-4">
           <div className="mt-0.5 mb-[18px] flex flex-wrap items-center gap-2">
-            <PillTabs tabs={SORT_TABS} value={sort} onChange={onSortChange} className="w-auto" />
+            <PillTabs tabs={sortTabs} value={sort} onChange={onSortChange} className="w-auto" />
             {onNewPost && (
               <Button size="sm" className="ml-auto clip-corner-lg h-9 gap-1.5 touch:h-11" onClick={onNewPost}>
                 <Plus className="size-4" />
-                New post
+                <FormattedMessage id="forumFeed.newPost" defaultMessage="New post" />
               </Button>
             )}
           </div>
@@ -349,25 +363,27 @@ export function ForumFeed({
               <div className="flex size-14 items-center justify-center clip-corner-lg bg-primary/10 text-primary">
                 {syncing ? <Loader2 className="size-6 animate-spin" /> : <MessageSquareText className="size-6" />}
               </div>
-              <p className="font-medium">{syncing ? "Catching up" : "No posts yet"}</p>
+              <p className="font-medium">{syncing
+                ? <FormattedMessage id="forumFeed.catchingUp" defaultMessage="Catching up" />
+                : <FormattedMessage id="forumFeed.empty" defaultMessage="No posts yet" />}</p>
               {onNewPost && !syncing && (
                 <Button className="clip-corner-lg gap-1.5" onClick={onNewPost}>
                   <Plus className="size-4" />
-                  Write the first post
+                  <FormattedMessage id="forumFeed.writeFirst" defaultMessage="Write the first post" />
                 </Button>
               )}
             </div>
           ) : (
             <div className="space-y-4">
               {pinned.length > 0 && (
-                <PostGroup eyebrow="Pinned" icon={Pin}>
+                <PostGroup eyebrow={intl.formatMessage({ id: "forumFeed.pinned", defaultMessage: "Pinned" })} icon={Pin}>
                   {pinned.map((post) => (
                     <ForumPostRow key={post.root.id} post={post} isNew={isNew(post)} onOpen={onOpen} />
                   ))}
                 </PostGroup>
               )}
               {rest.length > 0 && (
-                <PostGroup eyebrow={pinned.length > 0 ? "Posts" : undefined}>
+                <PostGroup eyebrow={pinned.length > 0 ? intl.formatMessage({ id: "forumFeed.posts", defaultMessage: "Posts" }) : undefined}>
                   {rest.map((post) => (
                     <ForumPostRow key={post.root.id} post={post} isNew={isNew(post)} onOpen={onOpen} />
                   ))}
@@ -383,7 +399,9 @@ export function ForumFeed({
                     onClick={loadOlderByHand}
                   >
                     {isLoadingOlder ? <Loader2 className="size-4 animate-spin" /> : <ChevronDown className="size-4" />}
-                    {isLoadingOlder ? "Loading older posts" : "Load older posts"}
+                    {isLoadingOlder
+                      ? <FormattedMessage id="forumFeed.loadingOlder" defaultMessage="Loading older posts" />
+                      : <FormattedMessage id="forumFeed.loadOlder" defaultMessage="Load older posts" />}
                   </Button>
                 </div>
               )}

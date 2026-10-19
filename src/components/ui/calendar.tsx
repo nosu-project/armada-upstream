@@ -1,15 +1,26 @@
 import * as React from "react";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { DayPicker, useDayPicker, type MonthCaptionProps } from "react-day-picker";
-import { format } from "date-fns";
+import { format, type Locale } from "date-fns";
+import { de, enUS, es, fr, it, ja, nl } from "date-fns/locale";
+
+import { useIntl } from "@/i18n";
 
 import { cn } from "@/lib/utils";
 import { buttonVariants } from "@/components/ui/button-variants";
 
 export type CalendarProps = React.ComponentProps<typeof DayPicker>;
 
+const DATE_FNS_LOCALES: Record<string, Locale> = { de, en: enUS, es, fr, it, ja, nl };
+
+/** The date-fns locale for an app language code (English when unknown). */
+function dateFnsLocale(locale: string): Locale {
+  return DATE_FNS_LOCALES[locale] ?? DATE_FNS_LOCALES[locale.split("-")[0]] ?? enUS;
+}
+
 /** Inline ◀ Month Year ▶ header; react-day-picker v9's default `nav` is hidden. */
 function MonthCaption({ calendarMonth }: MonthCaptionProps) {
+  const intl = useIntl();
   const { previousMonth, nextMonth, goToMonth } = useDayPicker();
   const navBtn = cn(
     buttonVariants({ variant: "ghost" }),
@@ -22,17 +33,17 @@ function MonthCaption({ calendarMonth }: MonthCaptionProps) {
         className={navBtn}
         disabled={!previousMonth}
         onClick={() => previousMonth && goToMonth(previousMonth)}
-        aria-label="Previous month"
+        aria-label={intl.formatMessage({ id: "calendar.previousMonth", defaultMessage: "Previous month" })}
       >
         <ChevronLeft className="size-4" />
       </button>
-      <span className="text-sm font-medium">{format(calendarMonth.date, "MMMM yyyy")}</span>
+      <span className="text-sm font-medium">{format(calendarMonth.date, "LLLL yyyy", { locale: dateFnsLocale(intl.locale) })}</span>
       <button
         type="button"
         className={navBtn}
         disabled={!nextMonth}
         onClick={() => nextMonth && goToMonth(nextMonth)}
-        aria-label="Next month"
+        aria-label={intl.formatMessage({ id: "calendar.nextMonth", defaultMessage: "Next month" })}
       >
         <ChevronRight className="size-4" />
       </button>
@@ -46,8 +57,10 @@ function Calendar({
   showOutsideDays = true,
   ...props
 }: CalendarProps) {
+  const intl = useIntl();
   return (
     <DayPicker
+      locale={dateFnsLocale(intl.locale)}
       showOutsideDays={showOutsideDays}
       className={cn("p-3", className)}
       classNames={{

@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 
 import { WalletContext, type WalletContextType } from "@/contexts/WalletContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { t } from "@/i18n";
 import { readActive, readConnections, writeWalletStorage, type NWCConnection } from "@/lib/walletStorage";
 import { bolt11Info } from "@/lib/zaps";
 
@@ -116,10 +117,15 @@ const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ children }) =
     async (uri: string, alias?: string) => {
       const trimmed = uri.trim();
       if (!/^nostr\+?walletconnect:\/\//i.test(trimmed)) {
-        throw new Error("Not a wallet connection string (expected nostr+walletconnect://…).");
+        throw new Error(
+          t({
+            id: "walletProvider.notConnectionString",
+            defaultMessage: "Not a wallet connection string (expected nostr+walletconnect://…).",
+          }),
+        );
       }
       if (connections.some((c) => c.connectionString === trimmed)) {
-        throw new Error("That wallet is already connected.");
+        throw new Error(t({ id: "walletProvider.alreadyConnected", defaultMessage: "That wallet is already connected." }));
       }
       // Prove reachability with a NIP-47 get_info before saving.
       let client: LN | undefined;
@@ -131,10 +137,13 @@ const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ children }) =
             await client.nwcClient.getInfo();
           })(),
           CONNECT_TIMEOUT_MS,
-          "Wallet didn't respond. Check the connection string and try again.",
+          t({
+            id: "walletProvider.noResponse",
+            defaultMessage: "Wallet didn't respond. Check the connection string and try again.",
+          }),
         );
       } catch (e) {
-        throw e instanceof Error ? e : new Error("Couldn't reach that wallet.");
+        throw e instanceof Error ? e : new Error(t({ id: "walletProvider.unreachable", defaultMessage: "Couldn't reach that wallet." }));
       } finally {
         try {
           client?.close();
@@ -172,7 +181,7 @@ const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ children }) =
   const payWithNWC = useCallback(
     async (invoice: string): Promise<{ preimage: string | null }> => {
       const connection = connections.find((c) => c.connectionString === active);
-      if (!connection) throw new Error("No wallet connected.");
+      if (!connection) throw new Error(t({ id: "walletProvider.noWallet", defaultMessage: "No wallet connected." }));
       let client: LN | undefined;
       try {
         return await withTimeout(
@@ -191,13 +200,16 @@ const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ children }) =
               const recovery = await recoverPreimage(client, invoice);
               if (recovery.state === "settled") return { preimage: recovery.preimage };
               if (recovery.state === "failed" || !(payErr instanceof sdk.Nip47TimeoutError)) {
-                throw payErr instanceof Error ? payErr : new Error("Payment failed.");
+                throw payErr instanceof Error ? payErr : new Error(t({ id: "walletProvider.paymentFailed", defaultMessage: "Payment failed." }));
               }
               return { preimage: null };
             }
           })(),
           PAY_TIMEOUT_MS,
-          "Payment timed out. Check your wallet before retrying.",
+          t({
+            id: "walletProvider.paymentTimedOut",
+            defaultMessage: "Payment timed out. Check your wallet before retrying.",
+          }),
         );
       } finally {
         try {

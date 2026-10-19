@@ -30,13 +30,16 @@ import { SettingsOverlayContext } from '@/lib/settingsOverlay';
 import { useAppContext } from '@/hooks/useAppContext';
 import { cn } from '@/lib/utils';
 import { MountWhenOpened } from '@/components/MountWhenOpened';
+import { defineMessage, FormattedMessage, useIntl } from '@/i18n';
 
 interface AccountSwitcherProps {
   onAddAccountClick: () => void;
 }
 
-const getDisplayName = (account: Account): string => {
-  return account.metadata.name || account.metadata.display_name || 'Anonymous';
+const ANONYMOUS = defineMessage({ id: 'accountSwitcher.anonymous', defaultMessage: 'Anonymous' });
+
+const getDisplayName = (account: Account, anonymous: string): string => {
+  return account.metadata.name || account.metadata.display_name || anonymous;
 };
 
 /** Whether the kind-0 has any name (vs. the 'Anonymous' fallback). */
@@ -46,15 +49,18 @@ const hasName = (account: Account): boolean => {
 
 /** Name with NIP-30 custom emoji rendered; plain-string sites use {@link getDisplayName}. */
 function AccountName({ account }: { account: Account }) {
+  const intl = useIntl();
   return (
     <EmojifiedText tags={account.event?.tags ?? []}>
-      {getDisplayName(account)}
+      {getDisplayName(account, intl.formatMessage(ANONYMOUS))}
     </EmojifiedText>
   );
 }
 
 export function AccountSwitcher({ onAddAccountClick }: AccountSwitcherProps) {
   const { currentUser, otherUsers, isLoading } = useLoggedInAccounts();
+  const intl = useIntl();
+  const anonymous = intl.formatMessage(ANONYMOUS);
   // Both reload the app (see `switchAccount`), or the incoming account inherits
   // the outgoing one's caches.
   const { switchTo, signOut } = useSwitchAccount();
@@ -136,9 +142,9 @@ export function AccountSwitcher({ onAddAccountClick }: AccountSwitcherProps) {
           ) : (
             <span className='relative shrink-0'>
               <Avatar shape={getAvatarShape(currentUser.metadata)} className='w-8 h-8'>
-                <AvatarImage src={currentUser.metadata.picture} imeta={currentUser.imeta?.picture} alt={getDisplayName(currentUser)} />
+                <AvatarImage src={currentUser.metadata.picture} imeta={currentUser.imeta?.picture} alt={getDisplayName(currentUser, anonymous)} />
                 <AvatarFallback>
-                  {profileIncomplete ? <UserIcon className='size-4' /> : getDisplayName(currentUser).charAt(0)}
+                  {profileIncomplete ? <UserIcon className='size-4' /> : getDisplayName(currentUser, anonymous).charAt(0)}
                 </AvatarFallback>
               </Avatar>
               {(profileIncomplete || backupPending) && (
@@ -150,7 +156,7 @@ export function AccountSwitcher({ onAddAccountClick }: AccountSwitcherProps) {
             {isLoading ? (
               <Skeleton className='h-4 w-24' />
             ) : profileIncomplete ? (
-              <p className='text-sm italic text-muted-foreground truncate'>Set your name</p>
+              <p className='text-sm italic text-muted-foreground truncate'><FormattedMessage id="accountSwitcher.setYourName" defaultMessage="Set your name" /></p>
             ) : (
               <p className='font-medium text-sm truncate'><AccountName account={currentUser} /></p>
             )}
@@ -165,7 +171,7 @@ export function AccountSwitcher({ onAddAccountClick }: AccountSwitcherProps) {
             className='flex items-center gap-2 cursor-pointer p-2 clip-corner-lg text-primary focus:text-primary bg-primary/10'
           >
             <KeyRound className='w-4 h-4' />
-            <span>Back up your secret key</span>
+            <span><FormattedMessage id="accountSwitcher.backUpKey" defaultMessage="Back up your secret key" /></span>
             <span className='ml-auto size-2 rounded-full bg-primary' aria-hidden />
           </DropdownMenuItem>
         )}
@@ -177,7 +183,7 @@ export function AccountSwitcher({ onAddAccountClick }: AccountSwitcherProps) {
           )}
         >
           <UserPen className='w-4 h-4' />
-          <span>{profileIncomplete ? 'Set up your profile' : 'Edit profile'}</span>
+          <span>{profileIncomplete ? <FormattedMessage id="accountSwitcher.setUpProfile" defaultMessage="Set up your profile" /> : <FormattedMessage id="accountSwitcher.editProfile" defaultMessage="Edit profile" />}</span>
           {profileIncomplete && <span className='ml-auto size-2 rounded-full bg-primary' aria-hidden />}
         </DropdownMenuItem>
         <DropdownMenuItem
@@ -185,14 +191,14 @@ export function AccountSwitcher({ onAddAccountClick }: AccountSwitcherProps) {
           className='flex items-center gap-2 cursor-pointer p-2 clip-corner-lg'
         >
           <Smile className='w-4 h-4' />
-          <span>Set status</span>
+          <span><FormattedMessage id="accountSwitcher.setStatus" defaultMessage="Set status" /></span>
         </DropdownMenuItem>
         <DropdownMenuItem
           onClick={() => { setIsOpen(false); setShareProfileOpen(true); }}
           className='flex items-center gap-2 cursor-pointer p-2 clip-corner-lg'
         >
           <QrCode className='w-4 h-4' />
-          <span>Share your profile</span>
+          <span><FormattedMessage id="accountSwitcher.shareProfile" defaultMessage="Share your profile" /></span>
         </DropdownMenuItem>
         {serverScope && (
           <DropdownMenuItem
@@ -200,7 +206,7 @@ export function AccountSwitcher({ onAddAccountClick }: AccountSwitcherProps) {
             className='flex items-center gap-2 cursor-pointer p-2 clip-corner-lg'
           >
             <IdCard className='w-4 h-4' />
-            <span>Server identity</span>
+            <span><FormattedMessage id="accountSwitcher.serverIdentity" defaultMessage="Server identity" /></span>
           </DropdownMenuItem>
         )}
         {config.zapsEnabled && (
@@ -209,13 +215,13 @@ export function AccountSwitcher({ onAddAccountClick }: AccountSwitcherProps) {
             className='flex items-center gap-2 cursor-pointer p-2 clip-corner-lg'
           >
             <Wallet className='w-4 h-4' />
-            <span>Wallet</span>
+            <span><FormattedMessage id="accountSwitcher.wallet" defaultMessage="Wallet" /></span>
           </DropdownMenuItem>
         )}
         <DropdownMenuSeparator />
         {otherUsers.length > 0 && (
           <div className='px-2 pb-1 pt-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground'>
-            Switch account
+            <FormattedMessage id="accountSwitcher.switchAccount" defaultMessage="Switch account" />
           </div>
         )}
         {otherUsers.map((user) => (
@@ -225,8 +231,8 @@ export function AccountSwitcher({ onAddAccountClick }: AccountSwitcherProps) {
             className='flex items-center gap-2 cursor-pointer p-2 clip-corner-lg'
           >
             <Avatar shape={getAvatarShape(user.metadata)} className='w-8 h-8'>
-              <AvatarImage src={user.metadata.picture} imeta={user.imeta?.picture} alt={getDisplayName(user)} />
-              <AvatarFallback>{getDisplayName(user)?.charAt(0) || <UserIcon />}</AvatarFallback>
+              <AvatarImage src={user.metadata.picture} imeta={user.imeta?.picture} alt={getDisplayName(user, anonymous)} />
+              <AvatarFallback>{getDisplayName(user, anonymous)?.charAt(0) || <UserIcon />}</AvatarFallback>
             </Avatar>
             <div className='flex-1 truncate'>
               <p className='text-sm font-medium'><AccountName account={user} /></p>
@@ -239,7 +245,7 @@ export function AccountSwitcher({ onAddAccountClick }: AccountSwitcherProps) {
           className='flex items-center gap-2 cursor-pointer p-2 clip-corner-lg'
         >
           <UserPlus className='w-4 h-4' />
-          <span>Add another account</span>
+          <span><FormattedMessage id="accountSwitcher.addAccount" defaultMessage="Add another account" /></span>
         </DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuItem
@@ -247,7 +253,7 @@ export function AccountSwitcher({ onAddAccountClick }: AccountSwitcherProps) {
           className='flex items-center gap-2 cursor-pointer p-2 clip-corner-lg text-red-500'
         >
           <LogOut className='w-4 h-4' />
-          <span>Log out</span>
+          <span><FormattedMessage id="accountSwitcher.logOut" defaultMessage="Log out" /></span>
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>

@@ -4,6 +4,7 @@
  * Pure and synchronous over an {@link ExportModel} built from the local rumor store.
  */
 
+import { getLanguage, t } from "@/i18n/intl";
 import { sanitizeUrl } from "@/lib/sanitizeUrl";
 
 export interface ExportProfile {
@@ -75,23 +76,51 @@ export function exportJson(model: ExportModel): string {
   return JSON.stringify(model, null, 2) + "\n";
 }
 
+function exportedLine(model: ExportModel): string {
+  return t({ id: "historyExport.exportedAt", defaultMessage: "Exported {time}" }, { time: isoTime(model.generatedAtMs) });
+}
+
+function replyTag(): string {
+  return t({ id: "historyExport.tag.reply", defaultMessage: "reply" });
+}
+
+function editedTag(): string {
+  return t({ id: "historyExport.tag.edited", defaultMessage: "edited" });
+}
+
 export function buildTranscript(model: ExportModel): string {
   const out: string[] = [];
   out.push(model.communityName);
-  out.push(`Community ${model.communityIdHex}`);
-  out.push(`Exported ${isoTime(model.generatedAtMs)}`);
+  out.push(t({ id: "historyExport.communityId", defaultMessage: "Community {id}" }, { id: model.communityIdHex }));
+  out.push(exportedLine(model));
   out.push("");
   for (const ch of model.channels) {
     out.push("=".repeat(56));
-    out.push(`#${ch.name}${ch.isPrivate ? " (private)" : ""}  ${ch.messages.length} message(s)`);
+    out.push(
+      ch.isPrivate
+        ? t(
+            {
+              id: "historyExport.channelHeadingPrivate",
+              defaultMessage: "#{name} (private)  {count, plural, one {# message} other {# messages}}",
+            },
+            { name: ch.name, count: ch.messages.length },
+          )
+        : t(
+            { id: "historyExport.channelHeading", defaultMessage: "#{name}  {count, plural, one {# message} other {# messages}}" },
+            { name: ch.name, count: ch.messages.length },
+          ),
+    );
     out.push("=".repeat(56));
     for (const m of ch.messages) {
       const who = nameOf(model, m.author);
-      const flags = [m.replyTo ? "reply" : "", m.edited ? "edited" : ""].filter(Boolean).join(", ");
+      const flags = [m.replyTo ? replyTag() : "", m.edited ? editedTag() : ""].filter(Boolean).join(", ");
       out.push(`[${isoTime(m.ms)}] ${who}${flags ? ` (${flags})` : ""}`);
       if (m.content) out.push(m.content.split("\n").map((l) => `    ${l}`).join("\n"));
       for (const a of m.attachments) {
-        out.push(`    <attachment${a.failed ? " (undecryptable)" : ""}: ${a.url}>`);
+        const line = a.failed
+          ? t({ id: "historyExport.attachmentUndecryptable", defaultMessage: "'<'attachment (undecryptable): {url}>" }, { url: a.url })
+          : t({ id: "historyExport.attachment", defaultMessage: "'<'attachment: {url}>" }, { url: a.url });
+        out.push(`    ${line}`);
       }
       if (m.reactions.length) out.push(`    ${m.reactions.map((r) => `${r.emoji} ${r.count}`).join("  ")}`);
     }
@@ -179,9 +208,13 @@ function attachmentHtml(a: ExportAttachment): string {
   if (a.failed) {
     const source = safeMediaUrl(a.url);
     const link = source
-      ? ` <a href="${escapeHtml(source)}" rel="noopener noreferrer" target="_blank">Source link</a>`
+      ? ` <a href="${escapeHtml(source)}" rel="noopener noreferrer" target="_blank">${escapeHtml(t({ id: "historyExport.sourceLink", defaultMessage: "Source link" }))}</a>`
       : "";
-    return `<div class="attachment failed">Attachment could not be decrypted for offline embedding.${link}</div>`;
+    const failed = t({
+      id: "historyExport.attachmentFailed",
+      defaultMessage: "Attachment could not be decrypted for offline embedding.",
+    });
+    return `<div class="attachment failed">${escapeHtml(failed)}${link}</div>`;
   }
   const src = safeMediaUrl(a.dataUri ?? a.url);
   if (src === undefined) return `<div class="attachment file">${escapeHtml(a.url)}</div>`;
@@ -195,8 +228,8 @@ function messageHtml(model: ExportModel, m: ExportMessage): string {
   const head =
     `<div class="msg-head"><span class="author">${escapeHtml(nameOf(model, m.author))}</span>` +
     `<span class="time">${escapeHtml(isoTime(m.ms))}</span>` +
-    (m.replyTo ? `<span class="tag">reply</span>` : "") +
-    (m.edited ? `<span class="tag">edited</span>` : "") +
+    (m.replyTo ? `<span class="tag">${escapeHtml(replyTag())}</span>` : "") +
+    (m.edited ? `<span class="tag">${escapeHtml(editedTag())}</span>` : "") +
     `</div>`;
   const body = m.content ? `<div class="content">${renderContent(m.content)}</div>` : "";
   const atts = m.attachments.map(attachmentHtml).join("");
@@ -331,34 +364,40 @@ function lightenForJson(model: ExportModel): ExportModel {
 export function exportHtmlParts(model: ExportModel): string[] {
   const channels = model.channels;
   const firstName = channels[0]?.name ?? "";
-  const rail = channels.map(channelButton).join("") || '<div class="empty">No channels</div>';
+  const rail =
+    channels.map(channelButton).join("") ||
+    `<div class="empty">${escapeHtml(t({ id: "historyExport.noChannels", defaultMessage: "No channels" }))}</div>`;
+  const title = t({ id: "historyExport.title", defaultMessage: "{community} Concord export" }, { community: model.communityName });
+  const tab = (view: string, label: string, active = "") =>
+    `<button class="tab${active}" data-view="${view}">${escapeHtml(label)}</button>`;
 
   const parts: string[] = [];
   parts.push(
-    `<!doctype html>\n<html lang="en">\n<head>\n` +
+    `<!doctype html>\n<html lang="${escapeHtml(getLanguage())}">\n<head>\n` +
       `<meta charset="utf-8">\n<meta name="viewport" content="width=device-width, initial-scale=1">\n` +
-      `<title>${escapeHtml(model.communityName)} Concord export</title>\n<style>${APP_STYLE}</style>\n<style>`,
+      `<title>${escapeHtml(title)}</title>\n<style>${APP_STYLE}</style>\n<style>`,
   );
   parts.push(...avatarStyleParts(model));
   parts.push(
     `</style>\n</head>\n<body>\n` +
-      `<div class="tabbar"><button class="tab active" data-view="chat">Chat</button>` +
-      `<button class="tab" data-view="text">Text</button><button class="tab" data-view="json">JSON</button></div>\n` +
+      `<div class="tabbar">${tab("chat", t({ id: "historyExport.tab.chat", defaultMessage: "Chat" }), " active")}` +
+      `${tab("text", t({ id: "historyExport.tab.text", defaultMessage: "Text" }))}${tab("json", "JSON")}</div>\n` +
       `<div class="views"><section class="view view-chat active" data-view="chat"><div class="app">` +
       `<aside class="sidebar"><div class="community">${communityGlyph(model)}<span>${escapeHtml(model.communityName)}</span></div>` +
       `<nav class="channels">${rail}</nav>` +
-      `<div class="exported">Exported ${escapeHtml(isoTime(model.generatedAtMs))}<br>${escapeHtml(model.communityIdHex.slice(0, 16))}…</div></aside>` +
+      `<div class="exported">${escapeHtml(exportedLine(model))}<br>${escapeHtml(model.communityIdHex.slice(0, 16))}…</div></aside>` +
       `<main class="main"><div class="topbar"><span class="title"><span class="hash muted">#</span> ` +
       `<span id="pane-title">${escapeHtml(firstName)}</span></span></div><div class="panes">`,
   );
 
   if (channels.length === 0) {
-    parts.push('<div class="empty">Nothing to show.</div>');
+    parts.push(`<div class="empty">${escapeHtml(t({ id: "historyExport.nothingToShow", defaultMessage: "Nothing to show." }))}</div>`);
   } else {
     for (const ch of channels) {
       parts.push(`<section class="pane" data-pane="${escapeHtml(ch.channelIdHex)}">`);
       if (ch.messages.length === 0) {
-        parts.push('<div class="empty">No messages in this channel.</div>');
+        const empty = t({ id: "historyExport.noMessages", defaultMessage: "No messages in this channel." });
+        parts.push(`<div class="empty">${escapeHtml(empty)}</div>`);
       } else {
         for (const m of ch.messages) parts.push(messageHtml(model, m));
       }

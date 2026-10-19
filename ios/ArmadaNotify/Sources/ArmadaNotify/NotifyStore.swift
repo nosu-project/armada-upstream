@@ -91,7 +91,8 @@ struct NotifyStore {
 
     /// A sender's name and avatar, from the local kind-0 and never the network.
     struct Profile {
-        let name: String
+        /// Nil for a profile that names no one; the caller words the absence.
+        let name: String?
         /// An `https` picture URL, or nil. Only https: a notification image is
         /// fetched by the extension, and a plaintext URL would both leak the
         /// read and be trivially substitutable in flight.
@@ -99,8 +100,8 @@ struct NotifyStore {
     }
 
     /// A notification is the one surface with no time to wait on a relay, so an
-    /// author this cannot name reads "Anonymous" — a fact established by
-    /// looking, not a placeholder for a lookup that never happened.
+    /// author this cannot name has no name — a fact established by looking, not
+    /// a placeholder for a lookup that never happened.
     func profile(pubkey: String) -> Profile {
         guard let events = query(
             tenant: ArmadaDbTenants.main,
@@ -109,9 +110,9 @@ struct NotifyStore {
             let content = first["content"] as? String,
             let decoded = try? JSONSerialization.jsonObject(with: Data(content.utf8)),
             let metadata = decoded as? [String: Any]
-        else { return Profile(name: "Anonymous", picture: nil) }
+        else { return Profile(name: nil, picture: nil) }
 
-        var name = "Anonymous"
+        var name: String?
         if let value = metadata["name"] as? String, !value.isEmpty {
             name = value
         } else if let value = metadata["display_name"] as? String, !value.isEmpty {
@@ -126,7 +127,7 @@ struct NotifyStore {
     }
 
     /// Just the name, for the mention map.
-    func displayName(pubkey: String) -> String {
+    func displayName(pubkey: String) -> String? {
         profile(pubkey: pubkey).name
     }
 
@@ -135,8 +136,7 @@ struct NotifyStore {
     func mentionNames(in content: String) -> [String: String] {
         var names = [String: String]()
         for pubkey in NotificationPreview.mentionedPubkeys(in: content) {
-            let name = displayName(pubkey: pubkey)
-            if name != "Anonymous" { names[pubkey] = name }
+            if let name = displayName(pubkey: pubkey) { names[pubkey] = name }
         }
         return names
     }
@@ -159,7 +159,7 @@ struct NotifyStore {
     /// independently useful, and there is nothing here a partially-unreadable
     /// fold could make unsafe. `channels` is a `Map`, which `foldedCache`
     /// encodes as `{"__t":"map","v":[[key, value], …]}`.
-    func concordRoomTitle(communityId: String, channelId: String) -> String? {
+    func concordRoomTitle(communityId: String, channelId: String, strings: Strings) -> String? {
         // `try?` flattens the throwing call's own `String?`, so this is one
         // binding, not two: a missing key and a failed read are the same answer.
         guard let json = try? bridge.kvGet(key: "folded:concord2-fold:\(communityId)"),
@@ -182,9 +182,9 @@ struct NotifyStore {
         if let value = channel, value.isEmpty { channel = nil }
 
         switch (community, channel) {
-        case let (community?, channel?): return "\(community) / #\(channel)"
+        case let (community?, channel?): return strings.roomTitle(community: community, channel: channel)
         case let (community?, nil): return community
-        case let (nil, channel?): return "#\(channel)"
+        case let (nil, channel?): return strings.channelTitle(channel: channel)
         default: return nil
         }
     }

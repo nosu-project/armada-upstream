@@ -17,6 +17,7 @@ import {
   type MyEmojiPack,
 } from "@/hooks/useEmojiPacks";
 import { toast } from "@/hooks/useToast";
+import { FormattedMessage, t, useIntl } from "@/i18n";
 
 import type { NostrRumor } from "@/lib/nostrRumor";
 
@@ -38,6 +39,7 @@ const PREVIEW_LIMIT = 8;
  * under Published, and can be removed from there.
  */
 export function EmojiPackSettings() {
+  const intl = useIntl();
   const { user } = useCurrentUser();
   const published = useMyPublishedPacks();
   const added = useMyEmojiPacks();
@@ -54,7 +56,7 @@ export function EmojiPackSettings() {
       <SettingsRow>
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
           <Loader2 className="size-4 animate-spin" />
-          Loading your emoji packs…
+          <FormattedMessage id="emojiPackSettings.loading" defaultMessage="Loading your emoji packs…" />
         </div>
       </SettingsRow>
     );
@@ -63,7 +65,7 @@ export function EmojiPackSettings() {
       <>
         {publishedPacks.length > 0 && (
           <>
-            <GroupLabel title="Published" count={publishedPacks.length} />
+            <GroupLabel title={intl.formatMessage({ id: "emojiPackSettings.published", defaultMessage: "Published" })} count={publishedPacks.length} />
             {publishedPacks.map((pack) => (
               <PackRow
                 key={pack.coord}
@@ -76,7 +78,7 @@ export function EmojiPackSettings() {
         )}
         {addedFromOthers.length > 0 && (
           <>
-            <GroupLabel title="Added" count={addedFromOthers.length} />
+            <GroupLabel title={intl.formatMessage({ id: "emojiPackSettings.added", defaultMessage: "Added" })} count={addedFromOthers.length} />
             {addedFromOthers.map((pack) => (
               <PackRow key={pack.coord} pack={pack} removable />
             ))}
@@ -85,17 +87,23 @@ export function EmojiPackSettings() {
         {added.isError ? (
           <SettingsRow>
             <p className="text-sm text-muted-foreground">
-              Couldn't read your emoji list. Check your connection and try again.
+              <FormattedMessage id="emojiPackSettings.readError" defaultMessage="Couldn't read your emoji list. Check your connection and try again." />
             </p>
           </SettingsRow>
         ) : publishedPacks.length === 0 && addedFromOthers.length === 0 && (
           <SettingsRow>
             <p className="text-sm text-muted-foreground">
-              No emoji packs yet. Browse and add packs in{" "}
-              <Link to="/discover?tab=emojis" className="text-primary hover:underline">
-                Discover
-              </Link>
-              , or create your own.
+              <FormattedMessage
+                id="emojiPackSettings.empty"
+                defaultMessage="No emoji packs yet. Browse and add packs in <link>Discover</link>, or create your own."
+                values={{
+                  link: (chunks) => (
+                    <Link to="/discover?tab=emojis" className="text-primary hover:underline">
+                      {chunks}
+                    </Link>
+                  ),
+                }}
+              />
             </p>
           </SettingsRow>
         )}
@@ -113,7 +121,7 @@ export function EmojiPackSettings() {
           onClick={() => setDialog({})}
         >
           <Plus className="size-4" />
-          Create emoji pack
+          <FormattedMessage id="emojiPackSettings.create" defaultMessage="Create emoji pack" />
         </Button>
       </SettingsRow>
 
@@ -151,10 +159,11 @@ function PackRow({
   removable: boolean;
   onEdit?: (event: NostrRumor) => void;
 }) {
+  const intl = useIntl();
   const { mutateAsync: removePack, isPending } = useRemoveEmojiPack();
   const [removed, setRemoved] = useState(false);
 
-  const name = pack.event ? emojiPackName(pack.event) : pack.coord.split(":")[2] || "Emoji pack";
+  const name = pack.event ? emojiPackName(pack.event) : pack.coord.split(":")[2] || intl.formatMessage({ id: "emojiPackSettings.fallbackName", defaultMessage: "Emoji pack" });
   const picture = pack.event ? emojiPackPicture(pack.event) : undefined;
   const entries = pack.event ? emojiPackEntries(pack.event) : [];
   const visible = entries.slice(0, PREVIEW_LIMIT);
@@ -168,11 +177,11 @@ function PackRow({
     try {
       await removePack({ coord: pack.coord });
       setRemoved(true);
-      toast({ title: "Emoji pack removed", description: name });
+      toast({ title: t({ id: "emojiPackSettings.removed", defaultMessage: "Emoji pack removed" }), description: name });
     } catch (e) {
       toast({
-        title: "Couldn't remove pack",
-        description: e instanceof Error ? e.message : "Publishing failed.",
+        title: t({ id: "emojiPackSettings.removeFailed", defaultMessage: "Couldn't remove pack" }),
+        description: e instanceof Error ? e.message : t({ id: "emojiPackSettings.publishFailed", defaultMessage: "Publishing failed." }),
         variant: "destructive",
       });
     }
@@ -208,7 +217,9 @@ function PackRow({
             </div>
           ) : (
             <div className="text-xs text-muted-foreground">
-              {pack.event ? "This pack has no emojis." : "Pack details couldn't be loaded."}
+              {pack.event
+                ? intl.formatMessage({ id: "emojiPackSettings.noEmojis", defaultMessage: "This pack has no emojis." })
+                : intl.formatMessage({ id: "emojiPackSettings.detailsFailed", defaultMessage: "Pack details couldn't be loaded." })}
             </div>
           )}
         </div>
@@ -219,7 +230,7 @@ function PackRow({
             className="size-9 touch:size-11 shrink-0 text-muted-foreground hover:text-foreground"
             onClick={() => pack.event && onEdit(pack.event)}
             disabled={!pack.event}
-            aria-label={`Edit ${name}`}
+            aria-label={intl.formatMessage({ id: "emojiPackSettings.edit", defaultMessage: "Edit {name}" }, { name })}
           >
             <Pencil className="size-4" />
           </Button>
@@ -231,7 +242,9 @@ function PackRow({
             className="size-9 touch:size-11 shrink-0 text-muted-foreground hover:text-destructive"
             onClick={onRemove}
             disabled={isPending}
-            aria-label={onEdit ? `Remove ${name} from your emojis` : `Remove ${name}`}
+            aria-label={onEdit
+              ? intl.formatMessage({ id: "emojiPackSettings.removeOwn", defaultMessage: "Remove {name} from your emojis" }, { name })
+              : intl.formatMessage({ id: "emojiPackSettings.remove", defaultMessage: "Remove {name}" }, { name })}
           >
             {isPending ? (
               <Loader2 className="size-4 animate-spin" />

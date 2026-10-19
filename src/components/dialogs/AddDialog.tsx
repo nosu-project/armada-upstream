@@ -20,6 +20,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { useNip29Servers } from "@/hooks/useNip29Servers";
+import { FormattedMessage, t, useIntl } from "@/i18n";
 import { useCommunityActions } from "@/concord/hooks/useCommunityActions";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { toast } from "@/hooks/useToast";
@@ -39,11 +40,14 @@ interface AddDialogProps {
 
 /** The "Add" wizard: start an encrypted Concord community, or smart-paste to join something existing. */
 export function AddDialog({ open, onOpenChange }: AddDialogProps) {
+  const intl = useIntl();
   const close = () => onOpenChange(false);
 
   return (
     <Dialog open={open} onOpenChange={(o) => (o ? onOpenChange(true) : close())}>
-      <ChromeDialogContent title="Add an encrypted chat or server">
+      <ChromeDialogContent
+        title={intl.formatMessage({ id: "addDialog.title", defaultMessage: "Add an encrypted chat or server" })}
+      >
         <AddBody onDone={close} />
         <ArmadaCrestKeyframes />
       </ChromeDialogContent>
@@ -63,7 +67,7 @@ export function AddBody({ onDone }: { onDone: () => void }) {
       <ArmadaCrest size={84} />
 
       <h2 className="chrome-dialog-title font-mono font-bold lowercase tracking-tight text-foreground">
-        gather your crew
+        <FormattedMessage id="addDialog.gatherYourCrew" defaultMessage="gather your crew" />
       </h2>
 
       <div className="w-full max-w-sm">
@@ -78,7 +82,7 @@ export function AddBody({ onDone }: { onDone: () => void }) {
           className="h-12 w-full clip-corner-lg text-base font-medium"
         >
           <ShieldCheck className="size-4 mr-2" />
-          Create encrypted community
+          <FormattedMessage id="addDialog.createCommunity" defaultMessage="Create encrypted community" />
         </Button>
       </div>
 
@@ -96,7 +100,9 @@ function ImportFromDiscordSection({ onOpen }: { onOpen: () => void }) {
     <div className="w-full max-w-sm space-y-2">
       <div className="flex items-center gap-3">
         <span className="h-px flex-1 bg-border" />
-        <span className="text-2xs uppercase tracking-wider text-muted-foreground">or</span>
+        <span className="text-2xs uppercase tracking-wider text-muted-foreground">
+          <FormattedMessage id="addDialog.or" defaultMessage="or" />
+        </span>
         <span className="h-px flex-1 bg-border" />
       </div>
       <ImportFromDiscordButton onOpen={onOpen} />
@@ -161,6 +167,7 @@ function EscapeHatch({ onDone }: { onDone: () => void }) {
   const servers = useNip29Servers();
   const { user } = useCurrentUser();
   const navigate = useNavigate();
+  const intl = useIntl();
   const { mutateAsync: updateList } = useUpdateUserGroupList();
   const actions = useCommunityActions();
 
@@ -185,8 +192,11 @@ function EscapeHatch({ onDone }: { onDone: () => void }) {
       }
     } catch {
       toast({
-        title: "Paste failed",
-        description: "Couldn't read the clipboard. Paste manually instead.",
+        title: t({ id: "addDialog.pasteFailed", defaultMessage: "Paste failed" }),
+        description: t({
+          id: "addDialog.pasteFailedDescription",
+          defaultMessage: "Couldn't read the clipboard. Paste manually instead.",
+        }),
         variant: "destructive",
       });
     }
@@ -245,7 +255,7 @@ function EscapeHatch({ onDone }: { onDone: () => void }) {
         } else if (classified.kind === "nip29") {
           const relay = classified.relay;
           if (servers.includes(relay)) {
-            throw new Error("That server is already in your list.");
+            throw new Error(t({ id: "addDialog.alreadyInList", defaultMessage: "That server is already in your list." }));
           }
           // NIP-11 is only a preview; the join (kind 9021 over WebSocket) isn't CORS-gated,
           // and many relays lack CORS on NIP-11, so a failed fetch must not block joining.
@@ -268,8 +278,11 @@ function EscapeHatch({ onDone }: { onDone: () => void }) {
           e instanceof Error
             ? e.message
             : classified.kind === "nip29"
-              ? "Could not reach that relay's NIP-11 endpoint. Check the URL and your network."
-              : "Couldn't load that invite.",
+              ? t({
+                  id: "addDialog.relayUnreachable",
+                  defaultMessage: "Could not reach that relay's NIP-11 endpoint. Check the URL and your network.",
+                })
+              : t({ id: "addDialog.inviteLoadFailed", defaultMessage: "Couldn't load that invite." }),
         );
       } finally {
         if (!cancelled) setResolving(false);
@@ -292,13 +305,17 @@ function EscapeHatch({ onDone }: { onDone: () => void }) {
       if (target.kind === "buzz") {
         if (classified.kind !== "buzz") return;
         if (!user) {
-          throw new Error("Sign in first. A Buzz invite is claimed with your key.");
+          throw new Error(
+            t({ id: "addDialog.signInBuzz", defaultMessage: "Sign in first. A Buzz invite is claimed with your key." }),
+          );
         }
         if (target.policy && !policyAccepted) {
-          throw new Error("Accept the server's terms to join.");
+          throw new Error(t({ id: "addDialog.acceptTermsRequired", defaultMessage: "Accept the server's terms to join." }));
         }
         if (target.policy?.ageAttestationRequired && !ageConfirmed) {
-          throw new Error("This server requires an age confirmation to join.");
+          throw new Error(
+            t({ id: "addDialog.ageRequired", defaultMessage: "This server requires an age confirmation to join." }),
+          );
         }
         await claimBuzzInvite(user.signer, classified.invite, {
           policy: target.policy,
@@ -307,7 +324,7 @@ function EscapeHatch({ onDone }: { onDone: () => void }) {
         // The 10009 list is the only rail source, so this write IS the add; awaited so failures surface.
         await updateList({ type: "add-server", url: target.relay });
         onDone();
-        toast({ title: "Joined", description: target.name || target.relay });
+        toast({ title: t({ id: "addDialog.joined", defaultMessage: "Joined" }), description: target.name || target.relay });
         navigate(`/s/${relayToRouteParam(target.relay)}`);
         return;
       }
@@ -315,7 +332,7 @@ function EscapeHatch({ onDone }: { onDone: () => void }) {
         if (classified.kind !== "concord") return;
         const { communityId, name } = await actions.join({ invite: classified.invite });
         onDone();
-        toast({ title: "Encrypted community joined", description: name });
+        toast({ title: t({ id: "addDialog.communityJoined", defaultMessage: "Encrypted community joined" }), description: name });
         navigate(`/c/${encodeURIComponent(communityId)}`);
         return;
       }
@@ -328,13 +345,18 @@ function EscapeHatch({ onDone }: { onDone: () => void }) {
       // The 10009 list is the only store for added servers, so this needs a signer
       // and is awaited so failures surface.
       if (!user) {
-        throw new Error("Sign in first. Your server list is stored on your Nostr account.");
+        throw new Error(
+          t({
+            id: "addDialog.signInServerList",
+            defaultMessage: "Sign in first. Your server list is stored on your Nostr account.",
+          }),
+        );
       }
       await updateList({ type: "add-server", url: target.relay });
-      toast({ title: "Server added", description: target.name || target.relay });
+      toast({ title: t({ id: "addDialog.serverAdded", defaultMessage: "Server added" }), description: target.name || target.relay });
       onDone();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Something went wrong.");
+      setError(e instanceof Error ? e.message : t({ id: "addDialog.genericError", defaultMessage: "Something went wrong." }));
     } finally {
       setCommitting(false);
     }
@@ -350,7 +372,7 @@ function EscapeHatch({ onDone }: { onDone: () => void }) {
           className="mx-auto flex items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
         >
           <Link2 className="size-3.5" />
-          Have an invite or server URL?
+          <FormattedMessage id="addDialog.haveInvite" defaultMessage="Have an invite or server URL?" />
           <ChevronDown className={cn("size-3.5 transition-transform", open && "rotate-180")} />
         </button>
       </CollapsibleTrigger>
@@ -366,8 +388,11 @@ function EscapeHatch({ onDone }: { onDone: () => void }) {
             <Input
               value={value}
               onChange={(e) => setValue(e.target.value)}
-              placeholder="Paste invite or server URL"
-              aria-label="Invite link, invite code, or server URL"
+              placeholder={intl.formatMessage({ id: "addDialog.inputPlaceholder", defaultMessage: "Paste invite or server URL" })}
+              aria-label={intl.formatMessage({
+                id: "addDialog.inputLabel",
+                defaultMessage: "Invite link, invite code, or server URL",
+              })}
               autoComplete="off"
               autoCapitalize="off"
               autoCorrect="off"
@@ -382,15 +407,17 @@ function EscapeHatch({ onDone }: { onDone: () => void }) {
                     variant="outline"
                     size="icon"
                     className="shrink-0"
-                    aria-label="Paste from clipboard"
+                    aria-label={intl.formatMessage({ id: "addDialog.pasteFromClipboard", defaultMessage: "Paste from clipboard" })}
                     onClick={handlePaste}
                   >
                     <ClipboardPaste className="size-4" />
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent side="top" className="z-[260] max-w-60 text-center text-xs">
-                  Paste a Concord invite link, a bare invite code, or a server
-                  relay URL. We detect which it is.
+                  <FormattedMessage
+                    id="addDialog.pasteHint"
+                    defaultMessage="Paste a Concord invite link, a bare invite code, or a server relay URL. We detect which it is."
+                  />
                 </TooltipContent>
               </Tooltip>
             </TooltipProvider>
@@ -399,7 +426,11 @@ function EscapeHatch({ onDone }: { onDone: () => void }) {
           {resolving && (
             <div className="mt-3 flex items-center gap-2 text-xs text-muted-foreground">
               <Loader2 className="size-3.5 animate-spin" />
-              {classified.kind === "nip29" ? "Reaching server..." : "Loading invite..."}
+              {classified.kind === "nip29" ? (
+                <FormattedMessage id="addDialog.reachingServer" defaultMessage="Reaching server..." />
+              ) : (
+                <FormattedMessage id="addDialog.loadingInvite" defaultMessage="Loading invite..." />
+              )}
             </div>
           )}
 
@@ -423,33 +454,34 @@ function EscapeHatch({ onDone }: { onDone: () => void }) {
                       onChange={(e) => setPolicyAccepted(e.target.checked)}
                     />
                     <span>
-                      I accept this server's{" "}
-                      {target.policy.termsMarkdown ? (
-                        <a
-                          href={`${target.origin}/api/join-policy/terms`}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="underline hover:text-foreground"
-                        >
-                          Terms of Service
-                        </a>
-                      ) : (
-                        "terms"
-                      )}
-                      {target.policy.privacyMarkdown && (
-                        <>
-                          {" "}and{" "}
-                          <a
-                            href={`${target.origin}/api/join-policy/privacy`}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="underline hover:text-foreground"
-                          >
-                            Privacy Policy
-                          </a>
-                        </>
-                      )}
-                      .
+                      <FormattedMessage
+                        id="addDialog.acceptTerms"
+                        defaultMessage="I accept this server's {hasTerms, select, true {<terms>Terms of Service</terms>} other {terms}}{hasPrivacy, select, true { and <privacy>Privacy Policy</privacy>} other {}}."
+                        values={{
+                          hasTerms: target.policy.termsMarkdown ? "true" : "false",
+                          hasPrivacy: target.policy.privacyMarkdown ? "true" : "false",
+                          terms: (chunks) => (
+                            <a
+                              href={`${target.origin}/api/join-policy/terms`}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="underline hover:text-foreground"
+                            >
+                              {chunks}
+                            </a>
+                          ),
+                          privacy: (chunks) => (
+                            <a
+                              href={`${target.origin}/api/join-policy/privacy`}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="underline hover:text-foreground"
+                            >
+                              {chunks}
+                            </a>
+                          ),
+                        }}
+                      />
                     </span>
                   </label>
                   {target.policy.ageAttestationRequired && (
@@ -460,7 +492,12 @@ function EscapeHatch({ onDone }: { onDone: () => void }) {
                         checked={ageConfirmed}
                         onChange={(e) => setAgeConfirmed(e.target.checked)}
                       />
-                      <span>I confirm I meet this server's minimum age requirement.</span>
+                      <span>
+                        <FormattedMessage
+                          id="addDialog.confirmAge"
+                          defaultMessage="I confirm I meet this server's minimum age requirement."
+                        />
+                      </span>
                     </label>
                   )}
                 </div>
@@ -476,15 +513,22 @@ function EscapeHatch({ onDone }: { onDone: () => void }) {
                 className="mt-3 w-full clip-corner-lg"
               >
                 {busy ? (
-                  <><Loader2 className="size-4 mr-2 animate-spin" /> {target.kind === "nip29" ? "Adding..." : "Joining..."}</>
+                  <>
+                    <Loader2 className="size-4 mr-2 animate-spin" />{" "}
+                    {target.kind === "nip29" ? (
+                      <FormattedMessage id="addDialog.adding" defaultMessage="Adding..." />
+                    ) : (
+                      <FormattedMessage id="addDialog.joining" defaultMessage="Joining..." />
+                    )}
+                  </>
                 ) : target.kind === "nip29" ? (
-                  "Add server"
+                  <FormattedMessage id="addDialog.addServer" defaultMessage="Add server" />
                 ) : target.kind === "nip29-group" ? (
-                  "Open channel"
+                  <FormattedMessage id="addDialog.openChannel" defaultMessage="Open channel" />
                 ) : target.kind === "buzz" && !user ? (
-                  "Sign in to join"
+                  <FormattedMessage id="addDialog.signInToJoin" defaultMessage="Sign in to join" />
                 ) : (
-                  "Join"
+                  <FormattedMessage id="addDialog.join" defaultMessage="Join" />
                 )}
               </Button>
             </>
@@ -496,6 +540,7 @@ function EscapeHatch({ onDone }: { onDone: () => void }) {
 }
 
 function TargetPreview({ target }: { target: Target }) {
+  const intl = useIntl();
   const isConcord = target.kind === "concord";
   const Icon = isConcord ? ShieldCheck : target.kind === "nip29-group" ? Hash : Server;
   const title =
@@ -508,19 +553,34 @@ function TargetPreview({ target }: { target: Target }) {
     target.kind === "nip29-group"
       ? target.relay
       : target.kind === "buzz"
-        ? target.description || `Buzz workspace · ${target.relay}`
+        ? target.description ||
+          intl.formatMessage({ id: "addDialog.buzzWorkspace", defaultMessage: "Buzz workspace · {relay}" }, { relay: target.relay })
         : target.kind === "nip29"
           ? target.description || target.relay
-          : `Encrypted community · ${target.channelCount} ${target.channelCount === 1 ? "channel" : "channels"}`;
+          : intl.formatMessage(
+              {
+                id: "addDialog.encryptedCommunityChannels",
+                defaultMessage: "Encrypted community · {count, plural, one {# channel} other {# channels}}",
+              },
+              { count: target.channelCount },
+            );
 
   return (
     <div className="mt-3 flex items-start gap-3 rounded-lg bg-secondary/50 p-3 text-left">
       <Icon className={cn("mt-0.5 size-5 shrink-0", isConcord ? "text-success" : "text-muted-foreground")} />
       <div className="min-w-0">
         <div className="text-2xs uppercase tracking-wider text-muted-foreground">
-          {isConcord ? "You're joining" : target.kind === "nip29-group" ? "You're opening the channel" : target.kind === "buzz" ? "You're joining the workspace" : "You're adding the server"}
+          {isConcord ? (
+            <FormattedMessage id="addDialog.youreJoining" defaultMessage="You're joining" />
+          ) : target.kind === "nip29-group" ? (
+            <FormattedMessage id="addDialog.youreOpeningChannel" defaultMessage="You're opening the channel" />
+          ) : target.kind === "buzz" ? (
+            <FormattedMessage id="addDialog.youreJoiningWorkspace" defaultMessage="You're joining the workspace" />
+          ) : (
+            <FormattedMessage id="addDialog.youreAddingServer" defaultMessage="You're adding the server" />
+          )}
         </div>
-        <div className="truncate font-medium">{title || "Untitled"}</div>
+        <div className="truncate font-medium">{title || <FormattedMessage id="addDialog.untitled" defaultMessage="Untitled" />}</div>
         <div className="truncate text-xs text-muted-foreground">{subtitle}</div>
       </div>
     </div>

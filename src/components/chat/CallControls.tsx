@@ -28,6 +28,7 @@ import {
 import { useCallSignals } from "@/contexts/CallSignalsContext";
 import { useCall } from "@/hooks/useCall";
 import { toast } from "@/hooks/useToast";
+import { common, defineMessage, FormattedMessage, t, useIntl } from "@/i18n";
 import { ToastAction } from "@/components/ui/toast";
 import { playLeaveSound } from "@/lib/callSounds";
 import {
@@ -65,17 +66,23 @@ import {
 const supportsScreenShare =
   typeof navigator !== "undefined" && typeof navigator.mediaDevices?.getDisplayMedia === "function";
 
+const sharingWithoutAudio = defineMessage({ id: "callControls.sharingWithoutAudio", defaultMessage: "Sharing without audio" });
+const shareWithoutAudio = defineMessage({ id: "callControls.shareWithoutAudio", defaultMessage: "Share without audio" });
+
 const CTRL = "inline-flex items-center justify-center rounded-md size-8 touch:size-11 shrink-0 transition-colors";
 
 export function MicButton({ className }: { className?: string }) {
   const { isMicrophoneEnabled, pushToTalk, toggle } = useMicToggle();
+  const intl = useIntl();
   const label = pushToTalk.ready
     ? pushToTalk.pressed
-      ? "Talking. Click to mute and stop push to talk"
-      : `Hold ${pushToTalk.bindingLabel || "your shortcut"} to talk`
+      ? intl.formatMessage({ id: "callControls.talking", defaultMessage: "Talking. Click to mute and stop push to talk" })
+      : pushToTalk.bindingLabel
+        ? intl.formatMessage({ id: "callControls.holdToTalk", defaultMessage: "Hold {key} to talk" }, { key: pushToTalk.bindingLabel })
+        : intl.formatMessage({ id: "callControls.holdShortcutToTalk", defaultMessage: "Hold your shortcut to talk" })
     : isMicrophoneEnabled
-      ? "Mute microphone"
-      : "Unmute microphone";
+      ? intl.formatMessage({ id: "callControls.muteMic", defaultMessage: "Mute microphone" })
+      : intl.formatMessage({ id: "callControls.unmuteMic", defaultMessage: "Unmute microphone" });
   return (
     <button
       type="button"
@@ -97,7 +104,10 @@ export function MicButton({ className }: { className?: string }) {
 
 export function CameraButton({ className }: { className?: string }) {
   const { localParticipant, isCameraEnabled } = useLocalParticipant();
-  const label = isCameraEnabled ? "Turn off camera" : "Turn on camera";
+  const intl = useIntl();
+  const label = isCameraEnabled
+    ? intl.formatMessage({ id: "callControls.cameraOff", defaultMessage: "Turn off camera" })
+    : intl.formatMessage({ id: "callControls.cameraOn", defaultMessage: "Turn on camera" });
   return (
     <button
       type="button"
@@ -133,6 +143,7 @@ export function ScreenShareButton({
   const [qualityOpen, setQualityOpen] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [working, setWorking] = useState(false);
+  const intl = useIntl();
   const customHevcAvailable = Boolean(hevcScreenShare?.capability?.available);
   const customHevcActive = Boolean(hevcScreenShare?.active);
   const shareActive = isScreenShareEnabled || customHevcActive;
@@ -156,15 +167,18 @@ export function ScreenShareButton({
     const status = await desktopScreenCaptureAccessStatus();
     if (status === "denied" || status === "restricted") {
       toast({
-        title: "Screen Recording permission required",
-        description: "Allow Armada in macOS Privacy & Security, then try sharing again.",
+        title: t({ id: "callControls.screenPermissionTitle", defaultMessage: "Screen Recording permission required" }),
+        description: t({
+          id: "callControls.screenPermissionDescription",
+          defaultMessage: "Allow Armada in macOS Privacy & Security, then try sharing again.",
+        }),
         variant: "destructive",
         action: (
           <ToastAction
-            altText="Open Screen Recording settings"
+            altText={t({ id: "callControls.openScreenSettings", defaultMessage: "Open Screen Recording settings" })}
             onClick={() => void openDesktopScreenCaptureSettings()}
           >
-            Settings
+            {t(common.settings)}
           </ToastAction>
         ),
       });
@@ -175,7 +189,8 @@ export function ScreenShareButton({
   const acquireCustomHevc = async (quality: ScreenShareQuality): Promise<MediaStream> => {
     if (!hevcScreenShare || !customHevcAvailable) {
       throw new Error(
-        hevcScreenShare?.capability?.reason || "The Linux H.265 encoder is unavailable.",
+        hevcScreenShare?.capability?.reason ||
+          t({ id: "callControls.hevcUnavailable", defaultMessage: "The Linux H.265 encoder is unavailable." }),
       );
     }
     // Same trusted picker/audio wrapper as the LiveKit path; only encoding differs.
@@ -208,7 +223,13 @@ export function ScreenShareButton({
               // The transition error below is more useful; the shell also tears down on stream end.
             }
             throw new Error(
-              `The H.265 sender started, but the previous share could not be retired. The previous share remains active: ${error instanceof Error ? error.message : String(error)}`,
+              t(
+                {
+                  id: "callControls.hevcRetireFailed",
+                  defaultMessage: "The H.265 sender started, but the previous share could not be retired. The previous share remains active: {error}",
+                },
+                { error: error instanceof Error ? error.message : String(error) },
+              ),
             );
           }
         }
@@ -241,10 +262,10 @@ export function ScreenShareButton({
         // (screenShareOwnAudio.ts); say so.
         const dropped = consumeOwnAudioDrop();
         if (dropped) {
-          toast({ title: "Sharing without audio", description: describeOwnAudioDrop(dropped) });
+          toast({ title: t(sharingWithoutAudio), description: describeOwnAudioDrop(dropped) });
         } else if (shareActive) {
           toast({
-            title: "Screen share quality updated",
+            title: t({ id: "callControls.qualityUpdated", defaultMessage: "Screen share quality updated" }),
             description: formatScreenShareQuality(quality),
           });
         }
@@ -258,27 +279,31 @@ export function ScreenShareButton({
         // audio endpoint; offer retry with audio off.
         if (quality.captureAudio && isScreenShareAudioSourceFailure(error)) {
           toast({
-            title: "Couldn't share screen audio",
-            description:
-              "This screen or window has no audio Armada can capture. Share without audio instead?",
+            title: t({ id: "callControls.audioFailedTitle", defaultMessage: "Couldn't share screen audio" }),
+            description: t({
+              id: "callControls.audioFailedDescription",
+              defaultMessage: "This screen or window has no audio Armada can capture. Share without audio instead?",
+            }),
             variant: "destructive",
             action: (
               <ToastAction
-                altText="Share without audio"
+                altText={t(shareWithoutAudio)}
                 onClick={() =>
                   applyQuality({ ...quality, captureAudio: false }, { rememberAs: quality })
                 }
               >
-                Share without audio
+                {t(shareWithoutAudio)}
               </ToastAction>
             ),
           });
           return;
         }
         toast({
-          title: "Couldn't update screen share quality",
+          title: t({ id: "callControls.qualityFailedTitle", defaultMessage: "Couldn't update screen share quality" }),
           description:
-            error instanceof Error ? error.message : "The new quality could not be applied.",
+            error instanceof Error
+              ? error.message
+              : t({ id: "callControls.qualityFailedDescription", defaultMessage: "The new quality could not be applied." }),
           variant: "destructive",
         });
       })
@@ -308,21 +333,24 @@ export function ScreenShareButton({
       }
       const dropped = consumeOwnAudioDrop();
       if (dropped) {
-        toast({ title: "Sharing without audio", description: describeOwnAudioDrop(dropped) });
+        toast({ title: t(sharingWithoutAudio), description: describeOwnAudioDrop(dropped) });
       }
     } catch (error) {
       consumeOwnAudioDrop();
       if (await handleCapturePermission(error)) return;
       console.warn("failed to switch screen share", error);
       toast({
-        title: "Couldn't switch the screen share",
+        title: t({ id: "callControls.switchFailedTitle", defaultMessage: "Couldn't switch the screen share" }),
         // Once the video swap lands the new source is published, so only an earlier
         // failure leaves the previous share up.
         description: customHevcActive || isScreenShareSwitchPartialFailure(error)
           ? error instanceof Error
             ? error.message
-            : "The previous H.265 share stopped while the replacement was starting."
-          : "Your existing share is still active. Please try again.",
+            : t({
+              id: "callControls.switchHevcStopped",
+              defaultMessage: "The previous H.265 share stopped while the replacement was starting.",
+            })
+          : t({ id: "callControls.switchStillActive", defaultMessage: "Your existing share is still active. Please try again." }),
         variant: "destructive",
       });
     } finally {
@@ -330,13 +358,18 @@ export function ScreenShareButton({
     }
   };
 
+  const optionsLabel = screenShareAudioMissing
+    ? intl.formatMessage({ id: "callControls.shareOptionsNoAudio", defaultMessage: "Screen share options (audio not captured)" })
+    : intl.formatMessage({ id: "callControls.shareOptions", defaultMessage: "Screen share options" });
+
   if (!shareActive) {
+    const shareLabel = intl.formatMessage({ id: "callControls.shareScreen", defaultMessage: "Share screen" });
     return (
       <>
         <button
           type="button"
-          aria-label="Share screen"
-          title="Share screen"
+          aria-label={shareLabel}
+          title={shareLabel}
           disabled={working}
           onClick={() => setQualityOpen(true)}
           className={cn(
@@ -368,16 +401,8 @@ export function ScreenShareButton({
         <DropdownMenuTrigger asChild>
           <button
             type="button"
-            aria-label={
-              screenShareAudioMissing
-                ? "Screen share options (audio not captured)"
-                : "Screen share options"
-            }
-            title={
-              screenShareAudioMissing
-                ? "Screen share options (audio not captured)"
-                : "Screen share options"
-            }
+            aria-label={optionsLabel}
+            title={optionsLabel}
             disabled={working}
             className={cn(
               CTRL,
@@ -407,15 +432,15 @@ export function ScreenShareButton({
         >
           <DropdownMenuItem onSelect={() => setQualityOpen(true)}>
             <Settings2 className="size-4" />
-            Screen share quality
+            <FormattedMessage id="callControls.quality" defaultMessage="Screen share quality" />
           </DropdownMenuItem>
           <DropdownMenuItem onSelect={() => setDetailsOpen(true)}>
             <Info className="size-4" />
-            Stream details
+            <FormattedMessage id="callControls.streamDetails" defaultMessage="Stream details" />
           </DropdownMenuItem>
           <DropdownMenuItem onSelect={() => void switchShare()}>
             <RefreshCw className="size-4" />
-            Switch screen or audio
+            <FormattedMessage id="callControls.switchShare" defaultMessage="Switch screen or audio" />
           </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem
@@ -423,7 +448,7 @@ export function ScreenShareButton({
             onSelect={stopShare}
           >
             <MonitorOff className="size-4" />
-            Stop sharing
+            <FormattedMessage id="callControls.stopSharing" defaultMessage="Stop sharing" />
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
@@ -444,7 +469,7 @@ export function ScreenShareButton({
         track={screenSharePublication?.videoTrack}
         audioTrack={localParticipant.getTrackPublication(Track.Source.ScreenShareAudio)?.audioTrack}
         encrypted={customHevcActive ? true : screenSharePublication?.isEncrypted}
-        participantName="you"
+        participantName={intl.formatMessage({ id: "callControls.you", defaultMessage: "you" })}
         nativeHevcStatus={customHevcActive ? hevcScreenShare?.status : undefined}
         onOpenChange={setDetailsOpen}
       />
@@ -454,6 +479,8 @@ export function ScreenShareButton({
 
 export function LeaveButton({ className }: { className?: string }) {
   const { leaveCall } = useCall();
+  const intl = useIntl();
+  const label = intl.formatMessage({ id: "callControls.leave", defaultMessage: "Leave call" });
   return (
     <button
       type="button"
@@ -462,8 +489,8 @@ export function LeaveButton({ className }: { className?: string }) {
         playLeaveSound();
         leaveCall();
       }}
-      aria-label="Leave call"
-      title="Leave call"
+      aria-label={label}
+      title={label}
       className={cn(CTRL, "bg-destructive text-destructive-foreground hover:bg-destructive/90", className)}
     >
       <PhoneOff className="size-4" />
@@ -474,8 +501,11 @@ export function LeaveButton({ className }: { className?: string }) {
 /** Raise / lower your hand (Concord calls only); renders nothing elsewhere. */
 export function RaiseHandButton({ className }: { className?: string }) {
   const { enabled, myHandRaised, toggleHand } = useCallSignals();
+  const intl = useIntl();
   if (!enabled) return null;
-  const label = myHandRaised ? "Lower hand" : "Raise hand";
+  const label = myHandRaised
+    ? intl.formatMessage({ id: "callControls.lowerHand", defaultMessage: "Lower hand" })
+    : intl.formatMessage({ id: "callControls.raiseHand", defaultMessage: "Raise hand" });
   return (
     <button
       type="button"
@@ -509,14 +539,16 @@ export function ReactionsMenu({
 }) {
   const { enabled, sendReaction } = useCallSignals();
   const [open, setOpen] = useState(false);
+  const intl = useIntl();
   if (!enabled) return null;
+  const reactionsLabel = intl.formatMessage({ id: "callControls.reactions", defaultMessage: "Reactions" });
   return (
     <DropdownMenu open={open} onOpenChange={setOpen}>
       <DropdownMenuTrigger asChild>
         <button
           type="button"
-          aria-label="Reactions"
-          title="Reactions"
+          aria-label={reactionsLabel}
+          title={reactionsLabel}
           className={cn(CTRL, "bg-foreground/10 text-foreground hover:bg-foreground/20", className)}
         >
           <Smile className="size-4" />
@@ -532,7 +564,7 @@ export function ReactionsMenu({
             <button
               key={emoji}
               type="button"
-              aria-label={`React ${emoji}`}
+              aria-label={intl.formatMessage({ id: "callControls.react", defaultMessage: "React {emoji}" }, { emoji })}
               onClick={() => {
                 sendReaction(emoji);
                 setOpen(false);

@@ -29,13 +29,14 @@ import {
   type ImportStatus,
 } from "@/lib/bridgeApi";
 import { sanitizeUrl } from "@/lib/sanitizeUrl";
+import { common, FormattedMessage, t, useIntl } from "@/i18n";
 import { cn } from "@/lib/utils";
 
 const STEPS = ["connect", "server", "review", "import", "done"] as const;
 type Step = 0 | 1 | 2 | 3 | 4;
 
 const errText = (e: unknown) =>
-  e instanceof BridgeApiError || e instanceof Error ? e.message : "Something went wrong.";
+  e instanceof BridgeApiError || e instanceof Error ? e.message : t({ id: "discordImportWizard.genericError", defaultMessage: "Something went wrong." });
 
 /**
  * Import a Discord server via the bridge portal ({@link bridgeApi}). Lives
@@ -105,7 +106,7 @@ export function DiscordImportWizard({ onClose }: { onClose: () => void }) {
         // Install link comes from the portal, so sanitize before it reaches an href.
         const url = sanitizeUrl(res.installUrl);
         if (!url) {
-          setError("The bridge returned an invalid bot-install link.");
+          setError(t({ id: "discordImportWizard.invalidInstallLink", defaultMessage: "The bridge returned an invalid bot-install link." }));
           return;
         }
         setInstallUrl(url);
@@ -151,7 +152,7 @@ export function DiscordImportWizard({ onClose }: { onClose: () => void }) {
     setBusy(true);
     setError("");
     try {
-      setSigningStep("Preparing the community…");
+      setSigningStep(t({ id: "discordImportWizard.preparing", defaultMessage: "Preparing the community…" }));
       const prep = await prepareImport(importId, {
         ownerNpub: user.pubkey,
         relays: editRelays ? relays : undefined,
@@ -165,7 +166,9 @@ export function DiscordImportWizard({ onClose }: { onClose: () => void }) {
 
       const signed: NostrEvent[] = [];
       for (let i = 0; i < prep.templates.length; i++) {
-        setSigningStep(`Signing as owner (${i + 1} of ${prep.templates.length})…`);
+        setSigningStep(
+          t({ id: "discordImportWizard.signing", defaultMessage: "Signing as owner ({index} of {total})…" }, { index: i + 1, total: prep.templates.length }),
+        );
         signed.push(await user.signer.signEvent(prep.templates[i].template));
       }
 
@@ -225,9 +228,9 @@ export function DiscordImportWizard({ onClose }: { onClose: () => void }) {
     setError("");
     try {
       const invite = parseInviteLink(status.inviteUrl);
-      if (!invite) throw new Error("The portal returned an invite link Armada couldn't read.");
+      if (!invite) throw new Error(t({ id: "discordImportWizard.badInvite", defaultMessage: "The portal returned an invite link Armada couldn't read." }));
       const { communityId, name } = await join({ invite });
-      toast({ title: "Imported from Discord", description: name });
+      toast({ title: t({ id: "discordImportWizard.importedToast", defaultMessage: "Imported from Discord" }), description: name });
       // Navigating away IS the close (the wizard is the route); onClose would race a history pop.
       navigate(`/c/${encodeURIComponent(communityId)}`, { replace: true });
     } catch (e) {
@@ -362,12 +365,15 @@ function ConnectStep({
   busy: boolean;
   onConnect: () => void;
 }) {
+  const intl = useIntl();
   if (me && !me.discordConfigured) {
     return (
       <WizardStepBody
         glyph={glyph}
-        title="not available here"
-        description="This bridge portal has no Discord application configured, so it can't import servers. That's an operator setting, not something you can fix from here."
+        title={intl.formatMessage({ id: "discordImportWizard.unavailable.title", defaultMessage: "not available here" })}
+        description={
+          <FormattedMessage id="discordImportWizard.unavailable.description" defaultMessage="This bridge portal has no Discord application configured, so it can't import servers. That's an operator setting, not something you can fix from here." />
+        }
       >
         <span />
       </WizardStepBody>
@@ -377,20 +383,21 @@ function ConnectStep({
   return (
     <WizardStepBody
       glyph={glyph}
-      title="import from discord"
-      description="Turn a Discord server you run into an encrypted Armada community, with its channels, roles, custom emoji, and optionally its message history. You'll sign for it with your own key, so you own it outright."
+      title={intl.formatMessage({ id: "discordImportWizard.connect.title", defaultMessage: "import from discord" })}
+      description={
+        <FormattedMessage id="discordImportWizard.connect.description" defaultMessage="Turn a Discord server you run into an encrypted Armada community, with its channels, roles, custom emoji, and optionally its message history. You'll sign for it with your own key, so you own it outright." />
+      }
     >
       <div className="w-full space-y-3">
         <Button size="lg" className="h-12 w-full clip-corner-lg text-base" disabled={busy} onClick={onConnect}>
           {busy ? (
-            <><Loader2 className="size-4 mr-2 animate-spin" /> Waiting for Discord…</>
+            <><Loader2 className="size-4 mr-2 animate-spin" /> <FormattedMessage id="discordImportWizard.connect.waiting" defaultMessage="Waiting for Discord…" /></>
           ) : (
-            <><DiscordMark className="size-4 mr-2" /> Connect Discord</>
+            <><DiscordMark className="size-4 mr-2" /> <FormattedMessage id="discordImportWizard.connect.button" defaultMessage="Connect Discord" /></>
           )}
         </Button>
         <p className="text-xs text-muted-foreground">
-          Opens Discord's sign-in in a new window. Armada never sees your Discord
-          password, and only servers where you hold Manage Server are listed.
+          <FormattedMessage id="discordImportWizard.connect.hint" defaultMessage="Opens Discord's sign-in in a new window. Armada never sees your Discord password, and only servers where you hold Manage Server are listed." />
         </p>
       </div>
     </WizardStepBody>
@@ -410,16 +417,19 @@ function ServerStep({
   onPick: (id: string) => void;
   onContinue: () => void;
 }) {
+  const intl = useIntl();
   return (
     <WizardStepBody
       glyph={glyph}
-      title="pick a server"
-      description="The whole server becomes a brand-new Armada community that you own. Only servers where you hold Manage Server are shown."
+      title={intl.formatMessage({ id: "discordImportWizard.server.title", defaultMessage: "pick a server" })}
+      description={
+        <FormattedMessage id="discordImportWizard.server.description" defaultMessage="The whole server becomes a brand-new Armada community that you own. Only servers where you hold Manage Server are shown." />
+      }
     >
       <div className="w-full space-y-3">
         {guilds.length === 0 && (
           <p className="text-sm text-muted-foreground">
-            No servers found where you hold Manage Server.
+            <FormattedMessage id="discordImportWizard.server.none" defaultMessage="No servers found where you hold Manage Server." />
           </p>
         )}
         <div className="space-y-1.5">
@@ -453,7 +463,11 @@ function ServerStep({
           disabled={!guildId || busy}
           onClick={onContinue}
         >
-          {busy ? <><Loader2 className="size-4 mr-2 animate-spin" /> Reading the server…</> : "Continue"}
+          {busy ? (
+            <><Loader2 className="size-4 mr-2 animate-spin" /> <FormattedMessage id="discordImportWizard.server.reading" defaultMessage="Reading the server…" /></>
+          ) : (
+            <FormattedMessage {...common.continue} />
+          )}
         </Button>
       </div>
     </WizardStepBody>
@@ -469,20 +483,27 @@ function InstallBotStep({
   busy: boolean;
   onRecheck: () => void;
 }) {
+  const intl = useIntl();
   return (
     <WizardStepBody
       glyph={glyph}
-      title="install the bot"
-      description="The bridge bot isn't in this server yet. It's what reads the channels and mirrors messages, so it has to be invited before the import can read anything."
+      title={intl.formatMessage({ id: "discordImportWizard.install.title", defaultMessage: "install the bot" })}
+      description={
+        <FormattedMessage id="discordImportWizard.install.description" defaultMessage="The bridge bot isn't in this server yet. It's what reads the channels and mirrors messages, so it has to be invited before the import can read anything." />
+      }
     >
       <div className="w-full space-y-3">
         <Button asChild size="lg" className="h-12 w-full clip-corner-lg text-base">
           <a href={installUrl} target="_blank" rel="noopener noreferrer">
-            <DiscordMark className="size-4 mr-2" /> Install the bot
+            <DiscordMark className="size-4 mr-2" /> <FormattedMessage id="discordImportWizard.install.button" defaultMessage="Install the bot" />
           </a>
         </Button>
         <Button variant="outline" className="w-full clip-corner-lg" disabled={busy} onClick={onRecheck}>
-          {busy ? <><Loader2 className="size-4 mr-2 animate-spin" /> Checking…</> : "I installed it, check again"}
+          {busy ? (
+            <><Loader2 className="size-4 mr-2 animate-spin" /> <FormattedMessage id="discordImportWizard.install.checking" defaultMessage="Checking…" /></>
+          ) : (
+            <FormattedMessage id="discordImportWizard.install.recheck" defaultMessage="I installed it, check again" />
+          )}
         </Button>
       </div>
     </WizardStepBody>
@@ -516,7 +537,7 @@ function ChannelRow({
             disabled={!channel.selected}
             onCheckedChange={() => onToggle("bridge")}
           />
-          <span className="text-xs text-muted-foreground">bridge</span>
+          <span className="text-xs text-muted-foreground"><FormattedMessage id="discordImportWizard.channel.bridge" defaultMessage="bridge" /></span>
         </label>
       )}
       {channel.bridgeable && historyAllowed && (
@@ -526,7 +547,7 @@ function ChannelRow({
             disabled={!channel.selected || !channel.bridge}
             onCheckedChange={() => onToggle("history")}
           />
-          <span className="text-xs text-muted-foreground">history</span>
+          <span className="text-xs text-muted-foreground"><FormattedMessage id="discordImportWizard.channel.history" defaultMessage="history" /></span>
         </label>
       )}
     </div>
@@ -556,6 +577,7 @@ function ReviewStep(props: {
   onStart: () => void;
 }) {
   const { plan } = props;
+  const intl = useIntl();
 
   return (
     <div className="flex flex-col gap-5">
@@ -568,14 +590,16 @@ function ReviewStep(props: {
         <div className="space-y-1.5">
           <h1 className="font-mono text-2xl font-bold lowercase tracking-tight">{plan.communityName}</h1>
           <p className="text-sm text-muted-foreground">
-            {props.selectedCount} {props.selectedCount === 1 ? "channel" : "channels"} ·{" "}
-            {props.bridgeCount} live-bridged · {plan.roles.length}{" "}
-            {plan.roles.length === 1 ? "role" : "roles"}
+            <FormattedMessage
+              id="discordImportWizard.review.summary"
+              defaultMessage="{channels, plural, one {# channel} other {# channels}} · {bridged} live-bridged · {roles, plural, one {# role} other {# roles}}"
+              values={{ channels: props.selectedCount, bridged: props.bridgeCount, roles: plan.roles.length }}
+            />
           </p>
         </div>
       </div>
 
-      <Section title="Channels">
+      <Section title={intl.formatMessage({ id: "discordImportWizard.review.channels", defaultMessage: "Channels" })}>
         <div className="rounded-lg bg-secondary/30 p-1">
           {plan.channels.map((c) => (
             <ChannelRow
@@ -588,21 +612,20 @@ function ReviewStep(props: {
         </div>
         <p className="text-xs text-muted-foreground">
           {plan.historyAllowed
-            ? "History imports the newest 10,000 messages per channel, keeping their original times and authors."
-            : `Message history isn't available for servers with more than 100 members${
-                plan.memberCount ? ` (this one has about ${plan.memberCount})` : ""
-              }.`}
+            ? <FormattedMessage id="discordImportWizard.review.historyAllowed" defaultMessage="History imports the newest 10,000 messages per channel, keeping their original times and authors." />
+            : plan.memberCount
+              ? <FormattedMessage id="discordImportWizard.review.historyTooBigCount" defaultMessage="Message history isn't available for servers with more than 100 members (this one has about {count})." values={{ count: String(plan.memberCount) }} />
+              : <FormattedMessage id="discordImportWizard.review.historyTooBig" defaultMessage="Message history isn't available for servers with more than 100 members." />}
         </p>
         {plan.emojis.length > 0 && (
           <p className="text-xs text-muted-foreground">
-            {plan.emojis.length} custom emoji will be published as an Armada emoji pack.
+            <FormattedMessage id="discordImportWizard.review.emoji" defaultMessage="{count} custom emoji will be published as an Armada emoji pack." values={{ count: plan.emojis.length }} />
           </p>
         )}
         {plan.channels.some((c) => c.private) && (
           <p className="text-xs text-muted-foreground">
             <Lock className="mr-1 inline size-3" />
-            Gated channels import as private: key-gated, and invisible to members
-            without the role. Mirroring one is off unless you turn it on.
+            <FormattedMessage id="discordImportWizard.review.gated" defaultMessage="Gated channels import as private: key-gated, and invisible to members without the role. Mirroring one is off unless you turn it on." />
           </p>
         )}
       </Section>
@@ -611,25 +634,25 @@ function ReviewStep(props: {
         <Alert variant="destructive">
           <Lock className="size-4" />
           <AlertDescription className="text-xs leading-relaxed">
-            You're mirroring a private channel. Its key is handed to the bridge's
-            own identity so it can read the room, and everything posted there is
-            copied to Discord in plaintext. A gated room on this side is an
-            ordinary Discord channel on the other. You can revoke the bridge's
-            access from the channel's role in Armada at any time; note that doing
-            so rotates the key, and the bridge stays silent on that channel until
-            you re-grant it.
+            <FormattedMessage
+              id="discordImportWizard.review.privateWarning"
+              defaultMessage="You're mirroring a private channel. Its key is handed to the bridge's own identity so it can read the room, and everything posted there is copied to Discord in plaintext. A gated room on this side is an ordinary Discord channel on the other. You can revoke the bridge's access from the channel's role in Armada at any time; note that doing so rotates the key, and the bridge stays silent on that channel until you re-grant it."
+            />
           </AlertDescription>
         </Alert>
       )}
 
       {plan.roles.length > 0 && (
-        <Section title="Roles">
+        <Section title={intl.formatMessage({ id: "discordImportWizard.review.roles", defaultMessage: "Roles" })}>
           <div className="space-y-1">
             {plan.roles.map((r) => (
               <p key={r.discordId} className="text-sm">
                 {r.name}
                 {r.dropped.length > 0 && (
-                  <span className="text-xs text-muted-foreground"> · loses {r.dropped.join(", ")}</span>
+                  <span className="text-xs text-muted-foreground">
+                    {" "}
+                    <FormattedMessage id="discordImportWizard.review.loses" defaultMessage="· loses {permissions}" values={{ permissions: r.dropped.join(", ") }} />
+                  </span>
                 )}
               </p>
             ))}
@@ -638,7 +661,7 @@ function ReviewStep(props: {
       )}
 
       {plan.skipped.length > 0 && (
-        <Section title="Not imported">
+        <Section title={intl.formatMessage({ id: "discordImportWizard.notImported", defaultMessage: "Not imported" })}>
           <div className="space-y-1">
             {plan.skipped.map((s, i) => (
               <p key={i} className="text-xs text-muted-foreground">
@@ -649,7 +672,7 @@ function ReviewStep(props: {
         </Section>
       )}
 
-      <Section title="Relays">
+      <Section title={intl.formatMessage({ id: "discordImportWizard.review.relays", defaultMessage: "Relays" })}>
         <div className="space-y-1">
           {props.relays.map((r) => (
             <div key={r} className="flex items-center gap-2">
@@ -660,7 +683,7 @@ function ReviewStep(props: {
                   variant="ghost"
                   size="icon"
                   className="size-6 touch:size-11 shrink-0 text-muted-foreground hover:text-destructive"
-                  aria-label={`Remove ${r}`}
+                  aria-label={intl.formatMessage({ id: "discordImportWizard.review.removeRelay", defaultMessage: "Remove {relay}" }, { relay: r })}
                   onClick={() => props.onRemoveRelay(r)}
                 >
                   <X className="size-3.5" />
@@ -675,7 +698,7 @@ function ReviewStep(props: {
             className="text-xs text-muted-foreground underline hover:text-foreground"
             onClick={props.onEditRelays}
           >
-            Change relays
+            <FormattedMessage id="discordImportWizard.review.changeRelays" defaultMessage="Change relays" />
           </button>
         ) : (
           <div className="space-y-2">
@@ -700,7 +723,7 @@ function ReviewStep(props: {
                 variant="outline"
                 size="icon"
                 className="size-9 shrink-0"
-                aria-label="Add relay"
+                aria-label={intl.formatMessage({ id: "discordImportWizard.review.addRelay", defaultMessage: "Add relay" })}
                 disabled={!props.newRelayValid}
                 onClick={props.onAddRelay}
               >
@@ -712,7 +735,7 @@ function ReviewStep(props: {
               className="text-xs text-muted-foreground underline hover:text-foreground"
               onClick={props.onResetRelays}
             >
-              Reset to the standard set
+              <FormattedMessage id="discordImportWizard.review.resetRelays" defaultMessage="Reset to the standard set" />
             </button>
           </div>
         )}
@@ -721,12 +744,11 @@ function ReviewStep(props: {
       <Alert>
         <AlertTriangle className="size-4" />
         <AlertDescription className="text-xs leading-relaxed">
-          You'll sign the community's founding events with your key, in this app. It
-          never leaves your device, and the community is yours. The bridge keeps an
-          Admin role to run the import and the live bridges; you can revoke it from
-          Armada at any time. <strong>Bridged channels leave end-to-end encryption:</strong>{" "}
-          their messages are mirrored to Discord in plaintext. The import runs once and
-          can't be undone from here.
+          <FormattedMessage
+            id="discordImportWizard.review.ownership"
+            defaultMessage="You'll sign the community's founding events with your key, in this app. It never leaves your device, and the community is yours. The bridge keeps an Admin role to run the import and the live bridges; you can revoke it from Armada at any time. <strong>Bridged channels leave end-to-end encryption:</strong> their messages are mirrored to Discord in plaintext. The import runs once and can't be undone from here."
+            values={{ strong: (chunks) => <strong>{chunks}</strong> }}
+          />
         </AlertDescription>
       </Alert>
 
@@ -737,8 +759,7 @@ function ReviewStep(props: {
           className="mt-0.5"
         />
         <span className="text-xs leading-relaxed text-muted-foreground">
-          I understand that I own this community, and that bridged channels are not
-          end-to-end encrypted.
+          <FormattedMessage id="discordImportWizard.review.consent" defaultMessage="I understand that I own this community, and that bridged channels are not end-to-end encrypted." />
         </span>
       </label>
 
@@ -757,9 +778,9 @@ function ReviewStep(props: {
         {props.signingStep ? (
           <><Loader2 className="size-4 mr-2 animate-spin" /> {props.signingStep}</>
         ) : props.busy ? (
-          <><Loader2 className="size-4 mr-2 animate-spin" /> Working…</>
+          <><Loader2 className="size-4 mr-2 animate-spin" /> <FormattedMessage id="discordImportWizard.review.working" defaultMessage="Working…" /></>
         ) : (
-          "Import the server"
+          <FormattedMessage id="discordImportWizard.review.start" defaultMessage="Import the server" />
         )}
       </Button>
     </div>
@@ -796,17 +817,25 @@ function ProgressStep({
   historyCount: number;
   onRetry: () => void;
 }) {
+  const intl = useIntl();
   const failed = status?.status === "failed";
   const rows: Array<[string, string]> = [
-    ["community", plan?.checkpoints?.communityIdHex ? "minted, owned by your key" : "minting…"],
-    ["channels published", `${publishedCount} / ${selectedCount}`],
-    ["roles published", `${plan?.roles.filter((r) => r.publishedAt).length ?? 0} / ${plan?.roles.length ?? 0}`],
-    ["bridges wired", `${wiredCount} / ${bridgeCount}`],
+    [
+      intl.formatMessage({ id: "discordImportWizard.progress.community", defaultMessage: "community" }),
+      plan?.checkpoints?.communityIdHex
+        ? intl.formatMessage({ id: "discordImportWizard.progress.minted", defaultMessage: "minted, owned by your key" })
+        : intl.formatMessage({ id: "discordImportWizard.progress.minting", defaultMessage: "minting…" }),
+    ],
+    [intl.formatMessage({ id: "discordImportWizard.progress.channels", defaultMessage: "channels published" }), `${publishedCount} / ${selectedCount}`],
+    [intl.formatMessage({ id: "discordImportWizard.progress.roles", defaultMessage: "roles published" }), `${plan?.roles.filter((r) => r.publishedAt).length ?? 0} / ${plan?.roles.length ?? 0}`],
+    [intl.formatMessage({ id: "discordImportWizard.progress.bridges", defaultMessage: "bridges wired" }), `${wiredCount} / ${bridgeCount}`],
   ];
   if (plan?.historyAllowed && plan.channels.some((c) => c.history)) {
     rows.push([
-      "history messages",
-      `${historyCount}${status?.status === "history" ? " (importing…)" : ""}`,
+      intl.formatMessage({ id: "discordImportWizard.progress.history", defaultMessage: "history messages" }),
+      status?.status === "history"
+        ? intl.formatMessage({ id: "discordImportWizard.progress.historyImporting", defaultMessage: "{count} (importing…)" }, { count: String(historyCount) })
+        : String(historyCount),
     ]);
   }
 
@@ -815,11 +844,11 @@ function ProgressStep({
       glyph={failed ? <AlertTriangle className="size-14 text-destructive" /> : (
         <Loader2 className="size-14 animate-spin text-[#5865F2]" />
       )}
-      title={failed ? "import stopped" : "importing…"}
+      title={failed ? intl.formatMessage({ id: "discordImportWizard.progress.stoppedTitle", defaultMessage: "import stopped" }) : intl.formatMessage({ id: "discordImportWizard.progress.title", defaultMessage: "importing…" })}
       description={
         failed
-          ? "The import stopped partway. Nothing is lost, and retrying picks up where it left off."
-          : "Minting the community, publishing channels and roles, then wiring the live bridges. This can take a few minutes for a big server."
+          ? <FormattedMessage id="discordImportWizard.progress.stoppedDescription" defaultMessage="The import stopped partway. Nothing is lost, and retrying picks up where it left off." />
+          : <FormattedMessage id="discordImportWizard.progress.description" defaultMessage="Minting the community, publishing channels and roles, then wiring the live bridges. This can take a few minutes for a big server." />
       }
     >
       <div className="w-full space-y-3">
@@ -839,7 +868,7 @@ function ProgressStep({
               </Alert>
             )}
             <Button className="w-full clip-corner-lg" onClick={onRetry}>
-              Retry from where it stopped
+              <FormattedMessage id="discordImportWizard.progress.retry" defaultMessage="Retry from where it stopped" />
             </Button>
           </>
         )}
@@ -865,18 +894,35 @@ function DoneStep({
   joining: boolean;
   onOpen: () => void;
 }) {
+  const intl = useIntl();
   const bits = [
-    `${publishedCount} ${publishedCount === 1 ? "channel" : "channels"}`,
-    wiredCount > 0 ? `${wiredCount} live ${wiredCount === 1 ? "bridge" : "bridges"}` : null,
-    historyCount > 0 ? `${historyCount} history messages` : null,
-    plan && plan.emojis.length > 0 ? `${plan.emojis.length} custom emoji` : null,
+    intl.formatMessage(
+      { id: "discordImportWizard.done.channels", defaultMessage: "{count, plural, one {# channel} other {# channels}}" },
+      { count: publishedCount },
+    ),
+    wiredCount > 0
+      ? intl.formatMessage(
+          { id: "discordImportWizard.done.bridges", defaultMessage: "{count, plural, one {# live bridge} other {# live bridges}}" },
+          { count: wiredCount },
+        )
+      : null,
+    historyCount > 0
+      ? intl.formatMessage({ id: "discordImportWizard.done.history", defaultMessage: "{count, plural, one {# history message} other {# history messages}}" }, { count: historyCount })
+      : null,
+    plan && plan.emojis.length > 0
+      ? intl.formatMessage({ id: "discordImportWizard.done.emoji", defaultMessage: "{count} custom emoji" }, { count: plan.emojis.length })
+      : null,
   ].filter(Boolean);
 
   return (
     <WizardStepBody
       glyph={<Check className="size-14 text-success" />}
-      title={`${plan?.communityName ?? "your community"} is live`}
-      description={`${bits.join(", ")}, owned by your key.`}
+      title={
+        plan?.communityName
+          ? intl.formatMessage({ id: "discordImportWizard.done.title", defaultMessage: "{name} is live" }, { name: plan.communityName })
+          : intl.formatMessage({ id: "discordImportWizard.done.titleFallback", defaultMessage: "your community is live" })
+      }
+      description={intl.formatMessage({ id: "discordImportWizard.done.description", defaultMessage: "{summary}, owned by your key." }, { summary: intl.formatList(bits as string[], { type: "unit", style: "short" }) })}
     >
       <div className="w-full space-y-3">
         <Button
@@ -885,12 +931,16 @@ function DoneStep({
           disabled={joining || !status?.inviteUrl}
           onClick={onOpen}
         >
-          {joining ? <><Loader2 className="size-4 mr-2 animate-spin" /> Opening…</> : "Open your community"}
+          {joining ? (
+            <><Loader2 className="size-4 mr-2 animate-spin" /> <FormattedMessage id="discordImportWizard.done.opening" defaultMessage="Opening…" /></>
+          ) : (
+            <FormattedMessage id="discordImportWizard.done.open" defaultMessage="Open your community" />
+          )}
         </Button>
         {plan && plan.skipped.length > 0 && (
           <div className="space-y-1 rounded-lg bg-secondary/40 p-3 text-left">
             <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-              Not imported
+              <FormattedMessage id="discordImportWizard.notImported" defaultMessage="Not imported" />
             </span>
             {plan.skipped.map((s, i) => (
               <p key={i} className="text-xs text-muted-foreground">

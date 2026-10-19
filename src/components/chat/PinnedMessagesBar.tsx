@@ -8,6 +8,7 @@ import { useAddrEvent, useEvent } from "@/hooks/useEvent";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { parseAddrPinRef, type PinAddr } from "@/lib/nip29";
 import { cn } from "@/lib/utils";
+import { defineMessages, FormattedMessage, useIntl } from "@/i18n";
 
 function previewText(content: string): string {
   return content.replace(/https?:\/\/\S+/g, "📎").trim() || "📎";
@@ -26,11 +27,12 @@ function PinnedRow({
   onJump: (id: string) => void;
   onUnpin: (ref: string) => void;
 }) {
+  const intl = useIntl();
   const { data: event } = useEvent(eventId, [relayUrl]);
   const author = useAuthor(event?.pubkey);
   const scopedName = useScopedDisplayName(event?.pubkey, author.data?.metadata);
   const displayName = event ? scopedName : "";
-  const preview = event ? previewText(event.content) : "Pinned message";
+  const preview = event ? previewText(event.content) : intl.formatMessage({ id: "pinnedMessagesBar.pinnedMessage", defaultMessage: "Pinned message" });
 
   return (
     <div className="group/pin flex items-start gap-2 min-w-0 clip-corner px-2 py-1.5 hover:bg-secondary/60">
@@ -56,37 +58,46 @@ function PinnedRow({
             className="h-6 touch:h-9 shrink-0 px-2 touch:px-3 text-2xs text-muted-foreground hover:text-primary"
             onClick={() => onJump(eventId)}
           >
-            Jump
+            <FormattedMessage id="pinnedMessagesBar.jump" defaultMessage="Jump" />
           </Button>
         </TooltipTrigger>
-        <TooltipContent>Jump to message</TooltipContent>
+        <TooltipContent>
+          <FormattedMessage id="pinnedMessagesBar.jumpToMessage" defaultMessage="Jump to message" />
+        </TooltipContent>
       </Tooltip>
       {canModerate && (
         <Button
           variant="ghost"
           size="sm"
-          aria-label="Unpin message"
+          aria-label={intl.formatMessage({ id: "pinnedMessagesBar.unpinMessage", defaultMessage: "Unpin message" })}
           className="h-6 touch:h-9 shrink-0 px-2 touch:px-3 text-2xs touch:text-xs text-muted-foreground hover:text-destructive opacity-0 group-hover/pin:opacity-100 touch:opacity-100 focus-visible:opacity-100 transition-opacity"
           onClick={() => onUnpin(eventId)}
         >
-          Unpin
+          <FormattedMessage id="pinnedMessagesBar.unpin" defaultMessage="Unpin" />
         </Button>
       )}
     </div>
   );
 }
 
-function addrPinLabel(kind: number): string {
+const ADDR_PIN_LABELS = defineMessages({
+  article: { id: "pinnedMessagesBar.kind.article", defaultMessage: "Article" },
+  wiki: { id: "pinnedMessagesBar.kind.wiki", defaultMessage: "Wiki page" },
+  calendar: { id: "pinnedMessagesBar.kind.calendar", defaultMessage: "Calendar event" },
+  other: { id: "pinnedMessagesBar.kind.other", defaultMessage: "Kind {kind}" },
+});
+
+function addrPinLabel(kind: number) {
   switch (kind) {
     case 30023:
-      return "Article";
+      return ADDR_PIN_LABELS.article;
     case 30818:
-      return "Wiki page";
+      return ADDR_PIN_LABELS.wiki;
     case 31922:
     case 31923:
-      return "Calendar event";
+      return ADDR_PIN_LABELS.calendar;
     default:
-      return `Kind ${kind}`;
+      return ADDR_PIN_LABELS.other;
   }
 }
 
@@ -104,18 +115,19 @@ function PinnedAddrRow({
   canModerate: boolean;
   onUnpin: (ref: string) => void;
 }) {
+  const intl = useIntl();
   const { data: event } = useAddrEvent(addr, [relayUrl]);
   const author = useAuthor(event?.pubkey);
   const scopedName = useScopedDisplayName(event?.pubkey, author.data?.metadata);
   const title = event?.tags.find(([n]) => n === "title")?.[1];
-  const preview = event ? title || previewText(event.content) : "Pinned event";
+  const preview = event ? title || previewText(event.content) : intl.formatMessage({ id: "pinnedMessagesBar.pinnedEvent", defaultMessage: "Pinned event" });
 
   return (
     <div className="group/pin flex items-start gap-2 min-w-0 clip-corner px-2 py-1.5 hover:bg-secondary/60">
       <div className="flex min-w-0 flex-1 flex-col items-start gap-0.5">
         <span className="flex max-w-full items-center gap-1.5">
           <span className="shrink-0 text-3xs font-semibold uppercase tracking-wide text-amber-500/90">
-            {addrPinLabel(addr.kind)}
+            {intl.formatMessage(addrPinLabel(addr.kind), { kind: addr.kind })}
           </span>
           {event && (
             <span className="text-2xs font-semibold text-primary truncate">
@@ -131,11 +143,11 @@ function PinnedAddrRow({
         <Button
           variant="ghost"
           size="sm"
-          aria-label="Unpin event"
+          aria-label={intl.formatMessage({ id: "pinnedMessagesBar.unpinEvent", defaultMessage: "Unpin event" })}
           className="h-6 touch:h-9 shrink-0 px-2 touch:px-3 text-2xs touch:text-xs text-muted-foreground hover:text-destructive opacity-0 group-hover/pin:opacity-100 touch:opacity-100 focus-visible:opacity-100 transition-opacity"
           onClick={() => onUnpin(pinRef)}
         >
-          Unpin
+          <FormattedMessage id="pinnedMessagesBar.unpin" defaultMessage="Unpin" />
         </Button>
       )}
     </div>
@@ -162,6 +174,7 @@ export function PinnedMessagesBar({
   onUnpin,
   onClose,
 }: PinnedMessagesBarProps) {
+  const intl = useIntl();
   const expanded = open && pinnedRefs.length > 0;
 
   return (
@@ -176,12 +189,12 @@ export function PinnedMessagesBar({
         <div className="flex items-center justify-between gap-2 mb-1.5">
           <span className="flex items-center gap-1.5 text-2xs font-semibold uppercase tracking-wide text-muted-foreground/80">
             <Pin className="size-3 text-amber-500" />
-            Pinned messages
+            <FormattedMessage id="pinnedMessagesBar.title" defaultMessage="Pinned messages" />
           </span>
           <Button
             variant="ghost"
             size="icon"
-            aria-label="Close pinned messages"
+            aria-label={intl.formatMessage({ id: "pinnedMessagesBar.close", defaultMessage: "Close pinned messages" })}
             className="size-6 touch:size-10 text-muted-foreground"
             onClick={onClose}
           >

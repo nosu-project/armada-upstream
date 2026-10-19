@@ -12,6 +12,7 @@ import { parseInviteLink, type ParsedInviteLink } from "@/concord/lib/invite";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { toast } from "@/hooks/useToast";
 import { cn } from "@/lib/utils";
+import { FormattedMessage, t, useIntl } from "@/i18n";
 
 interface InviteEmbedProps {
   url: string;
@@ -20,12 +21,16 @@ interface InviteEmbedProps {
 
 /** Join card for a Concord invite link, previewing the sealed bundle from its bootstrap relays. */
 export function InviteEmbed({ url, className }: InviteEmbedProps) {
+  const intl = useIntl();
   const invite = parseInviteLink(url);
   if (!invite) {
     // The secret lives in the `#fragment`; without it the invite can't be joined.
     return (
       <InviteTombstone
-        message="This invite link is missing its secret (the part after #). Ask for a fresh link."
+        message={intl.formatMessage({
+          id: "inviteEmbed.missingSecret",
+          defaultMessage: "This invite link is missing its secret (the part after #). Ask for a fresh link.",
+        })}
         className={className}
       />
     );
@@ -47,7 +52,9 @@ function InviteCard({ invite, className }: { invite: ParsedInviteLink; className
         if (!cancelled) setData(p);
       })
       .catch((e) => {
-        if (!cancelled) setError(e instanceof Error ? e.message : "Couldn't load this invite.");
+        if (!cancelled) setError(e instanceof Error
+            ? e.message
+            : t({ id: "inviteEmbed.loadFailed", defaultMessage: "Couldn't load this invite." }));
       });
     return () => {
       cancelled = true;
@@ -87,18 +94,26 @@ function InviteResolvedCard({
 
   const doJoin = async () => {
     if (!user) {
-      toast({ title: "Sign in to join", description: "Create an account or sign in to accept this invite." });
+      toast({
+        title: t({ id: "inviteEmbed.signInToJoin", defaultMessage: "Sign in to join" }),
+        description: t({
+          id: "inviteEmbed.signInToJoinDescription",
+          defaultMessage: "Create an account or sign in to accept this invite.",
+        }),
+      });
       return;
     }
     try {
       // Optimistic: the durable join runs in the background (failures toast).
       const { communityId, name } = await join({ invite, bundle: preview.bundle });
-      toast({ title: "Joined", description: name });
+      toast({ title: t({ id: "inviteEmbed.joined", defaultMessage: "Joined" }), description: name });
       navigate(`/c/${encodeURIComponent(communityId)}`);
     } catch (e) {
       toast({
-        title: "Couldn't join",
-        description: e instanceof Error ? e.message : "The invite didn't work.",
+        title: t({ id: "inviteEmbed.joinFailed", defaultMessage: "Couldn't join" }),
+        description: e instanceof Error
+          ? e.message
+          : t({ id: "inviteEmbed.joinFailedDescription", defaultMessage: "The invite didn't work." }),
         variant: "destructive",
       });
     }
@@ -114,7 +129,7 @@ function InviteResolvedCard({
     >
       <div className="px-3.5 py-3 space-y-2.5">
         <p className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground">
-          You've been invited to join a community
+          <FormattedMessage id="inviteEmbed.invited" defaultMessage="You've been invited to join a community" />
         </p>
 
         <div className="flex items-center gap-3 min-w-0">
@@ -130,12 +145,16 @@ function InviteResolvedCard({
             <div className="mt-0.5 flex items-center gap-3 text-xs text-muted-foreground">
               <span className="inline-flex items-center gap-1">
                 <ShieldCheck className="size-3.5 text-success shrink-0" />
-                Encrypted
+                <FormattedMessage id="inviteEmbed.encrypted" defaultMessage="Encrypted" />
               </span>
               {preview.channelCount > 0 && (
                 <span className="inline-flex items-center gap-1">
                   <Users className="size-3.5 shrink-0" />
-                  {preview.channelCount} {preview.channelCount === 1 ? "channel" : "channels"}
+                  <FormattedMessage
+                    id="inviteEmbed.channelCount"
+                    defaultMessage="{count, plural, one {# channel} other {# channels}}"
+                    values={{ count: preview.channelCount }}
+                  />
                 </span>
               )}
             </div>
@@ -144,15 +163,15 @@ function InviteResolvedCard({
 
         {alreadyJoined ? (
           <Button variant="secondary" className="w-full clip-corner-lg" onClick={open}>
-            Open
+            <FormattedMessage id="inviteEmbed.open" defaultMessage="Open" />
           </Button>
         ) : expired ? (
           <Button variant="secondary" className="w-full clip-corner-lg" disabled>
-            Invite expired
+            <FormattedMessage id="inviteEmbed.expired" defaultMessage="Invite expired" />
           </Button>
         ) : (
           <Button className="w-full clip-corner-lg" onClick={doJoin} disabled={isJoining}>
-            Join
+            <FormattedMessage id="inviteEmbed.join" defaultMessage="Join" />
           </Button>
         )}
       </div>

@@ -17,6 +17,7 @@ import { useHiddenMessages } from "@/hooks/useHiddenMessages";
 import { useMutedWordFilter } from "@/hooks/useMutedWords";
 import { useMessagePermalink } from "@/hooks/useMessagePermalink";
 import { useMutedPubkeys } from "@/hooks/useMuteList";
+import { common, FormattedMessage, useIntl } from "@/i18n";
 import { cn } from "@/lib/utils";
 
 import type { ChatMsg, ChatTransport } from "@/components/chat/transport";
@@ -63,6 +64,7 @@ export function ForumPostPage({
   onBack: () => void;
   className?: string;
 }) {
+  const intl = useIntl();
   const { user } = useCurrentUser();
   const { config } = useAppContext();
   const isLoading = transport.threadLoading?.(root.id) ?? false;
@@ -156,10 +158,13 @@ export function ForumPostPage({
 
   const commentCount = comments.length;
   const commentsLabel = isLoading
-    ? "Comments"
+    ? intl.formatMessage({ id: "forumPostPage.comments", defaultMessage: "Comments" })
     : commentCount === 0
-      ? "No comments yet"
-      : `${commentCount} ${commentCount === 1 ? "comment" : "comments"}`;
+      ? intl.formatMessage({ id: "forumPostPage.noComments", defaultMessage: "No comments yet" })
+      : intl.formatMessage(
+        { id: "forumPostPage.commentCount", defaultMessage: "{count, plural, one {# comment} other {# comments}}" },
+        { count: commentCount },
+      );
 
   const rowProps = (event: ChatMsg) => ({
     event,
@@ -186,12 +191,16 @@ export function ForumPostPage({
       messages={[]}
       layout="document"
       documentEnterSends
-      submitLabel={opts.inline ? "Reply" : "Comment"}
+      submitLabel={opts.inline
+        ? intl.formatMessage(common.reply)
+        : intl.formatMessage({ id: "forumPostPage.comment", defaultMessage: "Comment" })}
       onCancel={opts.inline ? () => setReplyingTo(undefined) : () => setCommentOpen(false)}
       mentionPubkeys={mentionPubkeys}
       canMentionEveryone={transport.canMentionEveryone}
       conversationRelays={conversationRelays}
-      placeholder={opts.inline ? "Write a reply" : "Add a comment"}
+      placeholder={opts.inline
+        ? intl.formatMessage({ id: "forumPostPage.writeReply", defaultMessage: "Write a reply" })
+        : intl.formatMessage({ id: "forumPostPage.addComment", defaultMessage: "Add a comment" })}
       // Inline drafts are scoped to the comment answered.
       draftScope={opts.inline ? `thread:${root.id}:${parent.id}` : `thread:${root.id}`}
       autoFocus={opts.inline}
@@ -238,7 +247,11 @@ export function ForumPostPage({
             <div className="flex items-center gap-1 px-3 pt-2 text-xs text-muted-foreground">
               <CornerDownRight className="size-3 shrink-0" />
               <span className="truncate">
-                replying to <DisplayName pubkey={parent.pubkey} />
+                <FormattedMessage
+                  id="forumPostPage.replyingToLower"
+                  defaultMessage="replying to {name}"
+                  values={{ name: <DisplayName pubkey={parent.pubkey} /> }}
+                />
               </span>
             </div>
           )}
@@ -251,7 +264,11 @@ export function ForumPostPage({
             <div className="mb-1 flex items-center gap-1 px-1 text-xs text-muted-foreground">
               <CornerDownRight className="size-3 shrink-0" />
               <span className="truncate">
-                Replying to <DisplayName pubkey={comment.pubkey} />
+                <FormattedMessage
+                  id="forumPostPage.replyingTo"
+                  defaultMessage="Replying to {name}"
+                  values={{ name: <DisplayName pubkey={comment.pubkey} /> }}
+                />
               </span>
             </div>
             {composer(comment, { inline: true })}
@@ -278,14 +295,14 @@ export function ForumPostPage({
               onClick={onBack}
             >
               <ArrowLeft className="size-4" />
-              All posts
+              <FormattedMessage id="forumPostPage.allPosts" defaultMessage="All posts" />
             </Button>
 
             <article data-event-id={root.id}>
               {pinned && (
                 <div className="mb-1 flex items-center gap-1 text-xs font-medium text-muted-foreground">
                   <Pin className="size-3" />
-                  Pinned
+                  <FormattedMessage id="forumPostPage.pinned" defaultMessage="Pinned" />
                 </div>
               )}
               <h1 className="mb-4 text-2xl font-semibold leading-tight break-words">{title}</h1>
@@ -294,8 +311,8 @@ export function ForumPostPage({
                   <MessagesSquare className="size-4 shrink-0" />
                   <span className="italic">
                     {rootMuted
-                      ? "You blocked the person who wrote this post."
-                      : "The post isn't loaded. It may be older than the channel window."}
+                      ? <FormattedMessage id="forumPostPage.authorBlocked" defaultMessage="You blocked the person who wrote this post." />
+                      : <FormattedMessage id="forumPostPage.notLoaded" defaultMessage="The post isn't loaded. It may be older than the channel window." />}
                   </span>
                 </div>
               ) : (
@@ -311,7 +328,7 @@ export function ForumPostPage({
                     onClick={openCommentBox}
                     className="flex w-full items-center clip-corner-lg bg-secondary/60 px-3 py-2.5 text-left text-sm text-muted-foreground transition-colors hover:bg-secondary/80 hover:text-foreground touch:py-3"
                   >
-                    Add a comment
+                    <FormattedMessage id="forumPostPage.addComment" defaultMessage="Add a comment" />
                   </button>
                 )}
                 <div
@@ -331,10 +348,12 @@ export function ForumPostPage({
                 </div>
               </div>
             ) : (
-              <p className="mt-4 py-2 text-center text-xs text-muted-foreground">Join this channel to comment.</p>
+              <p className="mt-4 py-2 text-center text-xs text-muted-foreground">
+                <FormattedMessage id="forumPostPage.joinToComment" defaultMessage="Join this channel to comment." />
+              </p>
             )}
 
-            <section className="mt-6" aria-label="Comments">
+            <section className="mt-6" aria-label={intl.formatMessage({ id: "forumPostPage.comments", defaultMessage: "Comments" })}>
               <h2 className="flex items-center gap-2 px-3 pb-1 text-sm font-semibold">
                 <span>{commentsLabel}</span>
                 {isLoading && <Loader2 className="size-3.5 animate-spin text-muted-foreground" />}

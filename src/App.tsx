@@ -22,6 +22,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import WalletProvider from "@/components/WalletProvider";
 import { WebPushNotifications } from "@/components/WebPushNotifications";
 import { initGroupKeyPersistence } from "@/concord/lib/groupKeyPersist";
+import { I18nProvider } from "@/i18n/I18nProvider";
 import { secureStorage } from "@/lib/secureStorage";
 import { APP_CONFIG_STORAGE_KEY } from "@/lib/activeAccount";
 import { likelySignedIn } from "@/lib/likelySignedIn";
@@ -91,6 +92,7 @@ if (Capacitor.isNativePlatform()) {
 
 export function App() {
   return (
+    <I18nProvider>
     <AppProvider storageKey={APP_CONFIG_STORAGE_KEY}>
       <ArmadaDBProvider>
         <QueryClientProvider client={queryClient}>
@@ -121,6 +123,7 @@ export function App() {
         </QueryClientProvider>
       </ArmadaDBProvider>
     </AppProvider>
+    </I18nProvider>
   );
 }
 

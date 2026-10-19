@@ -17,6 +17,7 @@ import { queryExplicitRelaysWithStatus } from "@/lib/nip65";
 
 import type { Community } from "@/concord/lib/types";
 import type { NostrFilter } from "@nostrify/nostrify";
+import { t } from "@/i18n";
 
 /**
  * Discover listings by LINK. A kind-3314 announcement carries only an invite
@@ -69,7 +70,7 @@ export async function fetchLinkAnnouncements(
     listingFilters.push({ kinds: [KIND_COMMUNITY_ANNOUNCEMENT], limit: LISTING_READ_LIMIT });
   }
   const listingRead = await queryExplicitRelaysWithStatus(nostr, relays, listingFilters, readSignal(opts?.signal));
-  if (listingRead.answered.length === 0) throw new DiscoverUnansweredError("No Discover relay answered.");
+  if (listingRead.answered.length === 0) throw new DiscoverUnansweredError(t({ id: "useDiscoverListings.noRelayAnswered", defaultMessage: "No Discover relay answered." }));
   const listings = listingRead.events.filter(
     (e) => e.kind === KIND_COMMUNITY_ANNOUNCEMENT && linkSigners.has(announcementFromEvent(e)?.linkSigner ?? ""),
   );
@@ -83,7 +84,7 @@ export async function fetchLinkAnnouncements(
   }
   const deletionRead = await queryExplicitRelaysWithStatus(nostr, relays, deletionFilters, readSignal(opts?.signal));
   if (deletionRead.answered.length === 0 && opts?.strict) {
-    throw new DiscoverUnansweredError("No Discover relay answered the deletions read.");
+    throw new DiscoverUnansweredError(t({ id: "useDiscoverListings.noRelayAnsweredDeletions", defaultMessage: "No Discover relay answered the deletions read." }));
   }
   return announcementsForLinks([...listings, ...deletionRead.events], linkSigners);
 }
@@ -154,7 +155,7 @@ export function useUnlistAnnouncements() {
 
   const unlist = useCallback(
     async (announcements: DiscoveredInvite[]): Promise<number> => {
-      if (!user) throw new Error("Sign in to remove a listing.");
+      if (!user) throw new Error(t({ id: "useDiscoverListings.signInToRemove", defaultMessage: "Sign in to remove a listing." }));
       const ids = [...new Set(announcements.filter((a) => a.source.pubkey === user.pubkey).map((a) => a.source.id))];
       if (ids.length === 0) return 0;
       await publishEvent(buildAnnouncementDeletion(ids));
@@ -168,7 +169,7 @@ export function useUnlistAnnouncements() {
 
   const unlistLinks = useCallback(
     async (linkSigners: Iterable<string>, alsoKnown: DiscoveredInvite[] = []): Promise<number> => {
-      if (!user) throw new Error("Sign in to remove a listing.");
+      if (!user) throw new Error(t({ id: "useDiscoverListings.signInToRemove", defaultMessage: "Sign in to remove a listing." }));
       const signers = new Set(linkSigners);
       const found = await fetchLinkAnnouncements(nostr, relays, signers, { authors: [user.pubkey], strict: true });
       return unlist([...found, ...alsoKnown]);

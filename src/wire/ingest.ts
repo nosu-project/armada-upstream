@@ -11,7 +11,7 @@ import { KIND_GROUP_CHAT } from "@/lib/nip29";
 import { KIND_STREAM_MESSAGE_V2 } from "@/buzz/kinds";
 import { reactionContentKey } from "@/hooks/useReactions";
 import { dmThreadScope, emitWireScopes } from "@/wire/bus";
-import { feedNotifyCandidates, type NotifyCandidate } from "@/wire/notify";
+import { feedNotifyCandidates, type GitNotifyAction, type NotifyCandidate } from "@/wire/notify";
 import { isCIEventKind, matchCIEventRepository } from "@/lib/ci";
 import { firstImetaMime, isThreadReply } from "@/lib/notificationPreview";
 import { chatRoute } from "@/lib/routes";
@@ -460,19 +460,19 @@ function gitCandidates(ev: NostrEvent, spec: WireSpec | undefined): NotifyCandid
   let repository: string | undefined;
   let ticketId: string | undefined;
   let ticketTitle: string | undefined;
-  let action: string | undefined;
+  let action: GitNotifyAction | undefined;
   const ticket = parseGitTicket(ev);
   if (ticket?.repositoryAddress) {
     repository = ticket.repositoryAddress.coordinate;
     ticketId = ticket.id;
     ticketTitle = ticket.subject;
-    action = ticket.type === "issue" ? "opened an issue" : "opened a pull request";
+    action = ticket.type === "issue" ? "issue" : "pr";
   }
   const comment = parseGitComment(ev);
   if (comment) {
     repository = spec?.gitRootById.get(comment.ticketId);
     ticketId = comment.ticketId;
-    action = "commented on a ticket";
+    action = "comment";
   }
   const status = parseGitStatusEvent(ev);
   if (status) {
@@ -480,7 +480,7 @@ function gitCandidates(ev: NostrEvent, spec: WireSpec | undefined): NotifyCandid
     ticketId = status.ticketId;
     // Owners always trusted; other status authors are validated by the timeline, never surfaced here.
     if (!repository || (status.author !== repository.split(":")[1] && status.author !== spec?.gitRootAuthorById.get(status.ticketId))) return [];
-    action = "changed a ticket status";
+    action = "status";
   }
   if (!repository || !action) return [];
   const attachments = spec?.gitByRepository.get(repository) ?? [];

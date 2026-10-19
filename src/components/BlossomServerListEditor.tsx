@@ -6,6 +6,7 @@ import { BlossomLed } from "@/components/RelayLed";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { toast } from "@/hooks/useToast";
+import { common, FormattedMessage, t, useIntl } from "@/i18n";
 import { normalizeBlossomServerUrl } from "@/lib/blossom";
 
 function serverHost(url: string): string {
@@ -78,7 +79,7 @@ export interface BlossomServerListEditorProps {
   defaults?: boolean;
 }
 
-function RowTag({ children }: { children: string }) {
+function RowTag({ children }: { children: React.ReactNode }) {
   return <span className="text-xs text-muted-foreground shrink-0 ml-1">{children}</span>;
 }
 
@@ -90,25 +91,29 @@ export function BlossomServerListEditor({
   servers,
   onChange,
   onReset,
-  emptyText = "No media servers configured.",
+  emptyText,
   placeholder = "https://blossom.example.com",
   primary = servers[0],
   defaults = false,
 }: BlossomServerListEditorProps) {
+  const intl = useIntl();
   const [newUrl, setNewUrl] = useState("");
 
   const handleAdd = () => {
     const normalized = normalizeBlossomServerUrl(newUrl);
     if (!normalized) {
       toast({
-        title: "Invalid server URL",
-        description: "Enter an https:// URL.",
+        title: t({ id: "blossomServerListEditor.invalidTitle", defaultMessage: "Invalid server URL" }),
+        description: t({ id: "blossomServerListEditor.invalidDescription", defaultMessage: "Enter an https:// URL." }),
         variant: "destructive",
       });
       return;
     }
     if (servers.includes(normalized)) {
-      toast({ title: "Already in the list", description: normalized });
+      toast({
+        title: t({ id: "blossomServerListEditor.duplicate", defaultMessage: "Already in the list" }),
+        description: normalized,
+      });
       return;
     }
     onChange([...servers, normalized]);
@@ -122,15 +127,24 @@ export function BlossomServerListEditor({
           <div className="flex-1 min-w-0">
             <ServerIdentity url={url} />
           </div>
-          {defaults && <RowTag>Default</RowTag>}
+          {defaults && (
+            <RowTag>
+              <FormattedMessage id="blossomServerListEditor.default" defaultMessage="Default" />
+            </RowTag>
+          )}
           {url === primary ? (
-            <RowTag>Primary</RowTag>
+            <RowTag>
+              <FormattedMessage id="blossomServerListEditor.primary" defaultMessage="Primary" />
+            </RowTag>
           ) : (
             <Button
               variant="ghost"
               size="icon"
-              aria-label={`Make ${url} primary`}
-              title="Make primary"
+              aria-label={intl.formatMessage(
+                { id: "blossomServerListEditor.makePrimaryLabel", defaultMessage: "Make {url} primary" },
+                { url },
+              )}
+              title={intl.formatMessage({ id: "blossomServerListEditor.makePrimary", defaultMessage: "Make primary" })}
               className="size-7 touch:size-11 text-muted-foreground hover:text-foreground shrink-0"
               onClick={() => onChange([url, ...servers.filter((u) => u !== url)])}
             >
@@ -140,7 +154,7 @@ export function BlossomServerListEditor({
           <Button
             variant="ghost"
             size="icon"
-            aria-label={`Remove ${url}`}
+            aria-label={intl.formatMessage({ id: "blossomServerListEditor.remove", defaultMessage: "Remove {url}" }, { url })}
             className="size-7 touch:size-11 text-muted-foreground hover:text-destructive shrink-0"
             onClick={() => onChange(servers.filter((u) => u !== url))}
           >
@@ -150,7 +164,11 @@ export function BlossomServerListEditor({
       ))}
 
       {servers.length === 0 && (
-        <p className="text-sm text-muted-foreground py-1">{emptyText}</p>
+        <p className="text-sm text-muted-foreground py-1">
+          {emptyText ?? (
+            <FormattedMessage id="blossomServerListEditor.empty" defaultMessage="No media servers configured." />
+          )}
+        </p>
       )}
 
       <form
@@ -164,18 +182,19 @@ export function BlossomServerListEditor({
           value={newUrl}
           onChange={(e) => setNewUrl(e.target.value)}
           placeholder={placeholder}
-          aria-label="Add media server"
+          aria-label={intl.formatMessage({ id: "blossomServerListEditor.addLabel", defaultMessage: "Add media server" })}
           autoComplete="off"
           className="text-base md:text-sm bg-background/40 border-transparent"
         />
         <Button type="submit" disabled={!newUrl.trim()} className="clip-corner-lg shrink-0">
-          <Plus className="size-4 mr-1.5" /> Add
+          <Plus className="size-4 mr-1.5" /> <FormattedMessage {...common.add} />
         </Button>
       </form>
 
       {onReset && (
         <Button type="button" variant="ghost" size="sm" className="text-muted-foreground -ml-2" onClick={onReset}>
-          <RotateCcw className="size-3.5 mr-1.5" /> Reset to defaults
+          <RotateCcw className="size-3.5 mr-1.5" />{" "}
+          <FormattedMessage id="blossomServerListEditor.reset" defaultMessage="Reset to defaults" />
         </Button>
       )}
     </div>

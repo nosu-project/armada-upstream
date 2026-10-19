@@ -18,6 +18,7 @@ import { bytesToHex, hexToBytes, random32, type GroupKey } from "@/concord/lib/d
 import { KIND_VOICE_PRESENCE } from "@/concord/lib/kinds";
 import type { OpenedEvent } from "@/concord/lib/stream";
 import { MAX_COMMUNITY_AV_BROKERS, type CommunityMetadata } from "@/concord/lib/types";
+import { t } from "@/i18n/intl";
 
 // Protocol constants (CORD-07)
 /** NIP-98-style HTTP-auth event kind — the token grant's carrier (§2). */
@@ -167,13 +168,13 @@ export async function fetchAvToken(origin: string, voice: GroupKey): Promise<AvT
     headers: { Authorization: `Concord ${signAvGrant(voice, url)}` },
     signal: AbortSignal.timeout(8000),
   });
-  if (!res.ok) throw new Error(`Voice token request failed: HTTP ${res.status}`);
+  if (!res.ok) throw new Error(t({ id: "concordVoice.tokenRequestFailed", defaultMessage: "Voice token request failed: HTTP {status}" }, { status: res.status }));
   const data = (await res.json()) as Record<string, unknown>;
   const token = typeof data.token === "string" ? data.token : "";
   const sfuUrl = typeof data.url === "string" ? data.url : "";
   const identity = typeof data.identity === "string" ? data.identity : "";
-  if (!token || !sfuUrl || !identity) throw new Error("Voice token response missing token, url, or identity");
-  if (!/^wss:\/\//i.test(sfuUrl)) throw new Error("Broker returned a non-wss SFU url");
+  if (!token || !sfuUrl || !identity) throw new Error(t({ id: "concordVoice.tokenResponseIncomplete", defaultMessage: "Voice token response missing token, url, or identity" }));
+  if (!/^wss:\/\//i.test(sfuUrl)) throw new Error(t({ id: "concordVoice.nonWssUrl", defaultMessage: "Broker returned a non-wss SFU url" }));
   return { token, url: sfuUrl, identity, origin };
 }
 
@@ -184,7 +185,7 @@ export async function fetchAvToken(origin: string, voice: GroupKey): Promise<AvT
  */
 export async function fetchAvTokenFromAny(origins: string[], voice: GroupKey): Promise<AvToken> {
   const candidates = [...new Set(origins.filter(Boolean))];
-  if (candidates.length === 0) throw new Error("No voice server to request a token from");
+  if (candidates.length === 0) throw new Error(t({ id: "concordVoice.noServer", defaultMessage: "No voice server to request a token from" }));
   let lastError: unknown;
   for (const origin of candidates) {
     try {
@@ -193,7 +194,7 @@ export async function fetchAvTokenFromAny(origins: string[], voice: GroupKey): P
       lastError = err;
     }
   }
-  throw lastError instanceof Error ? lastError : new Error("No reachable voice server");
+  throw lastError instanceof Error ? lastError : new Error(t({ id: "concordVoice.noReachableServer", defaultMessage: "No reachable voice server" }));
 }
 
 // Presence (§4)

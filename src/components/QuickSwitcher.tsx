@@ -17,6 +17,7 @@ import {
 } from "@/components/ui/command";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { useAppContext } from "@/hooks/useAppContext";
+import { common, defineMessage, FormattedMessage, useIntl, type MessageDescriptor } from "@/i18n";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useClosedDms } from "@/hooks/useClosedDms";
@@ -52,12 +53,12 @@ const DM_RESULT_HEIGHT = 52;
 /** Result categories; `messages` is channel/community chat, `dms` direct messages. */
 type Scope = "all" | "channels" | "servers" | "messages" | "dms";
 
-const SCOPE_TABS: Array<{ value: Scope; label: string }> = [
-  { value: "all", label: "All" },
-  { value: "messages", label: "Messages" },
-  { value: "dms", label: "DMs" },
-  { value: "channels", label: "Channels" },
-  { value: "servers", label: "Servers" },
+const SCOPE_TABS: Array<{ value: Scope; label: MessageDescriptor }> = [
+  { value: "all", label: defineMessage({ id: "quickSwitcher.scope.all", defaultMessage: "All" }) },
+  { value: "messages", label: defineMessage({ id: "quickSwitcher.scope.messages", defaultMessage: "Messages" }) },
+  { value: "dms", label: defineMessage({ id: "quickSwitcher.scope.dms", defaultMessage: "DMs" }) },
+  { value: "channels", label: defineMessage({ id: "quickSwitcher.scope.channels", defaultMessage: "Channels" }) },
+  { value: "servers", label: defineMessage({ id: "quickSwitcher.scope.servers", defaultMessage: "Servers" }) },
 ];
 
 /** Message corpus for a scope, or null. `dmsDisabled` excludes DMs entirely. */
@@ -90,9 +91,11 @@ function MessageResult({ message, onSelect }: { message: MessageEntry; onSelect:
           <DisplayName pubkey={message.authorPubkey} name={name} />
           {" · "}
           {message.dmPeers ? (
-            <>
-              Direct message · <DmMessageSource peers={message.dmPeers} />
-            </>
+            <FormattedMessage
+              id="quickSwitcher.dmMessageSource"
+              defaultMessage="Direct message · {conversation}"
+              values={{ conversation: <DmMessageSource peers={message.dmPeers} /> }}
+            />
           ) : (
             message.source
           )}
@@ -134,9 +137,15 @@ function DmResult({
       <div className="flex min-w-0 flex-col">
         <span className="truncate">{name}</span>
         <span className="truncate text-xs text-muted-foreground">
-          {conversation.peers.length > 1
-            ? `${conversation.peers.length} people`
-            : "Direct message"}
+          {conversation.peers.length > 1 ? (
+            <FormattedMessage
+              id="quickSwitcher.peopleCount"
+              defaultMessage="{count, plural, one {# person} other {# people}}"
+              values={{ count: conversation.peers.length }}
+            />
+          ) : (
+            <FormattedMessage id="quickSwitcher.directMessage" defaultMessage="Direct message" />
+          )}
         </span>
       </div>
     </CommandItem>
@@ -148,6 +157,7 @@ function DmResult({
  * settings; also Alt+↑/↓ channel hopping. Mounted once in {@link MainLayout}.
  */
 export function QuickSwitcher() {
+  const intl = useIntl();
   const [open, setOpen] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
@@ -299,7 +309,7 @@ export function QuickSwitcher() {
 
   return (
     <CommandDialog open={open} onOpenChange={setOpen}>
-      <CommandInput placeholder="Where would you like to go?" onValueChange={setQuery} />
+      <CommandInput placeholder={intl.formatMessage({ id: "quickSwitcher.placeholder", defaultMessage: "Where would you like to go?" })} onValueChange={setQuery} />
       {/* Prevent mousedown so the input keeps focus. */}
       <div
         className="flex flex-wrap gap-1 border-b border-chrome px-3 py-2"
@@ -317,7 +327,7 @@ export function QuickSwitcher() {
               value={t.value}
               className="h-auto px-3 py-1.5 touch:py-2.5 text-sm font-normal clip-corner-lg text-muted-foreground hover:bg-foreground/5 hover:text-foreground data-[state=on]:bg-primary data-[state=on]:font-medium data-[state=on]:text-primary-foreground"
             >
-              {t.label}
+              <FormattedMessage {...t.label} />
             </ToggleGroupItem>
           ))}
         </ToggleGroup>
@@ -325,22 +335,24 @@ export function QuickSwitcher() {
       <CommandList>
         {/* An in-flight search isn't "no results". */}
         {!searching && !(dmEntriesLoading && dmSectionActive) && (
-          <CommandEmpty>No results found.</CommandEmpty>
+          <CommandEmpty>
+            <FormattedMessage id="quickSwitcher.noResults" defaultMessage="No results found." />
+          </CommandEmpty>
         )}
         {dmEntriesLoading && dmSectionActive && (
           <div className="flex items-center justify-center gap-2 py-6 text-sm text-muted-foreground">
             <Loader2 className="size-4 animate-spin" />
-            Loading direct messages…
+            <FormattedMessage id="quickSwitcher.loadingDms" defaultMessage="Loading direct messages…" />
           </div>
         )}
         {searching && messages.length === 0 && (
           <div className="flex items-center justify-center gap-2 py-6 text-sm text-muted-foreground">
             <Loader2 className="size-4 animate-spin" />
-            Searching messages…
+            <FormattedMessage id="quickSwitcher.searchingMessages" defaultMessage="Searching messages…" />
           </div>
         )}
         {dmSectionActive && dmEntries.length > 0 && (
-          <CommandGroup heading="Direct messages">
+          <CommandGroup heading={intl.formatMessage({ id: "quickSwitcher.heading.directMessages", defaultMessage: "Direct messages" })}>
             {dmEntries.map((conversation, index) => (
               <DeferredRow
                 // Reset the latch when the search clears so the blank launcher stays cheap.
@@ -362,7 +374,7 @@ export function QuickSwitcher() {
           </CommandGroup>
         )}
         {(scope === "all" || scope === "channels") && entries.channels.length > 0 && (
-          <CommandGroup heading="Channels">
+          <CommandGroup heading={intl.formatMessage({ id: "quickSwitcher.heading.channels", defaultMessage: "Channels" })}>
             {entries.channels.map((c) => (
               <CommandItem
                 key={c.key}
@@ -377,7 +389,11 @@ export function QuickSwitcher() {
           </CommandGroup>
         )}
         {messages.length > 0 && (
-          <CommandGroup heading={scope === "dms" ? "DM messages" : "Messages"}>
+          <CommandGroup heading={
+              scope === "dms"
+                ? intl.formatMessage({ id: "quickSwitcher.heading.dmMessages", defaultMessage: "DM messages" })
+                : intl.formatMessage({ id: "quickSwitcher.heading.messages", defaultMessage: "Messages" })
+            }>
             {messages.map((m) => (
               <MessageResult
                 key={m.key}
@@ -391,7 +407,7 @@ export function QuickSwitcher() {
           </CommandGroup>
         )}
         {(scope === "all" || scope === "servers") && entries.spaces.length > 0 && (
-          <CommandGroup heading="Servers">
+          <CommandGroup heading={intl.formatMessage({ id: "quickSwitcher.heading.servers", defaultMessage: "Servers" })}>
             {entries.spaces.map((s) => (
               <CommandItem key={s.key} value={`${s.name} ${s.key}`} onSelect={() => go(s.route)}>
                 <Server className="mr-2 size-4 shrink-0 text-muted-foreground" />
@@ -401,16 +417,16 @@ export function QuickSwitcher() {
           </CommandGroup>
         )}
         {scope === "all" && (
-          <CommandGroup heading="Go to">
+          <CommandGroup heading={intl.formatMessage({ id: "quickSwitcher.heading.goTo", defaultMessage: "Go to" })}>
             {!config.dmsDisabled && (
               <CommandItem value="direct messages dms" onSelect={() => go("/dm")}>
                 <MessageCircle className="mr-2 size-4 shrink-0 text-muted-foreground" />
-                Direct messages
+                <FormattedMessage id="quickSwitcher.goTo.directMessages" defaultMessage="Direct messages" />
               </CommandItem>
             )}
             <CommandItem value="settings preferences" onSelect={openSettings}>
               <Settings className="mr-2 size-4 shrink-0 text-muted-foreground" />
-              Settings
+              <FormattedMessage {...common.settings} />
             </CommandItem>
           </CommandGroup>
         )}

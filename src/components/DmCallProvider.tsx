@@ -49,6 +49,7 @@ import {
   type DmCallSignal,
 } from "@/lib/dmCall";
 import { getDisplayName } from "@/lib/getDisplayName";
+import { FormattedMessage, t, useIntl } from "@/i18n";
 import {
   buildDmRumor,
   KIND_DM_CALL,
@@ -389,8 +390,8 @@ export function DmCallProvider({ children }: { children: React.ReactNode }) {
     async (peer: string) => {
       if (!user?.signer.nip44) {
         toast({
-          title: "Calls unavailable",
-          description: "This login can't make encrypted calls (NIP-44 unsupported).",
+          title: t({ id: "dmCallProvider.unavailable", defaultMessage: "Calls unavailable" }),
+          description: t({ id: "dmCallProvider.unavailableDescription", defaultMessage: "This login can't make encrypted calls (NIP-44 unsupported)." }),
           variant: "destructive",
         });
         return;
@@ -401,7 +402,10 @@ export function DmCallProvider({ children }: { children: React.ReactNode }) {
         return;
       }
       if (activeCallRef.current) {
-        toast({ title: "Already in a call", description: "Leave the current call first." });
+        toast({
+          title: t({ id: "dmCallProvider.alreadyInCall", defaultMessage: "Already in a call" }),
+          description: t({ id: "dmCallProvider.leaveFirst", defaultMessage: "Leave the current call first." }),
+        });
         return;
       }
       if (outgoingRef.current) return;
@@ -424,8 +428,8 @@ export function DmCallProvider({ children }: { children: React.ReactNode }) {
         if (yieldToCollided()) return;
         clearOutgoing();
         toast({
-          title: "Could not start the call",
-          description: "No voice server is reachable.",
+          title: t({ id: "dmCallProvider.startFailed", defaultMessage: "Could not start the call" }),
+          description: t({ id: "dmCallProvider.noServer", defaultMessage: "No voice server is reachable." }),
           variant: "destructive",
         });
         return;
@@ -440,8 +444,8 @@ export function DmCallProvider({ children }: { children: React.ReactNode }) {
         if (yieldToCollided()) return;
         clearOutgoing();
         toast({
-          title: "Could not start the call",
-          description: "The call invite could not be delivered to any relay.",
+          title: t({ id: "dmCallProvider.startFailed", defaultMessage: "Could not start the call" }),
+          description: t({ id: "dmCallProvider.notDelivered", defaultMessage: "The call invite could not be delivered to any relay." }),
           variant: "destructive",
         });
         return;
@@ -459,14 +463,17 @@ export function DmCallProvider({ children }: { children: React.ReactNode }) {
         clearOutgoing();
         leaveCall();
         if (out.reached) {
-          toast({ title: "No answer" });
+          toast({ title: t({ id: "dmCallProvider.noAnswer", defaultMessage: "No answer" }) });
         } else {
           // No "ringing" receipt: it may be offline, lack receipts, or have silently
           // refused us at the ring gate.
           toast({
-            title: "No answer",
-            description:
-              "The call may not have rung for them. Calls only ring for people who follow you or have messaged you, and only while Armada is running for them.",
+            title: t({ id: "dmCallProvider.noAnswer", defaultMessage: "No answer" }),
+            description: t({
+              id: "dmCallProvider.noAnswerDescription",
+              defaultMessage:
+                "The call may not have rung for them. Calls only ring for people who follow you or have messaged you, and only while Armada is running for them.",
+            }),
           });
         }
       }, DM_CALL_RING_MS);
@@ -618,9 +625,15 @@ export function DmCallProvider({ children }: { children: React.ReactNode }) {
             // busy: it would end the attempt for all our free devices.
             if (activeCallRef.current.dm) {
               sendReceipt("busy", signal.author, signal.callId);
-              toast({ title: "Missed call", description: "You were already in a call." });
+              toast({
+                title: t({ id: "dmCallProvider.missed", defaultMessage: "Missed call" }),
+                description: t({ id: "dmCallProvider.missedBusy", defaultMessage: "You were already in a call." }),
+              });
             } else {
-              toast({ title: "Missed call", description: "You were in a voice channel." });
+              toast({
+                title: t({ id: "dmCallProvider.missed", defaultMessage: "Missed call" }),
+                description: t({ id: "dmCallProvider.missedVoice", defaultMessage: "You were in a voice channel." }),
+              });
             }
             return;
           }
@@ -652,7 +665,10 @@ export function DmCallProvider({ children }: { children: React.ReactNode }) {
           if (out && out.callId === signal.callId && signal.author === out.peer && !out.answered) {
             clearOutgoing();
             if (activeCallRef.current?.dm?.callId === signal.callId) leaveCall();
-            toast({ title: "On another call", description: "They're already in a call. Try again later." });
+            toast({
+              title: t({ id: "dmCallProvider.peerBusy", defaultMessage: "On another call" }),
+              description: t({ id: "dmCallProvider.peerBusyDescription", defaultMessage: "They're already in a call. Try again later." }),
+            });
           }
           return;
         }
@@ -661,7 +677,7 @@ export function DmCallProvider({ children }: { children: React.ReactNode }) {
           if (out && out.callId === signal.callId && signal.author === out.peer) {
             clearOutgoing();
             if (activeCallRef.current?.dm?.callId === signal.callId) leaveCall();
-            toast({ title: "Call declined" });
+            toast({ title: t({ id: "dmCallProvider.declined", defaultMessage: "Call declined" }) });
           }
           return;
         }
@@ -675,7 +691,7 @@ export function DmCallProvider({ children }: { children: React.ReactNode }) {
           const ringing = incomingRef.current;
           if (ringing && ringing.callId === signal.callId) {
             clearIncoming();
-            toast({ title: "Missed call" });
+            toast({ title: t({ id: "dmCallProvider.missed", defaultMessage: "Missed call" }) });
           }
           if (activeCallRef.current?.dm?.callId === signal.callId) {
             // A 1:1 room with one person is over.
@@ -855,6 +871,7 @@ function IncomingCallOverlay({
   onAccept: () => void;
   onDecline: () => void;
 }) {
+  const intl = useIntl();
   const author = useAuthor(signal.author);
   const name = getDisplayName(author.data?.metadata, signal.author);
 
@@ -862,7 +879,7 @@ function IncomingCallOverlay({
     // Only Accept/Decline end the ring: Escape, outside clicks and back don't dismiss it.
     <Dialog open onOpenChange={() => {}}>
       <ChromeDialogContent
-        title="Incoming call"
+        title={intl.formatMessage({ id: "dmCallProvider.incomingTitle", defaultMessage: "Incoming call" })}
         hideClose
         className="w-80 max-w-[calc(100vw-2rem)]"
         contentClassName="flex flex-col items-center gap-6 px-8 py-10 sm:px-8 sm:py-10"
@@ -874,30 +891,36 @@ function IncomingCallOverlay({
           <div className="chrome-dialog-title font-mono font-bold lowercase tracking-tight truncate">
             <DisplayName pubkey={signal.author} name={name} />
           </div>
-          <div className="text-sm text-muted-foreground animate-pulse">Incoming call…</div>
+          <div className="text-sm text-muted-foreground animate-pulse">
+            <FormattedMessage id="dmCallProvider.incoming" defaultMessage="Incoming call…" />
+          </div>
         </div>
         <div className="flex items-center gap-10">
           <div className="flex flex-col items-center gap-1.5">
             <Button
               size="icon"
-              aria-label="Decline call"
+              aria-label={intl.formatMessage({ id: "dmCallProvider.declineCall", defaultMessage: "Decline call" })}
               className="size-14 rounded-full bg-destructive text-destructive-foreground hover:bg-destructive/90"
               onClick={onDecline}
             >
               <PhoneOff className="size-6" />
             </Button>
-            <span className="text-xs text-muted-foreground">Decline</span>
+            <span className="text-xs text-muted-foreground">
+              <FormattedMessage id="dmCallProvider.decline" defaultMessage="Decline" />
+            </span>
           </div>
           <div className="flex flex-col items-center gap-1.5">
             <Button
               size="icon"
-              aria-label="Accept call"
+              aria-label={intl.formatMessage({ id: "dmCallProvider.acceptCall", defaultMessage: "Accept call" })}
               className="size-14 rounded-full bg-success text-success-foreground hover:bg-success/90"
               onClick={onAccept}
             >
               <Phone className="size-6" />
             </Button>
-            <span className="text-xs text-muted-foreground">Accept</span>
+            <span className="text-xs text-muted-foreground">
+              <FormattedMessage id="dmCallProvider.accept" defaultMessage="Accept" />
+            </span>
           </div>
         </div>
       </ChromeDialogContent>

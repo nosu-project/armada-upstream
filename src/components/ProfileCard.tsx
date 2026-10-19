@@ -14,6 +14,7 @@ import type { EmojiSelection } from '@/components/chat/EmojiPicker';
 import { sanitizeImageSrc } from '@/lib/sanitizeUrl';
 import { FallbackImage } from '@/components/ui/FallbackImage';
 import type { ProfileImeta } from '@/lib/profileImeta';
+import { FormattedMessage, useIntl } from '@/i18n';
 
 /** Lazy so emoji-mart (~420 KB data) stays out of this chunk; only used behind the avatar-shape dialog. */
 const LazyEmojiPicker = lazy(() =>
@@ -116,12 +117,13 @@ export function ProfileCard({
   extraFields,
   onExtraFieldsChange,
 }: ProfileCardProps) {
+  const intl = useIntl();
   const editable = !!onChange;
   const [nip05Focused, setNip05Focused] = useState(false);
   const [fieldsOpen, setFieldsOpen] = useState(false);
   const [emojiPickerOpen, setEmojiPickerOpen] = useState(false);
 
-  const displayName = metadata.name || metadata.display_name || 'Anonymous';
+  const displayName = metadata.name || metadata.display_name || intl.formatMessage({ id: 'profileCard.anonymous', defaultMessage: 'Anonymous' });
   const initial = displayName[0]?.toUpperCase() ?? '?';
   const patch = (key: keyof NostrMetadata) => (v: string) => onChange?.({ [key]: v });
 
@@ -193,7 +195,12 @@ export function ProfileCard({
             {/* Hover affordances only; on touch the card is obviously tappable. */}
             <div className="absolute inset-0 bg-black/0 group-hover:bg-black/30 transition-colors flex items-center justify-center">
               <span className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1.5 text-white text-xs font-medium bg-black/50 rounded-full px-3 py-1.5 backdrop-blur-sm">
-                <Pencil className="size-3.5" /> {metadata.banner ? 'Change banner' : 'Add banner'}
+                <Pencil className="size-3.5" />{' '}
+                {metadata.banner ? (
+                  <FormattedMessage id="profileCard.changeBanner" defaultMessage="Change banner" />
+                ) : (
+                  <FormattedMessage id="profileCard.addBanner" defaultMessage="Add banner" />
+                )}
               </span>
             </div>
             {metadata.banner && (
@@ -240,16 +247,16 @@ export function ProfileCard({
                 <DropdownMenuContent align="start" sideOffset={6}>
                   <DropdownMenuItem onClick={() => onPickImage?.('picture')}>
                     <ImagePlus className="size-4 mr-2" />
-                    Change avatar
+                    <FormattedMessage id="profileCard.changeAvatar" defaultMessage="Change avatar" />
                   </DropdownMenuItem>
                   <DropdownMenuItem onClick={() => setEmojiPickerOpen(true)}>
                     <SmilePlus className="size-4 mr-2" />
-                    Set avatar shape
+                    <FormattedMessage id="profileCard.setAvatarShape" defaultMessage="Set avatar shape" />
                   </DropdownMenuItem>
                   {metadata.picture && (
                     <DropdownMenuItem onClick={() => onRemoveAvatar?.()} className="text-destructive focus:text-destructive">
                       <XIcon className="size-4 mr-2" />
-                      Remove avatar
+                      <FormattedMessage id="profileCard.removeAvatar" defaultMessage="Remove avatar" />
                     </DropdownMenuItem>
                   )}
                 </DropdownMenuContent>
@@ -258,11 +265,19 @@ export function ProfileCard({
               <Dialog open={emojiPickerOpen} onOpenChange={setEmojiPickerOpen}>
                 {/* `w-fit` needs the card to have an intrinsic width, which an inline-size container lacks. */}
                 <ChromeDialogContent
-                  title="Set avatar shape"
+                  title={intl.formatMessage({ id: 'profileCard.setAvatarShape', defaultMessage: 'Set avatar shape' })}
                   className="w-fit max-w-[calc(100vw-2rem)] sm:max-w-[calc(100vw-2rem)]"
                   contentClassName="p-4 sm:p-5 [container-type:normal]"
                 >
-                  <ChromeDialogHeader icon={SmilePlus} title="set avatar shape" description="Pick an emoji to mask your avatar" className="mb-4" />
+                  <ChromeDialogHeader
+                    icon={SmilePlus}
+                    title={intl.formatMessage({ id: 'profileCard.shapeDialog.title', defaultMessage: 'set avatar shape' })}
+                    description={intl.formatMessage({
+                      id: 'profileCard.shapeDialog.description',
+                      defaultMessage: 'Pick an emoji to mask your avatar',
+                    })}
+                    className="mb-4"
+                  />
                   <Suspense fallback={<div className="h-[360px] w-[352px] max-w-[calc(100vw-4rem)]" />}>
                     <LazyEmojiPicker onSelect={(selection: EmojiSelection) => {
                       if (selection.type === 'native') {
@@ -280,7 +295,7 @@ export function ProfileCard({
                         onClick={() => { onAvatarShape?.(''); setEmojiPickerOpen(false); }}
                       >
                         <XIcon className="size-3.5 mr-1.5" />
-                        Remove avatar shape
+                        <FormattedMessage id="profileCard.removeAvatarShape" defaultMessage="Remove avatar shape" />
                       </Button>
                     </ChromeDialogFooter>
                   )}
@@ -302,7 +317,7 @@ export function ProfileCard({
         {editable ? (
           <EditableInput
             value={metadata.name ?? ''}
-            placeholder="Your name"
+            placeholder={intl.formatMessage({ id: 'profileCard.namePlaceholder', defaultMessage: 'Your name' })}
             onChange={patch('name')}
             className="text-xl font-bold"
           />
@@ -346,7 +361,7 @@ export function ProfileCard({
           {editable ? (
             <EditableTextarea
               value={metadata.about ?? ''}
-              placeholder="Write a short bio…"
+              placeholder={intl.formatMessage({ id: 'profileCard.bioPlaceholder', defaultMessage: 'Write a short bio…' })}
               onChange={patch('about')}
             />
           ) : metadata.about ? (
@@ -361,14 +376,16 @@ export function ProfileCard({
             <div className="flex items-center justify-between">
               <CollapsibleTrigger asChild>
                 <Button type="button" variant="ghost" className="w-full justify-between px-0 h-auto hover:bg-transparent text-sm font-medium text-muted-foreground">
-                  Profile Fields
+                  <FormattedMessage id="profileCard.fields" defaultMessage="Profile Fields" />
                   <ChevronDown className="size-4 transition-transform duration-200 [[data-state=open]_&]:rotate-180" strokeWidth={4} />
                 </Button>
               </CollapsibleTrigger>
             </div>
             <CollapsibleContent className="space-y-2 pt-2">
               <div className="grid grid-cols-[1fr,2fr] gap-2 items-center">
-                <span className="text-sm text-muted-foreground px-1">Website</span>
+                <span className="text-sm text-muted-foreground px-1">
+                  <FormattedMessage id="profileCard.website" defaultMessage="Website" />
+                </span>
                 <Input
                   placeholder="https://yourwebsite.com"
                   value={(metadata.website as string) ?? ''}
@@ -380,13 +397,13 @@ export function ProfileCard({
               {extraFields.map((field, i) => (
                 <div key={i} className="grid grid-cols-[1fr,2fr,auto] gap-2 items-center">
                   <Input
-                    placeholder="Label"
+                    placeholder={intl.formatMessage({ id: 'profileCard.fieldLabel', defaultMessage: 'Label' })}
                     value={field.label}
                     onChange={(e) => updateField(i, 'label', e.target.value)}
                     className="h-8 text-base md:text-sm"
                   />
                   <Input
-                    placeholder="Value or URL"
+                    placeholder={intl.formatMessage({ id: 'profileCard.fieldValue', defaultMessage: 'Value or URL' })}
                     value={field.value}
                     onChange={(e) => updateField(i, 'value', e.target.value)}
                     className="h-8 text-base md:text-sm"
@@ -398,7 +415,8 @@ export function ProfileCard({
               ))}
 
               <Button type="button" variant="outline" size="sm" onClick={addField} className="w-full h-8 text-xs">
-                <Plus className="size-3 mr-1" strokeWidth={4} /> Add Field
+                <Plus className="size-3 mr-1" strokeWidth={4} />{' '}
+                <FormattedMessage id="profileCard.addField" defaultMessage="Add Field" />
               </Button>
             </CollapsibleContent>
           </Collapsible>

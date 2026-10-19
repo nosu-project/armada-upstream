@@ -4,6 +4,7 @@ import { useNostrLogin } from "@nostrify/react/login";
 import { ArmadaCrest, ArmadaCrestKeyframes } from "@/components/brand/ArmadaCrest";
 import { BrandMark } from "@/components/brand/BrandMark";
 import { TerminalProgress } from "@/components/brand/TerminalProgress";
+import { t } from "@/i18n";
 import { markUpToDate, pendingUpgrades, runMigrations } from "@/lib/db/migrations";
 
 import type { SyncLogLine } from "@/hooks/useInitialSync";
@@ -43,7 +44,7 @@ export function DBMigrationGate() {
       }
 
       setActive(true);
-      setLog([{ id: "open", text: "upgrading local storage", tone: "info" }]);
+      setLog([{ id: "open", text: t({ id: "dbMigrationGate.upgrading", defaultMessage: "upgrading local storage" }), tone: "info" }]);
 
       await runMigrations(accountsRef.current, ({ label, done, total }) => {
         if (cancelled) return;
@@ -56,7 +57,7 @@ export function DBMigrationGate() {
       if (cancelled) return;
       setLog((prev) => [
         ...prev.map((l) => (l.status === undefined ? { ...l, status: "OK", tone: "ok" as const } : l)),
-        { id: "done", text: "storage upgraded", status: "OK", tone: "ok" },
+        { id: "done", text: t({ id: "dbMigrationGate.done", defaultMessage: "storage upgraded" }), status: "OK", tone: "ok" },
       ]);
       setTimeout(() => {
         if (!cancelled) setActive(false);

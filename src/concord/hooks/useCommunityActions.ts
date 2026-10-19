@@ -47,6 +47,7 @@ import {
   takeExpiredPendingJoins,
 } from "@/concord/lib/pendingJoins";
 import { toast } from "@/hooks/useToast";
+import { t } from "@/i18n";
 import { logSync } from "@/lib/syncLog";
 import { ownAvServers } from "@/concord/hooks/useVoice";
 import { canonicalOrigin } from "@/concord/lib/voice";
@@ -78,14 +79,14 @@ import type { NostrEvent } from "@nostrify/nostrify";
 
 export class BannedFromCommunityError extends Error {
   constructor() {
-    super("You're banned from this community and can't rejoin.");
+    super(t({ id: "useCommunityActions.banned", defaultMessage: "You're banned from this community and can't rejoin." }));
     this.name = "BannedFromCommunityError";
   }
 }
 
 export class DissolvedCommunityError extends Error {
   constructor() {
-    super("This community was dissolved by its owner and can no longer be joined.");
+    super(t({ id: "useCommunityActions.dissolved", defaultMessage: "This community was dissolved by its owner and can no longer be joined." }));
     this.name = "DissolvedCommunityError";
   }
 }
@@ -131,8 +132,11 @@ export function isJoinRejected(error: unknown): boolean {
 
 function toastJoinAbandoned(name: string): void {
   toast({
-    title: `Couldn't join ${name}`,
-    description: "Armada stopped retrying. Ask for a new invite to try again.",
+    title: t({ id: "useCommunityActions.joinAbandoned.title", defaultMessage: "Couldn't join {name}" }, { name }),
+    description: t({
+      id: "useCommunityActions.joinAbandoned.description",
+      defaultMessage: "Armada stopped retrying. Ask for a new invite to try again.",
+    }),
     variant: "destructive",
   });
 }
@@ -140,7 +144,7 @@ function toastJoinAbandoned(name: string): void {
 /** Thrown when the control plane can't be read to verify access (retryable). */
 export class ControlUnreadableError extends Error {
   constructor() {
-    super("Couldn't verify your access to this community. Please try again.");
+    super(t({ id: "useCommunityActions.controlUnreadable", defaultMessage: "Couldn't verify your access to this community. Please try again." }));
     this.name = "ControlUnreadableError";
   }
 }
@@ -295,7 +299,7 @@ export async function resolveBundle(
   const remembered = await readBundleFloor(invite.linkSigner);
   let best = flat[0] as NostrEvent | undefined;
   if (remembered && (!best || remembered.created_at > best.created_at)) best = remembered;
-  if (!best) throw new Error("Couldn't find that invite on its relays.");
+  if (!best) throw new Error(t({ id: "useCommunityActions.inviteNotFound", defaultMessage: "Couldn't find that invite on its relays." }));
 
   let bundle = parseBundleEvent(best, invite.linkSigner, invite.token, Date.now());
 
@@ -437,10 +441,10 @@ export function useCommunityActions() {
     }
   >({
     mutationFn: async ({ name, relays: chosen, avBrokers: chosenBrokers, messageExpirationSecs, description, icon, banner }) => {
-      if (!user) throw new Error("Sign in to start an encrypted community.");
-      if (!user.signer.nip44) throw new Error("This signer can't hold encrypted communities (NIP-44 unsupported).");
+      if (!user) throw new Error(t({ id: "useCommunityActions.signInToCreate", defaultMessage: "Sign in to start an encrypted community." }));
+      if (!user.signer.nip44) throw new Error(t({ id: "useCommunityActions.signerNoEncryptedCommunities", defaultMessage: "This signer can't hold encrypted communities (NIP-44 unsupported)." }));
       const trimmed = name.trim();
-      if (!trimmed) throw new Error("Name your community first.");
+      if (!trimmed) throw new Error(t({ id: "useCommunityActions.nameRequired", defaultMessage: "Name your community first." }));
 
       // Prefer wss://: a ws:// relay sealed into the bundle is unreachable from secure origins.
       const relays = chosen && chosen.length > 0
@@ -576,7 +580,7 @@ export function useCommunityActions() {
     invite: ParsedInviteLink,
     pendingId?: string,
   ): Promise<{ communityId: string; name: string }> => {
-      if (!user) throw new Error("Sign in to join an encrypted community.");
+      if (!user) throw new Error(t({ id: "useCommunityActions.signInToJoin", defaultMessage: "Sign in to join an encrypted community." }));
       const bundle = await resolveBundle(nostr, invite, bootstrapRelays);
       const unusable = unusableRelaysReason(bundle.relays);
       if (unusable) throw new UnusableRelaysError(unusable);
@@ -640,15 +644,15 @@ export function useCommunityActions() {
         toast({
           title:
             e instanceof BannedFromCommunityError
-              ? "You're banned"
+              ? t({ id: "useCommunityActions.joinFailed.banned", defaultMessage: "You're banned" })
               : e instanceof DissolvedCommunityError
-                ? `${name} was dissolved`
+                ? t({ id: "useCommunityActions.joinFailed.dissolved", defaultMessage: "{name} was dissolved" }, { name })
                 : rejected
-                  ? `Couldn't join ${name}`
-                  : `Couldn't finish joining ${name}`,
+                  ? t({ id: "useCommunityActions.joinAbandoned.title", defaultMessage: "Couldn't join {name}" }, { name })
+                  : t({ id: "useCommunityActions.joinFailed.unfinished", defaultMessage: "Couldn't finish joining {name}" }, { name }),
           description: rejected
-            ? (e instanceof Error ? e.message : "The invite didn't work.")
-            : "Armada will try again the next time it starts.",
+            ? (e instanceof Error ? e.message : t({ id: "useCommunityActions.inviteDidntWork", defaultMessage: "The invite didn't work." }))
+            : t({ id: "useCommunityActions.willRetry", defaultMessage: "Armada will try again the next time it starts." }),
           ...(rejected ? { variant: "destructive" as const } : {}),
         });
       });
@@ -660,7 +664,7 @@ export function useCommunityActions() {
     { invite: ParsedInviteLink; bundle?: InviteBundle }
   >({
     mutationFn: async ({ invite, bundle: resolved }) => {
-      if (!user) throw new Error("Sign in to join an encrypted community.");
+      if (!user) throw new Error(t({ id: "useCommunityActions.signInToJoin", defaultMessage: "Sign in to join an encrypted community." }));
       if (!resolved) return completeJoin(invite);
 
       // Optimistic path: record a pending entry on disk and answer NOW; the durable
@@ -747,7 +751,7 @@ export function useCommunityManagement(community: Community | undefined) {
     // Local-only; `navigator.onLine` is unreliable in the Android WebView.
     networkMode: "always",
     mutationFn: async () => {
-      if (!user || !community) throw new Error("Not ready.");
+      if (!user || !community) throw new Error(t({ id: "useCommunityActions.notReady", defaultMessage: "Not ready." }));
       const communityId = community.idHex;
       const removedAt = Date.now();
       // The local tombstone is authoritative and on disk now. Walk away from any
@@ -771,14 +775,14 @@ export function useCommunityManagement(community: Community | undefined) {
 
   const dissolve = useMutation<void, Error, { retire?: () => Promise<void> } | void>({
     mutationFn: async (opts) => {
-      if (!user || !community) throw new Error("Not ready.");
-      if (user.pubkey !== community.owner) throw new Error("Only the owner can dissolve the community.");
+      if (!user || !community) throw new Error(t({ id: "useCommunityActions.notReady", defaultMessage: "Not ready." }));
+      if (user.pubkey !== community.owner) throw new Error(t({ id: "useCommunityActions.onlyOwnerDissolves", defaultMessage: "Only the owner can dissolve the community." }));
       const wrap = await sealDissolved(community.id, user.pubkey, user.signer);
       const results = await Promise.allSettled(
         community.relays.map((url) => nostr.relay(url).event(wrap, { signal: AbortSignal.timeout(8000) })),
       );
       if (!results.some((r) => r.status === "fulfilled")) {
-        throw new Error("No relay accepted the dissolution.");
+        throw new Error(t({ id: "useCommunityActions.noRelayAcceptedDissolution", defaultMessage: "No relay accepted the dissolution." }));
       }
       // Mark dissolved BEFORE dropping the vault entry: `useCallSync` treats a gone
       // entry as removal, but a known grave keeps the call connected.
@@ -801,12 +805,12 @@ export function useCommunityManagement(community: Community | undefined) {
     // A signer with no resolvable rank may mint no Role (verifiers would drop it as self-promotion).
     const position = accessRolePosition(folded?.roster, user.pubkey, ownerHex);
     if (position === undefined) {
-      throw new Error("You don't hold a rank that can create this channel's access role.");
+      throw new Error(t({ id: "useCommunityActions.noRankForAccessRole", defaultMessage: "You don't hold a rank that can create this channel's access role." }));
     }
     // At the 100-role cap the fold keeps the lowest role_ids (CORD-04 §2), so a
     // new id could fold out or evict another; refuse.
     if ((folded?.roster.roles.length ?? 0) >= MAX_ROLES_PER_COMMUNITY) {
-      throw new Error("This community is at its 100-role limit; delete a role first.");
+      throw new Error(t({ id: "useCommunityActions.roleLimit", defaultMessage: "This community is at its 100-role limit; delete a role first." }));
     }
     const roleId = bytesToHex(random32());
     await publishEdition(
@@ -832,7 +836,7 @@ export function useCommunityManagement(community: Community | undefined) {
   const mintAccessRole = useMutation<string | undefined, Error, { channelIdHex: string; name: string }>({
     mutationFn: async ({ channelIdHex, name }) => {
       const trimmed = name.trim();
-      if (!trimmed) throw new Error("Role name is required.");
+      if (!trimmed) throw new Error(t({ id: "useCommunityActions.roleNameRequired", defaultMessage: "Role name is required." }));
       const roleId = await mintChannelRole(hex32(channelIdHex), trimmed);
       if (community) invalidateControl(queryClient, community.idHex);
       return roleId;
@@ -845,9 +849,9 @@ export function useCommunityManagement(community: Community | undefined) {
     { name: string; repository?: { address: string; relayHints: string[] }; isPrivate?: boolean; accessRoleName?: string; view?: ChannelView }
   >({
     mutationFn: async ({ name, repository, isPrivate, accessRoleName, view }) => {
-      if (!user || !community) throw new Error("Not ready.");
+      if (!user || !community) throw new Error(t({ id: "useCommunityActions.notReady", defaultMessage: "Not ready." }));
       const trimmed = name.trim();
-      if (!trimmed) throw new Error("Channel name is required.");
+      if (!trimmed) throw new Error(t({ id: "useCommunityActions.channelNameRequired", defaultMessage: "Channel name is required." }));
       const channelId = random32();
       // In the FIRST edition: attachRepository resolves from the fold, which won't
       // have the new channel yet.
@@ -856,7 +860,7 @@ export function useCommunityManagement(community: Community | undefined) {
       if (view) metadata = withChannelView(metadata, view);
       if (repository) {
         const address = parseGitRepositoryAddress(repository.address);
-        if (!address) throw new Error("Repository address must be a canonical 30617 coordinate.");
+        if (!address) throw new Error(t({ id: "useCommunityActions.repositoryAddressInvalid", defaultMessage: "Repository address must be a canonical 30617 coordinate." }));
         metadata = withChannelGitRepositoryAttachments(
           metadata,
           attachGitRepository([], address, repository.relayHints, Math.floor(Date.now() / 1000)),
@@ -905,9 +909,9 @@ export function useCommunityManagement(community: Community | undefined) {
 
   const renameChannel = useMutation<void, Error, { channelIdHex: string; name: string }>({
     mutationFn: async ({ channelIdHex, name }) => {
-      if (!user || !community) throw new Error("Not ready.");
+      if (!user || !community) throw new Error(t({ id: "useCommunityActions.notReady", defaultMessage: "Not ready." }));
       const trimmed = name.trim();
-      if (!trimmed) throw new Error("Channel name is required.");
+      if (!trimmed) throw new Error(t({ id: "useCommunityActions.channelNameRequired", defaultMessage: "Channel name is required." }));
       const def = folded?.channels.get(channelIdHex);
       const head = folded?.heads.get(channelIdHex);
       await publishEdition(
@@ -942,10 +946,10 @@ export function useCommunityManagement(community: Community | undefined) {
     { channelIdHex: string; accessRoleName?: string }
   >({
     mutationFn: async ({ channelIdHex, accessRoleName }) => {
-      if (!user || !community) throw new Error("Not ready.");
+      if (!user || !community) throw new Error(t({ id: "useCommunityActions.notReady", defaultMessage: "Not ready." }));
       const def = folded?.channels.get(channelIdHex);
-      if (!def) throw new Error("Channel not found in the control fold yet; try again shortly.");
-      if (def.isPrivate) throw new Error("This channel is already private.");
+      if (!def) throw new Error(t({ id: "useCommunityActions.channelNotInFold", defaultMessage: "Channel not found in the control fold yet; try again shortly." }));
+      if (def.isPrivate) throw new Error(t({ id: "useCommunityActions.alreadyPrivate", defaultMessage: "This channel is already private." }));
       const head = folded?.heads.get(channelIdHex);
 
       // CORD-03 §2: mint at the NEXT channel_epoch (never reset, or two keys share
@@ -1025,14 +1029,14 @@ export function useCommunityManagement(community: Community | undefined) {
    */
   const publiciseChannel = useMutation<void, Error, { channelIdHex: string }>({
     mutationFn: async ({ channelIdHex }) => {
-      if (!user || !community) throw new Error("Not ready.");
+      if (!user || !community) throw new Error(t({ id: "useCommunityActions.notReady", defaultMessage: "Not ready." }));
       const def = folded?.channels.get(channelIdHex);
-      if (!def) throw new Error("Channel not found in the control fold yet; try again shortly.");
-      if (!def.isPrivate) throw new Error("This channel is already public.");
-      if (def.deleted) throw new Error("This channel was deleted.");
+      if (!def) throw new Error(t({ id: "useCommunityActions.channelNotInFold", defaultMessage: "Channel not found in the control fold yet; try again shortly." }));
+      if (!def.isPrivate) throw new Error(t({ id: "useCommunityActions.alreadyPublic", defaultMessage: "This channel is already public." }));
+      if (def.deleted) throw new Error(t({ id: "useCommunityActions.channelDeleted", defaultMessage: "This channel was deleted." }));
       const ownerHex = folded?.ownerHex ?? community.owner;
       if (!isAuthorized(folded?.roster ?? { roles: [], grants: [] }, user.pubkey, ownerHex, Permissions.MANAGE_CHANNELS)) {
-        throw new Error("Making a channel public needs the Manage-channels permission.");
+        throw new Error(t({ id: "useCommunityActions.makePublicNeedsPermission", defaultMessage: "Making a channel public needs the Manage-channels permission." }));
       }
       const head = folded?.heads.get(channelIdHex);
       await publishEdition(
@@ -1075,7 +1079,7 @@ export function useCommunityManagement(community: Community | undefined) {
    */
   const publishPositions = useCallback(
     async (moves: Array<{ idHex: string; position: number }>) => {
-      if (!user || !community) throw new Error("Not ready.");
+      if (!user || !community) throw new Error(t({ id: "useCommunityActions.notReady", defaultMessage: "Not ready." }));
       for (const { idHex, position } of moves) {
         const def = folded?.channels.get(idHex);
         if (!def) continue;
@@ -1109,10 +1113,10 @@ export function useCommunityManagement(community: Community | undefined) {
     Array<{ idHex: string; position: number; category: string | undefined }>
   >({
     mutationFn: async (changes) => {
-      if (!user || !community) throw new Error("Not ready.");
+      if (!user || !community) throw new Error(t({ id: "useCommunityActions.notReady", defaultMessage: "Not ready." }));
       const ownerHex = folded?.ownerHex ?? community.owner;
       if (!isAuthorized(folded?.roster ?? { roles: [], grants: [] }, user.pubkey, ownerHex, Permissions.MANAGE_CHANNELS)) {
-        throw new Error("Rearranging channels needs the Manage-channels permission.");
+        throw new Error(t({ id: "useCommunityActions.rearrangeNeedsPermission", defaultMessage: "Rearranging channels needs the Manage-channels permission." }));
       }
       for (const { idHex, position, category } of changes) {
         const def = folded?.channels.get(idHex);
@@ -1143,7 +1147,7 @@ export function useCommunityManagement(community: Community | undefined) {
     mutationFn: async ({ channelIdHex, direction }) => {
       const ordered = orderedForMove();
       const from = ordered.findIndex((c) => c.idHex === channelIdHex);
-      if (from === -1) throw new Error("Channel not found in the control fold yet; try again shortly.");
+      if (from === -1) throw new Error(t({ id: "useCommunityActions.channelNotInFold", defaultMessage: "Channel not found in the control fold yet; try again shortly." }));
       const to = from + direction;
       if (to < 0 || to >= ordered.length) return;
       await publishPositions(reorderPositions(ordered, from, to));
@@ -1155,7 +1159,7 @@ export function useCommunityManagement(community: Community | undefined) {
     mutationFn: async ({ channelIdHex, toIndex }) => {
       const ordered = orderedForMove();
       const from = ordered.findIndex((c) => c.idHex === channelIdHex);
-      if (from === -1) throw new Error("Channel not found in the control fold yet; try again shortly.");
+      if (from === -1) throw new Error(t({ id: "useCommunityActions.channelNotInFold", defaultMessage: "Channel not found in the control fold yet; try again shortly." }));
       await publishPositions(reorderPositions(ordered, from, Math.max(0, Math.min(toIndex, ordered.length - 1))));
     },
   });
@@ -1167,17 +1171,17 @@ export function useCommunityManagement(community: Community | undefined) {
    */
   const setChannelCategory = useMutation<void, Error, { channelIdHex: string; category: string | undefined }>({
     mutationFn: async ({ channelIdHex, category }) => {
-      if (!user || !community) throw new Error("Not ready.");
+      if (!user || !community) throw new Error(t({ id: "useCommunityActions.notReady", defaultMessage: "Not ready." }));
       const trimmed = category?.trim();
       if (trimmed && utf8Len(trimmed) > NAME_MAX_BYTES) {
-        throw new Error(`Category names are limited to ${NAME_MAX_BYTES} bytes.`);
+        throw new Error(t({ id: "useCommunityActions.categoryNameTooLong", defaultMessage: "Category names are limited to {max} bytes." }, { max: NAME_MAX_BYTES }));
       }
       const def = folded?.channels.get(channelIdHex);
-      if (!def) throw new Error("Channel not found in the control fold yet; try again shortly.");
-      if (def.deleted) throw new Error("This channel was deleted.");
+      if (!def) throw new Error(t({ id: "useCommunityActions.channelNotInFold", defaultMessage: "Channel not found in the control fold yet; try again shortly." }));
+      if (def.deleted) throw new Error(t({ id: "useCommunityActions.channelDeleted", defaultMessage: "This channel was deleted." }));
       const ownerHex = folded?.ownerHex ?? community.owner;
       if (!isAuthorized(folded?.roster ?? { roles: [], grants: [] }, user.pubkey, ownerHex, Permissions.MANAGE_CHANNELS)) {
-        throw new Error("Filing a channel needs the Manage-channels permission.");
+        throw new Error(t({ id: "useCommunityActions.fileNeedsPermission", defaultMessage: "Filing a channel needs the Manage-channels permission." }));
       }
       const head = folded?.heads.get(channelIdHex);
       await publishEdition(
@@ -1203,13 +1207,13 @@ export function useCommunityManagement(community: Community | undefined) {
   /** Set what a channel opens to (CORD-03 §2 `view`); same id, chat plane untouched. Same not-yet-folded refusal. */
   const setChannelView = useMutation<void, Error, { channelIdHex: string; view: ChannelView }>({
     mutationFn: async ({ channelIdHex, view }) => {
-      if (!user || !community) throw new Error("Not ready.");
+      if (!user || !community) throw new Error(t({ id: "useCommunityActions.notReady", defaultMessage: "Not ready." }));
       const def = folded?.channels.get(channelIdHex);
-      if (!def) throw new Error("Channel not found in the control fold yet; try again shortly.");
-      if (def.deleted) throw new Error("This channel was deleted.");
+      if (!def) throw new Error(t({ id: "useCommunityActions.channelNotInFold", defaultMessage: "Channel not found in the control fold yet; try again shortly." }));
+      if (def.deleted) throw new Error(t({ id: "useCommunityActions.channelDeleted", defaultMessage: "This channel was deleted." }));
       const ownerHex = folded?.ownerHex ?? community.owner;
       if (!isAuthorized(folded?.roster ?? { roles: [], grants: [] }, user.pubkey, ownerHex, Permissions.MANAGE_CHANNELS)) {
-        throw new Error("Changing how a channel opens needs the Manage-channels permission.");
+        throw new Error(t({ id: "useCommunityActions.changeViewNeedsPermission", defaultMessage: "Changing how a channel opens needs the Manage-channels permission." }));
       }
       const head = folded?.heads.get(channelIdHex);
       await publishEdition(
@@ -1234,7 +1238,7 @@ export function useCommunityManagement(community: Community | undefined) {
 
   const deleteChannel = useMutation<void, Error, { channelIdHex: string }>({
     mutationFn: async ({ channelIdHex }) => {
-      if (!user || !community) throw new Error("Not ready.");
+      if (!user || !community) throw new Error(t({ id: "useCommunityActions.notReady", defaultMessage: "Not ready." }));
       const def = folded?.channels.get(channelIdHex);
       const head = folded?.heads.get(channelIdHex);
       await publishEdition(
@@ -1258,14 +1262,14 @@ export function useCommunityManagement(community: Community | undefined) {
 
   const attachRepository = useMutation<void, Error, { channelIdHex: string; address: string; relayHints: string[] }>({
     mutationFn: async ({ channelIdHex, address: rawAddress, relayHints }) => {
-      if (!user || !community) throw new Error("Not ready.");
+      if (!user || !community) throw new Error(t({ id: "useCommunityActions.notReady", defaultMessage: "Not ready." }));
       if (!folded || !isAuthorized(folded.roster, user.pubkey, community.owner, Permissions.MANAGE_CHANNELS)) {
-        throw new Error("You don't have permission to manage channels.");
+        throw new Error(t({ id: "useCommunityActions.noManageChannelsPermission", defaultMessage: "You don't have permission to manage channels." }));
       }
       const address = parseGitRepositoryAddress(rawAddress);
-      if (!address) throw new Error("Repository address must be a canonical 30617 coordinate.");
+      if (!address) throw new Error(t({ id: "useCommunityActions.repositoryAddressInvalid", defaultMessage: "Repository address must be a canonical 30617 coordinate." }));
       const def = folded?.channels.get(channelIdHex);
-      if (!def) throw new Error("Channel not found.");
+      if (!def) throw new Error(t({ id: "useCommunityActions.channelNotFound", defaultMessage: "Channel not found." }));
       const head = folded?.heads.get(channelIdHex);
       const createdAtSecs = Math.floor(Date.now() / 1000);
       const attachments = channelGitRepositoryAttachments(def.metadata);
@@ -1290,14 +1294,14 @@ export function useCommunityManagement(community: Community | undefined) {
 
   const detachRepository = useMutation<void, Error, { channelIdHex: string; address: string }>({
     mutationFn: async ({ channelIdHex, address: rawAddress }) => {
-      if (!user || !community) throw new Error("Not ready.");
+      if (!user || !community) throw new Error(t({ id: "useCommunityActions.notReady", defaultMessage: "Not ready." }));
       if (!folded || !isAuthorized(folded.roster, user.pubkey, community.owner, Permissions.MANAGE_CHANNELS)) {
-        throw new Error("You don't have permission to manage channels.");
+        throw new Error(t({ id: "useCommunityActions.noManageChannelsPermission", defaultMessage: "You don't have permission to manage channels." }));
       }
       const address = parseGitRepositoryAddress(rawAddress);
-      if (!address) throw new Error("Repository address must be a canonical 30617 coordinate.");
+      if (!address) throw new Error(t({ id: "useCommunityActions.repositoryAddressInvalid", defaultMessage: "Repository address must be a canonical 30617 coordinate." }));
       const def = folded?.channels.get(channelIdHex);
-      if (!def) throw new Error("Channel not found.");
+      if (!def) throw new Error(t({ id: "useCommunityActions.channelNotFound", defaultMessage: "Channel not found." }));
       const head = folded?.heads.get(channelIdHex);
       const createdAtSecs = Math.floor(Date.now() / 1000);
       await publishEdition(

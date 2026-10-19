@@ -12,6 +12,7 @@ import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useTheme } from "@/hooks/useTheme";
 import { toast } from "@/hooks/useToast";
 import { useRehostFile } from "@/hooks/useUploadFile";
+import { common, FormattedMessage, t, useIntl } from "@/i18n";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { clearThemePreview, useThemePreview } from "@/lib/themePreview";
 
@@ -19,6 +20,7 @@ import type { ThemeConfig } from "@/themes";
 
 /** Confirm bar for a theme being tried on. Previewing stores nothing. */
 export function ThemePreviewBar() {
+  const intl = useIntl();
   const preview = useThemePreview();
   const { pathname } = useLocation();
   const { user } = useCurrentUser();
@@ -52,7 +54,7 @@ export function ThemePreviewBar() {
 
   if (!config) return null;
 
-  const title = config.title || "Untitled theme";
+  const title = config.title || intl.formatMessage({ id: "themePreviewBar.untitled", defaultMessage: "Untitled theme" });
 
   const use = async () => {
     let adopted: ThemeConfig = { ...config, source };
@@ -63,8 +65,10 @@ export function ThemePreviewBar() {
         adopted = { ...adopted, background: { ...adopted.background, url } };
       } catch (e) {
         toast({
-          title: "Couldn't copy the background",
-          description: e instanceof Error ? e.message : "The theme still links to its creator's copy.",
+          title: t({ id: "themePreviewBar.copyFailed.title", defaultMessage: "Couldn't copy the background" }),
+          description: e instanceof Error
+            ? e.message
+            : t({ id: "themePreviewBar.copyFailed.description", defaultMessage: "The theme still links to its creator's copy." }),
           variant: "destructive",
         });
       }
@@ -79,11 +83,13 @@ export function ThemePreviewBar() {
       else setTheme(previous.mode);
     };
     toast({
-      title: "Theme applied",
-      description: authorName ? `${title} by ${authorName}` : title,
+      title: t({ id: "themePreviewBar.applied", defaultMessage: "Theme applied" }),
+      description: authorName
+        ? t({ id: "themePreviewBar.titleByAuthor", defaultMessage: "{title} by {author}" }, { title, author: authorName })
+        : title,
       action: (
-        <ToastAction altText="Undo theme change" onClick={undo}>
-          Undo
+        <ToastAction altText={t({ id: "themePreviewBar.undoAlt", defaultMessage: "Undo theme change" })} onClick={undo}>
+          {t({ id: "themePreviewBar.undo", defaultMessage: "Undo" })}
         </ToastAction>
       ),
     });
@@ -93,16 +99,22 @@ export function ThemePreviewBar() {
     <div className="pointer-events-none fixed inset-x-0 bottom-[calc(1rem+env(safe-area-inset-bottom))] z-50 flex justify-center px-4">
       <div
         role="region"
-        aria-label="Theme preview"
+        aria-label={intl.formatMessage({ id: "themePreviewBar.region", defaultMessage: "Theme preview" })}
         className="pointer-events-auto w-full max-w-md clip-corner-lg bg-popover p-4 text-popover-foreground shadow-xl animate-in fade-in-0 slide-in-from-bottom-2"
       >
         <div className="flex items-start gap-3">
           <Palette className="mt-0.5 size-5 shrink-0 text-primary" aria-hidden />
           <div className="min-w-0 flex-1">
-            <p className="truncate text-sm font-semibold">Previewing {title}</p>
+            <p className="truncate text-sm font-semibold">
+              <FormattedMessage id="themePreviewBar.previewing" defaultMessage="Previewing {title}" values={{ title }} />
+            </p>
             {source && authorName && (
               <p className="truncate text-xs text-muted-foreground">
-                by <DisplayName pubkey={source.pubkey} name={authorName} />
+                <FormattedMessage
+                  id="themePreviewBar.byAuthor"
+                  defaultMessage="by {author}"
+                  values={{ author: <DisplayName pubkey={source.pubkey} name={authorName} /> }}
+                />
               </p>
             )}
           </div>
@@ -111,7 +123,7 @@ export function ThemePreviewBar() {
         {offerRehost && (
           <div className="mt-3 flex items-center justify-between gap-3">
             <Label htmlFor="theme-preview-keep-background" className="cursor-pointer text-sm font-normal">
-              Keep my own copy of the background
+              <FormattedMessage id="themePreviewBar.keepBackground" defaultMessage="Keep my own copy of the background" />
             </Label>
             <Switch
               id="theme-preview-keep-background"
@@ -128,11 +140,11 @@ export function ThemePreviewBar() {
             onClick={clearThemePreview}
             disabled={rehost.isPending}
           >
-            Cancel
+            <FormattedMessage {...common.cancel} />
           </Button>
           <Button className="clip-corner-lg touch:h-11" onClick={use} disabled={rehost.isPending}>
             {rehost.isPending && <Loader2 className="size-4 animate-spin" />}
-            Use this theme
+            <FormattedMessage id="themePreviewBar.useTheme" defaultMessage="Use this theme" />
           </Button>
         </div>
       </div>

@@ -1,6 +1,7 @@
 import { Blocks } from "lucide-react";
 
 import { Webxdc } from "@/components/Webxdc";
+import { useIntl } from "@/i18n";
 import { useWebxdcApi, type AppSync } from "@/hooks/useWebxdcApi";
 import { deriveIframeSubdomain } from "@/lib/iframeSubdomain";
 import type { ImetaEncryption } from "@/lib/imeta";
@@ -23,7 +24,9 @@ export function WebxdcApp({
   name?: string;
   encryption?: ImetaEncryption;
 }) {
+  const intl = useIntl();
   const api = useWebxdcApi(sync);
+  const title = name ?? intl.formatMessage({ id: "webxdcApp.defaultName", defaultMessage: "Webxdc app" });
   const iframeId = deriveIframeSubdomain("webxdc", sessionId);
 
   return (
@@ -33,12 +36,12 @@ export function WebxdcApp({
         xdc={url}
         encryption={encryption}
         webxdc={api}
-        title={name ?? "Webxdc app"}
+        title={title}
         className="w-full h-full border-0"
       />
       <noscript>
         <div className="flex items-center gap-2 p-4 text-sm">
-          <Blocks className="size-4" /> {name ?? "Webxdc app"}
+          <Blocks className="size-4" /> {title}
         </div>
       </noscript>
     </div>

@@ -2,6 +2,7 @@ import { Plus } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { common, FormattedMessage, useIntl } from "@/i18n";
 import { cn } from "@/lib/utils";
 
 import type { ReactNode } from "react";
@@ -54,13 +55,14 @@ export function ChannelSidebarView({
   className,
   scrollRef,
 }: ChannelSidebarViewProps) {
-  const addLabel = addChannelOpen ? "Cancel" : addChannelLabel;
+  const intl = useIntl();
+  const addLabel = addChannelOpen ? intl.formatMessage(common.cancel) : addChannelLabel;
   const addButton = (onAddChannel || addChannelDisabled) && (
     <Button
       variant="ghost"
       size="icon"
       className="size-5 touch:size-8"
-      aria-label={addLabel ?? "Add channel"}
+      aria-label={addLabel ?? intl.formatMessage({ id: "channelSidebarView.addChannel", defaultMessage: "Add channel" })}
       aria-expanded={addChannelOpen}
       onClick={onAddChannel}
       disabled={!onAddChannel}
@@ -138,7 +140,7 @@ export function ChannelSidebarView({
         <div className="space-y-0.5">
           <div className="flex h-10 items-center justify-between px-2">
             <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-              Channels
+              <FormattedMessage id="channelSidebarView.channels" defaultMessage="Channels" />
             </span>
             {addLabel ? (
               <Tooltip>

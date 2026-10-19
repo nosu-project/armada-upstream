@@ -42,6 +42,7 @@ import { haltSyncManager } from "@/sync/syncManager";
 import { clearShareShortcuts } from "@/lib/shareTarget";
 import { writePushDisabledFlag } from "@/lib/swPushDisabled";
 import { WEB_PUSH_RETIREMENT_KEY } from "@/lib/webPushEndpoint";
+import { LOCALE_KEY } from "@/i18n/language";
 
 /**
  * localStorage keys that survive a purge. `armada:login` is mutated by
@@ -54,6 +55,8 @@ const PRESERVE_LOCAL_STORAGE_KEYS = new Set<string>([
   WEB_PUSH_RETIREMENT_KEY,
   // A device accessibility setting, not account data; the login screen needs it too.
   FONT_SCALE_KEY,
+  // Likewise the interface language.
+  LOCALE_KEY,
 ]);
 
 /**

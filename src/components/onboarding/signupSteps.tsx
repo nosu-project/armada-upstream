@@ -3,6 +3,7 @@ import { generateSecretKey, getPublicKey, nip19 } from "nostr-tools";
 
 import { ArmadaKey } from "@/components/brand/ArmadaCrest";
 import { Button } from "@/components/ui/button";
+import { common, FormattedMessage } from "@/i18n";
 
 /**
  * Shared account-creation parts for {@link SignupWizard} and {@link SignupDialog}:
@@ -58,11 +59,18 @@ export function CreatingAccountStepBody({ failed, onRetry }: { failed: boolean; 
       <ArmadaKey size={96} />
       <div className="space-y-2">
         <h1 className="font-mono text-2xl font-bold lowercase tracking-tight text-foreground">
-          {failed ? "couldn't create your account" : "creating your account…"}
+          {failed ? (
+            <FormattedMessage id="signupSteps.createFailedTitle" defaultMessage="couldn't create your account" />
+          ) : (
+            <FormattedMessage id="signupSteps.creatingTitle" defaultMessage="creating your account…" />
+          )}
         </h1>
         {failed && (
           <p className="text-sm leading-relaxed text-muted-foreground">
-            It couldn't be saved to this device. Nothing was lost; try again.
+            <FormattedMessage
+              id="signupSteps.createFailedBody"
+              defaultMessage="It couldn't be saved to this device. Nothing was lost; try again."
+            />
           </p>
         )}
       </div>
@@ -73,7 +81,7 @@ export function CreatingAccountStepBody({ failed, onRetry }: { failed: boolean; 
           className="h-12 w-full clip-corner-lg text-base font-medium"
           onClick={onRetry}
         >
-          Try again
+          <FormattedMessage {...common.tryAgain} />
         </Button>
       )}
     </div>

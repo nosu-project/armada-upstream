@@ -5,6 +5,7 @@ import { KIND_DELETE } from "@/lib/nip29";
 
 import type { NostrEvent } from "@nostrify/nostrify";
 import type { NostrRumor } from "@/lib/nostrRumor";
+import { t } from "@/i18n";
 
 /**
  * Edit an own message NIP-09 style: delete (kind 5) and republish with the SAME
@@ -17,7 +18,7 @@ export function useEditMessage(relayUrl: string, groupId: string) {
   return useMutation<NostrEvent | null, Error, { original: NostrRumor; content: string }>({
     mutationFn: async ({ original, content }) => {
       const trimmed = content.trim();
-      if (!trimmed) throw new Error("Message cannot be empty");
+      if (!trimmed) throw new Error(t({ id: "useEditMessage.empty", defaultMessage: "Message cannot be empty" }));
       if (trimmed === original.content.trim()) return null;
 
       // `h` scopes the delete to the group; `k` records the deleted kind per NIP-09.

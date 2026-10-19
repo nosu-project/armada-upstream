@@ -25,6 +25,7 @@ import { faviconUrl } from "@/lib/faviconUrl";
 import { fullDateTime } from "@/lib/formatTime";
 import type { RichEmbedImage } from "@/lib/richEmbed";
 import { sanitizeImageSrc } from "@/lib/sanitizeUrl";
+import { FormattedMessage, common, t, useIntl } from "@/i18n";
 import {
   hasNativeYouTubePlayer,
   needsNativeYouTubePlayer,
@@ -40,6 +41,7 @@ interface LinkEmbedProps {
 
 /** YouTube: click-to-play facade; Spotify: official iframe; else an OEmbed preview card. */
 export function LinkEmbed({ url, className }: LinkEmbedProps) {
+  const intl = useIntl();
   const youtubeId = extractYouTubeId(url);
   const spotify = extractSpotifyEmbed(url);
   const tweetId = extractTweetId(url);
@@ -110,7 +112,7 @@ export function LinkEmbed({ url, className }: LinkEmbedProps) {
           <iframe
             key={pauseEpoch}
             src={`https://streamable.com/e/${streamableId}`}
-            title="Streamable video"
+            title={intl.formatMessage({ id: "linkEmbed.streamableVideo", defaultMessage: "Streamable video" })}
             // Supersedes `allowFullScreen` (browsers warn if both are set).
             allow="autoplay; fullscreen; picture-in-picture"
             loading="lazy"
@@ -155,7 +157,7 @@ function EmbedInfoBar({ url }: { url: string }) {
           onClick={(e) => e.stopPropagation()}
         >
           <ExternalLink className="size-3" />
-          <span>Open</span>
+          <span><FormattedMessage id="linkEmbed.open" defaultMessage="Open" /></span>
         </a>
       </div>
       {data?.title && <p className="text-sm font-semibold leading-snug line-clamp-2">{data.title}</p>}
@@ -391,6 +393,7 @@ function EmbedImage({
   onOpen: () => void;
   onSize?: (size: { w: number; h: number }) => void;
 }) {
+  const intl = useIntl();
   const src = useMediaSrc(sanitizeImageSrc(image.thumb));
   const [natural, setNatural] = useState<{ w: number; h: number } | null>(null);
   const [failed, setFailed] = useState(false);
@@ -403,7 +406,7 @@ function EmbedImage({
   return (
     <button
       type="button"
-      aria-label="View image"
+      aria-label={intl.formatMessage({ id: "linkEmbed.viewImage", defaultMessage: "View image" })}
       className={cn(
         "pointer-events-auto relative z-10 block max-w-full cursor-zoom-in rounded-md focus:outline-none focus-visible:ring-2 focus-visible:ring-primary",
         variant === "tile" && "w-full",
@@ -449,6 +452,7 @@ function fitPreviewBox(w: number, h: number): { aspectRatio: string; maxWidth: n
 
 /** Copies the URL; re-enables pointer events above the card-wide link overlay. */
 function CopyLinkButton({ url }: { url: string }) {
+  const intl = useIntl();
   const [copied, setCopied] = useState(false);
 
   const copy = (e: React.MouseEvent) => {
@@ -458,9 +462,9 @@ function CopyLinkButton({ url }: { url: string }) {
       () => {
         setCopied(true);
         setTimeout(() => setCopied(false), 1500);
-        toast({ title: "Copied link" });
+        toast({ title: t({ id: "linkEmbed.copiedLink", defaultMessage: "Copied link" }) });
       },
-      () => toast({ title: "Couldn't copy link", variant: "destructive" }),
+      () => toast({ title: t({ id: "linkEmbed.copyLinkFailed", defaultMessage: "Couldn't copy link" }), variant: "destructive" }),
     );
   };
 
@@ -468,8 +472,8 @@ function CopyLinkButton({ url }: { url: string }) {
     <button
       type="button"
       onClick={copy}
-      title="Copy link"
-      aria-label="Copy link"
+      title={intl.formatMessage(common.copyLink)}
+      aria-label={intl.formatMessage(common.copyLink)}
       className={cn(
         "absolute top-1 right-1 z-10 grid place-items-center size-7 touch:size-9 clip-corner-lg",
         "text-muted-foreground hover:text-primary hover:bg-secondary transition-colors",
@@ -522,6 +526,7 @@ function findThumbnail(videoId: string): Promise<string | null> {
 
 /** Click-to-load facade: no requests to YouTube until play. */
 export function YouTubeEmbed({ videoId, className }: { videoId: string; className?: string }) {
+  const intl = useIntl();
   // Pausing media bumps the epoch, returning the embed to its facade.
   const pauseEpoch = useEmbedPauseEpoch();
   const [activatedAt, setActivatedAt] = useState<number | null>(null);
@@ -574,7 +579,7 @@ export function YouTubeEmbed({ videoId, className }: { videoId: string; classNam
         {activated ? (
           <iframe
             src={`https://www.youtube-nocookie.com/embed/${videoId}?autoplay=1`}
-            title="YouTube video"
+            title={intl.formatMessage({ id: "linkEmbed.youtubeVideo", defaultMessage: "YouTube video" })}
             // YouTube requires a Referer; send this deployment's own origin.
             referrerPolicy="strict-origin-when-cross-origin"
             allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
@@ -586,7 +591,9 @@ export function YouTubeEmbed({ videoId, className }: { videoId: string; classNam
             type="button"
             className="absolute inset-0 w-full h-full cursor-pointer bg-black group"
             onClick={play}
-            aria-label={nativeOpenFailed ? "Open video on YouTube" : "Play video"}
+            aria-label={nativeOpenFailed
+              ? intl.formatMessage({ id: "linkEmbed.openVideoOnYoutube", defaultMessage: "Open video on YouTube" })
+              : intl.formatMessage({ id: "linkEmbed.playVideo", defaultMessage: "Play video" })}
           >
             {resolvedThumb && (
               <img src={resolvedThumb} alt="" className="absolute inset-0 w-full h-full object-cover" />
@@ -594,7 +601,7 @@ export function YouTubeEmbed({ videoId, className }: { videoId: string; classNam
             <div className="absolute inset-0 flex items-center justify-center">
               {nativeOpenFailed ? (
                 <span className="rounded-full bg-black/85 px-4 py-2 text-sm font-medium text-white">
-                  Open on YouTube
+                  <FormattedMessage id="linkEmbed.openOnYoutube" defaultMessage="Open on YouTube" />
                 </span>
               ) : (
                 <div

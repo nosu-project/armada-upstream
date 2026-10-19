@@ -3,6 +3,7 @@
  * there's no relay NIP-50: the decrypted rumor store is the only corpus.
  */
 
+import { getLocale, t } from "@/i18n/intl";
 import { parseImetaMap } from "@/lib/imeta";
 import { AUDIO_EXTS, IMAGE_URL_REGEX, VIDEO_EXTS } from "@/lib/mediaUrls";
 
@@ -106,20 +107,50 @@ export function searchDateBounds(f: Pick<SearchFilters, "dateFrom" | "dateTo">):
 
 export function formatSearchDate(ymd: string): string {
   const d = ymdToDate(ymd);
-  return d ? d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }) : ymd;
+  return d ? d.toLocaleDateString(getLocale(), { month: "short", day: "numeric", year: "numeric" }) : ymd;
 }
 
 // ── Typed tokens (Discord-style `from:` / `in:` / `has:` / dates) ──────────
 
 export type SearchTokenKey = "from" | "in" | "has" | "before" | "after" | "during";
 
-export const SEARCH_TOKEN_KEYS: Array<{ key: SearchTokenKey; hint: string }> = [
-  { key: "from", hint: "user" },
-  { key: "in", hint: "channel" },
-  { key: "has", hint: "link, image or video" },
-  { key: "before", hint: "date" },
-  { key: "after", hint: "date" },
-  { key: "during", hint: "date" },
+export const SEARCH_TOKEN_KEYS: Array<{ key: SearchTokenKey; readonly hint: string }> = [
+  {
+    key: "from",
+    get hint() {
+      return t({ id: "concordSearch.tokenHint.user", defaultMessage: "user" });
+    },
+  },
+  {
+    key: "in",
+    get hint() {
+      return t({ id: "concordSearch.tokenHint.channel", defaultMessage: "channel" });
+    },
+  },
+  {
+    key: "has",
+    get hint() {
+      return t({ id: "concordSearch.tokenHint.has", defaultMessage: "link, image or video" });
+    },
+  },
+  {
+    key: "before",
+    get hint() {
+      return t({ id: "concordSearch.tokenHint.date", defaultMessage: "date" });
+    },
+  },
+  {
+    key: "after",
+    get hint() {
+      return t({ id: "concordSearch.tokenHint.date", defaultMessage: "date" });
+    },
+  },
+  {
+    key: "during",
+    get hint() {
+      return t({ id: "concordSearch.tokenHint.date", defaultMessage: "date" });
+    },
+  },
 ];
 
 export type SearchDateKey = Extract<SearchTokenKey, "before" | "after" | "during">;

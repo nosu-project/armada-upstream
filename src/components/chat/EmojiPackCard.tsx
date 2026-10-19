@@ -25,6 +25,7 @@ import { getAvatarShape } from "@/lib/avatarShape";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { naddrPath } from "@/lib/naddrLink";
 import { cn } from "@/lib/utils";
+import { FormattedMessage, common, t, useIntl } from "@/i18n";
 
 import type { NostrRumor } from "@/lib/nostrRumor";
 
@@ -49,6 +50,7 @@ interface EmojiPackCardProps {
  * "Add" (to the kind-10030 list) and a copy of its `/<naddr>` link.
  */
 export function EmojiPackCard({ event, expanded = false, className }: EmojiPackCardProps) {
+  const intl = useIntl();
   const { user } = useCurrentUser();
   const author = useAuthor(event.pubkey);
   const metadata = author.data?.metadata;
@@ -77,7 +79,7 @@ export function EmojiPackCard({ event, expanded = false, className }: EmojiPackC
 
   const onAdd = async () => {
     if (!user) {
-      toast({ title: "Sign in to add emoji packs" });
+      toast({ title: t({ id: "emojiPackCard.signInToAdd", defaultMessage: "Sign in to add emoji packs" }) });
       return;
     }
     try {
@@ -85,8 +87,10 @@ export function EmojiPackCard({ event, expanded = false, className }: EmojiPackC
       setOverride("added");
     } catch (e) {
       toast({
-        title: "Couldn't add pack",
-        description: e instanceof Error ? e.message : "Publishing failed.",
+        title: t({ id: "emojiPackCard.addFailed", defaultMessage: "Couldn't add pack" }),
+        description: e instanceof Error
+          ? e.message
+          : t({ id: "emojiPackCard.publishFailed", defaultMessage: "Publishing failed." }),
         variant: "destructive",
       });
     }
@@ -96,11 +100,13 @@ export function EmojiPackCard({ event, expanded = false, className }: EmojiPackC
     try {
       await removePack({ coord });
       setOverride("removed");
-      toast({ title: "Emoji pack removed", description: name });
+      toast({ title: t({ id: "emojiPackCard.removed", defaultMessage: "Emoji pack removed" }), description: name });
     } catch (e) {
       toast({
-        title: "Couldn't remove pack",
-        description: e instanceof Error ? e.message : "Publishing failed.",
+        title: t({ id: "emojiPackCard.removeFailed", defaultMessage: "Couldn't remove pack" }),
+        description: e instanceof Error
+          ? e.message
+          : t({ id: "emojiPackCard.publishFailed", defaultMessage: "Publishing failed." }),
         variant: "destructive",
       });
     }
@@ -143,7 +149,11 @@ export function EmojiPackCard({ event, expanded = false, className }: EmojiPackC
               isAdded ? "bg-success/15 text-success" : "bg-secondary text-muted-foreground",
             )}
           >
-            {isAdded ? "Added" : "Emoji pack"}
+            {isAdded ? (
+              <FormattedMessage id="emojiPackCard.added" defaultMessage="Added" />
+            ) : (
+              <FormattedMessage id="emojiPackCard.emojiPack" defaultMessage="Emoji pack" />
+            )}
           </span>
         </div>
 
@@ -164,7 +174,11 @@ export function EmojiPackCard({ event, expanded = false, className }: EmojiPackC
               </AvatarFallback>
             </Avatar>
             <span className="truncate">
-              by <DisplayName pubkey={event.pubkey} name={displayName} />
+              <FormattedMessage
+                id="emojiPackCard.byAuthor"
+                defaultMessage="by {name}"
+                values={{ name: <DisplayName pubkey={event.pubkey} name={displayName} /> }}
+              />
             </span>
           </button>
         </ProfilePreviewCard>
@@ -186,7 +200,9 @@ export function EmojiPackCard({ event, expanded = false, className }: EmojiPackC
             )}
           </div>
         ) : (
-          <p className="text-xs text-muted-foreground">This pack has no emojis.</p>
+          <p className="text-xs text-muted-foreground">
+            <FormattedMessage id="emojiPackCard.empty" defaultMessage="This pack has no emojis." />
+          </p>
         )}
         {expanded && extra > 0 && (
           <Button
@@ -195,7 +211,11 @@ export function EmojiPackCard({ event, expanded = false, className }: EmojiPackC
             className="self-start text-muted-foreground touch:h-11"
             onClick={() => setExpandedLimit((limit) => limit + EXPANDED_STEP)}
           >
-            Show {Math.min(extra, EXPANDED_STEP)} more ({extra} hidden)
+            <FormattedMessage
+              id="emojiPackCard.showMore"
+              defaultMessage="Show {step} more ({hidden} hidden)"
+              values={{ step: Math.min(extra, EXPANDED_STEP), hidden: extra }}
+            />
           </Button>
         )}
 
@@ -211,12 +231,12 @@ export function EmojiPackCard({ event, expanded = false, className }: EmojiPackC
               {isRemoving ? (
                 <>
                   <Loader2 className="size-4 animate-spin" />
-                  Removing…
+                  <FormattedMessage id="emojiPackCard.removing" defaultMessage="Removing…" />
                 </>
               ) : (
                 <>
                   <Trash2 className="size-4" />
-                  Remove
+                  <FormattedMessage {...common.remove} />
                 </>
               )}
             </Button>
@@ -229,12 +249,20 @@ export function EmojiPackCard({ event, expanded = false, className }: EmojiPackC
               {isAdding ? (
                 <>
                   <Loader2 className="size-4 animate-spin" />
-                  Adding…
+                  <FormattedMessage id="emojiPackCard.adding" defaultMessage="Adding…" />
                 </>
               ) : (
                 <>
                   <Plus className="size-4" />
-                  Add {entries.length > 0 ? `${entries.length} emoji${entries.length === 1 ? "" : "s"}` : "pack"}
+                  {entries.length > 0 ? (
+                    <FormattedMessage
+                      id="emojiPackCard.addCount"
+                      defaultMessage="{count, plural, one {Add # emoji} other {Add # emojis}}"
+                      values={{ count: entries.length }}
+                    />
+                  ) : (
+                    <FormattedMessage id="emojiPackCard.addPack" defaultMessage="Add pack" />
+                  )}
                 </>
               )}
             </Button>
@@ -244,8 +272,8 @@ export function EmojiPackCard({ event, expanded = false, className }: EmojiPackC
               variant="secondary"
               className="shrink-0 clip-corner-lg"
               onClick={() => setEditing(true)}
-              aria-label="Edit emoji pack"
-              title="Edit emoji pack"
+              aria-label={intl.formatMessage({ id: "emojiPackCard.edit", defaultMessage: "Edit emoji pack" })}
+              title={intl.formatMessage({ id: "emojiPackCard.edit", defaultMessage: "Edit emoji pack" })}
             >
               <Pencil className="size-4" />
             </Button>
@@ -255,8 +283,8 @@ export function EmojiPackCard({ event, expanded = false, className }: EmojiPackC
               variant="secondary"
               className="shrink-0 clip-corner-lg"
               onClick={copy}
-              aria-label="Copy emoji pack link"
-              title="Copy emoji pack link"
+              aria-label={intl.formatMessage({ id: "emojiPackCard.copyLink", defaultMessage: "Copy emoji pack link" })}
+              title={intl.formatMessage({ id: "emojiPackCard.copyLink", defaultMessage: "Copy emoji pack link" })}
             >
               {copied ? <Check className="size-4" /> : <Link2 className="size-4" />}
             </Button>

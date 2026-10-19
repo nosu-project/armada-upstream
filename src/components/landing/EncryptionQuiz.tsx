@@ -1,17 +1,21 @@
-import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { defineMessages, FormattedMessage, useIntl } from "@/i18n";
 import { cn } from "@/lib/utils";
 
 import { ConcordGrid, ConcordMark, ConcordReveal } from "./ConcordReveal";
 
 /** Landing's closing beat: an encrypted quiz. Picking an answer blows it to dust, uncovering the punchline. */
 
-const TITLE = "What are you talking about?";
-
-const PUNCHLINE = [
-  "Messages on Armada are encrypted.",
-  "Not even we know what you're talking about.",
-];
+const MESSAGES = defineMessages({
+  title: { id: "encryptionQuiz.title", defaultMessage: "What are you talking about?" },
+  punchlineEncrypted: { id: "encryptionQuiz.punchlineEncrypted", defaultMessage: "Messages on Armada are encrypted." },
+  punchlineNotEvenWe: { id: "encryptionQuiz.punchlineNotEvenWe", defaultMessage: "Not even we know what you're talking about." },
+  pickOne: { id: "encryptionQuiz.pickOne", defaultMessage: "// pick one" },
+  firstAnswer: { id: "encryptionQuiz.firstAnswer", defaultMessage: "First answer (encrypted)" },
+  secondAnswer: { id: "encryptionQuiz.secondAnswer", defaultMessage: "Second answer (encrypted)" },
+  sealed: { id: "encryptionQuiz.sealed", defaultMessage: "sealed" },
+});
 
 const BLOCK_ROWS = 5;
 const BLOCK_COLS = 18;
@@ -86,13 +90,14 @@ function DustText({
 /** Decodes the heading by writing to `ref`'s text directly, not state (~50 re-renders otherwise). */
 function useDecodingTitle(
   ref: React.RefObject<HTMLElement | null>,
+  title: string,
   active: boolean,
 ) {
   useEffect(() => {
     const el = ref.current;
     if (!active || !el) return;
     if (prefersReducedMotion()) {
-      el.textContent = TITLE;
+      el.textContent = title;
       return;
     }
     const start = performance.now();
@@ -101,16 +106,16 @@ function useDecodingTitle(
       const decoded =
         elapsed <= GARBLE_MS
           ? 0
-          : Math.round(((elapsed - GARBLE_MS) / DECODE_MS) * TITLE.length);
-      if (decoded >= TITLE.length) {
-        el.textContent = TITLE;
+          : Math.round(((elapsed - GARBLE_MS) / DECODE_MS) * title.length);
+      if (decoded >= title.length) {
+        el.textContent = title;
         clearInterval(id);
         return;
       }
-      el.textContent = TITLE.slice(0, decoded) + hex(TITLE.length - decoded);
+      el.textContent = title.slice(0, decoded) + hex(title.length - decoded);
     }, TICK_MS);
     return () => clearInterval(id);
-  }, [ref, active]);
+  }, [ref, title, active]);
 }
 
 /** Whether `ref` is on screen in a visible page; gates the ciphertext churn. */
@@ -238,7 +243,7 @@ const AnswerButton = memo(function AnswerButton({
               dust && "opacity-0",
             )}
           >
-            sealed
+            <FormattedMessage {...MESSAGES.sealed} />
           </span>
           <span
             aria-hidden="true"
@@ -273,13 +278,16 @@ const AnswerButton = memo(function AnswerButton({
 });
 
 export function EncryptionQuiz() {
+  const intl = useIntl();
+  const title = intl.formatMessage(MESSAGES.title);
   const sectionRef = useRef<HTMLElement>(null);
   const [revealed, setRevealed] = useState(false);
   const [picked, setPicked] = useState(false);
   const titleRef = useRef<HTMLSpanElement>(null);
-  // Initial noise only; the decode writes the rest straight into the node.
-  const [titleNoise] = useState(() => hex(TITLE.length));
-  useDecodingTitle(titleRef, revealed && !picked);
+  // Initial noise only; the decode writes the rest straight into the node. Re-rolled per
+  // language so the garble is as long as the title it hides.
+  const titleNoise = useMemo(() => hex(title.length), [title.length]);
+  useDecodingTitle(titleRef, title, revealed && !picked);
   const onScreen = useOnScreen(sectionRef);
   // Stable, so memoized answers don't re-render.
   const pick = useCallback(() => setPicked(true), []);
@@ -320,9 +328,13 @@ export function EncryptionQuiz() {
               picked ? "opacity-100 delay-500" : "opacity-0",
             )}
           >
-            <span className="text-foreground">{PUNCHLINE[0]}</span>
+            <span className="text-foreground">
+              <FormattedMessage {...MESSAGES.punchlineEncrypted} />
+            </span>
             <br />
-            <span className="text-[hsl(var(--primary))]">{PUNCHLINE[1]}</span>
+            <span className="text-[hsl(var(--primary))]">
+              <FormattedMessage {...MESSAGES.punchlineNotEvenWe} />
+            </span>
           </p>
 
           <ConcordReveal shown={picked} />
@@ -335,7 +347,7 @@ export function EncryptionQuiz() {
             {/* Keyed swap: the live span's text is written outside React. */}
             {picked ? (
               <span key="dust">
-                <DustText text={TITLE} dust />
+                <DustText text={title} dust />
               </span>
             ) : (
               <span key="live" ref={titleRef}>
@@ -350,12 +362,12 @@ export function EncryptionQuiz() {
               picked && "opacity-0",
             )}
           >
-            // pick one
+            <FormattedMessage {...MESSAGES.pickOne} />
           </p>
 
           <div className="grid w-full grid-cols-2 gap-4 sm:gap-10">
             <AnswerButton
-              label="First answer (encrypted)"
+              label={intl.formatMessage(MESSAGES.firstAnswer)}
               letter="a"
               seed={100}
               live={!picked && onScreen}
@@ -363,7 +375,7 @@ export function EncryptionQuiz() {
               onPick={pick}
             />
             <AnswerButton
-              label="Second answer (encrypted)"
+              label={intl.formatMessage(MESSAGES.secondAnswer)}
               letter="b"
               seed={500}
               live={!picked && onScreen}

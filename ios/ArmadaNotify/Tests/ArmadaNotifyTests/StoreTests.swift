@@ -158,7 +158,7 @@ final class StoreTests: XCTestCase {
         XCTAssertEqual(store.displayName(pubkey: peer), "bob")
     }
 
-    func testFallsBackToDisplayNameThenAnonymous() throws {
+    func testFallsBackToDisplayNameThenNoName() throws {
         try bridge.event(
             tenant: ArmadaDbTenants.main,
             rumors: """
@@ -167,9 +167,9 @@ final class StoreTests: XCTestCase {
             """
         )
         XCTAssertEqual(store.displayName(pubkey: peer), "Bob B")
-        // An author with no kind-0 at all reads "Anonymous" — a fact
-        // established by looking, not a placeholder for a lookup never made.
-        XCTAssertEqual(store.displayName(pubkey: self_), "Anonymous")
+        // An author with no kind-0 at all has no name — a fact established by
+        // looking, not a placeholder for a lookup never made. The caller words it.
+        XCTAssertNil(store.displayName(pubkey: self_))
     }
 
     func testReadsANip29GroupNameFromItsOwnRelayTenant() throws {
@@ -198,7 +198,7 @@ final class StoreTests: XCTestCase {
             """
         )
         XCTAssertEqual(
-            store.concordRoomTitle(communityId: community, channelId: channel),
+            store.concordRoomTitle(communityId: community, channelId: channel, strings: .english),
             "Armada / #general"
         )
     }
@@ -208,10 +208,15 @@ final class StoreTests: XCTestCase {
             key: "folded:concord2-fold:\(community)",
             value: #"{"metadata":{"name":"Armada"}}"#
         )
-        XCTAssertEqual(store.concordRoomTitle(communityId: community, channelId: channel), "Armada")
+        XCTAssertEqual(
+            store.concordRoomTitle(communityId: community, channelId: channel, strings: .english),
+            "Armada"
+        )
         // No fold at all (a fresh join) stays unnamed, and the caller titles
         // the notification "Chat" rather than waiting on a relay.
-        XCTAssertNil(store.concordRoomTitle(communityId: "unknown", channelId: channel))
+        XCTAssertNil(
+            store.concordRoomTitle(communityId: "unknown", channelId: channel, strings: .english)
+        )
     }
 }
 

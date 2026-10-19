@@ -1,6 +1,7 @@
 import { lazy, Suspense } from "react";
 
 import { ChromeDialogContent, Dialog } from "@/components/ui/dialog";
+import { useIntl } from "@/i18n";
 
 import type { ChatMsg, OnchainZapAnnouncement, ZapPayment } from "@/components/chat/transport";
 
@@ -18,10 +19,11 @@ export interface ZapDialogProps {
 }
 
 export function ZapDialog({ open, onOpenChange, target, sendZap, sendOnchainZap }: ZapDialogProps) {
+  const intl = useIntl();
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <ChromeDialogContent
-        title="Zap"
+        title={intl.formatMessage({ id: "zapDialog.title", defaultMessage: "Zap" })}
         hideClose
         className="sm:max-w-[425px] gap-0 overflow-hidden max-h-[95vh]"
         contentClassName="p-0 sm:p-0"

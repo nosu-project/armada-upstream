@@ -7,6 +7,7 @@ import { useGifSearch, registerGifShare, type GifResult } from '@/hooks/useGifSe
 import { useFavoriteGifs } from '@/hooks/useFavoriteGifs';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { cn } from '@/lib/utils';
+import { FormattedMessage, useIntl } from '@/i18n';
 
 interface GifPickerProps {
   onSelect: (gif: GifResult) => void;
@@ -24,6 +25,7 @@ function thumbHeight(gif: GifResult): number {
 }
 
 function GifThumbnail({ gif, onClick, isFavorite, onToggleFavorite }: { gif: GifResult; onClick: (gif: GifResult) => void; isFavorite?: boolean; onToggleFavorite?: (gif: GifResult) => void }) {
+  const intl = useIntl();
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState(false);
 
@@ -116,7 +118,9 @@ function GifThumbnail({ gif, onClick, isFavorite, onToggleFavorite }: { gif: Gif
                 onToggleFavorite(gif);
               }
             }}
-            title={isFavorite ? 'Remove from favorites' : 'Add to favorites'}
+            title={isFavorite
+              ? intl.formatMessage({ id: 'gifPicker.removeFavorite', defaultMessage: 'Remove from favorites' })
+              : intl.formatMessage({ id: 'gifPicker.addFavorite', defaultMessage: 'Add to favorites' })}
           >
             <Star className={cn('size-3.5', isFavorite && 'fill-current')} />
           </span>
@@ -171,7 +175,9 @@ function GifGrid({ results, columns: columnCount, onSelect, isFavorite, onToggle
 }
 
 export function GifPicker({ onSelect, className }: GifPickerProps) {
+  const intl = useIntl();
   const { query, setQuery, clearQuery, results, isLoading, isError, isSearching, providerName } = useGifSearch();
+  const favoritesLabel = intl.formatMessage({ id: 'gifPicker.favorites', defaultMessage: 'Favorites' });
   const inputRef = useRef<HTMLInputElement>(null);
   const isMobile = useIsMobile();
   const columnCount = isMobile ? 2 : 3;
@@ -203,16 +209,22 @@ export function GifPicker({ onSelect, className }: GifPickerProps) {
             if (q) setQuery(q);
             else clearQuery();
           }}
-          placeholder={`Search ${providerName}`}
-          hint={`Powered by ${providerName}`}
+          placeholder={intl.formatMessage(
+            { id: 'gifPicker.searchProvider', defaultMessage: 'Search {provider}' },
+            { provider: providerName },
+          )}
+          hint={intl.formatMessage(
+            { id: 'gifPicker.poweredBy', defaultMessage: 'Powered by {provider}' },
+            { provider: providerName },
+          )}
           className="flex-1"
         />
         <button
           type="button"
           onClick={() => setShowFavorites((v) => !v)}
           aria-pressed={showFavorites}
-          aria-label="Favorites"
-          title="Favorites"
+          aria-label={favoritesLabel}
+          title={favoritesLabel}
           className={cn(
             'flex size-9 touch:size-11 shrink-0 items-center justify-center clip-corner-lg transition-colors',
             showFavorites
@@ -227,8 +239,15 @@ export function GifPicker({ onSelect, className }: GifPickerProps) {
       <div className="px-3 pb-1.5">
         <span className="text-2xs font-medium text-muted-foreground uppercase tracking-wider">
           {showFavorites
-            ? favoriteCount > 0 ? `${favoriteCount} favorite${favoriteCount === 1 ? '' : 's'}` : 'Favorites'
-            : isSearching ? 'Results' : 'Trending'}
+            ? favoriteCount > 0
+              ? intl.formatMessage(
+                { id: 'gifPicker.favoriteCount', defaultMessage: '{count, plural, one {# favorite} other {# favorites}}' },
+                { count: favoriteCount },
+              )
+              : favoritesLabel
+            : isSearching
+              ? intl.formatMessage({ id: 'gifPicker.results', defaultMessage: 'Results' })
+              : intl.formatMessage({ id: 'gifPicker.trending', defaultMessage: 'Trending' })}
         </span>
       </div>
 
@@ -237,8 +256,12 @@ export function GifPicker({ onSelect, className }: GifPickerProps) {
           {favorites.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-48 text-muted-foreground">
               <Star className="size-8 mb-2 opacity-40" />
-              <p className="text-sm">No favorite GIFs yet</p>
-              <p className="text-xs mt-1">Tap the star on any GIF to save it here</p>
+              <p className="text-sm">
+                <FormattedMessage id="gifPicker.noFavorites" defaultMessage="No favorite GIFs yet" />
+              </p>
+              <p className="text-xs mt-1">
+                <FormattedMessage id="gifPicker.noFavoritesHint" defaultMessage="Tap the star on any GIF to save it here" />
+              </p>
             </div>
           ) : (
             <GifGrid results={favorites} columns={columnCount} onSelect={handleSelect} isFavorite={isFavorite} onToggleFavorite={toggleFavorite} />
@@ -265,13 +288,21 @@ export function GifPicker({ onSelect, className }: GifPickerProps) {
           ) : isError ? (
             <div className="flex flex-col items-center justify-center h-48 text-muted-foreground">
               <ImageOff className="size-8 mb-2 opacity-40" />
-              <p className="text-sm">Failed to load GIFs</p>
-              <p className="text-xs mt-1">Please try again</p>
+              <p className="text-sm">
+                <FormattedMessage id="gifPicker.loadFailed" defaultMessage="Failed to load GIFs" />
+              </p>
+              <p className="text-xs mt-1">
+                <FormattedMessage id="gifPicker.pleaseTryAgain" defaultMessage="Please try again" />
+              </p>
             </div>
           ) : results.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-48 text-muted-foreground">
-              <p className="text-sm">No GIFs found</p>
-              <p className="text-xs mt-1">Try a different search term</p>
+              <p className="text-sm">
+                <FormattedMessage id="gifPicker.noResults" defaultMessage="No GIFs found" />
+              </p>
+              <p className="text-xs mt-1">
+                <FormattedMessage id="gifPicker.noResultsHint" defaultMessage="Try a different search term" />
+              </p>
             </div>
           ) : (
             <GifGrid results={results} columns={columnCount} onSelect={handleSelect} isFavorite={isFavorite} onToggleFavorite={toggleFavorite} />

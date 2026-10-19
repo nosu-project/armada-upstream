@@ -4,6 +4,7 @@ import { CustomEmojiImg } from "@/components/chat/CustomEmoji";
 import { EmojiSourceFooter } from "@/components/chat/EmojiSourceFooter";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
+import { useIntl } from "@/i18n";
 
 interface EmojiSourcePopoverProps {
   name: string;
@@ -15,6 +16,7 @@ interface EmojiSourcePopoverProps {
 
 /** Inline custom emoji that opens its source-pack popover (via `EmojiSourceFooter`). */
 export function EmojiSourcePopover({ name, url, imgClassName, authorPubkey }: EmojiSourcePopoverProps) {
+  const intl = useIntl();
   const [open, setOpen] = useState(false);
 
   return (
@@ -23,7 +25,10 @@ export function EmojiSourcePopover({ name, url, imgClassName, authorPubkey }: Em
         {/* Inline button keeps text flow; stopPropagation keeps the row from reacting. */}
         <button
           type="button"
-          aria-label={`:${name}: emoji`}
+          aria-label={intl.formatMessage(
+            { id: "emojiSourcePopover.label", defaultMessage: "{shortcode} emoji" },
+            { shortcode: `:${name}:` },
+          )}
           className="inline cursor-pointer align-text-bottom"
           onClick={(e) => e.stopPropagation()}
         >

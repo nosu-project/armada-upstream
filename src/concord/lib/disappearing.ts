@@ -16,6 +16,7 @@ import { writeRumors } from "@/concord/lib/rumorStore";
 import { buildRumor, channelBindingTags, sealRumor, wrapSeal, type StreamSigner } from "@/concord/lib/stream";
 import type { OpenedChat } from "@/concord/lib/chat";
 import type { Channel, CommunityMetadata, Community } from "@/concord/lib/types";
+import { t } from "@/i18n/intl";
 
 export { expirationOf, isExpired };
 
@@ -28,13 +29,43 @@ export const DEFAULT_MESSAGE_EXPIRATION_SECS = 30 * DAY;
  * Offered community timers. Longer than the DM presets on purpose (sub-day timers
  * punish whoever was asleep); "Off" leads for staff in a hurry.
  */
-export const COMMUNITY_TIMER_PRESETS: ReadonlyArray<{ seconds: number; label: string }> = [
-  { seconds: 0, label: "Off" },
-  { seconds: DAY, label: "1 day" },
-  { seconds: 7 * DAY, label: "1 week" },
-  { seconds: 30 * DAY, label: "30 days" },
-  { seconds: 90 * DAY, label: "90 days" },
-  { seconds: 365 * DAY, label: "1 year" },
+export const COMMUNITY_TIMER_PRESETS: ReadonlyArray<{ seconds: number; readonly label: string }> = [
+  {
+    seconds: 0,
+    get label() {
+      return t({ id: "concordDisappearing.preset.off", defaultMessage: "Off" });
+    },
+  },
+  {
+    seconds: DAY,
+    get label() {
+      return t({ id: "concordDisappearing.preset.oneDay", defaultMessage: "1 day" });
+    },
+  },
+  {
+    seconds: 7 * DAY,
+    get label() {
+      return t({ id: "concordDisappearing.preset.oneWeek", defaultMessage: "1 week" });
+    },
+  },
+  {
+    seconds: 30 * DAY,
+    get label() {
+      return t({ id: "concordDisappearing.preset.thirtyDays", defaultMessage: "30 days" });
+    },
+  },
+  {
+    seconds: 90 * DAY,
+    get label() {
+      return t({ id: "concordDisappearing.preset.ninetyDays", defaultMessage: "90 days" });
+    },
+  },
+  {
+    seconds: 365 * DAY,
+    get label() {
+      return t({ id: "concordDisappearing.preset.oneYear", defaultMessage: "1 year" });
+    },
+  },
 ];
 
 /**
@@ -64,9 +95,18 @@ export function formatCommunityTimer(seconds: number): string {
 
 /** The in-timeline notice copy, phrased from the viewer's side like the DM one. */
 export function communityTimerNotice(seconds: number, byMe: boolean, name: string): string {
-  const who = byMe ? "You" : name;
-  if (seconds <= 0) return `${who} turned off disappearing messages.`;
-  return `${who} set disappearing messages to ${formatCommunityTimer(seconds)}.`;
+  if (seconds <= 0) {
+    return byMe
+      ? t({ id: "concordDisappearing.notice.offByMe", defaultMessage: "You turned off disappearing messages." })
+      : t({ id: "concordDisappearing.notice.off", defaultMessage: "{name} turned off disappearing messages." }, { name });
+  }
+  const duration = formatCommunityTimer(seconds);
+  return byMe
+    ? t({ id: "concordDisappearing.notice.setByMe", defaultMessage: "You set disappearing messages to {duration}." }, { duration })
+    : t(
+        { id: "concordDisappearing.notice.set", defaultMessage: "{name} set disappearing messages to {duration}." },
+        { name, duration },
+      );
 }
 
 /**

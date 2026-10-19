@@ -10,6 +10,7 @@ import {
   Dialog,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { common, FormattedMessage, t, useIntl } from "@/i18n";
 import { toast } from "@/hooks/useToast";
 import { writeClipboardText } from "@/lib/clipboard";
 import { backUpNsec } from "@/lib/credentialManager";
@@ -32,6 +33,7 @@ interface BackupKeyDialogProps {
  * each clears the pending marker ({@link clearKeyBackupPending}).
  */
 export function BackupKeyDialog({ open, onOpenChange, nsec, pubkey, onLogout }: BackupKeyDialogProps) {
+  const intl = useIntl();
   const [showKey, setShowKey] = useState(false);
   const [copied, setCopied] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -55,12 +57,21 @@ export function BackupKeyDialog({ open, onOpenChange, nsec, pubkey, onLogout }: 
       await writeClipboardText(nsec);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
-      toast({ title: "Key copied", description: "Paste it somewhere safe, like a password manager." });
+      toast({
+        title: t({ id: "backupKeyDialog.copiedToast.title", defaultMessage: "Key copied" }),
+        description: t({
+          id: "backupKeyDialog.copiedToast.description",
+          defaultMessage: "Paste it somewhere safe, like a password manager.",
+        }),
+      });
       done();
     } catch {
       toast({
-        title: "Copy failed",
-        description: "Could not copy to the clipboard. Please select and copy it manually.",
+        title: t({ id: "backupKeyDialog.copyFailed.title", defaultMessage: "Copy failed" }),
+        description: t({
+          id: "backupKeyDialog.copyFailed.description",
+          defaultMessage: "Could not copy to the clipboard. Please select and copy it manually.",
+        }),
         variant: "destructive",
       });
     }
@@ -75,15 +86,21 @@ export function BackupKeyDialog({ open, onOpenChange, nsec, pubkey, onLogout }: 
       if (result.status === "cancelled") return;
       if (result.status === "failed") {
         toast({
-          title: "Couldn't save your key",
-          description: "Saving failed. Reveal your key, copy it, and store it somewhere safe.",
+          title: t({ id: "backupKeyDialog.saveFailed.title", defaultMessage: "Couldn't save your key" }),
+          description: t({
+            id: "backupKeyDialog.saveFailed.description",
+            defaultMessage: "Saving failed. Reveal your key, copy it, and store it somewhere safe.",
+          }),
           variant: "destructive",
         });
         return;
       }
       toast({
-        title: "Key saved",
-        description: `Saved to ${result.location}. Keep it safe. It's your only login.`,
+        title: t({ id: "backupKeyDialog.saved.title", defaultMessage: "Key saved" }),
+        description: t(
+          { id: "backupKeyDialog.saved.description", defaultMessage: "Saved to {location}. Keep it safe. It's your only login." },
+          { location: result.location },
+        ),
       });
       done();
     } finally {
@@ -93,15 +110,31 @@ export function BackupKeyDialog({ open, onOpenChange, nsec, pubkey, onLogout }: 
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <ChromeDialogContent title={onLogout ? "Back up before logging out" : "Back up your secret key"}>
+      <ChromeDialogContent title={
+          onLogout
+            ? intl.formatMessage({ id: "backupKeyDialog.logoutTitle", defaultMessage: "Back up before logging out" })
+            : intl.formatMessage({ id: "backupKeyDialog.title", defaultMessage: "Back up your secret key" })
+        }
+      >
         <ChromeDialogHeader
           icon={onLogout ? LogOut : KeyRound}
           tone={onLogout ? "destructive" : "primary"}
-          title={onLogout ? "back up before logging out" : "back up your secret key"}
+          title={
+            onLogout
+              ? intl.formatMessage({ id: "backupKeyDialog.logoutHeading", defaultMessage: "back up before logging out" })
+              : intl.formatMessage({ id: "backupKeyDialog.heading", defaultMessage: "back up your secret key" })
+          }
           description={
             onLogout
-              ? "Your key isn't backed up anywhere. Log out without it and this account is gone for good."
-              : "Your account lives only on this device. Save your key so you can sign in anywhere, and never lose it."
+              ? intl.formatMessage({
+                  id: "backupKeyDialog.logoutDescription",
+                  defaultMessage: "Your key isn't backed up anywhere. Log out without it and this account is gone for good.",
+                })
+              : intl.formatMessage({
+                  id: "backupKeyDialog.description",
+                  defaultMessage:
+                    "Your account lives only on this device. Save your key so you can sign in anywhere, and never lose it.",
+                })
           }
         />
 
@@ -111,11 +144,13 @@ export function BackupKeyDialog({ open, onOpenChange, nsec, pubkey, onLogout }: 
               <AlertTriangle className="mt-px size-4 shrink-0 text-destructive" />
               <div className="space-y-1">
                 <p className="text-xs font-bold uppercase tracking-widest text-destructive">
-                  This key is your only login
+                  <FormattedMessage id="backupKeyDialog.onlyLogin" defaultMessage="This key is your only login" />
                 </p>
                 <p className="text-xs leading-relaxed text-destructive/90">
-                  There's no email or password, and it can't be reset. Anyone you share it
-                  with can act as you.
+                  <FormattedMessage
+                    id="backupKeyDialog.noReset"
+                    defaultMessage="There's no email or password, and it can't be reset. Anyone you share it with can act as you."
+                  />
                 </p>
               </div>
             </div>
@@ -136,8 +171,16 @@ export function BackupKeyDialog({ open, onOpenChange, nsec, pubkey, onLogout }: 
                 size="icon"
                 className="absolute right-0 top-0 h-full px-3 hover:bg-transparent"
                 onClick={copyKey}
-                aria-label={copied ? "Key copied" : "Copy key"}
-                title={copied ? "Copied" : "Copy key"}
+                aria-label={
+                  copied
+                    ? intl.formatMessage({ id: "backupKeyDialog.keyCopied", defaultMessage: "Key copied" })
+                    : intl.formatMessage({ id: "backupKeyDialog.copyKey", defaultMessage: "Copy key" })
+                }
+                title={
+                  copied
+                    ? intl.formatMessage(common.copied)
+                    : intl.formatMessage({ id: "backupKeyDialog.copyKey", defaultMessage: "Copy key" })
+                }
               >
                 {copied ? (
                   <Check className="size-4 text-success" />
@@ -152,8 +195,8 @@ export function BackupKeyDialog({ open, onOpenChange, nsec, pubkey, onLogout }: 
                 size="icon"
                 className="absolute right-0 top-0 h-full px-3 hover:bg-transparent"
                 onClick={() => setShowKey(true)}
-                aria-label="Show key"
-                title="Show key"
+                aria-label={intl.formatMessage({ id: "backupKeyDialog.showKey", defaultMessage: "Show key" })}
+                title={intl.formatMessage({ id: "backupKeyDialog.showKey", defaultMessage: "Show key" })}
               >
                 <Eye className="size-4 text-muted-foreground" />
               </Button>
@@ -169,13 +212,21 @@ export function BackupKeyDialog({ open, onOpenChange, nsec, pubkey, onLogout }: 
             disabled={saving}
           >
             <Download className="size-4" />
-            {saving ? "Saving…" : "Save key"}
+            {saving ? (
+              <FormattedMessage {...common.saving} />
+            ) : (
+              <FormattedMessage id="backupKeyDialog.saveKey" defaultMessage="Save key" />
+            )}
           </Button>
         </div>
 
         <ChromeDialogFooter>
           <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
-            {onLogout ? "Cancel" : "Later"}
+            {onLogout ? (
+              <FormattedMessage {...common.cancel} />
+            ) : (
+              <FormattedMessage id="backupKeyDialog.later" defaultMessage="Later" />
+            )}
           </Button>
           {onLogout && (
             <Button
@@ -183,7 +234,11 @@ export function BackupKeyDialog({ open, onOpenChange, nsec, pubkey, onLogout }: 
               variant={backedUp ? "default" : "destructive"}
               onClick={onLogout}
             >
-              {backedUp ? "Log out" : "Log out anyway"}
+              {backedUp ? (
+                <FormattedMessage id="backupKeyDialog.logOut" defaultMessage="Log out" />
+              ) : (
+                <FormattedMessage id="backupKeyDialog.logOutAnyway" defaultMessage="Log out anyway" />
+              )}
             </Button>
           )}
         </ChromeDialogFooter>

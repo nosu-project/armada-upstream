@@ -13,6 +13,7 @@ import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { writeClipboardText } from "@/lib/clipboard";
 import { relativeTime } from "@/lib/formatTime";
 import { toast } from "@/hooks/useToast";
+import { common, defineMessage, defineMessages, FormattedMessage, t, useIntl, type MessageDescriptor } from "@/i18n";
 import { cn } from "@/lib/utils";
 
 import {
@@ -96,7 +97,13 @@ const LEVEL_CLASSES = [
   "bg-primary/75",
   "bg-primary",
 ];
-const LEVEL_LABELS = ["No activity", "1–2 events", "3–5 events", "6–9 events", "10+ events"];
+const LEVEL_LABELS = [
+  defineMessage({ id: "projectsView.level.none", defaultMessage: "No activity" }),
+  defineMessage({ id: "projectsView.level.1", defaultMessage: "1–2 events" }),
+  defineMessage({ id: "projectsView.level.2", defaultMessage: "3–5 events" }),
+  defineMessage({ id: "projectsView.level.3", defaultMessage: "6–9 events" }),
+  defineMessage({ id: "projectsView.level.4", defaultMessage: "10+ events" }),
+];
 
 function graphDayKey(date: Date) {
   const month = `${date.getMonth() + 1}`.padStart(2, "0");
@@ -128,37 +135,44 @@ function buildWeeks(today: Date, weekCount: number) {
 }
 
 const MIN_LABEL_GAP = 3;
-function monthLabels(weeks: Date[][]) {
+function monthLabels(weeks: Date[][], locale: string) {
   let lastLabeled = -MIN_LABEL_GAP;
   return weeks.map((week, index) => {
     const isNewMonth = index === 0 || week[0].getMonth() !== weeks[index - 1][0].getMonth();
     if (!isNewMonth || index - lastLabeled < MIN_LABEL_GAP) return "";
     lastLabeled = index;
-    return week[0].toLocaleDateString(undefined, { month: "short" });
+    return week[0].toLocaleDateString(locale, { month: "short" });
   });
 }
 
 function ContributionLegend() {
   return (
     <div className="flex items-center gap-1.5">
-      <span className="text-3xs text-muted-foreground">Less</span>
+      <span className="text-3xs text-muted-foreground">
+        <FormattedMessage id="projectsView.less" defaultMessage="Less" />
+      </span>
       {LEVEL_CLASSES.map((levelClass, level) => (
         <Tooltip key={levelClass}>
           <TooltipTrigger asChild>
             <span className={cn("size-2.5 rounded", levelClass)} />
           </TooltipTrigger>
-          <TooltipContent>{LEVEL_LABELS[level]}</TooltipContent>
+          <TooltipContent>
+            <FormattedMessage {...LEVEL_LABELS[level]} />
+          </TooltipContent>
         </Tooltip>
       ))}
-      <span className="text-3xs text-muted-foreground">More</span>
+      <span className="text-3xs text-muted-foreground">
+        <FormattedMessage id="projectsView.more" defaultMessage="More" />
+      </span>
     </div>
   );
 }
 
 function ContributionGraph({ data }: { data: Record<string, number> }) {
+  const intl = useIntl();
   const today = new Date();
   const weeks = buildWeeks(today, 26);
-  const labels = monthLabels(weeks);
+  const labels = monthLabels(weeks, intl.locale);
   const gridTemplateColumns = `repeat(${weeks.length}, minmax(0, 1fr))`;
   const todayKey = graphDayKey(today);
   return (
@@ -182,14 +196,26 @@ function ContributionGraph({ data }: { data: Record<string, number> }) {
               return <span aria-hidden key={key} className="aspect-square rounded-[22%] border border-border/40" />;
             }
             const count = data[key] ?? 0;
-            const dateLabel = day.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+            const dateLabel = day.toLocaleDateString(intl.locale, { month: "short", day: "numeric" });
             return (
               <Tooltip key={key}>
                 <TooltipTrigger asChild>
                   <span className={cn("aspect-square w-full rounded-[22%]", LEVEL_CLASSES[levelFor(count)])} />
                 </TooltipTrigger>
                 <TooltipContent>
-                  {count > 0 ? `${count} ${count === 1 ? "event" : "events"} · ${dateLabel}` : `No activity · ${dateLabel}`}
+                  {count > 0 ? (
+                    <FormattedMessage
+                      id="projectsView.dayEvents"
+                      defaultMessage="{count, plural, one {# event} other {# events}} · {date}"
+                      values={{ count, date: dateLabel }}
+                    />
+                  ) : (
+                    <FormattedMessage
+                      id="projectsView.dayNoActivity"
+                      defaultMessage="No activity · {date}"
+                      values={{ date: dateLabel }}
+                    />
+                  )}
                 </TooltipContent>
               </Tooltip>
             );
@@ -224,10 +250,18 @@ const STATUS_STYLES: Record<ProjectWorkItem["status"], string> = {
   draft: "bg-muted text-muted-foreground",
 };
 
+const STATUS_LABELS: Record<ProjectWorkItem["status"], MessageDescriptor> = defineMessages({
+  open: { id: "projectsView.status.open", defaultMessage: "open" },
+  merged: { id: "projectsView.status.merged", defaultMessage: "merged" },
+  resolved: { id: "projectsView.status.resolved", defaultMessage: "resolved" },
+  closed: { id: "projectsView.status.closed", defaultMessage: "closed" },
+  draft: { id: "projectsView.status.draft", defaultMessage: "draft" },
+});
+
 function StatusChip({ status }: { status: ProjectWorkItem["status"] }) {
   return (
     <span className={cn("shrink-0 rounded-full px-2 py-0.5 text-3xs font-medium capitalize", STATUS_STYLES[status])}>
-      {status}
+      <FormattedMessage {...STATUS_LABELS[status]} />
     </span>
   );
 }
@@ -256,15 +290,33 @@ function WorkItemRow({ item, repoName, onOpen, onLabelClick }: { item: ProjectWo
             {bumped ? (
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <span>updated {relativeTime(activityAt)}</span>
+                  <span>
+                    <FormattedMessage
+                      id="projectsView.updatedAgo"
+                      defaultMessage="updated {time}"
+                      values={{ time: relativeTime(activityAt) }}
+                    />
+                  </span>
                 </TooltipTrigger>
-                <TooltipContent>Opened {relativeTime(item.createdAt)}</TooltipContent>
+                <TooltipContent>
+                  <FormattedMessage
+                    id="projectsView.openedAgo"
+                    defaultMessage="Opened {time}"
+                    values={{ time: relativeTime(item.createdAt) }}
+                  />
+                </TooltipContent>
               </Tooltip>
             ) : (
               <span>{relativeTime(item.createdAt)}</span>
             )}
             <span aria-hidden>·</span>
-            <span>by <AuthorName pubkey={item.author} /></span>
+            <span>
+              <FormattedMessage
+                id="projectsView.byAuthor"
+                defaultMessage="by {name}"
+                values={{ name: <AuthorName pubkey={item.author} /> }}
+              />
+            </span>
             {labels.slice(0, 3).map((label) => (
               // Plain spans: the row is already a button, so no nested controls.
               <span
@@ -304,6 +356,7 @@ function RepoIcon() {
 }
 
 function CloneButton({ url }: { url: string }) {
+  const intl = useIntl();
   return (
     <Tooltip>
       <TooltipTrigger asChild>
@@ -311,14 +364,19 @@ function CloneButton({ url }: { url: string }) {
           variant="ghost"
           size="icon"
           className="size-7 touch:size-11 text-muted-foreground hover:text-foreground"
-          aria-label="Copy clone URL"
+          aria-label={intl.formatMessage({ id: "projectsView.copyCloneUrl", defaultMessage: "Copy clone URL" })}
           onClick={() =>
-            writeClipboardText(url).then(() => toast({ title: "Clone URL copied" }), () => undefined)}
+            writeClipboardText(url).then(
+              () => toast({ title: t({ id: "projectsView.cloneUrlCopied", defaultMessage: "Clone URL copied" }) }),
+              () => undefined,
+            )}
         >
           <Copy className="size-3.5" />
         </Button>
       </TooltipTrigger>
-      <TooltipContent>Copy clone URL</TooltipContent>
+      <TooltipContent>
+        <FormattedMessage id="projectsView.copyCloneUrl" defaultMessage="Copy clone URL" />
+      </TooltipContent>
     </Tooltip>
   );
 }
@@ -332,10 +390,19 @@ function safeWeb(webUrl?: string): string | null {
   }
 }
 
+const PR_COUNT = defineMessage({
+  id: "projectsView.prCount",
+  defaultMessage: "{count, plural, one {# PR} other {# PRs}}",
+});
+const ISSUE_COUNT = defineMessage({
+  id: "projectsView.issueCount",
+  defaultMessage: "{count, plural, one {# issue} other {# issues}}",
+});
+
 function ActivityBar({ summary }: { summary: ProjectRepoSummary }) {
   const items = [
-    { count: summary.prCount, bar: "bg-primary", label: summary.prCount === 1 ? "PR" : "PRs" },
-    { count: summary.issueCount, bar: "bg-orange-500", label: summary.issueCount === 1 ? "issue" : "issues" },
+    { count: summary.prCount, bar: "bg-primary", label: PR_COUNT },
+    { count: summary.issueCount, bar: "bg-orange-500", label: ISSUE_COUNT },
   ];
   const total = items.reduce((s, i) => s + i.count, 0);
   return (
@@ -349,7 +416,7 @@ function ActivityBar({ summary }: { summary: ProjectRepoSummary }) {
               <TooltipContent>
                 <span className="flex items-center gap-1.5">
                   <span className={cn("size-2 rounded-full", i.bar)} />
-                  {i.count} {i.label}
+                  <FormattedMessage {...i.label} values={{ count: i.count }} />
                 </span>
               </TooltipContent>
             </Tooltip>
@@ -359,20 +426,37 @@ function ActivityBar({ summary }: { summary: ProjectRepoSummary }) {
   );
 }
 
+const statNumber = (chunks: React.ReactNode[]) => <span className="font-medium text-foreground">{chunks}</span>;
+
 function StatsRow({ summary }: { summary: ProjectRepoSummary }) {
   return (
     <div className="flex items-center gap-x-3 text-xs leading-4 text-muted-foreground">
       <span className="flex items-center gap-1">
         <GitPullRequest className="size-3.5 shrink-0 text-primary" />
-        <span className="font-medium text-foreground">{summary.prCount}</span> {summary.prCount === 1 ? "PR" : "PRs"}
+        <FormattedMessage
+          id="projectsView.statsPrs"
+          defaultMessage="{count, plural, one {<n>#</n> PR} other {<n>#</n> PRs}}"
+          values={{ count: summary.prCount, n: statNumber }}
+        />
       </span>
       <span className="flex items-center gap-1">
         <CircleDot className="size-3.5 shrink-0 text-orange-500" />
-        <span className="font-medium text-foreground">{summary.issueCount}</span> {summary.issueCount === 1 ? "issue" : "issues"}
+        <FormattedMessage
+          id="projectsView.statsIssues"
+          defaultMessage="{count, plural, one {<n>#</n> issue} other {<n>#</n> issues}}"
+          values={{ count: summary.issueCount, n: statNumber }}
+        />
       </span>
     </div>
   );
 }
+
+const SHOW_REPO_ACTIVITY = defineMessage({ id: "projectsView.showRepoActivity", defaultMessage: "Show {name} activity" });
+const VIEW_ON_WEB = defineMessage({ id: "projectsView.viewOnWeb", defaultMessage: "View on web" });
+const REPO_FALLBACK_DESCRIPTION = defineMessage({
+  id: "projectsView.repoFallbackDescription",
+  defaultMessage: "A shared space for git work.",
+});
 
 function RepoCard({ repo, summary, people, selected, onOpen }: {
   repo: ProjectRepo;
@@ -381,6 +465,7 @@ function RepoCard({ repo, summary, people, selected, onOpen }: {
   selected?: boolean;
   onOpen?: () => void;
 }) {
+  const intl = useIntl();
   const web = safeWeb(repo.webUrl);
   return (
     <Card
@@ -395,7 +480,7 @@ function RepoCard({ repo, summary, people, selected, onOpen }: {
         <button
           type="button"
           onClick={onOpen}
-          aria-label={`Show ${repo.name} activity`}
+          aria-label={intl.formatMessage(SHOW_REPO_ACTIVITY, { name: repo.name })}
           aria-pressed={selected}
           className="absolute inset-0 z-0 cursor-pointer rounded-[inherit] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
         />
@@ -414,12 +499,14 @@ function RepoCard({ repo, summary, people, selected, onOpen }: {
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button variant="ghost" size="icon" className="size-7 touch:size-11 text-muted-foreground hover:text-foreground" asChild>
-                  <a href={web} target="_blank" rel="noopener noreferrer" aria-label="View on web">
+                  <a href={web} target="_blank" rel="noopener noreferrer" aria-label={intl.formatMessage(VIEW_ON_WEB)}>
                     <ExternalLink className="size-3.5" />
                   </a>
                 </Button>
               </TooltipTrigger>
-              <TooltipContent>View on web</TooltipContent>
+              <TooltipContent>
+                <FormattedMessage {...VIEW_ON_WEB} />
+              </TooltipContent>
             </Tooltip>
           )}
           {repo.cloneUrls[0] && <CloneButton url={repo.cloneUrls[0]} />}
@@ -427,7 +514,7 @@ function RepoCard({ repo, summary, people, selected, onOpen }: {
       </div>
 
       <p className="line-clamp-2 min-h-10 px-4 py-2 text-sm text-muted-foreground">
-        {repo.description || "A shared space for git work."}
+        {repo.description || <FormattedMessage {...REPO_FALLBACK_DESCRIPTION} />}
       </p>
 
       <div className="relative z-10 flex w-fit items-center px-4 pb-1">
@@ -454,6 +541,7 @@ function RepoRow({ repo, summary, people, selected, onOpen }: {
   selected?: boolean;
   onOpen?: () => void;
 }) {
+  const intl = useIntl();
   const web = safeWeb(repo.webUrl);
   return (
     <div
@@ -467,7 +555,7 @@ function RepoRow({ repo, summary, people, selected, onOpen }: {
         <button
           type="button"
           onClick={onOpen}
-          aria-label={`Show ${repo.name} activity`}
+          aria-label={intl.formatMessage(SHOW_REPO_ACTIVITY, { name: repo.name })}
           aria-pressed={selected}
           className="absolute inset-0 z-0 cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
         />
@@ -480,7 +568,7 @@ function RepoRow({ repo, summary, people, selected, onOpen }: {
         </div>
         <p className="truncate text-xs text-muted-foreground">
           {repo.subtitle ? `${repo.subtitle} · ` : ""}
-          {repo.description || "A shared space for git work."}
+          {repo.description || <FormattedMessage {...REPO_FALLBACK_DESCRIPTION} />}
         </p>
         <div className="relative z-10 flex w-fit flex-wrap items-center gap-x-3 gap-y-1">
           <StatsRow summary={summary} />
@@ -491,7 +579,7 @@ function RepoRow({ repo, summary, people, selected, onOpen }: {
       <div className="relative z-10 flex shrink-0 items-center">
         {web && (
           <Button variant="ghost" size="icon" className="size-7 touch:size-11 text-muted-foreground hover:text-foreground" asChild>
-            <a href={web} target="_blank" rel="noopener noreferrer" aria-label="View on web">
+            <a href={web} target="_blank" rel="noopener noreferrer" aria-label={intl.formatMessage(VIEW_ON_WEB)}>
               <ExternalLink className="size-3.5" />
             </a>
           </Button>
@@ -502,11 +590,11 @@ function RepoRow({ repo, summary, people, selected, onOpen }: {
   );
 }
 
-const TABS: Array<{ label: string; value: Filter }> = [
-  { label: "Overview", value: "all" },
-  { label: "Repositories", value: "repositories" },
-  { label: "Pull Requests", value: "prs" },
-  { label: "Issues", value: "issues" },
+const TABS: Array<{ label: MessageDescriptor; value: Filter }> = [
+  { label: defineMessage({ id: "projectsView.tab.overview", defaultMessage: "Overview" }), value: "all" },
+  { label: defineMessage({ id: "projectsView.tab.repositories", defaultMessage: "Repositories" }), value: "repositories" },
+  { label: defineMessage({ id: "projectsView.tab.pullRequests", defaultMessage: "Pull Requests" }), value: "prs" },
+  { label: defineMessage({ id: "projectsView.tab.issues", defaultMessage: "Issues" }), value: "issues" },
 ];
 
 function Tabs({ filter, onChange }: { filter: Filter; onChange: (f: Filter) => void }) {
@@ -528,7 +616,7 @@ function Tabs({ filter, onChange }: { filter: Filter; onChange: (f: Filter) => v
                 : "text-muted-foreground hover:text-foreground after:opacity-0 hover:after:opacity-100",
             )}
           >
-            {tab.label}
+            <FormattedMessage {...tab.label} />
           </button>
         );
       })}
@@ -576,6 +664,7 @@ function Overview({
   /** The overview can't show a label filter, so the click names a tab. */
   onLabelClick?: (label: string, target: Filter) => void;
 }) {
+  const intl = useIntl();
   const graph = useMemo(() => activityByDay(repos, items), [repos, items]);
   const prCount = items.filter((i) => i.kind !== "issue").length;
   const issueCount = items.filter((i) => i.kind === "issue").length;
@@ -585,15 +674,32 @@ function Overview({
   return (
     <div className="space-y-6">
       <div className="grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(8.5rem,1fr))]">
-        <StatPill count={repos.length} icon={FolderGit2} label="Repositories" onClick={() => onSelect("repositories")} />
-        <StatPill count={prCount} icon={GitPullRequest} label="Pull requests" onClick={() => onSelect("prs")} />
-        <StatPill count={issueCount} icon={CircleDot} label="Issues" onClick={() => onSelect("issues")} />
-        <StatPill count={people.length} icon={Users} label="People" />
+        <StatPill
+          count={repos.length}
+          icon={FolderGit2}
+          label={intl.formatMessage({ id: "projectsView.statRepositories", defaultMessage: "Repositories" })}
+          onClick={() => onSelect("repositories")}
+        />
+        <StatPill
+          count={prCount}
+          icon={GitPullRequest}
+          label={intl.formatMessage({ id: "projectsView.statPullRequests", defaultMessage: "Pull requests" })}
+          onClick={() => onSelect("prs")}
+        />
+        <StatPill
+          count={issueCount}
+          icon={CircleDot}
+          label={intl.formatMessage({ id: "projectsView.statIssues", defaultMessage: "Issues" })}
+          onClick={() => onSelect("issues")}
+        />
+        <StatPill count={people.length} icon={Users} label={intl.formatMessage({ id: "projectsView.people", defaultMessage: "People" })} />
       </div>
 
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_18rem]">
         <section className="min-w-0 space-y-3">
-          <h3 className="text-base font-semibold text-foreground">Recent activity</h3>
+          <h3 className="text-base font-semibold text-foreground">
+            <FormattedMessage id="projectsView.recentActivity" defaultMessage="Recent activity" />
+          </h3>
           {feed.length > 0 ? (
             <div className="clip-corner-lg bg-card divide-y divide-border/60">
               {feed.map((item) => (
@@ -608,25 +714,31 @@ function Overview({
             </div>
           ) : (
             <p className="clip-hairline-lg [--fill-hover:var(--background)/0.4] px-4 py-10 text-center text-sm text-muted-foreground">
-              No activity yet.
+              <FormattedMessage id="projectsView.noActivity" defaultMessage="No activity yet." />
             </p>
           )}
         </section>
 
         <div className="min-w-0 space-y-6">
           <section className="space-y-3">
-            <h3 className="text-base font-semibold text-foreground">People</h3>
+            <h3 className="text-base font-semibold text-foreground">
+              <FormattedMessage id="projectsView.people" defaultMessage="People" />
+            </h3>
             {people.length > 0 ? (
               <div className="flex flex-wrap gap-1.5">
                 {people.slice(0, 18).map((pk) => <PersonAvatar key={pk} pubkey={pk} />)}
               </div>
             ) : (
-              <p className="text-sm text-muted-foreground">No people yet.</p>
+              <p className="text-sm text-muted-foreground">
+                <FormattedMessage id="projectsView.noPeople" defaultMessage="No people yet." />
+              </p>
             )}
           </section>
 
           <section className="space-y-2">
-            <h3 className="text-base font-semibold text-foreground">Contribution activity</h3>
+            <h3 className="text-base font-semibold text-foreground">
+              <FormattedMessage id="projectsView.contributionActivity" defaultMessage="Contribution activity" />
+            </h3>
             <ContributionGraph data={graph} />
             <ContributionLegend />
           </section>
@@ -650,8 +762,12 @@ function CardsSkeleton() {
 function FilteredOutNotice({ onShowAll }: { onShowAll: () => void }) {
   return (
     <div className="flex flex-col items-center gap-3 px-4 py-14 text-center">
-      <p className="text-sm text-muted-foreground">Nothing matches the current filters.</p>
-      <Button variant="outline" size="sm" onClick={onShowAll}>Show all</Button>
+      <p className="text-sm text-muted-foreground">
+        <FormattedMessage id="projectsView.nothingMatches" defaultMessage="Nothing matches the current filters." />
+      </p>
+      <Button variant="outline" size="sm" onClick={onShowAll}>
+        <FormattedMessage id="projectsView.showAll" defaultMessage="Show all" />
+      </Button>
     </div>
   );
 }
@@ -677,13 +793,19 @@ function EmptyState({ icon: Icon, title, hint }: { icon: typeof FolderGit2; titl
   );
 }
 
+const STATUS_FILTER_LABELS = defineMessages({
+  open: { id: "projectsView.statusFilter.open", defaultMessage: "open" },
+  closed: { id: "projectsView.statusFilter.closed", defaultMessage: "closed" },
+  all: { id: "projectsView.statusFilter.all", defaultMessage: "all" },
+});
+
 /** Shared presentational Projects surface; callers supply repos and work items. */
 export function ProjectsView({
   repos,
   items: workItems,
   isLoading,
-  intro = "Browse this workspace's repositories and activity.",
-  emptyHint = "Repositories pushed to this workspace will appear here.",
+  intro,
+  emptyHint,
   headerExtra,
   onOpenItem,
 }: {
@@ -695,6 +817,7 @@ export function ProjectsView({
   headerExtra?: React.ReactNode;
   onOpenItem?: (item: ProjectWorkItem) => void;
 }) {
+  const intl = useIntl();
   const [filter, setFilter] = useState<Filter>("all");
   const [viewMode, setViewMode] = useState<ViewMode>("grid");
   const [sort, setSort] = useState<ProjectSort>("updated");
@@ -791,7 +914,14 @@ export function ProjectsView({
   return (
     <div className="mx-auto w-full max-w-6xl px-4 py-6 sm:px-6">
       <div className="mb-4 flex items-center justify-between gap-3">
-        <p className="text-xs text-muted-foreground sm:text-sm">{intro}</p>
+        <p className="text-xs text-muted-foreground sm:text-sm">
+          {intro ?? (
+            <FormattedMessage
+              id="projectsView.defaultIntro"
+              defaultMessage="Browse this workspace's repositories and activity."
+            />
+          )}
+        </p>
         {headerExtra}
       </div>
 
@@ -803,14 +933,26 @@ export function ProjectsView({
             {activeRepo && (
               <FilterChip
                 label={activeRepoName ?? activeRepo}
-                clearLabel="Show every repository"
+                clearLabel={intl.formatMessage({ id: "projectsView.showEveryRepository", defaultMessage: "Show every repository" })}
                 onClear={() => setRepoFilter(null)}
               />
             )}
             {(filter === "prs" || filter === "issues") && labelFilter && (
-              <FilterChip label={labelFilter} clearLabel="Clear the label filter" onClear={() => setLabelFilter(null)} />
+              <FilterChip
+                label={labelFilter}
+                clearLabel={intl.formatMessage({ id: "projectsView.clearLabelFilter", defaultMessage: "Clear the label filter" })}
+                onClear={() => setLabelFilter(null)}
+              />
             )}
-            {filter !== "all" && <SearchField ref={searchRef} value={query} onChange={setQuery} placeholder="Search" className="h-8 w-44 touch:h-10" />}
+            {filter !== "all" && (
+              <SearchField
+                ref={searchRef}
+                value={query}
+                onChange={setQuery}
+                placeholder={intl.formatMessage(common.search)}
+                className="h-8 w-44 touch:h-10"
+              />
+            )}
             {(filter === "prs" || filter === "issues") && (
               <div className="flex items-center rounded-lg bg-muted/40 p-0.5">
                 {(["open", "closed", "all"] as const).map((value) => (
@@ -822,7 +964,7 @@ export function ProjectsView({
                     aria-pressed={statusFilter === value}
                     onClick={() => setStatusFilter(value)}
                   >
-                    {value}
+                    <FormattedMessage {...STATUS_FILTER_LABELS[value]} />
                   </Button>
                 ))}
               </div>
@@ -831,11 +973,11 @@ export function ProjectsView({
               <select
                 value={sort}
                 onChange={(e) => setSort(e.target.value as ProjectSort)}
-                aria-label="Sort"
+                aria-label={intl.formatMessage({ id: "projectsView.sort", defaultMessage: "Sort" })}
                 className="h-8 clip-corner-lg bg-transparent px-2 text-xs text-foreground outline-none hover:bg-foreground/5 focus:ring-1 focus:ring-ring"
               >
-                <option value="updated">Recent</option>
-                <option value="name">Name</option>
+                <option value="updated">{intl.formatMessage({ id: "projectsView.sortRecent", defaultMessage: "Recent" })}</option>
+                <option value="name">{intl.formatMessage({ id: "projectsView.sortName", defaultMessage: "Name" })}</option>
               </select>
             )}
             {filter === "repositories" && (
@@ -844,7 +986,7 @@ export function ProjectsView({
                   variant={viewMode === "grid" ? "secondary" : "ghost"}
                   size="icon"
                   className="size-7 touch:size-11"
-                  aria-label="Grid layout"
+                  aria-label={intl.formatMessage({ id: "projectsView.gridLayout", defaultMessage: "Grid layout" })}
                   aria-pressed={viewMode === "grid"}
                   onClick={() => setViewMode("grid")}
                 >
@@ -854,7 +996,7 @@ export function ProjectsView({
                   variant={viewMode === "list" ? "secondary" : "ghost"}
                   size="icon"
                   className="size-7 touch:size-11"
-                  aria-label="List layout"
+                  aria-label={intl.formatMessage({ id: "projectsView.listLayout", defaultMessage: "List layout" })}
                   aria-pressed={viewMode === "list"}
                   onClick={() => setViewMode("list")}
                 >
@@ -870,7 +1012,14 @@ export function ProjectsView({
         {loading ? (
           <CardsSkeleton />
         ) : repos.length === 0 ? (
-          <EmptyState icon={FolderGit2} title="No projects yet" hint={emptyHint} />
+          <EmptyState
+            icon={FolderGit2}
+            title={intl.formatMessage({ id: "projectsView.noProjects", defaultMessage: "No projects yet" })}
+            hint={
+              emptyHint
+              ?? intl.formatMessage({ id: "projectsView.defaultEmptyHint", defaultMessage: "Repositories pushed to this workspace will appear here." })
+            }
+          />
         ) : filter === "all" ? (
           <Overview repos={scopedRepos} items={items} people={people} onSelect={setFilter} onOpenItem={onOpenItem} onLabelClick={openLabel} />
         ) : filter === "repositories" ? (
@@ -919,7 +1068,11 @@ export function ProjectsView({
           ) : anyPrs ? (
             <FilteredOutNotice onShowAll={showAll} />
           ) : (
-            <EmptyState icon={GitPullRequest} title="No pull requests" hint="Patches and PRs opened on this workspace will appear here." />
+            <EmptyState
+              icon={GitPullRequest}
+              title={intl.formatMessage({ id: "projectsView.noPullRequests", defaultMessage: "No pull requests" })}
+              hint={intl.formatMessage({ id: "projectsView.noPullRequestsHint", defaultMessage: "Patches and PRs opened on this workspace will appear here." })}
+            />
           )
         ) : filteredIssues.length > 0 ? (
           <div className="clip-corner-lg bg-card divide-y divide-border/60">
@@ -936,7 +1089,11 @@ export function ProjectsView({
         ) : anyIssues ? (
           <FilteredOutNotice onShowAll={showAll} />
         ) : (
-          <EmptyState icon={CircleDot} title="No issues" hint="Issues opened on this workspace will appear here." />
+          <EmptyState
+            icon={CircleDot}
+            title={intl.formatMessage({ id: "projectsView.noIssues", defaultMessage: "No issues" })}
+            hint={intl.formatMessage({ id: "projectsView.noIssuesHint", defaultMessage: "Issues opened on this workspace will appear here." })}
+          />
         )}
       </div>
     </div>

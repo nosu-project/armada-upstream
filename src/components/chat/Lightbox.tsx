@@ -20,6 +20,7 @@ import { canCopyImages, writeClipboardImage } from "@/lib/clipboard";
 import { downloadUrl, savedDescription } from "@/lib/downloadFile";
 import { canShareFiles, shareFile } from "@/lib/share";
 import { cn } from "@/lib/utils";
+import { FormattedMessage, common, t, useIntl } from "@/i18n";
 
 import type { EncryptedRef } from "@/hooks/useResolvedMediaSrc";
 
@@ -62,6 +63,7 @@ function slotTransform(delta: number, offsetPx: number): string {
  * controls are drags too.
  */
 export function Lightbox({ media, currentIndex, onClose, onNext, onPrev, className }: LightboxProps) {
+  const intl = useIntl();
   const hasMultiple = media.length > 1;
   const canGoNext = currentIndex < media.length - 1;
   const canGoPrev = currentIndex > 0;
@@ -319,8 +321,8 @@ export function Lightbox({ media, currentIndex, onClose, onNext, onPrev, classNa
             )}
             <button
               type="button"
-              aria-label="Close"
-              title="Close (Esc)"
+              aria-label={intl.formatMessage(common.close)}
+              title={intl.formatMessage({ id: "lightbox.closeEsc", defaultMessage: "Close (Esc)" })}
               className="p-2.5 touch:p-3 clip-corner-lg text-white/70 hover:text-white hover:bg-white/10 transition-colors"
               onClick={(e) => {
                 e.stopPropagation();
@@ -336,8 +338,8 @@ export function Lightbox({ media, currentIndex, onClose, onNext, onPrev, classNa
         {canGoPrev && (
           <button
             type="button"
-            aria-label="Previous"
-            title="Previous"
+            aria-label={intl.formatMessage({ id: "lightbox.previous", defaultMessage: "Previous" })}
+            title={intl.formatMessage({ id: "lightbox.previous", defaultMessage: "Previous" })}
             onClick={(e) => {
               e.stopPropagation();
               onPrev();
@@ -350,8 +352,8 @@ export function Lightbox({ media, currentIndex, onClose, onNext, onPrev, classNa
         {canGoNext && (
           <button
             type="button"
-            aria-label="Next"
-            title="Next"
+            aria-label={intl.formatMessage(common.next)}
+            title={intl.formatMessage(common.next)}
             onClick={(e) => {
               e.stopPropagation();
               onNext();
@@ -378,7 +380,7 @@ export function Lightbox({ media, currentIndex, onClose, onNext, onPrev, classNa
                 {covered(media[i]) ? (
                   <button
                     type="button"
-                    aria-label="Reveal spoiler"
+                    aria-label={intl.formatMessage({ id: "lightbox.revealSpoiler", defaultMessage: "Reveal spoiler" })}
                     onClick={(e) => {
                       e.stopPropagation();
                       const url = media[i].url;
@@ -387,8 +389,12 @@ export function Lightbox({ media, currentIndex, onClose, onNext, onPrev, classNa
                     className="flex flex-col items-center gap-3 clip-corner-lg bg-white/10 px-8 py-6 text-white transition-colors hover:bg-white/15"
                   >
                     <EyeOff className="size-8" />
-                    <span className="text-sm font-bold tracking-wide">SPOILER</span>
-                    <span className="text-xs text-white/70">Tap to reveal</span>
+                    <span className="text-sm font-bold tracking-wide">
+                      <FormattedMessage id="lightbox.spoiler" defaultMessage="SPOILER" />
+                    </span>
+                    <span className="text-xs text-white/70">
+                      <FormattedMessage id="lightbox.tapToReveal" defaultMessage="Tap to reveal" />
+                    </span>
                   </button>
                 ) : isVideoItem(media[i]) ? (
                   <LightboxVideo video={media[i]} isActive={i === currentIndex} />
@@ -435,6 +441,7 @@ export function Lightbox({ media, currentIndex, onClose, onNext, onPrev, classNa
  * non-CORS hosts fall back to opening the file.
  */
 function LightboxDownloadButton({ item }: { item: LightboxItem }) {
+  const intl = useIntl();
   const noun = isVideoItem(item) ? "video" : "image";
   const resolved = useResolvedMediaSrc(item);
   const [downloading, setDownloading] = useState(false);
@@ -448,17 +455,29 @@ function LightboxDownloadButton({ item }: { item: LightboxItem }) {
       try {
         const result = await downloadUrl(resolved.src, { nameHint: item.url, mime: item.mime });
         if (result.status === "downloaded") {
-          toast({ title: "Saved", description: savedDescription(result.location) });
+          toast({ title: t({ id: "lightbox.saved", defaultMessage: "Saved" }), description: savedDescription(result.location) });
         } else {
           toast({
-            title: "Opened in a new tab",
-            description: `This ${noun} couldn't be saved directly, so it opened instead.`,
+            title: t({ id: "lightbox.openedInNewTab", defaultMessage: "Opened in a new tab" }),
+            description: t(
+              {
+                id: "lightbox.openedInstead",
+                defaultMessage: "{noun, select, video {This video couldn't be saved directly, so it opened instead.} other {This image couldn't be saved directly, so it opened instead.}}",
+              },
+              { noun },
+            ),
           });
         }
       } catch {
         toast({
-          title: "Download failed",
-          description: `Could not save this ${noun}. Please try again.`,
+          title: t({ id: "lightbox.downloadFailed", defaultMessage: "Download failed" }),
+          description: t(
+            {
+              id: "lightbox.saveFailed",
+              defaultMessage: "{noun, select, video {Could not save this video. Please try again.} other {Could not save this image. Please try again.}}",
+            },
+            { noun },
+          ),
           variant: "destructive",
         });
       } finally {
@@ -472,8 +491,11 @@ function LightboxDownloadButton({ item }: { item: LightboxItem }) {
   return (
     <button
       type="button"
-      aria-label={`Download ${noun}`}
-      title="Download"
+      aria-label={intl.formatMessage(
+        { id: "lightbox.downloadNoun", defaultMessage: "{noun, select, video {Download video} other {Download image}}" },
+        { noun },
+      )}
+      title={intl.formatMessage({ id: "lightbox.download", defaultMessage: "Download" })}
       disabled={downloading}
       className="p-2.5 touch:p-3 clip-corner-lg text-white/70 hover:text-white hover:bg-white/10 transition-colors disabled:opacity-60 disabled:cursor-wait"
       onClick={handleDownload}
@@ -488,6 +510,7 @@ function LightboxDownloadButton({ item }: { item: LightboxItem }) {
  * useless to recipients). Hidden where the share sheet can't carry files.
  */
 function LightboxShareButton({ item }: { item: LightboxItem }) {
+  const intl = useIntl();
   const noun = isVideoItem(item) ? "video" : "image";
   const resolved = useResolvedMediaSrc(item);
   const [sharing, setSharing] = useState(false);
@@ -502,12 +525,18 @@ function LightboxShareButton({ item }: { item: LightboxItem }) {
         const shared = await shareFile(resolved.src, {
           nameHint: item.url,
           mime: item.mime,
-          dialogTitle: `Share ${noun}`,
+          dialogTitle: t(
+            { id: "lightbox.shareNoun", defaultMessage: "{noun, select, video {Share video} other {Share image}}" },
+            { noun },
+          ),
         });
         if (!shared) {
           toast({
-            title: `Couldn't share this ${noun}`,
-            description: "Try downloading it instead.",
+            title: t(
+              { id: "lightbox.shareFailed", defaultMessage: "{noun, select, video {Couldn't share this video} other {Couldn't share this image}}" },
+              { noun },
+            ),
+            description: t({ id: "lightbox.tryDownloading", defaultMessage: "Try downloading it instead." }),
             variant: "destructive",
           });
         }
@@ -522,8 +551,11 @@ function LightboxShareButton({ item }: { item: LightboxItem }) {
   return (
     <button
       type="button"
-      aria-label={`Share ${noun}`}
-      title="Share"
+      aria-label={intl.formatMessage(
+        { id: "lightbox.shareNoun", defaultMessage: "{noun, select, video {Share video} other {Share image}}" },
+        { noun },
+      )}
+      title={intl.formatMessage(common.share)}
       disabled={sharing}
       className="p-2.5 touch:p-3 clip-corner-lg text-white/70 hover:text-white hover:bg-white/10 transition-colors disabled:opacity-60 disabled:cursor-wait"
       onClick={handleShare}
@@ -577,16 +609,28 @@ async function saveLightboxImage(src: string, image: EncryptedRef): Promise<void
     const result = await downloadUrl(src, { nameHint: image.url, mime: image.mime });
     toast(
       result.status === "downloaded"
-        ? { title: "Saved", description: savedDescription(result.location) }
+        ? { title: t({ id: "lightbox.saved", defaultMessage: "Saved" }), description: savedDescription(result.location) }
         : {
-            title: "Opened in a new tab",
-            description: "This image couldn't be saved directly, so it opened instead.",
+            title: t({ id: "lightbox.openedInNewTab", defaultMessage: "Opened in a new tab" }),
+            description: t(
+              {
+                id: "lightbox.openedInstead",
+                defaultMessage: "{noun, select, video {This video couldn't be saved directly, so it opened instead.} other {This image couldn't be saved directly, so it opened instead.}}",
+              },
+              { noun: "image" },
+            ),
           },
     );
   } catch {
     toast({
-      title: "Download failed",
-      description: "Could not save this image. Please try again.",
+      title: t({ id: "lightbox.downloadFailed", defaultMessage: "Download failed" }),
+      description: t(
+        {
+          id: "lightbox.saveFailed",
+          defaultMessage: "{noun, select, video {Could not save this video. Please try again.} other {Could not save this image. Please try again.}}",
+        },
+        { noun: "image" },
+      ),
       variant: "destructive",
     });
   }
@@ -596,12 +640,18 @@ async function shareLightboxImage(src: string, image: EncryptedRef): Promise<voi
   const shared = await shareFile(src, {
     nameHint: image.url,
     mime: image.mime,
-    dialogTitle: "Share image",
+    dialogTitle: t(
+      { id: "lightbox.shareNoun", defaultMessage: "{noun, select, video {Share video} other {Share image}}" },
+      { noun: "image" },
+    ),
   });
   if (!shared) {
     toast({
-      title: "Couldn't share this image",
-      description: "Try downloading it instead.",
+      title: t(
+        { id: "lightbox.shareFailed", defaultMessage: "{noun, select, video {Couldn't share this video} other {Couldn't share this image}}" },
+        { noun: "image" },
+      ),
+      description: t({ id: "lightbox.tryDownloading", defaultMessage: "Try downloading it instead." }),
       variant: "destructive",
     });
   }
@@ -610,11 +660,14 @@ async function shareLightboxImage(src: string, image: EncryptedRef): Promise<voi
 async function copyLightboxImage(src: string): Promise<void> {
   try {
     await writeClipboardImage(src);
-    toast({ title: "Copied", description: "The image is on your clipboard." });
+    toast({
+      title: t(common.copied),
+      description: t({ id: "lightbox.copiedDescription", defaultMessage: "The image is on your clipboard." }),
+    });
   } catch {
     toast({
-      title: "Couldn't copy this image",
-      description: "Try downloading or sharing it instead.",
+      title: t({ id: "lightbox.copyFailed", defaultMessage: "Couldn't copy this image" }),
+      description: t({ id: "lightbox.copyFailedDescription", defaultMessage: "Try downloading or sharing it instead." }),
       variant: "destructive",
     });
   }
@@ -634,6 +687,7 @@ function LightboxImage({
   onSwipeBlocked?: () => void;
   onZoomChange?: (zoomed: boolean) => void;
 }) {
+  const intl = useIntl();
   const { resolved, onError, failed, reset } = useMediaWithFallback(image);
   const [loaded, setLoaded] = useState(false);
   const imgRef = useRef<HTMLImageElement>(null);
@@ -843,14 +897,17 @@ function LightboxImage({
   if (resolvedSrc) {
     actions.push({
       id: "img-save",
-      label: "Save image",
+      label: intl.formatMessage({ id: "lightbox.saveImage", defaultMessage: "Save image" }),
       icon: Download,
       onSelect: () => void saveLightboxImage(resolvedSrc, image),
     });
     if (canShareFiles()) {
       actions.push({
         id: "img-share",
-        label: "Share image",
+        label: intl.formatMessage(
+          { id: "lightbox.shareNoun", defaultMessage: "{noun, select, video {Share video} other {Share image}}" },
+          { noun: "image" },
+        ),
         icon: Share2,
         onSelect: () => void shareLightboxImage(resolvedSrc, image),
       });
@@ -858,7 +915,7 @@ function LightboxImage({
     if (canCopyImages()) {
       actions.push({
         id: "img-copy",
-        label: "Copy image",
+        label: intl.formatMessage({ id: "lightbox.copyImage", defaultMessage: "Copy image" }),
         icon: Copy,
         onSelect: () => void copyLightboxImage(resolvedSrc),
       });
@@ -879,7 +936,7 @@ function LightboxImage({
     >
       {failed && (
         <div className="absolute inset-0 flex items-center justify-center p-4">
-          <MediaFallback url={image.url} onRetry={reset} label="Image" className="bg-muted" />
+          <MediaFallback url={image.url} onRetry={reset} kind="image" className="bg-muted" />
         </div>
       )}
 

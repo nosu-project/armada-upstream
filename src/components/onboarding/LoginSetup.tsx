@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { WizardShell, WizardStepBody } from "@/components/onboarding/WizardShell";
 import { useSyncGateActive } from "@/components/syncGateState";
 import { Button } from "@/components/ui/button";
+import { FormattedMessage, useIntl } from "@/i18n";
 import { RelayBootstrapForm } from "@/components/RelayBootstrapForm";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
@@ -230,6 +231,7 @@ function RelayStep({
   onConfirmBack?: () => void;
   onCancelBack: () => void;
 }) {
+  const intl = useIntl();
   // Escape backs out like the arrow, unless spent on a popover (default
   // prevented), inside a text field, or ending an IME composition.
   useEffect(() => {
@@ -252,15 +254,20 @@ function RelayStep({
             <Waypoints className="size-9" />
           </StepGlyph>
         }
-        title="sign out?"
-        description="Going back signs this account out of Armada on this device, and removes what this device has stored for it. Your key and anything on your relays are not affected."
+        title={intl.formatMessage({ id: "loginSetup.signOut.title", defaultMessage: "sign out?" })}
+        description={
+          <FormattedMessage
+          id="loginSetup.signOut.description"
+          defaultMessage="Going back signs this account out of Armada on this device, and removes what this device has stored for it. Your key and anything on your relays are not affected."
+        />
+        }
       >
         <div className="flex flex-col gap-2">
           <Button variant="destructive" onClick={onConfirmBack}>
-            Sign out
+            <FormattedMessage id="loginSetup.signOut.confirm" defaultMessage="Sign out" />
           </Button>
           <Button variant="ghost" onClick={onCancelBack}>
-            Stay signed in
+            <FormattedMessage id="loginSetup.signOut.cancel" defaultMessage="Stay signed in" />
           </Button>
         </div>
       </WizardStepBody>
@@ -274,8 +281,13 @@ function RelayStep({
           <Waypoints className="size-9" />
         </StepGlyph>
       }
-      title="restore your setup"
-      description="We couldn't automatically find your servers and settings for this account. If you know a server address you've used before, enter it to look them up, or skip this and keep going."
+      title={intl.formatMessage({ id: "loginSetup.restore.title", defaultMessage: "restore your setup" })}
+      description={
+        <FormattedMessage
+          id="loginSetup.restore.description"
+          defaultMessage="We couldn't automatically find your servers and settings for this account. If you know a server address you've used before, enter it to look them up, or skip this and keep going."
+        />
+      }
     >
       <RelayBootstrapForm onDone={onDone} onSkip={onDone} />
     </WizardStepBody>
@@ -296,6 +308,7 @@ function StepGlyph({ children }: { children: ReactNode }) {
 }
 
 function NotificationsStep({ onDone }: { onDone: (granted: boolean) => void }) {
+  const intl = useIntl();
   const [busy, setBusy] = useState(false);
 
   const enable = async () => {
@@ -316,8 +329,13 @@ function NotificationsStep({ onDone }: { onDone: (granted: boolean) => void }) {
           <Bell className="size-9" />
         </StepGlyph>
       }
-      title="stay in the loop"
-      description="Armada can notify you about direct messages, mentions and replies while the app is closed. Nothing leaves your device to a push service; your phone holds the connection itself."
+      title={intl.formatMessage({ id: "loginSetup.notifications.title", defaultMessage: "stay in the loop" })}
+      description={
+        <FormattedMessage
+          id="loginSetup.notifications.description"
+          defaultMessage="Armada can notify you about direct messages, mentions and replies while the app is closed. Nothing leaves your device to a push service; your phone holds the connection itself."
+        />
+      }
     >
       <div className="w-full space-y-3">
         <Button
@@ -326,7 +344,7 @@ function NotificationsStep({ onDone }: { onDone: (granted: boolean) => void }) {
           onClick={enable}
           disabled={busy}
         >
-          Enable notifications
+          <FormattedMessage id="loginSetup.enableNotifications" defaultMessage="Enable notifications" />
         </Button>
         <Button
           variant="ghost"
@@ -334,7 +352,7 @@ function NotificationsStep({ onDone }: { onDone: (granted: boolean) => void }) {
           onClick={() => onDone(false)}
           disabled={busy}
         >
-          Not now
+          <FormattedMessage id="loginSetup.notNow" defaultMessage="Not now" />
         </Button>
       </div>
     </WizardStepBody>
@@ -343,6 +361,7 @@ function NotificationsStep({ onDone }: { onDone: (granted: boolean) => void }) {
 
 /** Web/PWA counterpart to `NotificationsStep`; copy is honest that a push service is involved. */
 function WebPushStep({ onDone }: { onDone: () => void }) {
+  const intl = useIntl();
   const [busy, setBusy] = useState(false);
   // Foreground mode must not promise closed-app delivery.
   const foreground = webPushOptInMode() === "foreground";
@@ -367,10 +386,19 @@ function WebPushStep({ onDone }: { onDone: () => void }) {
           <Bell className="size-9" />
         </StepGlyph>
       }
-      title="stay in the loop"
+      title={intl.formatMessage({ id: "loginSetup.notifications.title", defaultMessage: "stay in the loop" })}
       description={foreground
-        ? "Armada can notify you about direct messages, mentions and replies while it's open, even behind another window. This browser can't deliver notifications once Armada is closed, so nothing leaves your device for them."
-        : "Armada can notify you about direct messages, mentions and replies even while it's closed. Notifications go through your browser's push service but carry no message content. Armada decrypts them on your device."}
+        ? (
+          <FormattedMessage
+            id="loginSetup.webpush.foregroundDescription"
+            defaultMessage="Armada can notify you about direct messages, mentions and replies while it's open, even behind another window. This browser can't deliver notifications once Armada is closed, so nothing leaves your device for them."
+          />
+        ) : (
+          <FormattedMessage
+            id="loginSetup.webpush.description"
+            defaultMessage="Armada can notify you about direct messages, mentions and replies even while it's closed. Notifications go through your browser's push service but carry no message content. Armada decrypts them on your device."
+          />
+        )}
     >
       <div className="w-full space-y-3">
         <Button
@@ -379,7 +407,7 @@ function WebPushStep({ onDone }: { onDone: () => void }) {
           onClick={enable}
           disabled={busy}
         >
-          Enable notifications
+          <FormattedMessage id="loginSetup.enableNotifications" defaultMessage="Enable notifications" />
         </Button>
         <Button
           variant="ghost"
@@ -387,7 +415,7 @@ function WebPushStep({ onDone }: { onDone: () => void }) {
           onClick={() => onDone()}
           disabled={busy}
         >
-          Not now
+          <FormattedMessage id="loginSetup.notNow" defaultMessage="Not now" />
         </Button>
       </div>
     </WizardStepBody>
@@ -395,6 +423,7 @@ function WebPushStep({ onDone }: { onDone: () => void }) {
 }
 
 function BatteryStep({ onDone }: { onDone: () => void }) {
+  const intl = useIntl();
   const [busy, setBusy] = useState(false);
 
   const allow = async () => {
@@ -415,8 +444,13 @@ function BatteryStep({ onDone }: { onDone: () => void }) {
           <BatteryCharging className="size-9" />
         </StepGlyph>
       }
-      title="keep it connected"
-      description="Android's battery optimization suspends Armada's connection in the background, which silently stops notifications. Allowing background usage keeps them arriving."
+      title={intl.formatMessage({ id: "loginSetup.battery.title", defaultMessage: "keep it connected" })}
+      description={
+        <FormattedMessage
+          id="loginSetup.battery.description"
+          defaultMessage="Android's battery optimization suspends Armada's connection in the background, which silently stops notifications. Allowing background usage keeps them arriving."
+        />
+      }
     >
       <div className="w-full space-y-3">
         <Button
@@ -425,7 +459,7 @@ function BatteryStep({ onDone }: { onDone: () => void }) {
           onClick={allow}
           disabled={busy}
         >
-          Allow background usage
+          <FormattedMessage id="loginSetup.battery.allow" defaultMessage="Allow background usage" />
         </Button>
         <Button
           variant="ghost"
@@ -433,7 +467,7 @@ function BatteryStep({ onDone }: { onDone: () => void }) {
           onClick={onDone}
           disabled={busy}
         >
-          Not now
+          <FormattedMessage id="loginSetup.notNow" defaultMessage="Not now" />
         </Button>
       </div>
     </WizardStepBody>
@@ -441,6 +475,7 @@ function BatteryStep({ onDone }: { onDone: () => void }) {
 }
 
 function DecryptStep({ onDone }: { onDone: () => void }) {
+  const intl = useIntl();
   const choose = (value: "allowed" | "declined") => {
     setDecryptConsent(value);
     onDone();
@@ -453,14 +488,22 @@ function DecryptStep({ onDone }: { onDone: () => void }) {
           <Lock className="size-9" />
         </StepGlyph>
       }
-      title="decrypt your messages"
-      description="Your messages are end-to-end encrypted. Armada needs your signer to unlock them."
+      title={intl.formatMessage({ id: "loginSetup.decrypt.title", defaultMessage: "decrypt your messages" })}
+      description={
+        <FormattedMessage
+          id="loginSetup.decrypt.description"
+          defaultMessage="Your messages are end-to-end encrypted. Armada needs your signer to unlock them."
+        />
+      }
     >
       <div className="w-full space-y-3">
         <div className="clip-corner-lg bg-secondary/40 p-3 text-left">
           <p className="text-xs text-muted-foreground">
-            Allow it once and Armada decrypts quietly from here on. Decline and messages stay
-            locked until you tap <strong>Decrypt</strong> on them.
+            <FormattedMessage
+              id="loginSetup.decrypt.explainer"
+              defaultMessage="Allow it once and Armada decrypts quietly from here on. Decline and messages stay locked until you tap <strong>Decrypt</strong> on them."
+              values={{ strong: (chunks) => <strong>{chunks}</strong> }}
+            />
           </p>
         </div>
 
@@ -469,14 +512,14 @@ function DecryptStep({ onDone }: { onDone: () => void }) {
           className="h-12 w-full clip-corner-lg text-base font-medium"
           onClick={() => choose("allowed")}
         >
-          Decrypt my messages
+          <FormattedMessage id="loginSetup.decrypt.allow" defaultMessage="Decrypt my messages" />
         </Button>
         <Button
           variant="ghost"
           className="w-full text-muted-foreground"
           onClick={() => choose("declined")}
         >
-          Not now
+          <FormattedMessage id="loginSetup.notNow" defaultMessage="Not now" />
         </Button>
       </div>
     </WizardStepBody>

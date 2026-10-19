@@ -8,6 +8,7 @@ import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useQuickReactions } from "@/hooks/useQuickReactionList";
 import { QUICK_SLOTS_MENU } from "@/lib/reactionToggle";
 import { cn } from "@/lib/utils";
+import { useIntl } from "@/i18n";
 
 import type { MessageReactions } from "@/components/chat/transport";
 
@@ -22,16 +23,19 @@ export function MenuReactionRow({
   const { user } = useCurrentUser();
   const frequent = useQuickReactions(user?.pubkey, QUICK_SLOTS_MENU);
   const react = useToggleReact(reactions.react, reactions.tallies);
+  const intl = useIntl();
 
   return (
     <>
-      <div role="group" aria-label="Reactions" className="flex items-center justify-between gap-0.5">
+      <div role="group" aria-label={intl.formatMessage({ id: "menuReactions.reactions", defaultMessage: "Reactions" })} className="flex items-center justify-between gap-0.5">
         {frequent.map((f) => {
           const mine = reactions.tallies.find((t) => t.key === f.key)?.mine ?? false;
           return (
             <DropdownMenuItem
               key={f.key}
-              aria-label={mine ? `Remove ${f.key} reaction` : `React with ${f.key}`}
+              aria-label={mine
+                ? intl.formatMessage({ id: "menuReactions.removeReaction", defaultMessage: "Remove {emoji} reaction" }, { emoji: f.key })
+                : intl.formatMessage({ id: "menuReactions.reactWith", defaultMessage: "React with {emoji}" }, { emoji: f.key })}
               className={cn("size-8 justify-center p-0 touch:py-0", mine && "bg-primary/10 focus:bg-primary/20")}
               onSelect={() => react(f.key, f.url)}
             >
@@ -40,7 +44,7 @@ export function MenuReactionRow({
           );
         })}
         <DropdownMenuItem
-          aria-label="Add reaction"
+          aria-label={intl.formatMessage({ id: "menuReactions.addReaction", defaultMessage: "Add reaction" })}
           className="size-8 justify-center p-0 touch:py-0 text-muted-foreground"
           onSelect={onOpenPicker}
         >

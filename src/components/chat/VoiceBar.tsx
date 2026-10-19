@@ -58,6 +58,7 @@ import {
 import { syncRnnoise } from "@/lib/voiceProcessor";
 import { rnnoiseSupported } from "@/lib/rnnoiseSupport";
 import { cn } from "@/lib/utils";
+import { FormattedMessage, t, useIntl } from "@/i18n";
 
 /**
  * Whether `kind` is audio with unnamed devices, so a capture is worth opening to
@@ -93,6 +94,7 @@ function DeviceSelectGroup({
   label: string;
   icon: React.ReactNode;
 }) {
+  const intl = useIntl();
   const { devices, activeDeviceId, setActiveMediaDevice } = useMediaDeviceSelect({
     kind,
     requestPermissions: useNeedsAudioLabels(kind),
@@ -122,7 +124,10 @@ function DeviceSelectGroup({
             className="gap-2"
           >
             <Check className={cn("size-3.5 shrink-0", active ? "opacity-100" : "opacity-0")} />
-            <span className="truncate">{audioDeviceLabel(device, `${label} ${index + 1}`)}</span>
+            <span className="truncate">{audioDeviceLabel(
+              device,
+              intl.formatMessage({ id: "voiceBar.deviceNumbered", defaultMessage: "{label} {number}" }, { label, number: index + 1 }),
+            )}</span>
           </DropdownMenuItem>
         );
       })}
@@ -143,7 +148,7 @@ function CallRouteGroup() {
     <>
       <DropdownMenuLabel className="flex items-center gap-2 text-xs">
         <Volume2 className="size-3.5" />
-        Output
+        <FormattedMessage id="voiceBar.output" defaultMessage="Output" />
       </DropdownMenuLabel>
       {routes.map((route) => (
         <DropdownMenuItem
@@ -152,8 +157,11 @@ function CallRouteGroup() {
             void select(route.id).then((ok) => {
               if (!ok) {
                 toast({
-                  title: "Couldn't switch output",
-                  description: `${routeLabel(route)} is no longer available.`,
+                  title: t({ id: "voiceBar.switchOutputFailed", defaultMessage: "Couldn't switch output" }),
+                  description: t(
+                    { id: "voiceBar.switchOutputFailedDescription", defaultMessage: "{route} is no longer available." },
+                    { route: routeLabel(route) },
+                  ),
                   variant: "destructive",
                 });
               }
@@ -172,6 +180,7 @@ function CallRouteGroup() {
 
 /** Call/audio settings gear: device pickers, audio processing and per-participant volume. */
 export function DeviceMenu({ className }: { className?: string }) {
+  const intl = useIntl();
   const { localParticipant } = useLocalParticipant();
   const [processing, setProcessing] = useState<AudioProcessingPrefs>(() => getAudioProcessing());
 
@@ -206,11 +215,11 @@ export function DeviceMenu({ className }: { className?: string }) {
 
   const toggles: { key: keyof AudioProcessingPrefs; label: string }[] = [
     ...(rnnoiseSupported()
-      ? [{ key: "rnnoise" as const, label: "Noise cancellation" }]
+      ? [{ key: "rnnoise" as const, label: intl.formatMessage({ id: "voiceBar.processing.noiseCancellation", defaultMessage: "Noise cancellation" }) }]
       : []),
-    { key: "noiseSuppression", label: "Noise suppression" },
-    { key: "echoCancellation", label: "Echo cancellation" },
-    { key: "autoGainControl", label: "Auto gain control" },
+    { key: "noiseSuppression", label: intl.formatMessage({ id: "voiceBar.processing.noiseSuppression", defaultMessage: "Noise suppression" }) },
+    { key: "echoCancellation", label: intl.formatMessage({ id: "voiceBar.processing.echoCancellation", defaultMessage: "Echo cancellation" }) },
+    { key: "autoGainControl", label: intl.formatMessage({ id: "voiceBar.processing.autoGainControl", defaultMessage: "Auto gain control" }) },
   ];
 
   return (
@@ -220,7 +229,7 @@ export function DeviceMenu({ className }: { className?: string }) {
           <DropdownMenuTrigger asChild>
             <button
               type="button"
-              aria-label="Audio settings"
+              aria-label={intl.formatMessage({ id: "voiceBar.audioSettings", defaultMessage: "Audio settings" })}
               className={cn(
                 "inline-flex items-center justify-center rounded-md size-8 touch:size-11 shrink-0 transition-colors",
                 "bg-foreground/5 text-muted-foreground hover:bg-foreground/10",
@@ -231,19 +240,19 @@ export function DeviceMenu({ className }: { className?: string }) {
             </button>
           </DropdownMenuTrigger>
         </TooltipTrigger>
-        <TooltipContent>Audio settings</TooltipContent>
+        <TooltipContent>{intl.formatMessage({ id: "voiceBar.audioSettings", defaultMessage: "Audio settings" })}</TooltipContent>
       </Tooltip>
       <DropdownMenuContent align="end" className="max-w-72 max-h-[70vh] overflow-y-auto">
         {platformRoutesCallAudio() && <CallRouteGroup />}
         {!platformRoutesCallAudio() && (
           <>
-            <DeviceSelectGroup kind="audioinput" label="Microphone" icon={<Mic className="size-3.5" />} />
+            <DeviceSelectGroup kind="audioinput" label={intl.formatMessage({ id: "voiceBar.microphone", defaultMessage: "Microphone" })} icon={<Mic className="size-3.5" />} />
             {supportsSpeakerSelection() && (
               <>
                 <DropdownMenuSeparator />
                 <DeviceSelectGroup
                   kind="audiooutput"
-                  label="Speaker"
+                  label={intl.formatMessage({ id: "voiceBar.speaker", defaultMessage: "Speaker" })}
                   icon={<Volume2 className="size-3.5" />}
                 />
               </>
@@ -251,9 +260,11 @@ export function DeviceMenu({ className }: { className?: string }) {
             <DropdownMenuSeparator />
           </>
         )}
-        <DeviceSelectGroup kind="videoinput" label="Camera" icon={<Video className="size-3.5" />} />
+        <DeviceSelectGroup kind="videoinput" label={intl.formatMessage({ id: "voiceBar.camera", defaultMessage: "Camera" })} icon={<Video className="size-3.5" />} />
         <DropdownMenuSeparator />
-        <DropdownMenuLabel className="text-xs">Processing</DropdownMenuLabel>
+        <DropdownMenuLabel className="text-xs">
+          <FormattedMessage id="voiceBar.processing" defaultMessage="Processing" />
+        </DropdownMenuLabel>
         {toggles.map(({ key, label }) => (
           <label
             key={key}
@@ -275,12 +286,13 @@ export function DeviceMenu({ className }: { className?: string }) {
 
 /** Remote participant's mic and screen-share volume. Local participant is skipped (not played back locally). */
 function ParticipantVolumeRow({ participant }: { participant: Participant }) {
+  const intl = useIntl();
   const resolveIdentity = useVoiceIdentity();
   const { pubkey, verified } = resolveIdentity(participant.identity);
   const author = useAuthor(verified ? pubkey : undefined);
   const metadata = author.data?.metadata;
   const scopedName = useScopedDisplayName(pubkey, metadata);
-  const name = verified ? scopedName : "Unverified";
+  const name = verified ? scopedName : intl.formatMessage({ id: "voiceBar.unverified", defaultMessage: "Unverified" });
   const [volume, setVolume] = useUserVolume(pubkey);
   const [screenShareVolume, setScreenShareVolume] = useScreenShareVolume(pubkey);
   const hasScreenShareAudio = Boolean(
@@ -308,7 +320,9 @@ function ParticipantVolumeRow({ participant }: { participant: Participant }) {
         <div className="mt-3 border-t border-border/60 pt-2">
           <div className="mb-1.5 flex items-center gap-2 text-xs text-muted-foreground">
             <ScreenShare className="size-3.5" />
-            <span className="flex-1">Screen share</span>
+            <span className="flex-1">
+              <FormattedMessage id="voiceBar.screenShare" defaultMessage="Screen share" />
+            </span>
             <span className="tabular-nums">{Math.round(screenShareVolume * 100)}%</span>
           </div>
           <VolumeSliderRow
@@ -331,7 +345,9 @@ function ParticipantVolumeGroup() {
   return (
     <>
       <DropdownMenuSeparator />
-      <DropdownMenuLabel className="text-xs">Participants</DropdownMenuLabel>
+      <DropdownMenuLabel className="text-xs">
+        <FormattedMessage id="voiceBar.participants" defaultMessage="Participants" />
+      </DropdownMenuLabel>
       {remotes.map((p) => (
         <ParticipantVolumeRow key={p.sid || p.identity} participant={p} />
       ))}
@@ -351,6 +367,7 @@ interface InCallViewProps {
 export function InCallView({ label, onLabelClick, stacked, compact }: InCallViewProps) {
   // `stageVisible`, not `stageOpen`: away from the call's channel the visible
   // stage is the floating window, which `stageOpen` doesn't describe.
+  const intl = useIntl();
   const { stageVisible, toggleStage } = useCall();
   const participantCount = useParticipants().length;
   const connectionState = useConnectionState();
@@ -364,7 +381,9 @@ export function InCallView({ label, onLabelClick, stacked, compact }: InCallView
     return (
       <div className="flex items-center justify-center gap-2 px-3 py-2 min-h-12">
         <Loader2 className="size-4 animate-spin text-warning" />
-        <span className="flex-1 min-w-0 truncate text-sm text-warning">Reconnecting…</span>
+        <span className="flex-1 min-w-0 truncate text-sm text-warning">
+          <FormattedMessage id="voiceBar.reconnecting" defaultMessage="Reconnecting…" />
+        </span>
         <LeaveButton />
       </div>
     );
@@ -374,12 +393,16 @@ export function InCallView({ label, onLabelClick, stacked, compact }: InCallView
     return (
       <div className="flex items-center justify-center gap-2 px-3 py-2 min-h-12">
         <Loader2 className="size-4 animate-spin text-muted-foreground" />
-        <span className="text-sm text-muted-foreground">Connecting to voice…</span>
+        <span className="text-sm text-muted-foreground">
+          <FormattedMessage id="voiceBar.connecting" defaultMessage="Connecting to voice…" />
+        </span>
       </div>
     );
   }
 
-  const stageLabel = stageVisible ? "Hide call stage" : "Show call stage";
+  const stageLabel = stageVisible
+    ? intl.formatMessage({ id: "voiceBar.hideStage", defaultMessage: "Hide call stage" })
+    : intl.formatMessage({ id: "voiceBar.showStage", defaultMessage: "Show call stage" });
   const labelClass = cn("flex-1 min-w-0 truncate font-semibold", compact ? "text-sm" : "text-xs");
   const headerEl = (
     <div className="flex items-center gap-1.5 min-w-0 px-1">
@@ -397,7 +420,9 @@ export function InCallView({ label, onLabelClick, stacked, compact }: InCallView
           <span className={cn(labelClass, "text-foreground")}>{label}</span>
         )
       ) : (
-        <span className={cn(labelClass, "text-success")}>Voice connected</span>
+        <span className={cn(labelClass, "text-success")}>
+          <FormattedMessage id="voiceBar.connected" defaultMessage="Voice connected" />
+        </span>
       )}
       {/* The w-60 channel column fits only five controls, so desktop toggles the stage here. */}
       {!compact && (
@@ -410,7 +435,7 @@ export function InCallView({ label, onLabelClick, stacked, compact }: InCallView
         >
           <Video className="size-3.5" />
           <span className="tabular-nums">{participantCount}</span>
-          <span>{stageVisible ? "Hide" : "Show"}</span>
+          <span>{stageVisible ? intl.formatMessage({ id: "voiceBar.hide", defaultMessage: "Hide" }) : intl.formatMessage({ id: "voiceBar.show", defaultMessage: "Show" })}</span>
         </button>
       )}
     </div>

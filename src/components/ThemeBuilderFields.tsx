@@ -1,6 +1,7 @@
 import { ColorPicker } from "@/components/ui/color-picker";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { FormattedMessage, useIntl } from "@/i18n";
 import { hexToHslString, hslStringToHex } from "@/lib/colorUtils";
 import { coreToTokens, type CoreThemeColors } from "@/themes";
 
@@ -20,6 +21,7 @@ export function ThemeBuilderFields({
   onTitleChange,
   placeholder,
 }: ThemeBuilderFieldsProps) {
+  const intl = useIntl();
   const update = (channel: keyof CoreThemeColors) => (hex: string) =>
     onColorsChange({ ...colors, [channel]: hexToHslString(hex) });
 
@@ -34,32 +36,32 @@ export function ThemeBuilderFields({
         <div className="flex items-center gap-2">
           <span className="size-8 rounded-full" style={{ backgroundColor: `hsl(${tokens.primary})` }} />
           <div className="flex-1">
-            <div className="text-sm font-semibold">{title || "Preview"}</div>
+            <div className="text-sm font-semibold">{title || <FormattedMessage id="themeBuilderFields.preview" defaultMessage="Preview" />}</div>
             <div className="text-xs" style={{ color: `hsl(${tokens.mutedForeground})` }}>
-              The quick brown fox.
+              <FormattedMessage id="themeBuilderFields.sampleText" defaultMessage="The quick brown fox." />
             </div>
           </div>
           <span
             className="clip-corner-lg px-2 py-1 text-xs font-medium"
             style={{ backgroundColor: `hsl(${tokens.primary})`, color: `hsl(${tokens.primaryForeground})` }}
           >
-            Button
+            <FormattedMessage id="themeBuilderFields.sampleButton" defaultMessage="Button" />
           </span>
         </div>
         <div className="rounded-md p-2 text-xs" style={{ backgroundColor: `hsl(${tokens.secondary})` }}>
-          A muted surface row.
+          <FormattedMessage id="themeBuilderFields.sampleSurface" defaultMessage="A muted surface row." />
         </div>
       </div>
 
       <div className="flex items-start justify-around">
-        <ColorPicker label="Background" value={hslStringToHex(colors.background)} onChange={update("background")} />
-        <ColorPicker label="Text" value={hslStringToHex(colors.text)} onChange={update("text")} />
-        <ColorPicker label="Primary" value={hslStringToHex(colors.primary)} onChange={update("primary")} />
+        <ColorPicker label={intl.formatMessage({ id: "themeBuilderFields.background", defaultMessage: "Background" })} value={hslStringToHex(colors.background)} onChange={update("background")} />
+        <ColorPicker label={intl.formatMessage({ id: "themeBuilderFields.text", defaultMessage: "Text" })} value={hslStringToHex(colors.text)} onChange={update("text")} />
+        <ColorPicker label={intl.formatMessage({ id: "themeBuilderFields.primary", defaultMessage: "Primary" })} value={hslStringToHex(colors.primary)} onChange={update("primary")} />
       </div>
 
       <div className="space-y-1.5">
         <Label htmlFor="theme-title" className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-          Name
+          <FormattedMessage id="themeBuilderFields.name" defaultMessage="Name" />
         </Label>
         <Input
           id="theme-title"

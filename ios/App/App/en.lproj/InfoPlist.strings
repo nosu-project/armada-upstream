@@ -1,0 +1,3 @@
+/* Permission prompts; keep in step with App/Info.plist (the English is the fallback there). */
+"NSCameraUsageDescription" = "Armada uses the camera for video calls and to attach photos you take to messages.";
+"NSMicrophoneUsageDescription" = "Armada uses the microphone for voice rooms, calls, and voice messages.";

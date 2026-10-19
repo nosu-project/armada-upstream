@@ -5,6 +5,7 @@ import { useCallback, useMemo } from "react";
 import { KIND_DM_OPEN, KIND_DM_VISIBILITY } from "@/buzz/kinds";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useNostrPublish } from "@/hooks/useNostrPublish";
+import { t } from "@/i18n";
 
 import type { NostrEvent } from "@nostrify/nostrify";
 
@@ -45,7 +46,7 @@ export function useBuzzOpenDm(relayUrl: string | undefined) {
 
   return useCallback(
     async (peer: string): Promise<string> => {
-      if (!relayUrl || !user) throw new Error("Sign in to start a conversation.");
+      if (!relayUrl || !user) throw new Error(t({ id: "useBuzzDms.signIn", defaultMessage: "Sign in to start a conversation." }));
       await publish({
         kind: KIND_DM_OPEN,
         content: "",
@@ -68,7 +69,9 @@ export function useBuzzOpenDm(relayUrl: string | undefined) {
         if (id) return id;
         await new Promise((r) => setTimeout(r, 400 * (attempt + 1)));
       }
-      throw new Error("The conversation was created but couldn't be located yet.");
+      throw new Error(
+        t({ id: "useBuzzDms.notLocated", defaultMessage: "The conversation was created but couldn't be located yet." }),
+      );
     },
     [nostr, relayUrl, user, publish],
   );

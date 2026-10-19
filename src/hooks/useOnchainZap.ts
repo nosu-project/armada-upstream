@@ -7,6 +7,7 @@ import { useBitcoinSigner, isSignerCapabilityError, reportSignerUnsupported } fr
 import { useNostrPublish } from '@/hooks/useNostrPublish';
 import { useToast } from '@/hooks/useToast';
 import { useEsploraApis } from '@/hooks/useEsploraApis';
+import { t } from '@/i18n';
 import { notify } from '@/lib/haptics';
 import {
   nostrPubkeyToBitcoinAddress,
@@ -81,15 +82,15 @@ export function useOnchainZap(
 
   const mutation = useMutation<OnchainZapResult, Error, OnchainZapArgs>({
     mutationFn: async ({ amountSats, comment = '', feeSpeed = 'halfHour' }) => {
-      if (!user) throw new Error('You must be logged in to zap.');
-      if (user.pubkey === target.pubkey) throw new Error("You can't zap yourself.");
+      if (!user) throw new Error(t({ id: 'useOnchainZap.notLoggedIn', defaultMessage: 'You must be logged in to zap.' }));
+      if (user.pubkey === target.pubkey) throw new Error(t({ id: 'useOnchainZap.zapSelf', defaultMessage: "You can't zap yourself." }));
       if (!canSignPsbt || !signPsbt) {
         throw new Error(
           "Your login doesn't support sending Bitcoin. Log in with your secret key to send Bitcoin zaps.",
         );
       }
       if (!Number.isFinite(amountSats) || amountSats <= 0) {
-        throw new Error('Invalid amount.');
+        throw new Error(t({ id: 'useOnchainZap.invalidAmount', defaultMessage: 'Invalid amount.' }));
       }
 
       setIsZapping(true);
@@ -102,11 +103,11 @@ export function useOnchainZap(
 
       const senderAddress = nostrPubkeyToBitcoinAddress(user.pubkey);
       if (!senderAddress || !recipientAddress) {
-        throw new Error('Failed to derive Bitcoin address.');
+        throw new Error(t({ id: 'useOnchainZap.deriveAddressFailed', defaultMessage: 'Failed to derive Bitcoin address.' }));
       }
       // SP codes aren't checksummed here; the SP PSBT builder rejects malformed codes.
       if (!useSilentPayment && !validateBitcoinAddress(recipientAddress)) {
-        throw new Error('Recipient Bitcoin address failed validation.');
+        throw new Error(t({ id: 'useOnchainZap.recipientAddressInvalid', defaultMessage: 'Recipient Bitcoin address failed validation.' }));
       }
 
       const [utxos, rates] = await Promise.all([
@@ -115,7 +116,7 @@ export function useOnchainZap(
       ]);
 
       if (utxos.length === 0) {
-        throw new Error('Your Bitcoin wallet has no spendable funds.');
+        throw new Error(t({ id: 'useOnchainZap.noFunds', defaultMessage: 'Your Bitcoin wallet has no spendable funds.' }));
       }
 
       const feeRate = feeRateForSpeed(rates, feeSpeed);
@@ -123,7 +124,10 @@ export function useOnchainZap(
       const estFee = estimateFee(utxos.length, 2, feeRate);
       if (amountSats + estFee > totalBalance) {
         throw new Error(
-          `Insufficient funds. Need ~${(amountSats + estFee).toLocaleString()} sats, have ${totalBalance.toLocaleString()}.`,
+          t(
+            { id: 'useOnchainZap.insufficientFunds', defaultMessage: 'Insufficient funds. Need ~{need, number} sats, have {have, number}.' },
+            { need: amountSats + estFee, have: totalBalance },
+          ),
         );
       }
 
@@ -207,8 +211,11 @@ export function useOnchainZap(
         onSuccess(result);
       } else {
         toast({
-          title: 'Bitcoin zap sent!',
-          description: `Broadcast txid ${result.txid.slice(0, 12)}… (fee ${result.fee.toLocaleString()} sats)`,
+          title: t({ id: 'useOnchainZap.sent', defaultMessage: 'Bitcoin zap sent!' }),
+          description: t(
+            { id: 'useOnchainZap.sentDescription', defaultMessage: 'Broadcast txid {txid}… (fee {fee, number} sats)' },
+            { txid: result.txid.slice(0, 12), fee: result.fee },
+          ),
         });
       }
     },
@@ -219,7 +226,7 @@ export function useOnchainZap(
         return;
       }
       toast({
-        title: 'Bitcoin zap failed',
+        title: t({ id: 'useOnchainZap.failed', defaultMessage: 'Bitcoin zap failed' }),
         description: err.message,
         variant: 'destructive',
       });

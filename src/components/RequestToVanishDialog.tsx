@@ -11,6 +11,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { useRequestToVanish } from '@/hooks/useRequestToVanish';
 import { useLoginActions } from '@/hooks/useLoginActions';
 import { toast } from '@/hooks/useToast';
+import { common, defineMessage, FormattedMessage, t } from '@/i18n';
 
 interface RequestToVanishDialogProps {
   open: boolean;
@@ -18,11 +19,11 @@ interface RequestToVanishDialogProps {
 }
 
 const DELETION_ITEMS = [
-  { id: 'profile', label: 'Your profile and metadata' },
-  { id: 'posts', label: 'All posts, replies, and reactions' },
-  { id: 'messages', label: 'Direct messages' },
-  { id: 'settings', label: 'Follow lists and settings' },
-  { id: 'other', label: 'All other events submitted to the network' },
+  { id: 'profile', label: defineMessage({ id: 'requestToVanishDialog.item.profile', defaultMessage: 'Your profile and metadata' }) },
+  { id: 'posts', label: defineMessage({ id: 'requestToVanishDialog.item.posts', defaultMessage: 'All posts, replies, and reactions' }) },
+  { id: 'messages', label: defineMessage({ id: 'requestToVanishDialog.item.messages', defaultMessage: 'Direct messages' }) },
+  { id: 'settings', label: defineMessage({ id: 'requestToVanishDialog.item.settings', defaultMessage: 'Follow lists and settings' }) },
+  { id: 'other', label: defineMessage({ id: 'requestToVanishDialog.item.other', defaultMessage: 'All other events submitted to the network' }) },
 ] as const;
 
 type ItemId = (typeof DELETION_ITEMS)[number]['id'];
@@ -62,16 +63,19 @@ export function RequestToVanishDialog({ open, onOpenChange }: RequestToVanishDia
       await requestVanish({ relayUrls: ['ALL_RELAYS'], content: '' });
 
       toast({
-        title: 'Account deleted',
-        description: 'Your deletion request has been broadcast. You have been logged out.',
+        title: t({ id: 'requestToVanishDialog.deleted.title', defaultMessage: 'Account deleted' }),
+        description: t({
+          id: 'requestToVanishDialog.deleted.description',
+          defaultMessage: 'Your deletion request has been broadcast. You have been logged out.',
+        }),
       });
 
       onOpenChange(false);
       await logout();
     } catch {
       toast({
-        title: 'Failed to delete account',
-        description: 'Something went wrong. You can try again.',
+        title: t({ id: 'requestToVanishDialog.failed.title', defaultMessage: 'Failed to delete account' }),
+        description: t({ id: 'requestToVanishDialog.failed.description', defaultMessage: 'Something went wrong. You can try again.' }),
         variant: 'destructive',
       });
     }
@@ -84,9 +88,15 @@ export function RequestToVanishDialog({ open, onOpenChange }: RequestToVanishDia
           <div className="flex size-12 items-center justify-center clip-corner-lg bg-destructive/15 text-destructive">
             <AlertTriangle className="size-6" />
           </div>
-          <AlertDialogTitle>delete account</AlertDialogTitle>
+          <AlertDialogTitle>
+            <FormattedMessage id="requestToVanishDialog.title" defaultMessage="delete account" />
+          </AlertDialogTitle>
           <AlertDialogDescription>
-            This will <span className="font-semibold text-destructive">permanently delete your data</span>. Check each box to confirm you understand what will be removed:
+            <FormattedMessage
+              id="requestToVanishDialog.description"
+              defaultMessage="This will <em>permanently delete your data</em>. Check each box to confirm you understand what will be removed:"
+              values={{ em: (chunks) => <span className="font-semibold text-destructive">{chunks}</span> }}
+            />
           </AlertDialogDescription>
         </div>
 
@@ -101,14 +111,17 @@ export function RequestToVanishDialog({ open, onOpenChange }: RequestToVanishDia
                 onCheckedChange={() => toggle(item.id)}
                 className="border-destructive/60 data-[state=checked]:bg-destructive data-[state=checked]:border-destructive"
               />
-              <span className="text-sm text-muted-foreground">{item.label}</span>
+              <span className="text-sm text-muted-foreground"><FormattedMessage {...item.label} /></span>
             </label>
           ))}
         </div>
 
         <p className="text-xs text-muted-foreground leading-relaxed mb-5">
-          This action is <span className="font-semibold text-destructive">irreversible</span>.
-          Your account cannot be recovered after deletion. You will be logged out immediately.
+          <FormattedMessage
+            id="requestToVanishDialog.irreversible"
+            defaultMessage="This action is <em>irreversible</em>. Your account cannot be recovered after deletion. You will be logged out immediately."
+            values={{ em: (chunks) => <span className="font-semibold text-destructive">{chunks}</span> }}
+          />
         </p>
 
         <div className="flex gap-3">
@@ -118,7 +131,7 @@ export function RequestToVanishDialog({ open, onOpenChange }: RequestToVanishDia
             onClick={() => onOpenChange(false)}
             disabled={isPending}
           >
-            Cancel
+            <FormattedMessage {...common.cancel} />
           </Button>
           <Button
             className="flex-1 gap-1.5 bg-destructive text-destructive-foreground hover:bg-destructive/90 disabled:opacity-40"
@@ -128,10 +141,10 @@ export function RequestToVanishDialog({ open, onOpenChange }: RequestToVanishDia
             {isPending ? (
               <>
                 <Loader2 className="size-3.5 animate-spin" />
-                Deleting…
+                <FormattedMessage id="requestToVanishDialog.deleting" defaultMessage="Deleting…" />
               </>
             ) : (
-              'Delete Account'
+              <FormattedMessage id="requestToVanishDialog.deleteAccount" defaultMessage="Delete Account" />
             )}
           </Button>
         </div>

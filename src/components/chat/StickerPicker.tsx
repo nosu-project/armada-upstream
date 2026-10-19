@@ -4,6 +4,7 @@ import { SearchField } from '@/components/ui/search-field';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { CustomEmojiImg } from '@/components/chat/CustomEmoji';
 import type { CustomEmoji } from '@/hooks/useCustomEmojis';
+import { FormattedMessage, useIntl } from '@/i18n';
 
 interface StickerPickerProps {
   customEmojis: CustomEmoji[];
@@ -15,6 +16,7 @@ interface StickerPickerProps {
 }
 
 export function StickerPicker({ customEmojis, onSelect, height = 350, autoFocus = true }: StickerPickerProps) {
+  const intl = useIntl();
   const [query, setQuery] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -35,8 +37,12 @@ export function StickerPicker({ customEmojis, onSelect, height = 350, autoFocus 
     return (
       <div className="flex flex-col items-center justify-center text-muted-foreground gap-2" style={{ height }}>
         <Sticker className="size-8 opacity-40" />
-        <p className="text-sm">No sticker packs yet</p>
-        <p className="text-xs">Add emoji packs to your profile to use stickers</p>
+        <p className="text-sm">
+          <FormattedMessage id="stickerPicker.noPacks" defaultMessage="No sticker packs yet" />
+        </p>
+        <p className="text-xs">
+          <FormattedMessage id="stickerPicker.noPacksHint" defaultMessage="Add emoji packs to your profile to use stickers" />
+        </p>
       </div>
     );
   }
@@ -44,14 +50,18 @@ export function StickerPicker({ customEmojis, onSelect, height = 350, autoFocus 
   return (
     <div className="flex flex-col" style={{ height }}>
       <div className="px-3 pt-3 pb-2 shrink-0">
-        <SearchField ref={inputRef} value={query} onChange={setQuery} placeholder="Search stickers" />
+        <SearchField ref={inputRef} value={query} onChange={setQuery} placeholder={intl.formatMessage({ id: "stickerPicker.search", defaultMessage: "Search stickers" })} />
       </div>
 
       <ScrollArea className="flex-1 min-h-0">
         {filtered.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
-            <p className="text-sm">No stickers found</p>
-            <p className="text-xs mt-1">Try a different search term</p>
+            <p className="text-sm">
+          <FormattedMessage id="stickerPicker.noResults" defaultMessage="No stickers found" />
+        </p>
+            <p className="text-xs mt-1">
+          <FormattedMessage id="stickerPicker.noResultsHint" defaultMessage="Try a different search term" />
+        </p>
           </div>
         ) : (
           <div className="grid grid-cols-4 gap-1.5 px-3 pb-3">

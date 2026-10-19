@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 
 import { toast } from "@/hooks/useToast";
 import { ToastAction } from "@/components/ui/toast";
+import { t } from "@/i18n";
 import { parseChangelog } from "@/lib/changelog";
 import { getStorageKey } from "@/lib/storageKey";
 
@@ -50,10 +51,10 @@ export function VersionCheck() {
 
     if (storedVersion && storedVersion !== currentVersion) {
       const { update, id } = toast({
-        title: `What's new in v${currentVersion}`,
+        title: t({ id: "versionCheck.whatsNew", defaultMessage: "What's new in v{version}" }, { version: currentVersion }),
         action: (
-          <ToastAction altText="View changelog" asChild>
-            <Link to="/changelog">See all</Link>
+          <ToastAction altText={t({ id: "versionCheck.viewChangelog", defaultMessage: "View changelog" })} asChild>
+            <Link to="/changelog">{t({ id: "versionCheck.seeAll", defaultMessage: "See all" })}</Link>
           </ToastAction>
         ),
       });
@@ -62,11 +63,11 @@ export function VersionCheck() {
         if (excerpt) {
           update({
             id,
-            title: `What's new in v${currentVersion}`,
+            title: t({ id: "versionCheck.whatsNew", defaultMessage: "What's new in v{version}" }, { version: currentVersion }),
             description: excerpt,
             action: (
-              <ToastAction altText="View changelog" asChild>
-                <Link to="/changelog">See all</Link>
+              <ToastAction altText={t({ id: "versionCheck.viewChangelog", defaultMessage: "View changelog" })} asChild>
+                <Link to="/changelog">{t({ id: "versionCheck.seeAll", defaultMessage: "See all" })}</Link>
               </ToastAction>
             ),
           });

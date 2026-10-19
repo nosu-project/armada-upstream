@@ -30,6 +30,7 @@ import { sentDuringMembership } from "@/concord/lib/membershipFloor";
 import { presetIndexedDBArmadaDB } from "@/lib/db/armadaDB";
 import { APP_BLOSSOM_SERVERS } from "@/lib/blossom";
 import { appEventStore } from "@/lib/db/mainEventStore";
+import { createAppIntl, setIntl, t } from "@/i18n/intl";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { mediaPolicyFromConfig, mediaSrc, type MediaPolicy } from "@/lib/mediaPolicy";
 import { writeDm17Rumors } from "@/lib/nip17/dm17Store";
@@ -42,6 +43,7 @@ import {
   mentionPubkeys,
   NOTIFICATION_BADGE_ICON,
   NOTIFICATION_FALLBACK_ICON,
+  notificationMessages,
   presentNotification,
   type NotificationMessage,
 } from "@/lib/notificationPreview";
@@ -173,17 +175,14 @@ function policyOf(cfg: SwPushConfig | null): MediaPolicy {
   return mediaPolicyFromConfig(cfg?.mediaPolicy);
 }
 
-/** A name and an avatar routed per media policy (the OS fetches icons from this device). */
+/** A name (absent for an unnamed profile) and an avatar routed per media policy (the OS fetches icons from this device). */
 interface ResolvedProfile {
-  name: string;
+  name?: string;
   avatar?: string;
 }
 
 /** Mentions looked up per message; any beyond keep their raw token. */
 const MAX_MENTION_LOOKUPS = 8;
-
-/** The name of someone whose profile can't be found. */
-const ANONYMOUS = getDisplayName(undefined);
 
 function resolvedProfile(ev: { content: string; pubkey: string; tags: string[][] }, policy: MediaPolicy): ResolvedProfile | undefined {
   try {
@@ -191,7 +190,7 @@ function resolvedProfile(ev: { content: string; pubkey: string; tags: string[][]
     if (!metadata || typeof metadata !== "object") return undefined;
     const plain = plainProfilePicture(ev.tags, metadata);
     const picture = plain && /^https:\/\//.test(plain) ? plain : undefined;
-    return { name: getDisplayName(metadata, ev.pubkey), avatar: mediaSrc(picture, policy) };
+    return { name: metadata.name || metadata.display_name || undefined, avatar: mediaSrc(picture, policy) };
   } catch {
     return undefined;
   }
@@ -270,8 +269,8 @@ function requestPing(
   return {
     tag: "armada-dm-requests",
     url: "/dm",
-    title: "Message requests",
-    line: quiet ? "You have new message requests" : "You have a new message request",
+    title: t(notificationMessages.messageRequests),
+    line: t(notificationMessages.newMessageRequest, { count: quiet ? 2 : 1 }),
     icon: NOTIFICATION_FALLBACK_ICON,
     badge: NOTIFICATION_BADGE_ICON,
     timestamp: Date.now(),
@@ -296,12 +295,12 @@ async function present(
 ): Promise<PreparedPush> {
   const mentioned = mentionPubkeys(msg.content).slice(0, MAX_MENTION_LOOKUPS);
   const profiles = await profilesFor([...new Set([author, ...mentioned])], profileRelays, policy);
-  const { name, avatar } = profiles.get(author) ?? { name: ANONYMOUS };
+  const { name = getDisplayName(undefined), avatar } = profiles.get(author) ?? {};
   // An unnamed mention keeps its raw token: "@Anonymous" would name nobody.
   const mentionNames = new Map<string, string>();
   for (const pk of mentioned) {
     const mentionedName = profiles.get(pk)?.name;
-    if (mentionedName && mentionedName !== ANONYMOUS) mentionNames.set(pk, mentionedName);
+    if (mentionedName) mentionNames.set(pk, mentionedName);
   }
   const full: NotificationMessage = {
     ...msg,
@@ -559,8 +558,8 @@ async function opaqueConcord(stream: SwConcordStream, policy: MediaPolicy): Prom
     tag: `c2:${stream.channelId}`,
     roomKey: `c2:${stream.channelId}`,
     url: `/c/${stream.communityId}/${stream.channelId}`,
-    title: room.title || "New message in a community",
-    line: "New message",
+    title: room.title || t(notificationMessages.newCommunityMessage),
+    line: t(notificationMessages.newMessage),
     icon: image ?? NOTIFICATION_FALLBACK_ICON,
     badge: NOTIFICATION_BADGE_ICON,
     timestamp: Date.now(),
@@ -617,12 +616,27 @@ async function prepareGroup(
   );
 }
 
-/** Open the sealed config, or null when it can't be opened. */
+let installedLocale = "";
+
+/** Word every notification in the page's language; English without a usable catalog. */
+function installLocale(cfg: SwPushConfig | null): void {
+  const usable = cfg?.locale && cfg.messages ? cfg.locale : "en";
+  const key = usable === "en" ? "en" : `${usable}\0${JSON.stringify(cfg?.messages)}`;
+  if (key === installedLocale) return;
+  installedLocale = key;
+  setIntl(createAppIntl(usable, usable === "en" ? undefined : cfg?.messages));
+}
+
+/** Open the sealed config, or null when it can't be opened. Installs its language. */
 export async function openConfig(sealed: Uint8Array | undefined): Promise<SwPushConfig | null> {
-  if (!sealed) return null;
-  try {
-    return (await openSealedConfig(sealed)) as SwPushConfig | null;
-  } catch {
-    return null;
+  let cfg: SwPushConfig | null = null;
+  if (sealed) {
+    try {
+      cfg = (await openSealedConfig(sealed)) as SwPushConfig | null;
+    } catch {
+      cfg = null;
+    }
   }
+  installLocale(cfg);
+  return cfg;
 }

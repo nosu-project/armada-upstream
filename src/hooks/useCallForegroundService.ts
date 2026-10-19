@@ -4,6 +4,7 @@ import type { PluginListenerHandle } from "@capacitor/core";
 
 import type { CallSummary } from "@/contexts/CallContext";
 import { ArmadaCall, hasNativeCallService } from "@/lib/nativeCall";
+import { t } from "@/i18n";
 
 /**
  * Mirror the active call into the Android ongoing-call notification. Two effects:
@@ -22,7 +23,7 @@ export function useCallForegroundService(
   // The fallback label covers the gap before the room registers its summary.
   useEffect(() => {
     if (!active || !hasNativeCallService()) return;
-    ArmadaCall.start({ title: title ?? "Voice call", text: subtitle ?? "", icon }).catch((err) => {
+    ArmadaCall.start({ title: title ?? t({ id: "useCallForegroundService.voiceCall", defaultMessage: "Voice call" }), text: subtitle ?? "", icon }).catch((err) => {
       console.warn("[native-call] Could not post the ongoing call notification:", err);
     });
   }, [active, title, subtitle, icon]);

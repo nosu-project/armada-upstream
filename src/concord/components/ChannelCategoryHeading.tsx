@@ -6,6 +6,7 @@ import {
   ContextMenuItem,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
+import { FormattedMessage, useIntl } from "@/i18n";
 import { cn } from "@/lib/utils";
 
 interface ChannelCategoryHeading2Props {
@@ -32,6 +33,7 @@ export function ChannelCategoryHeading({
   highlight,
   children,
 }: ChannelCategoryHeading2Props) {
+  const intl = useIntl();
   const heading = (
     <button
       type="button"
@@ -49,7 +51,7 @@ export function ChannelCategoryHeading({
       />
       <span className="truncate">{name}</span>
       {collapsed && hasUnread && (
-        <span className="ml-1 size-1.5 shrink-0 rounded-full bg-primary" aria-label="Unread" />
+        <span className="ml-1 size-1.5 shrink-0 rounded-full bg-primary" aria-label={intl.formatMessage({ id: "channelCategoryHeading.unread", defaultMessage: "Unread" })} />
       )}
       {children}
     </button>
@@ -64,13 +66,13 @@ export function ChannelCategoryHeading({
         {onRename && (
           <ContextMenuItem onSelect={onRename}>
             <Pencil className="size-4" />
-            Rename category
+            <FormattedMessage id="channelCategoryHeading.rename" defaultMessage="Rename category" />
           </ContextMenuItem>
         )}
         {onUngroup && (
           <ContextMenuItem onSelect={onUngroup}>
             <FolderMinus className="size-4" />
-            Ungroup channels
+            <FormattedMessage id="channelCategoryHeading.ungroup" defaultMessage="Ungroup channels" />
           </ContextMenuItem>
         )}
       </ContextMenuContent>

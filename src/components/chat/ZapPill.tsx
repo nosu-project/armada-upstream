@@ -10,6 +10,7 @@ import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { getAvatarShape } from "@/lib/avatarShape";
 import { formatSats } from "@/lib/zaps";
 import { cn } from "@/lib/utils";
+import { FormattedMessage } from "@/i18n";
 
 import type { ZapEntry, ZapRail, ZapTally } from "@/lib/zaps";
 
@@ -91,7 +92,11 @@ export function ZapPill({
         <div className="flex items-center gap-2 border-b border-border/60 px-3 py-2">
           <Zap className="size-4 text-amber-500 fill-current" />
           <span className="text-xs text-muted-foreground">
-            {formatSats(tally.totalSats)} sats · {tally.count} {tally.count === 1 ? "zap" : "zaps"}
+            <FormattedMessage
+              id="zapPill.summary"
+              defaultMessage="{sats} sats · {count, plural, one {# zap} other {# zaps}}"
+              values={{ sats: formatSats(tally.totalSats), count: tally.count }}
+            />
           </span>
         </div>
         <div className="max-h-52 overflow-y-auto py-0.5">
@@ -110,7 +115,7 @@ export function ZapPill({
                 onZap();
               }}
             >
-              <Zap className="size-3.5" /> Zap
+              <Zap className="size-3.5" /> <FormattedMessage id="zapPill.zap" defaultMessage="Zap" />
             </Button>
           </div>
         )}

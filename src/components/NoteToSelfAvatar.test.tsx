@@ -35,6 +35,6 @@ describe("note to self mark", () => {
   });
 
   it("labels the conversation", () => {
-    expect(NOTE_TO_SELF_NAME).toBe("Note to Self");
+    expect(NOTE_TO_SELF_NAME.defaultMessage).toBe("Note to Self");
   });
 });

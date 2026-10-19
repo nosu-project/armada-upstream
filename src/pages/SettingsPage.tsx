@@ -37,6 +37,7 @@ import { DiagnosticsSettings } from "@/components/settings/DiagnosticsSettings";
 import { DirectMessageSettings } from "@/components/settings/DirectMessageSettings";
 import { EmojiPackSettings } from "@/components/settings/EmojiPackSettings";
 import { FontScaleSettings } from "@/components/settings/FontScaleSettings";
+import { LanguageSettings } from "@/components/settings/LanguageSettings";
 import { MutedPeopleSettings } from "@/components/settings/MutedPeopleSettings";
 import { MutedWordsSettings } from "@/components/settings/MutedWordsSettings";
 import { PrivacySettings } from "@/components/settings/PrivacySettings";
@@ -67,6 +68,7 @@ import { useAuthor } from "@/hooks/useAuthor";
 import { useBackOrHome } from "@/hooks/useBackOrHome";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useInstallPrompt } from "@/hooks/useInstallPrompt";
+import { common, useIntl } from "@/i18n";
 import { appVersionLabel } from "@/lib/appVersion";
 import { getAvatarShape } from "@/lib/avatarShape";
 import { isDesktop } from "@/lib/desktop";
@@ -90,35 +92,40 @@ const WIDE_PX = 860;
 /** Which pages exist for this user and build, and how the root list groups them. */
 function useSettingsPages(): { pages: Partial<Record<SettingsPageId, PageDef>>; groups: SettingsPageId[][] } {
   const { user } = useCurrentUser();
+  const intl = useIntl();
   return useMemo(() => {
     const profiling = import.meta.env.VITE_PROFILE === "1";
     const pages: Partial<Record<SettingsPageId, PageDef>> = {
       account: {
-        title: "Account",
+        title: intl.formatMessage({ id: "settingsPage.account.title", defaultMessage: "Account" }),
         icon: UserCircle,
         tone: "primary",
-        summary: user ? "Keys, sync and account standing" : "Log in or create an account",
+        summary: user
+          ? intl.formatMessage({ id: "settingsPage.account.summary", defaultMessage: "Keys, sync and account standing" })
+          : intl.formatMessage({ id: "settingsPage.account.summaryLoggedOut", defaultMessage: "Log in or create an account" }),
         render: () => <AccountSettings />,
       },
       notifications: {
-        title: "Notifications",
+        title: intl.formatMessage({ id: "settingsPage.notifications.title", defaultMessage: "Notifications" }),
         icon: Bell,
         tone: "destructive",
-        summary: "Mentions, replies and messages",
+        summary: intl.formatMessage({ id: "settingsPage.notifications.summary", defaultMessage: "Mentions, replies and messages" }),
         render: () => <NotificationSettings />,
       },
       privacy: {
-        title: "Privacy & safety",
+        title: intl.formatMessage({ id: "settingsPage.privacy.title", defaultMessage: "Privacy & safety" }),
         icon: ShieldCheck,
         tone: "accent2",
-        summary: user ? "Blocking, muted words and media" : "Media, links and Discover",
+        summary: user
+          ? intl.formatMessage({ id: "settingsPage.privacy.summary", defaultMessage: "Blocking, muted words and media" })
+          : intl.formatMessage({ id: "settingsPage.privacy.summaryLoggedOut", defaultMessage: "Media, links and Discover" }),
         render: () => <PrivacySettings />,
       },
       appearance: {
-        title: "Appearance",
+        title: intl.formatMessage({ id: "settingsPage.appearance.title", defaultMessage: "Appearance" }),
         icon: Palette,
         tone: "primary",
-        summary: "Theme and text size",
+        summary: intl.formatMessage({ id: "settingsPage.appearance.summary", defaultMessage: "Theme, language and text size" }),
         render: () => (
           <>
             <SettingsGroup id="appearance">
@@ -126,49 +133,50 @@ function useSettingsPages(): { pages: Partial<Record<SettingsPageId, PageDef>>; 
                 <ThemeSelector />
               </SettingsRow>
             </SettingsGroup>
-            <SettingsGroup title="Text">
+            <SettingsGroup title={intl.formatMessage({ id: "settingsPage.appearance.text", defaultMessage: "Text" })}>
+              <LanguageSettings />
               <FontScaleSettings />
             </SettingsGroup>
           </>
         ),
       },
       chat: {
-        title: "Chats",
+        title: intl.formatMessage({ id: "settingsPage.chat.title", defaultMessage: "Chats" }),
         icon: MessageSquare,
         tone: "success",
-        summary: "Sending, typing and reactions",
+        summary: intl.formatMessage({ id: "settingsPage.chat.summary", defaultMessage: "Sending, typing and reactions" }),
         render: () => <ChatSettings />,
       },
       dms: {
-        title: "Direct messages",
+        title: intl.formatMessage({ id: "settingsPage.dms.title", defaultMessage: "Direct messages" }),
         icon: MessageSquareLock,
         tone: "accent2",
-        summary: "Requests and previews",
+        summary: intl.formatMessage({ id: "settingsPage.dms.summary", defaultMessage: "Requests and previews" }),
         render: () => <DirectMessageSettings />,
       },
       voice: {
-        title: "Voice",
+        title: intl.formatMessage({ id: "settingsPage.voice.title", defaultMessage: "Voice" }),
         icon: Mic,
         tone: "warning",
-        summary: "Devices and noise filtering",
+        summary: intl.formatMessage({ id: "settingsPage.voice.summary", defaultMessage: "Devices and noise filtering" }),
         render: () => <VoiceSettings />,
       },
       relays: {
-        title: "Relays",
+        title: intl.formatMessage({ id: "settingsPage.relays.title", defaultMessage: "Relays" }),
         icon: Waypoints,
         tone: "accent2",
-        summary: "Where your account and uploads live",
+        summary: intl.formatMessage({ id: "settingsPage.relays.summary", defaultMessage: "Where your account and uploads live" }),
         render: () => <RelaysSettings />,
       },
       support: {
-        title: "Help & support",
+        title: intl.formatMessage({ id: "settingsPage.support.title", defaultMessage: "Help & support" }),
         icon: LifeBuoy,
         tone: "success",
-        summary: "Safety guide and contact",
+        summary: intl.formatMessage({ id: "settingsPage.support.summary", defaultMessage: "Safety guide and contact" }),
         render: () => <SupportSettings />,
       },
       about: {
-        title: "About Armada",
+        title: intl.formatMessage({ id: "settingsPage.about.title", defaultMessage: "About Armada" }),
         icon: Info,
         tone: "muted",
         summary: appVersionLabel(),
@@ -177,7 +185,7 @@ function useSettingsPages(): { pages: Partial<Record<SettingsPageId, PageDef>>; 
     };
     if (user) {
       pages.profile = {
-        title: "Profile",
+        title: intl.formatMessage({ id: "settingsPage.profile.title", defaultMessage: "Profile" }),
         icon: UserRound,
         tone: "primary",
         render: () => (
@@ -189,20 +197,20 @@ function useSettingsPages(): { pages: Partial<Record<SettingsPageId, PageDef>>; 
         ),
       };
       pages.blocked = {
-        title: "Blocked people",
+        title: intl.formatMessage({ id: "settingsPage.blocked.title", defaultMessage: "Blocked people" }),
         icon: UserX,
         tone: "destructive",
         render: () => (
           <SettingsGroup
             id="muted"
-            footer="Hidden everywhere in Armada. They are never told."
+            footer={intl.formatMessage({ id: "settingsPage.blocked.footer", defaultMessage: "Hidden everywhere in Armada. They are never told." })}
           >
             <MutedPeopleSettings />
           </SettingsGroup>
         ),
       };
       pages["muted-words"] = {
-        title: "Muted words",
+        title: intl.formatMessage({ id: "settingsPage.mutedWords.title", defaultMessage: "Muted words" }),
         icon: SpellCheck,
         tone: "warning",
         render: () => (
@@ -212,22 +220,28 @@ function useSettingsPages(): { pages: Partial<Record<SettingsPageId, PageDef>>; 
         ),
       };
       pages.emojis = {
-        title: "Emoji packs",
+        title: intl.formatMessage({ id: "settingsPage.emojis.title", defaultMessage: "Emoji packs" }),
         icon: Smile,
         tone: "warning",
-        summary: "Custom emoji you made or added",
+        summary: intl.formatMessage({ id: "settingsPage.emojis.summary", defaultMessage: "Custom emoji you made or added" }),
         render: () => (
-          <SettingsGroup id="emojis" footer="Packs you publish or add show up in the emoji picker on every device.">
+          <SettingsGroup
+            id="emojis"
+            footer={intl.formatMessage({
+              id: "settingsPage.emojis.footer",
+              defaultMessage: "Packs you publish or add show up in the emoji picker on every device.",
+            })}
+          >
             <EmojiPackSettings />
           </SettingsGroup>
         ),
       };
       // Reachable even with zaps off, since its enable toggle lives inside.
       pages.wallet = {
-        title: "Wallet",
+        title: intl.formatMessage({ id: "settingsPage.wallet.title", defaultMessage: "Wallet" }),
         icon: Zap,
         tone: "warning",
-        summary: "Lightning wallet and zaps",
+        summary: intl.formatMessage({ id: "settingsPage.wallet.summary", defaultMessage: "Lightning wallet and zaps" }),
         render: () => (
           <SettingsGroup id="wallet">
             <WalletSettings />
@@ -237,10 +251,10 @@ function useSettingsPages(): { pages: Partial<Record<SettingsPageId, PageDef>>; 
     }
     if (isDesktop()) {
       pages.desktop = {
-        title: "Desktop",
+        title: intl.formatMessage({ id: "settingsPage.desktop.title", defaultMessage: "Desktop" }),
         icon: Monitor,
         tone: "muted",
-        summary: "Startup and the tray",
+        summary: intl.formatMessage({ id: "settingsPage.desktop.summary", defaultMessage: "Startup and the tray" }),
         render: () => (
           <SettingsGroup id="desktop">
             <DesktopSettings />
@@ -250,10 +264,10 @@ function useSettingsPages(): { pages: Partial<Record<SettingsPageId, PageDef>>; 
     }
     if (profiling) {
       pages.diagnostics = {
-        title: "Diagnostics",
+        title: intl.formatMessage({ id: "settingsPage.diagnostics.title", defaultMessage: "Diagnostics" }),
         icon: Activity,
         tone: "muted",
-        summary: "Profiling build tools",
+        summary: intl.formatMessage({ id: "settingsPage.diagnostics.summary", defaultMessage: "Profiling build tools" }),
         render: () => (
           <SettingsGroup id="diagnostics">
             <DiagnosticsSettings />
@@ -268,11 +282,12 @@ function useSettingsPages(): { pages: Partial<Record<SettingsPageId, PageDef>>; 
       ["support", "about"],
     ];
     return { pages, groups: groups.map((ids) => ids.filter((id) => pages[id])).filter((ids) => ids.length > 0) };
-  }, [user]);
+  }, [user, intl]);
 }
 
 /** The root list's identity card: the account at a glance, opening Profile (or Account when logged out). */
 function ProfileCard({ compact, active, onOpen }: { compact?: boolean; active?: boolean; onOpen: (id: SettingsPageId) => void }) {
+  const intl = useIntl();
   const { user } = useCurrentUser();
   const author = useAuthor(user?.pubkey);
   const metadata = author.data?.metadata;
@@ -302,12 +317,19 @@ function ProfileCard({ compact, active, onOpen }: { compact?: boolean; active?: 
       </span>
       <span className="min-w-0 flex-1 space-y-0.5">
         <span className={cn("block truncate font-semibold leading-tight", compact ? "text-sm" : "text-base", !name && "text-muted-foreground")}>
-          {user ? (name ?? (author.isLoading ? "\u00a0" : "Set your name")) : "Log in or sign up"}
+          {user
+            ? (name ?? (author.isLoading
+              ? "\u00a0"
+              : intl.formatMessage({ id: "settingsPage.profileCard.setName", defaultMessage: "Set your name" })))
+            : intl.formatMessage({ id: "settingsPage.profileCard.logIn", defaultMessage: "Log in or sign up" })}
         </span>
         <span className="block truncate text-xs text-muted-foreground">
           {user
             ? <span className="font-mono">{npub.slice(0, 12)}…{npub.slice(-6)}</span>
-            : "Sync your settings and join communities"}
+            : intl.formatMessage({
+              id: "settingsPage.profileCard.loggedOutHint",
+              defaultMessage: "Sync your settings and join communities",
+            })}
         </span>
       </span>
       {!compact && <ChevronRight className="size-4 shrink-0 text-muted-foreground/70" aria-hidden />}
@@ -328,11 +350,12 @@ function RootList({
   active?: SettingsPageId;
   onOpen: (id: SettingsPageId) => void;
 }) {
+  const intl = useIntl();
   const { canInstall, install, needsManualInstall } = useInstallPrompt();
   const showInstall = canInstall || needsManualInstall;
 
   return (
-    <nav aria-label="Settings" className={compact ? "space-y-4" : "space-y-6"}>
+    <nav aria-label={intl.formatMessage(common.settings)} className={compact ? "space-y-4" : "space-y-6"}>
       <ProfileCard compact={compact} active={active === "profile" || (!pages.profile && active === "account")} onOpen={onOpen} />
       {groups.map((ids, index) => (
         <div
@@ -343,12 +366,18 @@ function RootList({
             <SettingsRow
               icon={Download}
               tone="primary"
-              label="Install Armada"
+              label={intl.formatMessage({ id: "settingsPage.install.label", defaultMessage: "Install Armada" })}
               description={compact ? undefined : needsManualInstall
-                ? "Add to your Home Screen from Safari."
-                : "Add to your home screen or desktop for a standalone app."}
+                ? intl.formatMessage({ id: "settingsPage.install.manual", defaultMessage: "Add to your Home Screen from Safari." })
+                : intl.formatMessage({
+                  id: "settingsPage.install.description",
+                  defaultMessage: "Add to your home screen or desktop for a standalone app.",
+                })}
               info={needsManualInstall
-                ? "In Safari, tap Share → Add to Home Screen, keep Open as Web App on, then launch Armada from its new icon."
+                ? intl.formatMessage({
+                  id: "settingsPage.install.manualInfo",
+                  defaultMessage: "In Safari, tap Share → Add to Home Screen, keep Open as Web App on, then launch Armada from its new icon.",
+                })
                 : undefined}
               onClick={canInstall ? () => install() : undefined}
               className={compact ? "min-h-11 py-2" : undefined}
@@ -412,6 +441,7 @@ export function SettingsPage({
   section?: string;
   onClose?: () => void;
 } = {}) {
+  const intl = useIntl();
   const back = useBackOrHome();
   const close = onClose ?? back;
   // Deep-linked section (e.g. /settings#profile) opens its page and scrolls to its group.
@@ -510,10 +540,11 @@ export function SettingsPage({
     return () => cancelAnimationFrame(frame);
   }, [anchor, current]);
 
+  const searchLabel = intl.formatMessage({ id: "settingsPage.searchLabel", defaultMessage: "Search settings" });
   const parentId = current ? SETTINGS_PAGE_PARENT[current] : undefined;
   const parent = parentId ? pages[parentId] : undefined;
   const page = current ? pages[current] : undefined;
-  const headerTitle = !wide && page && !searching ? page.title : "Settings";
+  const headerTitle = !wide && page && !searching ? page.title : intl.formatMessage(common.settings);
 
   const pageView = page && current && (
     <SettingsPageTitleContext.Provider value={page.title}>
@@ -551,7 +582,10 @@ export function SettingsPage({
       <div ref={resultsRef} className="mx-auto max-w-2xl space-y-8 px-4 pt-4 pb-12 sm:px-6">
         {visibleSections === 0 && (
           <p className="px-1 py-8 text-center text-sm text-muted-foreground">
-            No settings match “{query.trim()}”.
+            {intl.formatMessage(
+              { id: "settingsPage.noMatch", defaultMessage: "No settings match “{query}”." },
+              { query: query.trim() },
+            )}
           </p>
         )}
         {(Object.keys(pages) as SettingsPageId[]).map((id) => {
@@ -605,7 +639,7 @@ export function SettingsPage({
             variant="ghost"
             size="icon"
             className="size-9 shrink-0"
-            aria-label="Back"
+            aria-label={intl.formatMessage(common.back)}
             onClick={canPop && !searchOpen ? pop : close}
           >
             <ArrowLeft className="size-5" />
@@ -615,7 +649,7 @@ export function SettingsPage({
             <Button
               variant="ghost"
               size="icon"
-              aria-label="Search settings"
+              aria-label={searchLabel}
               aria-pressed={searchOpen}
               className="size-9 shrink-0 text-muted-foreground"
               onClick={() => setSearchOpen(true)}
@@ -628,8 +662,8 @@ export function SettingsPage({
             value={query}
             onChange={setQuery}
             onClose={closeSearch}
-            placeholder="Search settings…"
-            label="Search settings"
+            placeholder={intl.formatMessage({ id: "settingsPage.searchPlaceholder", defaultMessage: "Search settings…" })}
+            label={searchLabel}
           />
         </header>
 

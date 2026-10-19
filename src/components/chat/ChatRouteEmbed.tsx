@@ -16,6 +16,7 @@ import { getDisplayName } from "@/lib/getDisplayName";
 import { useLocalGroupMeta } from "@/hooks/useLocalGroupMeta";
 import { sanitizeImageSrc } from "@/lib/sanitizeUrl";
 import { cn } from "@/lib/utils";
+import { FormattedMessage, useIntl } from "@/i18n";
 
 import type { ComponentType, ReactNode } from "react";
 import type { ChatRoute, Concord2Route, DmRoute, Nip29Route } from "@/lib/routes";
@@ -149,7 +150,11 @@ function SenderRow({ rumor }: { rumor: NostrRumor }) {
 }
 
 function NotCachedNote() {
-  return <p className="text-sm text-muted-foreground">Open to load this message.</p>;
+  return (
+    <p className="text-sm text-muted-foreground">
+      <FormattedMessage id="chatRouteEmbed.notCached" defaultMessage="Open to load this message." />
+    </p>
+  );
 }
 
 function DmRouteCard({
@@ -163,12 +168,17 @@ function DmRouteCard({
   path: string;
   className?: string;
 }) {
+  const intl = useIntl();
   const rumor = useMainStoreRumor(route.messageId);
   return (
     <RouteCardShell url={url} path={path} className={className}>
       <CardLabel
         Icon={MessageCircle}
-        label={route.messageId ? "Direct message" : "Direct messages"}
+        label={
+          route.messageId
+            ? intl.formatMessage({ id: "chatRouteEmbed.directMessage", defaultMessage: "Direct message" })
+            : intl.formatMessage({ id: "chatRouteEmbed.directMessages", defaultMessage: "Direct messages" })
+        }
       />
       {rumor ? <MessageBody rumor={rumor} /> : route.messageId ? <NotCachedNote /> : null}
     </RouteCardShell>
@@ -210,6 +220,7 @@ function ConcordRouteCard({
   path: string;
   className?: string;
 }) {
+  const intl = useIntl();
   const community = useCommunity(route.communityId);
   const { data: listData, isLoading: listLoading } = useCommunityList();
   const membershipResolved = Boolean(listData && !listData.decryptFailed && !listLoading);
@@ -231,26 +242,34 @@ function ConcordRouteCard({
     staleTime: 5 * 60 * 1000,
   });
 
+  const encryptedCommunity = intl.formatMessage({
+    id: "chatRouteEmbed.encryptedCommunity",
+    defaultMessage: "Encrypted community",
+  });
   const label = route.messageId
-    ? "Community message"
+    ? intl.formatMessage({ id: "chatRouteEmbed.communityMessage", defaultMessage: "Community message" })
     : route.channelId
-      ? "Community channel"
-      : "Encrypted community";
+      ? intl.formatMessage({ id: "chatRouteEmbed.communityChannel", defaultMessage: "Community channel" })
+      : encryptedCommunity;
 
   if (!community) {
     return (
       <RouteCardShell url={url} path={path} className={className}>
-        <CardLabel Icon={MessagesSquare} label="Encrypted community" />
+        <CardLabel Icon={MessagesSquare} label={encryptedCommunity} />
         {membershipResolved ? (
           <div className="flex items-start gap-2 min-w-0 text-muted-foreground">
             <Lock className="mt-0.5 size-4 shrink-0" />
             <p className="text-sm">
-              You're not a member of this community, so it holds nothing you can read. Ask a
-              member for an invite link.
+              <FormattedMessage
+                id="chatRouteEmbed.notMember"
+                defaultMessage="You're not a member of this community, so it holds nothing you can read. Ask a member for an invite link."
+              />
             </p>
           </div>
         ) : (
-          <p className="text-sm text-muted-foreground">Open</p>
+          <p className="text-sm text-muted-foreground">
+            <FormattedMessage id="chatRouteEmbed.open" defaultMessage="Open" />
+          </p>
         )}
       </RouteCardShell>
     );
@@ -288,6 +307,7 @@ function Nip29RouteCard({
   path: string;
   className?: string;
 }) {
+  const intl = useIntl();
   const group = useLocalGroupMeta(route.relayUrl, route.groupId);
   const rumor = useMainStoreRumor(route.messageId ?? route.threadRoot, route.relayUrl);
 
@@ -298,11 +318,18 @@ function Nip29RouteCard({
     // parseChatRoute vetted the relay param; the host is a nicety only.
   }
 
-  const label = route.messageId ? "Group message" : route.groupId ? "Group" : "Server";
+  const label = route.messageId
+    ? intl.formatMessage(
+        { id: "chatRouteEmbed.groupMessageAt", defaultMessage: "Group message · {host}" },
+        { host },
+      )
+    : route.groupId
+      ? intl.formatMessage({ id: "chatRouteEmbed.groupAt", defaultMessage: "Group · {host}" }, { host })
+      : intl.formatMessage({ id: "chatRouteEmbed.serverAt", defaultMessage: "Server · {host}" }, { host });
 
   return (
     <RouteCardShell url={url} path={path} className={className}>
-      <CardLabel Icon={Hash} label={`${label} · ${host}`} />
+      <CardLabel Icon={Hash} label={label} />
       {route.groupId && (
         <PlaceRow
           name={group?.name || route.groupId}

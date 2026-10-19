@@ -9,6 +9,7 @@ import { SettingsGroup, SettingsRow } from "@/components/settings/SettingsSectio
 import { SyncSettings } from "@/components/settings/SyncSettings";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useIntl } from "@/i18n";
 
 const RequestToVanishDialog = lazy(() =>
   import("@/components/RequestToVanishDialog").then((m) => ({ default: m.RequestToVanishDialog })),
@@ -16,6 +17,7 @@ const RequestToVanishDialog = lazy(() =>
 
 /** Settings › Account: who is logged in, their key, sync, standing, and deletion. */
 export function AccountSettings() {
+  const intl = useIntl();
   const { user } = useCurrentUser();
   const { logins } = useNostrLogin();
   const { config, updateConfig } = useAppContext();
@@ -36,8 +38,10 @@ export function AccountSettings() {
     <>
       <SettingsGroup
         id="account"
-        title="Accounts"
-        footer={user ? "Switch accounts, add another, or log out." : "Log in to sync your settings and join communities."}
+        title={intl.formatMessage({ id: "accountSettings.accounts", defaultMessage: "Accounts" })}
+        footer={user
+          ? intl.formatMessage({ id: "accountSettings.accountsFooter", defaultMessage: "Switch accounts, add another, or log out." })
+          : intl.formatMessage({ id: "accountSettings.accountsFooterLoggedOut", defaultMessage: "Log in to sync your settings and join communities." })}
       >
         <SettingsRow>
           <LoginArea className="w-full flex" />
@@ -45,7 +49,7 @@ export function AccountSettings() {
       </SettingsGroup>
 
       {user && activeLogin?.type === "nsec" && (
-        <SettingsGroup id="keys" title="Keys">
+        <SettingsGroup id="keys" title={intl.formatMessage({ id: "accountSettings.keys", defaultMessage: "Keys" })}>
           <KeyBackupSettings nsec={activeLogin.data.nsec} pubkey={activeLogin.pubkey} />
         </SettingsGroup>
       )}
@@ -58,7 +62,7 @@ export function AccountSettings() {
           <SettingsRow
             icon={config.accountStandingSeen ? ShieldCheck : ShieldAlert}
             tone={config.accountStandingSeen ? "success" : "warning"}
-            label="Account standing"
+            label={intl.formatMessage({ id: "accountSettings.accountStanding", defaultMessage: "Account standing" })}
             chevron
             onClick={openStanding}
           />
@@ -68,12 +72,12 @@ export function AccountSettings() {
       {user && (
         <SettingsGroup
           id="danger"
-          footer="Permanently remove your identity and request data deletion from relays."
+          footer={intl.formatMessage({ id: "accountSettings.deleteFooter", defaultMessage: "Permanently remove your identity and request data deletion from relays." })}
         >
           <SettingsRow
             icon={Trash2}
             tone="destructive"
-            label="Delete account"
+            label={intl.formatMessage({ id: "accountSettings.deleteAccount", defaultMessage: "Delete account" })}
             destructive
             onClick={() => setDeleteOpen(true)}
           />

@@ -15,6 +15,8 @@
 //
 // The verdict is a pure function of settings; fixtures are measured values.
 
+import { t } from "@/i18n";
+
 export type WindowAudioPreference = "exclude" | "window" | "system";
 
 declare global {
@@ -119,15 +121,15 @@ export function peekOwnAudioDrop(): DroppedOwnAudio | null {
 export function describeOwnAudioBasis(basis: OwnAudioBasis): string {
   switch (basis) {
     case "restrictOwnAudio":
-      return "System audio, this app excluded by the browser";
+      return t({ id: "screenShareOwnAudio.basis.restrictOwnAudio", defaultMessage: "System audio, this app excluded by the browser" });
     case "callPlayoutCancelled":
-      return "System audio, the call cancelled out by the browser";
+      return t({ id: "screenShareOwnAudio.basis.callPlayoutCancelled", defaultMessage: "System audio, the call cancelled out by the browser" });
     case "processExcludedLoopback":
-      return "System audio, this app excluded at the device";
+      return t({ id: "screenShareOwnAudio.basis.processExcludedLoopback", defaultMessage: "System audio, this app excluded at the device" });
     case "venmic":
-      return "Application audio (PipeWire)";
+      return t({ id: "screenShareOwnAudio.basis.venmic", defaultMessage: "Application audio (PipeWire)" });
     case "tabScoped":
-      return "That tab's audio";
+      return t({ id: "screenShareOwnAudio.basis.tabScoped", defaultMessage: "That tab's audio" });
   }
 }
 
@@ -135,21 +137,25 @@ export function describeOwnAudioBasis(basis: OwnAudioBasis): string {
 export function describeOwnAudioState(track: MediaStreamTrack | undefined): string {
   if (track) {
     const verdict = ownAudioVerdict({ settings: track.getSettings(), label: track.label });
-    return verdict.publish ? describeOwnAudioBasis(verdict.basis) : "Unconfirmed";
+    return verdict.publish ? describeOwnAudioBasis(verdict.basis) : t({ id: "screenShareOwnAudio.state.unconfirmed", defaultMessage: "Unconfirmed" });
   }
   const drop = peekOwnAudioDrop();
-  if (!drop) return "Not captured";
+  if (!drop) return t({ id: "screenShareOwnAudio.state.notCaptured", defaultMessage: "Not captured" });
   return drop.reason === "unrestrictedLoopback"
-    ? "Left out: the system mix would carry the call"
-    : "Left out: the browser did not confirm the call was excluded";
+    ? t({ id: "screenShareOwnAudio.state.leftOutSystemMix", defaultMessage: "Left out: the system mix would carry the call" })
+    : t({ id: "screenShareOwnAudio.state.leftOutUnconfirmed", defaultMessage: "Left out: the browser did not confirm the call was excluded" });
 }
 
 /** A user-facing explanation of why a share is going out without audio. */
 export function describeOwnAudioDrop(drop: DroppedOwnAudio): string {
-  const what = drop.displaySurface === "monitor" ? "Full-screen audio" : "This source's audio";
-  const advice =
-    drop.displaySurface === "monitor"
-      ? " Share a window or a browser tab to include audio."
-      : "";
-  return `${what} would include the call itself and echo it back to everyone, so it was left out.${advice}`;
+  return drop.displaySurface === "monitor"
+    ? t({
+      id: "screenShareOwnAudio.drop.monitor",
+      defaultMessage:
+        "Full-screen audio would include the call itself and echo it back to everyone, so it was left out. Share a window or a browser tab to include audio.",
+    })
+    : t({
+      id: "screenShareOwnAudio.drop.source",
+      defaultMessage: "This source's audio would include the call itself and echo it back to everyone, so it was left out.",
+    });
 }

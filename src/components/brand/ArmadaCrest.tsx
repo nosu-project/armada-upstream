@@ -1,3 +1,4 @@
+import { useIntl } from "@/i18n";
 import { APP_NAME } from "@/lib/platform";
 
 /**
@@ -114,6 +115,7 @@ export function ArmadaCrest({
   className?: string;
   loop?: boolean;
 }) {
+  const intl = useIntl();
   return (
     <svg
       width={size}
@@ -121,7 +123,7 @@ export function ArmadaCrest({
       viewBox="0 0 128 128"
       fill="none"
       role="img"
-      aria-label={`${APP_NAME} logo`}
+      aria-label={intl.formatMessage({ id: "armadaCrest.logo", defaultMessage: "{app} logo" }, { app: APP_NAME })}
       className={`relative drop-shadow-[0_8px_24px_hsl(var(--primary)/0.25)] ${className}`}
     >
       <Waves loop={loop} />
@@ -141,6 +143,7 @@ export function ArmadaCrest({
  * {@link ArmadaCrestKeyframes}.
  */
 export function ArmadaKey({ size = 132, className = "" }: { size?: number; className?: string }) {
+  const intl = useIntl();
   const bow = "M64 12 L88 34 L64 56 L40 34 Z M64 24 L52 34 L64 44 L76 34 Z";
   const shaft = "M58 52 H70 V64 H80 V72 H70 V80 H76 V88 H70 V92 H58 Z";
   return (
@@ -150,7 +153,7 @@ export function ArmadaKey({ size = 132, className = "" }: { size?: number; class
       viewBox="0 0 128 128"
       fill="none"
       role="img"
-      aria-label="Secret key"
+      aria-label={intl.formatMessage({ id: "armadaCrest.secretKey", defaultMessage: "Secret key" })}
       className={`relative drop-shadow-[0_8px_24px_hsl(var(--primary)/0.25)] ${className}`}
     >
       <Waves loop={false} />
@@ -167,6 +170,7 @@ export function ArmadaKey({ size = 132, className = "" }: { size?: number; class
 
 /** Animated identity mark for the profile step. Pair with {@link ArmadaCrestKeyframes}. */
 export function ArmadaIdentity({ size = 132, className = "" }: { size?: number; className?: string }) {
+  const intl = useIntl();
   const head = "M64 22 L80 38 L64 54 L48 38 Z";
   const shoulders = "M52 62 H76 L92 84 H36 Z";
   return (
@@ -176,7 +180,7 @@ export function ArmadaIdentity({ size = 132, className = "" }: { size?: number; 
       viewBox="0 0 128 128"
       fill="none"
       role="img"
-      aria-label="Profile identity"
+      aria-label={intl.formatMessage({ id: "armadaCrest.profileIdentity", defaultMessage: "Profile identity" })}
       className={`relative drop-shadow-[0_8px_24px_hsl(var(--primary)/0.25)] ${className}`}
     >
       <Waves loop={false} />

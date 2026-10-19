@@ -1,5 +1,6 @@
 import { Component, type ErrorInfo, type ReactNode } from "react";
 
+import { t } from "@/i18n";
 import { clearChunkReloadGuard, isChunkLoadError, tryChunkReload } from "@/lib/chunkReload";
 
 interface Props {
@@ -44,10 +45,14 @@ export class ErrorBoundary extends Component<Props, State> {
         role="alert"
         className="fixed inset-0 z-50 flex flex-col items-center justify-center gap-4 bg-background px-6 text-center text-foreground"
       >
-        <h1 className="text-lg font-semibold">Something went wrong</h1>
+        <h1 className="text-lg font-semibold">
+          {t({ id: "errorBoundary.title", defaultMessage: "Something went wrong" })}
+        </h1>
         <p className="max-w-md text-sm text-muted-foreground">
-          The app hit an unexpected error and couldn't continue. Reloading
-          usually clears it.
+          {t({
+            id: "errorBoundary.description",
+            defaultMessage: "The app hit an unexpected error and couldn't continue. Reloading usually clears it.",
+          })}
         </p>
         {/* Shown in production: the only field diagnostic on a phone. */}
         <pre className="max-w-full max-h-40 overflow-auto rounded-md bg-muted p-3 text-left text-xs text-muted-foreground select-text whitespace-pre-wrap break-words">
@@ -58,7 +63,7 @@ export class ErrorBoundary extends Component<Props, State> {
           onClick={this.handleReload}
           className="inline-flex h-9 touch:h-11 items-center justify-center clip-corner-lg bg-primary px-4 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
-          Reload
+          {t({ id: "errorBoundary.reload", defaultMessage: "Reload" })}
         </button>
       </div>
     );

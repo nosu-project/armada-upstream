@@ -146,6 +146,9 @@ struct PushConfig {
     /// (`MediaPolicy`), applied to the one fetch the extension makes. A config
     /// written before the field existed gets the default: proxying off.
     let mediaPolicy: MediaPolicy
+    /// The app's language code, for `Strings`. Absent in a config written
+    /// before the field existed, which reads English.
+    let locale: String?
 
     init(
         policy: DmRequestLevel,
@@ -158,7 +161,8 @@ struct PushConfig {
         secretKey: [UInt8]?,
         nip46: Nip46Config?,
         concord: [ConcordStream],
-        mediaPolicy: MediaPolicy = .defaults
+        mediaPolicy: MediaPolicy = .defaults,
+        locale: String? = nil
     ) {
         self.policy = policy
         self.directMessages = directMessages
@@ -171,6 +175,7 @@ struct PushConfig {
         self.nip46 = nip46
         self.concord = concord
         self.mediaPolicy = mediaPolicy
+        self.locale = locale
     }
 
     static func parse(json: String) -> PushConfig? {
@@ -244,7 +249,8 @@ struct PushConfig {
             secretKey: secretKey,
             nip46: nip46,
             concord: streams,
-            mediaPolicy: MediaPolicy.parse(object["mediaPolicy"] as? [String: Any])
+            mediaPolicy: MediaPolicy.parse(object["mediaPolicy"] as? [String: Any]),
+            locale: object["locale"] as? String
         )
     }
 }

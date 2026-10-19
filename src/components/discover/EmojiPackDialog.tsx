@@ -26,6 +26,7 @@ import { usePressDrag } from "@/hooks/usePressDrag";
 import { useNostrPublish } from "@/hooks/useNostrPublish";
 import { useUploadFile } from "@/hooks/useUploadFile";
 import { toast } from "@/hooks/useToast";
+import { FormattedMessage, t, useIntl } from "@/i18n";
 import { sanitizeImageSrc } from "@/lib/sanitizeUrl";
 import { cn } from "@/lib/utils";
 
@@ -153,9 +154,12 @@ export function EmojiPackDialog({
   onOpenChange: (open: boolean) => void;
   editEvent?: NostrRumor;
 }) {
+  const intl = useIntl();
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <ChromeDialogContent title={editEvent ? "Edit emoji pack" : "Create emoji pack"}>
+      <ChromeDialogContent
+        title={editEvent ? intl.formatMessage({ id: "emojiPackDialog.editTitle", defaultMessage: "Edit emoji pack" }) : intl.formatMessage({ id: "emojiPackDialog.createTitle", defaultMessage: "Create emoji pack" })}
+      >
         {open && <EmojiPackForm editEvent={editEvent} onDone={() => onOpenChange(false)} />}
       </ChromeDialogContent>
     </Dialog>
@@ -163,6 +167,7 @@ export function EmojiPackDialog({
 }
 
 function EmojiPackForm({ editEvent, onDone }: { editEvent?: NostrRumor; onDone: () => void }) {
+  const intl = useIntl();
   const { user } = useCurrentUser();
   const { nostr } = useNostr();
   const eventStore = useEventStore();
@@ -208,7 +213,7 @@ function EmojiPackForm({ editEvent, onDone }: { editEvent?: NostrRumor; onDone: 
       const tags = await uploadFile(file);
       setIcon(tags[0]?.[1] ?? "");
     } catch {
-      toast({ title: "Icon upload failed", description: file.name, variant: "destructive" });
+      toast({ title: t({ id: "emojiPackDialog.iconUploadFailed", defaultMessage: "Icon upload failed" }), description: file.name, variant: "destructive" });
     } finally {
       setIconUploading(false);
     }
@@ -218,7 +223,7 @@ function EmojiPackForm({ editEvent, onDone }: { editEvent?: NostrRumor; onDone: 
     if (!files) return;
     const images = Array.from(files).filter((f) => f.type.startsWith("image/"));
     if (images.length === 0) {
-      toast({ title: "No images found", variant: "destructive" });
+      toast({ title: t({ id: "emojiPackDialog.noImages", defaultMessage: "No images found" }), variant: "destructive" });
       return;
     }
     await Promise.all(images.map(async (file) => {
@@ -235,7 +240,7 @@ function EmojiPackForm({ editEvent, onDone }: { editEvent?: NostrRumor; onDone: 
         );
       } catch {
         setEntries((prev) => prev.filter((e) => e.id !== id));
-        toast({ title: "Upload failed", description: file.name, variant: "destructive" });
+        toast({ title: t({ id: "emojiPackDialog.uploadFailed", defaultMessage: "Upload failed" }), description: file.name, variant: "destructive" });
       }
     }));
   };
@@ -356,20 +361,23 @@ function EmojiPackForm({ editEvent, onDone }: { editEvent?: NostrRumor; onDone: 
     duplicates === 0 && missing === 0 && (!isEditMode || !!initial?.identifier);
 
   const hint = busy
-    ? "Publishing…"
+    ? intl.formatMessage({ id: "emojiPackDialog.publishing", defaultMessage: "Publishing…" })
     : uploading > 0 || iconUploading
-      ? `Uploading ${uploading + (iconUploading ? 1 : 0)} image${uploading + (iconUploading ? 1 : 0) === 1 ? "" : "s"}…`
+      ? intl.formatMessage(
+        { id: "emojiPackDialog.uploadingImages", defaultMessage: "Uploading {count, plural, one {# image} other {# images}}…" },
+        { count: uploading + (iconUploading ? 1 : 0) },
+      )
       : missing > 0
-        ? "Every emoji needs a shortcode."
+        ? intl.formatMessage({ id: "emojiPackDialog.missingShortcode", defaultMessage: "Every emoji needs a shortcode." })
         : duplicates > 0
-          ? "Two emojis share a shortcode. Make each one unique."
+          ? intl.formatMessage({ id: "emojiPackDialog.duplicateShortcode", defaultMessage: "Two emojis share a shortcode. Make each one unique." })
           : !named
-            ? "Give the pack a name."
+            ? intl.formatMessage({ id: "emojiPackDialog.giveName", defaultMessage: "Give the pack a name." })
             : uploaded.length === 0
-              ? "Add at least one image."
+              ? intl.formatMessage({ id: "emojiPackDialog.addImage", defaultMessage: "Add at least one image." })
               : isEditMode
-                ? "Everyone who added this pack will get the changes."
-                : "Anyone will be able to find and add this pack.";
+                ? intl.formatMessage({ id: "emojiPackDialog.editHint", defaultMessage: "Everyone who added this pack will get the changes." })
+                : intl.formatMessage({ id: "emojiPackDialog.publicHint", defaultMessage: "Anyone will be able to find and add this pack." });
 
   const publish = async () => {
     if (!canPublish || !user) return;
@@ -414,25 +422,35 @@ function EmojiPackForm({ editEvent, onDone }: { editEvent?: NostrRumor; onDone: 
       if (addToMine && !isEditMode) {
         try {
           await addPack({ pubkey: user.pubkey, identifier });
-          toast({ title: "Emoji pack published", description: `${name.trim()} was added to your emojis` });
+          toast({
+            title: t({ id: "emojiPackDialog.packPublished", defaultMessage: "Emoji pack published" }),
+            description: t(
+              { id: "emojiPackDialog.addedToEmojis", defaultMessage: "{name} was added to your emojis" },
+              { name: name.trim() },
+            ),
+          });
         } catch (e) {
           toast({
-            title: "Published, but not added to your emojis",
-            description: e instanceof Error ? e.message : "Couldn't update your emoji list.",
+            title: t({ id: "emojiPackDialog.publishedNotAdded", defaultMessage: "Published, but not added to your emojis" }),
+            description: e instanceof Error ? e.message : t({ id: "emojiPackDialog.listUpdateFailed", defaultMessage: "Couldn't update your emoji list." }),
             variant: "destructive",
           });
         }
       } else {
         toast({
-          title: isEditMode ? "Emoji pack updated" : "Emoji pack published",
+          title: isEditMode
+            ? t({ id: "emojiPackDialog.packUpdated", defaultMessage: "Emoji pack updated" })
+            : t({ id: "emojiPackDialog.packPublished", defaultMessage: "Emoji pack published" }),
           description: name.trim(),
         });
       }
       onDone();
     } catch (e) {
       toast({
-        title: isEditMode ? "Couldn't update pack" : "Couldn't publish pack",
-        description: e instanceof Error ? e.message : "Publishing failed.",
+        title: isEditMode
+          ? t({ id: "emojiPackDialog.updateFailed", defaultMessage: "Couldn't update pack" })
+          : t({ id: "emojiPackDialog.publishFailed", defaultMessage: "Couldn't publish pack" }),
+        description: e instanceof Error ? e.message : t({ id: "emojiPackDialog.publishingFailed", defaultMessage: "Publishing failed." }),
         variant: "destructive",
       });
     } finally {
@@ -450,10 +468,10 @@ function EmojiPackForm({ editEvent, onDone }: { editEvent?: NostrRumor; onDone: 
           <Smile className="size-6" />
         </div>
         <h2 className="chrome-dialog-title font-mono font-bold lowercase tracking-tight text-foreground">
-          {isEditMode ? "edit emoji pack" : "create emoji pack"}
+          {isEditMode ? <FormattedMessage id="emojiPackDialog.editHeading" defaultMessage="edit emoji pack" /> : <FormattedMessage id="emojiPackDialog.createHeading" defaultMessage="create emoji pack" />}
         </h2>
         <p className="text-sm text-muted-foreground">
-          Upload images, give each a shortcode, and publish a pack anyone can add.
+          <FormattedMessage id="emojiPackDialog.intro" defaultMessage="Upload images, give each a shortcode, and publish a pack anyone can add." />
         </p>
       </div>
 
@@ -473,7 +491,7 @@ function EmojiPackForm({ editEvent, onDone }: { editEvent?: NostrRumor; onDone: 
           type="button"
           onClick={() => iconInput.current?.click()}
           disabled={busy}
-          aria-label="Pack icon"
+          aria-label={intl.formatMessage({ id: "emojiPackDialog.packIcon", defaultMessage: "Pack icon" })}
           className={cn(
             "flex size-14 shrink-0 items-center justify-center overflow-hidden clip-corner-lg transition-colors",
             icon
@@ -494,13 +512,13 @@ function EmojiPackForm({ editEvent, onDone }: { editEvent?: NostrRumor; onDone: 
             htmlFor="pack-name"
             className="text-xs font-medium uppercase tracking-wider text-muted-foreground"
           >
-            Pack name
+            <FormattedMessage id="emojiPackDialog.packName" defaultMessage="Pack name" />
           </Label>
           <Input
             id="pack-name"
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder="My emoji pack"
+            placeholder={intl.formatMessage({ id: "emojiPackDialog.namePlaceholder", defaultMessage: "My emoji pack" })}
             maxLength={60}
             disabled={busy}
             autoFocus
@@ -513,14 +531,21 @@ function EmojiPackForm({ editEvent, onDone }: { editEvent?: NostrRumor; onDone: 
           htmlFor="pack-about"
           className="text-xs font-medium uppercase tracking-wider text-muted-foreground"
         >
-          Description
-          <span className="ml-1 normal-case tracking-normal text-muted-foreground/60">optional</span>
+          <FormattedMessage
+            id="emojiPackDialog.descriptionOptional"
+            defaultMessage="Description<opt>optional</opt>"
+            values={{
+              opt: (chunks) => (
+                <span className="ml-1 normal-case tracking-normal text-muted-foreground/60">{chunks}</span>
+              ),
+            }}
+          />
         </Label>
         <Textarea
           id="pack-about"
           value={about}
           onChange={(e) => setAbout(e.target.value)}
-          placeholder="What's in this pack?"
+          placeholder={intl.formatMessage({ id: "emojiPackDialog.descriptionPlaceholder", defaultMessage: "What's in this pack?" })}
           maxLength={280}
           rows={2}
           disabled={busy}
@@ -543,7 +568,7 @@ function EmojiPackForm({ editEvent, onDone }: { editEvent?: NostrRumor; onDone: 
       <div className="space-y-2">
         <div className="flex items-center gap-2">
           <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-            Emojis
+            <FormattedMessage id="emojiPackDialog.emojis" defaultMessage="Emojis" />
           </span>
           {uploaded.length > 0 && (
             <span className="text-xs text-muted-foreground/70">{uploaded.length}</span>
@@ -558,7 +583,7 @@ function EmojiPackForm({ editEvent, onDone }: { editEvent?: NostrRumor; onDone: 
               disabled={busy}
             >
               <ImagePlus className="size-3.5" />
-              Add more
+              <FormattedMessage id="emojiPackDialog.addMore" defaultMessage="Add more" />
             </Button>
           )}
         </div>
@@ -582,8 +607,15 @@ function EmojiPackForm({ editEvent, onDone }: { editEvent?: NostrRumor; onDone: 
             )}
           >
             <ImagePlus className="size-6" />
-            <span className="text-sm font-medium text-foreground">Add emoji images</span>
-            <span className="text-xs">Drop images or a folder here, or click to browse. PNG, GIF or WebP.</span>
+            <span className="text-sm font-medium text-foreground">
+              <FormattedMessage id="emojiPackDialog.addImages" defaultMessage="Add emoji images" />
+            </span>
+            <span className="text-xs">
+              <FormattedMessage
+                id="emojiPackDialog.dropHint"
+                defaultMessage="Drop images or a folder here, or click to browse. PNG, GIF or WebP."
+              />
+            </span>
           </button>
         ) : (
           <div
@@ -612,7 +644,14 @@ function EmojiPackForm({ editEvent, onDone }: { editEvent?: NostrRumor; onDone: 
                 >
                   <button
                     type="button"
-                    aria-label={`Move ${e.shortcode || "emoji"}. Use the arrow keys, or drag.`}
+                    aria-label={intl.formatMessage(
+                      {
+                        id: "emojiPackDialog.moveEmoji",
+                        defaultMessage:
+                          "{named, select, true {Move {code}. Use the arrow keys, or drag.} other {Move emoji. Use the arrow keys, or drag.}}",
+                      },
+                      { named: e.shortcode ? "true" : "false", code: e.shortcode },
+                    )}
                     aria-disabled={!sortable}
                     tabIndex={sortable ? 0 : -1}
                     onPointerDown={(ev) => {
@@ -658,8 +697,8 @@ function EmojiPackForm({ editEvent, onDone }: { editEvent?: NostrRumor; onDone: 
                     <input
                       value={e.shortcode}
                       onChange={(ev) => setShortcode(e.id, ev.target.value)}
-                      placeholder="shortcode"
-                      aria-label="Emoji shortcode"
+                      placeholder={intl.formatMessage({ id: "emojiPackDialog.shortcodePlaceholder", defaultMessage: "shortcode" })}
+                      aria-label={intl.formatMessage({ id: "emojiPackDialog.shortcodeLabel", defaultMessage: "Emoji shortcode" })}
                       aria-invalid={invalid}
                       disabled={busy}
                       className="min-w-0 flex-1 bg-transparent py-1.5 touch:py-2.5 text-sm outline-none"
@@ -673,7 +712,13 @@ function EmojiPackForm({ editEvent, onDone }: { editEvent?: NostrRumor; onDone: 
                     className="size-8 touch:size-10 shrink-0 text-muted-foreground hover:text-destructive"
                     onClick={() => removeEntry(e.id)}
                     disabled={busy}
-                    aria-label={`Remove ${e.shortcode || "emoji"}`}
+                    aria-label={intl.formatMessage(
+                      {
+                        id: "emojiPackDialog.removeEmoji",
+                        defaultMessage: "{named, select, true {Remove {code}} other {Remove emoji}}",
+                      },
+                      { named: e.shortcode ? "true" : "false", code: e.shortcode },
+                    )}
                   >
                     <X className="size-4" />
                   </Button>
@@ -722,12 +767,12 @@ function EmojiPackForm({ editEvent, onDone }: { editEvent?: NostrRumor; onDone: 
               disabled={busy}
               className="shrink-0"
             />
-            Add to my emojis
+            <FormattedMessage id="emojiPackDialog.addToMine" defaultMessage="Add to my emojis" />
           </Label>
         )}
         <Button className="w-full clip-corner-lg" onClick={publish} disabled={!canPublish}>
           {busy && <Loader2 className="size-4 animate-spin" />}
-          {isEditMode ? "Update pack" : "Publish pack"}
+          {isEditMode ? <FormattedMessage id="emojiPackDialog.updatePack" defaultMessage="Update pack" /> : <FormattedMessage id="emojiPackDialog.publishPack" defaultMessage="Publish pack" />}
         </Button>
         <p
           className={cn(

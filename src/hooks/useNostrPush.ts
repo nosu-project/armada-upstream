@@ -45,6 +45,8 @@ import { LatestSerialRunner } from "@/lib/pushRegistration";
 import type { PushSubscriptionSpec } from "@/lib/pushSubscriptions";
 import { clearPushDisabledFlag, writePushDisabledFlag } from "@/lib/swPushDisabled";
 import { clearSwPushConfig, writeSwPushConfig } from "@/lib/swPushConfig";
+import { useIntl } from "@/i18n";
+import { notificationLocale } from "@/i18n/locales";
 import {
   acquireWebPushSubscription,
   activateRegisteredWebPush,
@@ -336,6 +338,7 @@ export function useNostrPush(): UsePushNotificationsReturn {
     watchSetReady,
   } = usePushWatchSet(prefs);
   const mediaPolicy = useMediaPolicyConfig();
+  const { locale } = useIntl();
   const profileRelaysKey = generalReadRelays(config, user?.pubkey).join(",");
   const profileRelays = useMemo(
     () => (profileRelaysKey ? profileRelaysKey.split(",") : []),
@@ -414,6 +417,7 @@ export function useNostrPush(): UsePushNotificationsReturn {
         ...(dmSk ? { sk: dmSk } : {}),
         mediaPolicy,
         profileRelays,
+        ...notificationLocale(locale),
       });
       if (!written) {
         throw new Error("The service worker notification policy could not be stored");
@@ -433,6 +437,7 @@ export function useNostrPush(): UsePushNotificationsReturn {
     dmSk,
     mediaPolicy,
     profileRelays,
+    locale,
     queueSwConfig,
   ]);
 

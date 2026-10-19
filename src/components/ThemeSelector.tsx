@@ -13,6 +13,7 @@ import { useNostrPublish } from "@/hooks/useNostrPublish";
 import { useTheme } from "@/hooks/useTheme";
 import { useUserThemes, type UserTheme } from "@/hooks/useUserThemes";
 import { toast } from "@/hooks/useToast";
+import { common, FormattedMessage, t, useIntl } from "@/i18n";
 import { buildThemeDefinitionEvent } from "@/lib/themeEvent";
 import { cn } from "@/lib/utils";
 import {
@@ -52,6 +53,7 @@ interface TileProps {
 }
 
 function ThemeTile({ label, emoji, colors, active, onClick, onEdit }: TileProps) {
+  const intl = useIntl();
   return (
     <div className="group relative">
       <button
@@ -88,8 +90,8 @@ function ThemeTile({ label, emoji, colors, active, onClick, onEdit }: TileProps)
           size="icon"
           className="absolute bottom-0.5 right-0.5 size-7 touch:size-11 text-muted-foreground hover:text-foreground"
           onClick={onEdit}
-          aria-label={`Edit ${label}`}
-          title="Edit theme"
+          aria-label={intl.formatMessage({ id: "themeSelector.editLabel", defaultMessage: "Edit {label}" }, { label })}
+          title={intl.formatMessage({ id: "themeSelector.editTheme", defaultMessage: "Edit theme" })}
         >
           <Pencil className="size-3.5" />
         </Button>
@@ -100,6 +102,7 @@ function ThemeTile({ label, emoji, colors, active, onClick, onEdit }: TileProps)
 
 /** Theme picker, adapted from Ditto's ThemeSelector. */
 export function ThemeSelector() {
+  const intl = useIntl();
   const { theme, customTheme, setTheme, applyCustomTheme } = useTheme();
   const { data: userThemes, isLoading: userThemesLoading } = useUserThemes();
   const { user } = useCurrentUser();
@@ -145,20 +148,24 @@ export function ThemeSelector() {
         });
       const copyLink = copyLinkFor(event);
       toast({
-        title: sameAsExisting ? "Already shared" : "Theme shared",
-        description: "It's now discoverable by others.",
+        title: sameAsExisting
+          ? t({ id: "themeSelector.alreadyShared", defaultMessage: "Already shared" })
+          : t({ id: "themeSelector.shared", defaultMessage: "Theme shared" }),
+        description: t({ id: "themeSelector.sharedDescription", defaultMessage: "It's now discoverable by others." }),
         ...(copyLink && {
           action: (
-            <ToastAction altText="Copy theme link" onClick={copyLink}>
-              Copy link
+            <ToastAction altText={t({ id: "themeSelector.copyLinkAlt", defaultMessage: "Copy theme link" })} onClick={copyLink}>
+              {t(common.copyLink)}
             </ToastAction>
           ),
         }),
       });
     } catch (e) {
       toast({
-        title: "Couldn't share theme",
-        description: e instanceof Error ? e.message : "Publishing failed.",
+        title: t({ id: "themeSelector.shareFailed.title", defaultMessage: "Couldn't share theme" }),
+        description: e instanceof Error
+          ? e.message
+          : t({ id: "themeSelector.shareFailed.description", defaultMessage: "Publishing failed." }),
         variant: "destructive",
       });
     }
@@ -167,24 +174,26 @@ export function ThemeSelector() {
   return (
     <div className="space-y-5">
       <div>
-        <h3 className="mb-2 text-sm font-semibold text-muted-foreground uppercase tracking-wide">Base</h3>
+        <h3 className="mb-2 text-sm font-semibold text-muted-foreground uppercase tracking-wide">
+          <FormattedMessage id="themeSelector.base" defaultMessage="Base" />
+        </h3>
         <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
           <ThemeTile
-            label="System"
+            label={intl.formatMessage({ id: "themeSelector.system", defaultMessage: "System" })}
             emoji="💻"
             colors={builtinThemes.dark}
             active={theme === "system"}
             onClick={() => selectMode("system")}
           />
           <ThemeTile
-            label="Light"
+            label={intl.formatMessage({ id: "themeSelector.light", defaultMessage: "Light" })}
             emoji="☀️"
             colors={builtinThemes.light}
             active={theme === "light"}
             onClick={() => selectMode("light")}
           />
           <ThemeTile
-            label="Dark"
+            label={intl.formatMessage({ id: "themeSelector.dark", defaultMessage: "Dark" })}
             emoji="🌙"
             colors={builtinThemes.dark}
             active={theme === "dark"}
@@ -194,7 +203,9 @@ export function ThemeSelector() {
       </div>
 
       <div>
-        <h3 className="mb-2 text-sm font-semibold text-muted-foreground uppercase tracking-wide">Presets</h3>
+        <h3 className="mb-2 text-sm font-semibold text-muted-foreground uppercase tracking-wide">
+          <FormattedMessage id="themeSelector.presets" defaultMessage="Presets" />
+        </h3>
         <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
           {presetKeys.map((key) => {
             const preset = themePresets[key];
@@ -215,10 +226,12 @@ export function ThemeSelector() {
       {(userThemesLoading || (userThemes && userThemes.length > 0)) && (
         <div>
           <h3 className="mb-2 text-sm font-semibold text-muted-foreground uppercase tracking-wide">
-            My themes
+            <FormattedMessage id="themeSelector.myThemes" defaultMessage="My themes" />
           </h3>
           {userThemesLoading ? (
-            <p className="text-xs text-muted-foreground">Loading your themes…</p>
+            <p className="text-xs text-muted-foreground">
+              <FormattedMessage id="themeSelector.loadingThemes" defaultMessage="Loading your themes…" />
+            </p>
           ) : (
             <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
               {userThemes!.map((t) => (
@@ -243,7 +256,11 @@ export function ThemeSelector() {
 
       <Button className="w-full clip-corner-lg" onClick={() => setBuilderOpen(true)}>
         <Palette className="size-4 mr-2" />
-        {isCustomBuild ? "Edit custom theme" : "Create a custom theme"}
+        {isCustomBuild ? (
+          <FormattedMessage id="themeSelector.editCustom" defaultMessage="Edit custom theme" />
+        ) : (
+          <FormattedMessage id="themeSelector.createCustom" defaultMessage="Create a custom theme" />
+        )}
       </Button>
 
       {user && canShare && (
@@ -254,7 +271,7 @@ export function ThemeSelector() {
           disabled={sharing}
         >
           {sharing ? <Loader2 className="size-4 mr-2 animate-spin" /> : <Share2 className="size-4 mr-2" />}
-          Share to Discover
+          <FormattedMessage id="themeSelector.shareToDiscover" defaultMessage="Share to Discover" />
         </Button>
       )}
 
@@ -284,6 +301,7 @@ interface BuilderProps {
 }
 
 function ThemeBuilderDialog({ open, onOpenChange, initial, onApply }: BuilderProps) {
+  const intl = useIntl();
   const [colors, setColors] = useState<CoreThemeColors>(initial?.colors ?? builderStarterColors);
   const [title, setTitle] = useState(initial?.title ?? "My theme");
   const [background, setBackground] = useState<ThemeBackground | undefined>(initial?.background);
@@ -291,16 +309,19 @@ function ThemeBuilderDialog({ open, onOpenChange, initial, onApply }: BuilderPro
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <ChromeDialogContent title="Custom theme">
+      <ChromeDialogContent title={intl.formatMessage({ id: "themeSelector.builder.dialogTitle", defaultMessage: "Custom theme" })}>
         <div className="flex flex-col items-center gap-2 text-center">
           <div className="flex size-12 items-center justify-center clip-corner-lg bg-primary/15 text-primary">
             <Palette className="size-6" />
           </div>
           <h2 className="chrome-dialog-title font-mono font-bold lowercase tracking-tight text-foreground">
-            custom theme
+            <FormattedMessage id="themeSelector.builder.title" defaultMessage="custom theme" />
           </h2>
           <p className="text-sm text-muted-foreground">
-            Pick three colors. Every other shade is derived from them.
+            <FormattedMessage
+              id="themeSelector.builder.description"
+              defaultMessage="Pick three colors. Every other shade is derived from them."
+            />
           </p>
         </div>
 
@@ -316,7 +337,7 @@ function ThemeBuilderDialog({ open, onOpenChange, initial, onApply }: BuilderPro
 
           <div className="flex gap-2 pt-1">
             <Button type="button" variant="ghost" className="flex-1 clip-corner-lg" onClick={() => onOpenChange(false)}>
-              Cancel
+              <FormattedMessage {...common.cancel} />
             </Button>
             <Button
               className="flex-1 clip-corner-lg"
@@ -327,7 +348,7 @@ function ThemeBuilderDialog({ open, onOpenChange, initial, onApply }: BuilderPro
                 onOpenChange(false);
               }}
             >
-              Apply theme
+              <FormattedMessage id="themeSelector.builder.apply" defaultMessage="Apply theme" />
             </Button>
           </div>
         </div>

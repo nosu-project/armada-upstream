@@ -195,44 +195,75 @@ public class NotificationContentTest {
 
     @Test
     public void labelsMediaByImetaMime() {
-        assertEquals("an image", NotificationContent.mediaLabel("image/png", ""));
-        assertEquals("a GIF", NotificationContent.mediaLabel("image/gif", ""));
-        assertEquals("a video", NotificationContent.mediaLabel("video/mp4", ""));
-        assertEquals("a voice message", NotificationContent.mediaLabel("audio/mp4", ""));
-        assertEquals("a game", NotificationContent.mediaLabel("application/x-webxdc", ""));
+        assertEquals("image", NotificationContent.mediaKind("image/png", ""));
+        assertEquals("gif", NotificationContent.mediaKind("image/gif", ""));
+        assertEquals("video", NotificationContent.mediaKind("video/mp4", ""));
+        assertEquals("voice", NotificationContent.mediaKind("audio/mp4", ""));
+        assertEquals("game", NotificationContent.mediaKind("application/x-webxdc", ""));
     }
 
     @Test
     public void imetaMimeWinsOverExtension() {
         // A voice message recorded into a .webm container: the extension list
         // calls it video, the audio/* MIME knows better.
-        assertEquals("a voice message",
-                NotificationContent.mediaLabel("audio/webm;codecs=opus", "https://x/a.webm"));
+        assertEquals("voice",
+                NotificationContent.mediaKind("audio/webm;codecs=opus", "https://x/a.webm"));
     }
 
     @Test
     public void labelsEncryptedAttachmentWithExtensionlessUrl() {
         // Concord/DM ciphertext blobs carry no media extension; only the imeta
         // MIME names the kind.
-        assertEquals("an image",
-                NotificationContent.mediaLabel("image/jpeg", "https://blossom.example/abcd1234"));
+        assertEquals("image",
+                NotificationContent.mediaKind("image/jpeg", "https://blossom.example/abcd1234"));
     }
 
     @Test
     public void labelsMediaByUrlExtensionWithoutImeta() {
-        assertEquals("an image", NotificationContent.mediaLabel(null, "https://x/a.jpg"));
-        assertEquals("a GIF", NotificationContent.mediaLabel(null, "https://x/a.GIF"));
-        assertEquals("a video", NotificationContent.mediaLabel(null, "https://x/a.mp4?t=1"));
-        assertEquals("a voice message", NotificationContent.mediaLabel(null, "https://x/a.opus"));
-        assertEquals("a game", NotificationContent.mediaLabel(null, "https://x/chess.xdc"));
+        assertEquals("image", NotificationContent.mediaKind(null, "https://x/a.jpg"));
+        assertEquals("gif", NotificationContent.mediaKind(null, "https://x/a.GIF"));
+        assertEquals("video", NotificationContent.mediaKind(null, "https://x/a.mp4?t=1"));
+        assertEquals("voice", NotificationContent.mediaKind(null, "https://x/a.opus"));
+        assertEquals("game", NotificationContent.mediaKind(null, "https://x/chess.xdc"));
     }
 
     @Test
     public void noLabelWithoutRecognizableMedia() {
-        assertNull(NotificationContent.mediaLabel(null, "just text https://reddit.com"));
-        assertNull(NotificationContent.mediaLabel(null, ""));
-        assertNull(NotificationContent.mediaLabel(null, null));
-        assertNull(NotificationContent.mediaLabel("application/pdf", "no urls here"));
+        assertNull(NotificationContent.mediaKind(null, "just text https://reddit.com"));
+        assertNull(NotificationContent.mediaKind(null, ""));
+        assertNull(NotificationContent.mediaKind(null, null));
+        assertNull(NotificationContent.mediaKind("application/pdf", "no urls here"));
+    }
+
+    // ── localized lines ──────────────────────────────────────────────────────
+
+    private static final NotificationContent.Labels GERMAN = new NotificationContent.Labels(
+            "Hat ein GIF gesendet", "Hat ein Bild gesendet", "Hat ein Video gesendet",
+            "Hat eine Sprachnachricht gesendet", "Hat ein Spiel gesendet",
+            "Hat eine Nachricht gesendet", "Im Thread geantwortet",
+            "Im Thread geantwortet: %1$s");
+
+    @Test
+    public void wordsLinesFromTheGivenStrings() {
+        assertEquals("Hat ein Bild gesendet", GERMAN.sentMedia(
+                NotificationContent.mediaKind("image/png", "")));
+        assertEquals("Hat eine Sprachnachricht gesendet", GERMAN.sentMedia(
+                NotificationContent.mediaKind(null, "https://x/a.opus")));
+        assertNull(GERMAN.sentMedia(NotificationContent.mediaKind(null, "text")));
+        assertEquals("Hat eine Nachricht gesendet",
+                NotificationContent.messageText(GERMAN, "", false));
+        assertEquals("Im Thread geantwortet",
+                NotificationContent.messageText(GERMAN, "", true));
+        assertEquals("Im Thread geantwortet: hallo",
+                NotificationContent.messageText(GERMAN, "hallo", true));
+        assertEquals("hallo", NotificationContent.messageText(GERMAN, "hallo", false));
+    }
+
+    @Test
+    public void previewIsAnArgumentNotAFormat() {
+        // A '%' in user text must not be read as a format specifier.
+        assertEquals("Im Thread geantwortet: 100% %s",
+                NotificationContent.messageText(GERMAN, "100% %s", true));
     }
 
     // ── combined + edge cases ────────────────────────────────────────────────

@@ -5,6 +5,7 @@ import { ArmadaCrestKeyframes } from "@/components/brand/ArmadaCrest";
 import { AsciiSea } from "@/components/landing/AsciiSea";
 import { Button } from "@/components/ui/button";
 import { useAndroidBack } from "@/hooks/useAndroidBack";
+import { common, useIntl } from "@/i18n";
 import { cn } from "@/lib/utils";
 
 /**
@@ -32,6 +33,7 @@ export function WizardShell({
   onClose?: () => void;
   children: ReactNode;
 }) {
+  const intl = useIntl();
   // Only bound when there's a close, so unabandonable flows stay put.
   useEffect(() => {
     if (!onClose) return;
@@ -72,7 +74,7 @@ export function WizardShell({
             size="icon"
             className="size-9 touch:size-11 text-muted-foreground hover:text-foreground"
             onClick={onBack}
-            aria-label="Back"
+            aria-label={intl.formatMessage(common.back)}
           >
             <ArrowLeft className="size-5" />
           </Button>
@@ -86,7 +88,7 @@ export function WizardShell({
             size="icon"
             className="size-9 touch:size-11 text-muted-foreground hover:text-foreground"
             onClick={onClose}
-            aria-label="Close"
+            aria-label={intl.formatMessage(common.close)}
           >
             <X className="size-5" />
           </Button>

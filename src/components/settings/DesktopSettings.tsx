@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 
 import { SettingsRow } from "@/components/settings/SettingsSection";
 import { Switch } from "@/components/ui/switch";
+import { useIntl } from "@/i18n";
 import {
   getDesktopLaunchSettings,
   setDesktopLaunchSettings,
@@ -10,6 +11,7 @@ import {
 
 /** Launch-at-login and start-minimized, via the Electron main process. Hides on shells without the bridge. */
 export function DesktopSettings() {
+  const intl = useIntl();
   const [settings, setSettings] = useState<DesktopLaunchSettings | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -42,8 +44,8 @@ export function DesktopSettings() {
   return (
     <>
       <SettingsRow
-        label="Launch on startup"
-        description="Start Armada automatically when you log in to this computer."
+        label={intl.formatMessage({ id: "desktopSettings.launchOnStartup", defaultMessage: "Launch on startup" })}
+        description={intl.formatMessage({ id: "desktopSettings.launchOnStartupDescription", defaultMessage: "Start Armada automatically when you log in to this computer." })}
       >
         <Switch
           checked={settings.openAtLogin}
@@ -55,8 +57,8 @@ export function DesktopSettings() {
       </SettingsRow>
       {settings.openAtLogin && (
         <SettingsRow
-          label="Start minimized"
-          description="When launched at login, start hidden in the tray instead of opening the window."
+          label={intl.formatMessage({ id: "desktopSettings.startMinimized", defaultMessage: "Start minimized" })}
+          description={intl.formatMessage({ id: "desktopSettings.startMinimizedDescription", defaultMessage: "When launched at login, start hidden in the tray instead of opening the window." })}
           className="pl-8 motion-safe:animate-in motion-safe:fade-in-0 motion-safe:slide-in-from-top-2 motion-safe:duration-200"
         >
           <Switch

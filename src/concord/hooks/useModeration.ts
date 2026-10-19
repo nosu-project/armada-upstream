@@ -17,6 +17,7 @@ import {
 import { canActOnMember, isAuthorized, Permissions } from "@/concord/lib/roles";
 import type { Community } from "@/concord/lib/types";
 import { toast } from "@/hooks/useToast";
+import { t } from "@/i18n";
 
 /**
  * The Three Removals, ordered by when their guarantees arrive (CORD-04 §6):
@@ -56,7 +57,7 @@ export function useModeration(community: Community | undefined, recipients: stri
 
   /** Publish the whole banlist, replaced entire, chained off the held head. */
   const publishBanlist = async (banned: string[]) => {
-    if (!user || !community) throw new Error("Not ready.");
+    if (!user || !community) throw new Error(t({ id: "useModeration.notReady", defaultMessage: "Not ready." }));
     const head = folded?.heads.get(bytesToHex(banlistLocator(community.id)));
     await publishEdition(
       nostr,
@@ -109,15 +110,15 @@ export function useModeration(community: Community | undefined, recipients: stri
     }
   >({
     mutationFn: async ({ targets, onPhase, onStripProgress, forceRotate }) => {
-      if (!user || !community) throw new Error("Not ready.");
+      if (!user || !community) throw new Error(t({ id: "useModeration.notReady", defaultMessage: "Not ready." }));
       const unique = [...new Set(targets)];
       const eligible = unique.filter((t) => canActOn(t, Permissions.BAN));
       const skipped = unique.filter((t) => !canActOn(t, Permissions.BAN));
       if (eligible.length === 0) {
         throw new Error(
           unique.length === 1
-            ? "You don't have permission to ban this member."
-            : "You don't have permission to ban any of these members.",
+            ? t({ id: "useModeration.banNoPermissionOne", defaultMessage: "You don't have permission to ban this member." })
+            : t({ id: "useModeration.banNoPermissionMany", defaultMessage: "You don't have permission to ban any of these members." }),
         );
       }
 
@@ -127,7 +128,7 @@ export function useModeration(community: Community | undefined, recipients: stri
       const willRotate = banShouldRotateMany(folded, user.pubkey, eligible, forceRotate);
       if (willRotate && !canRefound) {
         throw new Error(
-          "Banning from a private community rotates the community keys, which your signer can't do. Ask an admin whose signer supports encryption to carry out the ban.",
+          t({ id: "useModeration.banNeedsEncryption", defaultMessage: "Banning from a private community rotates the community keys, which your signer can't do. Ask an admin whose signer supports encryption to carry out the ban." }),
         );
       }
 
@@ -181,17 +182,17 @@ export function useModeration(community: Community | undefined, recipients: stri
    */
   const rotateKeys = useMutation<void, Error, void>({
     mutationFn: async () => {
-      if (!user || !community) throw new Error("Not ready.");
+      if (!user || !community) throw new Error(t({ id: "useModeration.notReady", defaultMessage: "Not ready." }));
       // An unsettled fold would rotate to a THIN recipient set and cut live members.
-      if (!folded) throw new Error("Still syncing this community; try again shortly.");
+      if (!folded) throw new Error(t({ id: "useModeration.stillSyncing", defaultMessage: "Still syncing this community; try again shortly." }));
       // CORD-06 Refounder authority, checked before the sweep; rank is vacuous with
       // nothing excluded.
       if (!isAuthorized(folded.roster, user.pubkey, folded.ownerHex, Permissions.BAN)) {
-        throw new Error("You don't have permission to rotate this community's keys.");
+        throw new Error(t({ id: "useModeration.rotateNoPermission", defaultMessage: "You don't have permission to rotate this community's keys." }));
       }
       if (!canRefound) {
         throw new Error(
-          "Rotating the community keys needs a signer that supports encryption, which yours doesn't. Ask an admin whose signer does.",
+          t({ id: "useModeration.rotateNeedsEncryption", defaultMessage: "Rotating the community keys needs a signer that supports encryption, which yours doesn't. Ask an admin whose signer does." }),
         );
       }
       await refound({ keep: recipients, exclude: [] });
@@ -201,7 +202,7 @@ export function useModeration(community: Community | undefined, recipients: stri
 
   const unban = useMutation<void, Error, { target: string }>({
     mutationFn: async ({ target }) => {
-      if (!canActOn(target, Permissions.BAN)) throw new Error("You don't have permission.");
+      if (!canActOn(target, Permissions.BAN)) throw new Error(t({ id: "useModeration.noPermission", defaultMessage: "You don't have permission." }));
       const next = new Set(folded?.banned ?? []);
       next.delete(target);
       await publishBanlist([...next]);
@@ -215,15 +216,15 @@ export function useModeration(community: Community | undefined, recipients: stri
     { targets: string[]; onProgress?: (done: number, total: number) => void }
   >({
     mutationFn: async ({ targets, onProgress }) => {
-      if (!community || !user) throw new Error("Not ready.");
+      if (!community || !user) throw new Error(t({ id: "useModeration.notReady", defaultMessage: "Not ready." }));
       const unique = [...new Set(targets)];
       const eligible = unique.filter((t) => canActOn(t, Permissions.KICK));
       const skipped = unique.filter((t) => !canActOn(t, Permissions.KICK));
       if (eligible.length === 0) {
         throw new Error(
           unique.length === 1
-            ? "You don't have permission to kick this member."
-            : "You don't have permission to kick any of these members.",
+            ? t({ id: "useModeration.kickNoPermissionOne", defaultMessage: "You don't have permission to kick this member." })
+            : t({ id: "useModeration.kickNoPermissionMany", defaultMessage: "You don't have permission to kick any of these members." }),
         );
       }
       const citation = citationFor(community, folded, user.pubkey);
@@ -241,12 +242,12 @@ export function useModeration(community: Community | undefined, recipients: stri
           kicked.push(target);
         } catch (e) {
           // Keep going: landing 9 of 10 beats aborting at #2.
-          failed.push({ target, message: e instanceof Error ? e.message : "Kick failed." });
+          failed.push({ target, message: e instanceof Error ? e.message : t({ id: "useModeration.kickFailed", defaultMessage: "Kick failed." }) });
         }
         done += 1;
         onProgress?.(done, eligible.length);
       }
-      if (kicked.length === 0) throw new Error(failed[0]?.message ?? "Kick failed.");
+      if (kicked.length === 0) throw new Error(failed[0]?.message ?? t({ id: "useModeration.kickFailed", defaultMessage: "Kick failed." }));
       return { kicked, failed, skipped };
     },
     // Settled, not success: a partial batch still moved the guestbook.
@@ -315,7 +316,7 @@ export function useReadCutRetry(community: Community | undefined): void {
         .then(() => {
           clearReadCutPending(user.pubkey, community.idHex);
           if (community) invalidateControl(queryClient, community.idHex);
-          toast({ title: "Key rotation completed", description: "An earlier ban's key rotation has now finished." });
+          toast({ title: t({ id: "useModeration.rotationCompleted.title", defaultMessage: "Key rotation completed" }), description: t({ id: "useModeration.rotationCompleted.description", defaultMessage: "An earlier ban's key rotation has now finished." }) });
         })
         .catch(() => {
           // Still failing — retry again next visit.

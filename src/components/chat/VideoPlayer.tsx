@@ -19,6 +19,7 @@ import { formatTime } from "@/lib/formatTime";
 import { companionEncryption } from "@/lib/imeta";
 import { canShareFiles, shareFile } from "@/lib/share";
 import { cn } from "@/lib/utils";
+import { t, useIntl } from "@/i18n";
 
 import type { MessageActionItem } from "@/components/chat/messageActions";
 import type { ImetaEncryption } from "@/lib/imeta";
@@ -100,6 +101,7 @@ export function VideoPlayer({
   alt,
   className,
 }: VideoPlayerProps) {
+  const intl = useIntl();
   const [revealed, setRevealed] = useState(false);
   const spoilerCover = spoiler && !revealed ? <MediaSpoilerCover onReveal={() => setRevealed(true)} /> : null;
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -183,18 +185,18 @@ export function VideoPlayer({
   const mediaActions = useMemo<MessageActionItem[]>(() => {
     if (gif || !mediaSrc) return [];
     const list: MessageActionItem[] = [
-      { id: "vid-save", label: "Save video", icon: Download, onSelect: () => void saveVideo(mediaSrc, { url: src, mime }) },
+      { id: "vid-save", label: intl.formatMessage({ id: "videoPlayer.saveVideo", defaultMessage: "Save video" }), icon: Download, onSelect: () => void saveVideo(mediaSrc, { url: src, mime }) },
     ];
     if (canShareFiles()) {
       list.push({
         id: "vid-share",
-        label: "Share video",
+        label: intl.formatMessage({ id: "videoPlayer.shareVideo", defaultMessage: "Share video" }),
         icon: Share2,
         onSelect: () => void shareVideo(mediaSrc, { url: src, mime }),
       });
     }
     return list;
-  }, [gif, mediaSrc, src, mime]);
+  }, [gif, mediaSrc, src, mime, intl]);
   const longPress = useLongPress(
     chatMenu?.isTouch && mediaActions.length > 0 && !isFullscreen
       ? () => {
@@ -249,7 +251,7 @@ export function VideoPlayer({
     const art = generatedPoster || posterSrc;
     const artwork: MediaImage[] = art ? [{ src: art, sizes: "512x512", type: "image/jpeg" }] : [];
     navigator.mediaSession.metadata = new MediaMetadata({
-      title: title || "Video",
+      title: title || t({ id: "videoPlayer.video", defaultMessage: "Video" }),
       artist: artist || "",
       artwork,
     });
@@ -374,7 +376,7 @@ export function VideoPlayer({
             onError={onError}
           />
         ) : failed ? (
-          <MediaFallback {...fallbackProps} label="GIF" />
+          <MediaFallback {...fallbackProps} kind="gif" />
         ) : (
           <div className="relative w-full h-full flex items-center justify-center">
             {isValidBlurhash(blurhash) && (
@@ -388,7 +390,7 @@ export function VideoPlayer({
   }
 
   if (failed) {
-    return <MediaFallback {...fallbackProps} label="Video" />;
+    return <MediaFallback {...fallbackProps} kind="video" />;
   }
 
   return (
@@ -534,7 +536,7 @@ export function VideoPlayer({
               type="button"
               onClick={togglePlay}
               className="text-white hover:text-white/80 transition-colors"
-              aria-label={isPlaying ? "Pause" : "Play"}
+              aria-label={isPlaying ? intl.formatMessage({ id: "videoPlayer.pause", defaultMessage: "Pause" }) : intl.formatMessage({ id: "videoPlayer.play", defaultMessage: "Play" })}
             >
               {isPlaying ? (
                 <Pause className="size-5" fill="white" />
@@ -548,7 +550,7 @@ export function VideoPlayer({
                 type="button"
                 onClick={toggleMute}
                 className="text-white hover:text-white/80 transition-colors shrink-0"
-                aria-label={isMuted ? "Unmute" : "Mute"}
+                aria-label={isMuted ? intl.formatMessage({ id: "videoPlayer.unmute", defaultMessage: "Unmute" }) : intl.formatMessage({ id: "videoPlayer.mute", defaultMessage: "Mute" })}
               >
                 {isMuted || volume === 0 ? (
                   <VolumeX className="size-5" />
@@ -566,7 +568,7 @@ export function VideoPlayer({
                 value={isMuted ? 0 : volume}
                 onChange={handleVolumeChange}
                 onClick={(e) => e.stopPropagation()}
-                aria-label="Volume"
+                aria-label={intl.formatMessage({ id: "videoPlayer.volume", defaultMessage: "Volume" })}
                 className={cn(
                   "w-0 opacity-0 group-hover/vol:w-16 group-hover/vol:opacity-100 group-focus-within/vol:w-16 group-focus-within/vol:opacity-100",
                   "transition-all duration-200 cursor-pointer accent-white h-1",
@@ -584,7 +586,7 @@ export function VideoPlayer({
               type="button"
               onClick={handleFullscreen}
               className="text-white hover:text-white/80 transition-colors"
-              aria-label={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
+              aria-label={isFullscreen ? intl.formatMessage({ id: "videoPlayer.exitFullscreen", defaultMessage: "Exit fullscreen" }) : intl.formatMessage({ id: "videoPlayer.fullscreen", defaultMessage: "Fullscreen" })}
             >
               {isFullscreen ? <Shrink className="size-[18px]" /> : <Expand className="size-[18px]" />}
             </button>
@@ -604,16 +606,16 @@ async function saveVideo(src: string, ref: { url: string; mime?: string }): Prom
     const result = await downloadUrl(src, { nameHint: ref.url, mime: ref.mime });
     toast(
       result.status === "downloaded"
-        ? { title: "Saved", description: savedDescription(result.location) }
+        ? { title: t({ id: "videoPlayer.saved", defaultMessage: "Saved" }), description: savedDescription(result.location) }
         : {
-            title: "Opened in a new tab",
-            description: "This video couldn't be saved directly, so it opened instead.",
+            title: t({ id: "videoPlayer.openedInTab", defaultMessage: "Opened in a new tab" }),
+            description: t({ id: "videoPlayer.openedInTabDescription", defaultMessage: "This video couldn't be saved directly, so it opened instead." }),
           },
     );
   } catch {
     toast({
-      title: "Download failed",
-      description: "Could not save this video. Please try again.",
+      title: t({ id: "videoPlayer.downloadFailed", defaultMessage: "Download failed" }),
+      description: t({ id: "videoPlayer.downloadFailedDescription", defaultMessage: "Could not save this video. Please try again." }),
       variant: "destructive",
     });
   }
@@ -621,17 +623,18 @@ async function saveVideo(src: string, ref: { url: string; mime?: string }): Prom
 
 /** Share the file, never the URL. */
 async function shareVideo(src: string, ref: { url: string; mime?: string }): Promise<void> {
-  const shared = await shareFile(src, { nameHint: ref.url, mime: ref.mime, dialogTitle: "Share video" });
+  const shared = await shareFile(src, { nameHint: ref.url, mime: ref.mime, dialogTitle: t({ id: "videoPlayer.shareVideo", defaultMessage: "Share video" }) });
   if (!shared) {
     toast({
-      title: "Couldn't share this video",
-      description: "Try downloading it instead.",
+      title: t({ id: "videoPlayer.shareFailed", defaultMessage: "Couldn't share this video" }),
+      description: t({ id: "videoPlayer.shareFailedDescription", defaultMessage: "Try downloading it instead." }),
       variant: "destructive",
     });
   }
 }
 
 function VideoDownloadButton({ src, nameHint, mime }: { src: string; nameHint: string; mime?: string }) {
+  const intl = useIntl();
   const [busy, setBusy] = useState(false);
 
   const handleDownload = useCallback(
@@ -651,8 +654,8 @@ function VideoDownloadButton({ src, nameHint, mime }: { src: string; nameHint: s
   return (
     <button
       type="button"
-      aria-label="Download video"
-      title="Download"
+      aria-label={intl.formatMessage({ id: "videoPlayer.downloadVideo", defaultMessage: "Download video" })}
+      title={intl.formatMessage({ id: "videoPlayer.download", defaultMessage: "Download" })}
       disabled={busy}
       onClick={handleDownload}
       className="size-9 touch:size-11 clip-corner-lg bg-black/60 text-white flex items-center justify-center backdrop-blur-sm hover:bg-black/80 transition-colors disabled:opacity-60 disabled:cursor-wait"

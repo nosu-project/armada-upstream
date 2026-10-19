@@ -5,6 +5,7 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { writeClipboardText } from "@/lib/clipboard";
+import { FormattedMessage, useIntl } from "@/i18n";
 
 import type { MessageIdentity } from "@/components/chat/MessageRow";
 
@@ -28,6 +29,7 @@ function MeshProfilePreviewBody({
   onMention,
   onAction,
 }: Omit<MeshProfilePreviewCardProps, "children"> & { onAction: () => void }) {
+  const intl = useIntl();
   const [copied, setCopied] = useState(false);
   const name = identity.name;
   const color = identity.color;
@@ -84,14 +86,14 @@ function MeshProfilePreviewBody({
           type="button"
           onClick={copyPeerID}
           className="mt-0.5 flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
-          title="Copy peer id"
+          title={intl.formatMessage({ id: "meshProfilePreviewCard.copyPeerId", defaultMessage: "Copy peer id" })}
         >
           <span className="font-mono">{peerID}</span>
           {copied ? <Check className="size-3 text-primary" /> : <Copy className="size-3" />}
         </button>
 
         <p className="text-xs text-muted-foreground/70 mt-2">
-          Nearby mesh peer
+          <FormattedMessage id="meshProfilePreviewCard.nearbyPeer" defaultMessage="Nearby mesh peer" />
         </p>
 
         {!isSelf && (
@@ -99,7 +101,7 @@ function MeshProfilePreviewBody({
             {onMessage && (
               <Button size="sm" className="flex-1 clip-corner-lg h-8" onClick={message}>
                 <MessageSquare className="size-3.5 mr-1.5" />
-                Message
+                <FormattedMessage id="meshProfilePreviewCard.message" defaultMessage="Message" />
               </Button>
             )}
             {onMention && (
@@ -110,7 +112,7 @@ function MeshProfilePreviewBody({
                 onClick={mention}
               >
                 <AtSign className="size-3.5 mr-1.5" />
-                Mention
+                <FormattedMessage id="meshProfilePreviewCard.mention" defaultMessage="Mention" />
               </Button>
             )}
           </div>

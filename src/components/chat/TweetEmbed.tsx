@@ -5,6 +5,7 @@ import { useEmbedLiveness } from "@/hooks/useEmbedLiveness";
 
 import { getBackgroundThemeMode } from "@/lib/colorUtils";
 import { cn } from "@/lib/utils";
+import { useIntl } from "@/i18n";
 
 interface TweetEmbedProps {
   tweetId: string;
@@ -20,6 +21,7 @@ interface TweetEmbedProps {
  * this mountable without an AppProvider.
  */
 export function TweetEmbed({ tweetId, className, fallback }: TweetEmbedProps) {
+  const intl = useIntl();
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const { failed, markAlive, onLoad } = useEmbedLiveness(iframeRef);
 
@@ -65,7 +67,7 @@ export function TweetEmbed({ tweetId, className, fallback }: TweetEmbedProps) {
       <iframe
         ref={iframeRef}
         src={`https://platform.twitter.com/embed/Tweet.html?${params}`}
-        title="Tweet"
+        title={intl.formatMessage({ id: "tweetEmbed.title", defaultMessage: "Tweet" })}
         className="w-full border-0"
         // A height seen earlier this session is reserved, so a remount doesn't grow into it.
         style={{ minHeight: 250, height: seenEmbedHeight(`tweet:${tweetId}`) }}

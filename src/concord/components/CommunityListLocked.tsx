@@ -4,12 +4,14 @@ import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useCommunityList } from "@/concord/hooks/useCommunityList";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { common, FormattedMessage, useIntl } from "@/i18n";
 
 /**
  * Why the rail is empty when the NIP-44 membership list can't be decrypted by
  * the signer: otherwise it reads as an account that never joined anything.
  */
 export function CommunityListLocked() {
+  const intl = useIntl();
   const { user } = useCurrentUser();
   const list = useCommunityList();
   const canDecrypt = Boolean(user?.signer?.nip44);
@@ -25,18 +27,26 @@ export function CommunityListLocked() {
         <Button
           variant="secondary"
           size="icon"
-          aria-label="Your communities couldn't be decrypted"
+          aria-label={intl.formatMessage({ id: "communityListLocked.title", defaultMessage: "Your communities couldn't be decrypted" })}
           className="size-12 shrink-0 clip-corner-lg text-destructive"
         >
           <KeyRound className="size-5" />
         </Button>
       </PopoverTrigger>
       <PopoverContent side="right" align="start" className="space-y-3 text-sm">
-        <p className="font-medium">Your communities couldn't be decrypted</p>
+        <p className="font-medium">
+          <FormattedMessage id="communityListLocked.title" defaultMessage="Your communities couldn't be decrypted" />
+        </p>
         <p className="text-muted-foreground">
           {canDecrypt
-            ? "Your list of encrypted communities was found, but your signer didn't decrypt it. Check that it's connected and allows decryption, then try again."
-            : "Your signer can't decrypt (NIP-44), so encrypted communities can't be shown or joined. Sign in with a signer that supports it to use them."}
+            ? <FormattedMessage
+              id="communityListLocked.decryptFailed"
+              defaultMessage="Your list of encrypted communities was found, but your signer didn't decrypt it. Check that it's connected and allows decryption, then try again."
+            />
+            : <FormattedMessage
+              id="communityListLocked.noNip44"
+              defaultMessage="Your signer can't decrypt (NIP-44), so encrypted communities can't be shown or joined. Sign in with a signer that supports it to use them."
+            />}
         </p>
         {canDecrypt && (
           <Button
@@ -45,7 +55,9 @@ export function CommunityListLocked() {
             disabled={list.isFetching}
             onClick={() => void list.refetch()}
           >
-            {list.isFetching ? "Trying…" : "Try again"}
+            {list.isFetching
+              ? <FormattedMessage id="communityListLocked.trying" defaultMessage="Trying…" />
+              : <FormattedMessage {...common.tryAgain} />}
           </Button>
         )}
       </PopoverContent>

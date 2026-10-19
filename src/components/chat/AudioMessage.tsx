@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { MediaFallback } from "@/components/chat/MediaFallback";
 import { hasAudioMetadata, useAudioMetadata, useAudioWaveform } from "@/hooks/useAudioMetadata";
 import { useMediaWithFallback } from "@/hooks/useMediaWithFallback";
+import { useIntl } from "@/i18n";
 import {
   pauseOthers,
   playNextAfter,
@@ -72,6 +73,7 @@ export function AudioMessage({
   duration,
   className,
 }: AudioMessageProps) {
+  const intl = useIntl();
   const audioRef = useRef<HTMLAudioElement>(null);
   // A play request that arrived before the <audio> mounted (encrypted blobs mount
   // after decrypt).
@@ -198,7 +200,7 @@ export function AudioMessage({
   };
 
   if (failed) {
-    return <MediaFallback {...fallbackProps} label="Audio" />;
+    return <MediaFallback {...fallbackProps} kind="audio" />;
   }
 
   // Keyed by source: changing a mounted <source>'s src does nothing without load().
@@ -212,7 +214,11 @@ export function AudioMessage({
     <button
       type="button"
       onClick={togglePlay}
-      aria-label={isPlaying ? "Pause" : "Play"}
+      aria-label={
+        isPlaying
+          ? intl.formatMessage({ id: "audioMessage.pause", defaultMessage: "Pause" })
+          : intl.formatMessage({ id: "audioMessage.play", defaultMessage: "Play" })
+      }
       className="size-9 touch:size-11 shrink-0 rounded-full bg-primary text-primary-foreground flex items-center justify-center hover:opacity-90 transition-opacity"
     >
       {isPlaying ? <Pause className="size-4" fill="currentColor" /> : <Play className="size-4 ml-0.5" fill="currentColor" />}
@@ -225,7 +231,7 @@ export function AudioMessage({
         className="flex-1 min-w-0 overflow-hidden flex items-center gap-[2px] h-8 cursor-pointer"
         onClick={handleSeek}
         role="slider"
-        aria-label="Seek"
+        aria-label={intl.formatMessage({ id: "audioMessage.seek", defaultMessage: "Seek" })}
         aria-valuemin={0}
         aria-valuemax={Math.round(mediaDuration)}
         aria-valuenow={Math.round(currentTime)}

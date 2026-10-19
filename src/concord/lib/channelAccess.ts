@@ -7,6 +7,7 @@
 
 import { bytesToHex } from "@/concord/lib/derive";
 import { byDisplayOrder, rolesOf, type CommunityRoles, type Role } from "@/concord/lib/roles";
+import { t } from "@/i18n/intl";
 
 /**
  * The Roles conferring read access to `channelIdHex`, in display order. A Private
@@ -74,7 +75,9 @@ export function vendableChannels<T extends { id: Uint8Array }>(
   if (held.length === 0) return [];
   if (audience.kind === "link") return [];
   if (!audience.roster) {
-    throw new Error("Still loading this community's roles; try again in a moment.");
+    throw new Error(
+      t({ id: "concordChannelAccess.rolesLoading", defaultMessage: "Still loading this community's roles; try again in a moment." }),
+    );
   }
   const { roster, ownerHex, memberHex, overlay } = audience;
   return held.filter((ch) => {

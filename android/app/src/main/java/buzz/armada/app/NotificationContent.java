@@ -77,10 +77,58 @@ final class NotificationContent {
     }
 
     /**
-     * Human label for the media a message carries — {@code "an image"},
-     * {@code "a GIF"}, {@code "a video"}, {@code "a voice message"} or
-     * {@code "a game"} — so a media-only body (empty once {@link #clean}
-     * strips the URLs) can read "Sent an image" instead of "Sent a message".
+     * The words a notification line is built from, resolved by the caller in the
+     * app's language; this class stays free of Android types. The {@code %1$s}
+     * ones are format strings.
+     */
+    static final class Labels {
+        final String sentGif, sentImage, sentVideo, sentVoice, sentGame;
+        final String sentMessage, repliedInThread, repliedInThreadWith;
+
+        Labels(String sentGif, String sentImage, String sentVideo, String sentVoice,
+               String sentGame, String sentMessage, String repliedInThread,
+               String repliedInThreadWith) {
+            this.sentGif = sentGif;
+            this.sentImage = sentImage;
+            this.sentVideo = sentVideo;
+            this.sentVoice = sentVoice;
+            this.sentGame = sentGame;
+            this.sentMessage = sentMessage;
+            this.repliedInThread = repliedInThread;
+            this.repliedInThreadWith = repliedInThreadWith;
+        }
+
+        /** The whole "Sent …" sentence for a {@link #mediaKind}, or null. */
+        String sentMedia(String kind) {
+            if (kind == null) return null;
+            switch (kind) {
+                case "gif": return sentGif;
+                case "image": return sentImage;
+                case "video": return sentVideo;
+                case "voice": return sentVoice;
+                case "game": return sentGame;
+                default: return null;
+            }
+        }
+    }
+
+    /**
+     * A group/channel line: the preview, a thread reply's "Replied in thread: …",
+     * or the bare verb when there is no preview. Mirrors {@code messageLine} in
+     * {@code src/lib/notificationPreview.ts}.
+     */
+    static String messageText(Labels labels, String preview, boolean threadReply) {
+        if (preview == null || preview.isEmpty()) {
+            return threadReply ? labels.repliedInThread : labels.sentMessage;
+        }
+        return threadReply ? String.format(Locale.ROOT, labels.repliedInThreadWith, preview) : preview;
+    }
+
+    /**
+     * The media a message carries — {@code "gif"}, {@code "image"},
+     * {@code "video"}, {@code "voice"} or {@code "game"}, the {@code MediaKind}
+     * of {@code notificationPreview.ts} — so a media-only body (empty once
+     * {@link #clean} strips the URLs) can read "Sent an image".
      *
      * The imeta {@code m} MIME wins over the URL extension when given: an
      * encrypted (Concord/DM) attachment's blob URL carries no media extension
@@ -89,32 +137,32 @@ final class NotificationContent {
      * MIME. Null when neither the MIME nor any URL in the content names a
      * media kind.
      */
-    static String mediaLabel(String imetaMime, String content) {
-        String byMime = labelForMime(imetaMime);
+    static String mediaKind(String imetaMime, String content) {
+        String byMime = kindForMime(imetaMime);
         if (byMime != null) return byMime;
         if (content == null || content.isEmpty()) return null;
         Matcher m = MEDIA_URL.matcher(content);
         if (!m.find()) return null;
-        return labelForExt(m.group(1).toLowerCase(Locale.ROOT));
+        return kindForExt(m.group(1).toLowerCase(Locale.ROOT));
     }
 
-    private static String labelForMime(String mime) {
+    private static String kindForMime(String mime) {
         if (mime == null) return null;
         mime = mime.toLowerCase(Locale.ROOT);
-        if (mime.equals("image/gif")) return "a GIF";
-        if (mime.startsWith("image/")) return "an image";
-        if (mime.startsWith("video/")) return "a video";
-        if (mime.startsWith("audio/")) return "a voice message";
-        if (mime.equals("application/x-webxdc")) return "a game";
+        if (mime.equals("image/gif")) return "gif";
+        if (mime.startsWith("image/")) return "image";
+        if (mime.startsWith("video/")) return "video";
+        if (mime.startsWith("audio/")) return "voice";
+        if (mime.equals("application/x-webxdc")) return "game";
         return null;
     }
 
-    private static String labelForExt(String ext) {
-        if (ext.equals("gif")) return "a GIF";
-        if (extIn(IMAGE_EXTS, ext)) return "an image";
-        if (extIn(VIDEO_EXTS, ext)) return "a video";
-        if (extIn(AUDIO_EXTS, ext)) return "a voice message";
-        if (ext.equals("xdc")) return "a game";
+    private static String kindForExt(String ext) {
+        if (ext.equals("gif")) return "gif";
+        if (extIn(IMAGE_EXTS, ext)) return "image";
+        if (extIn(VIDEO_EXTS, ext)) return "video";
+        if (extIn(AUDIO_EXTS, ext)) return "voice";
+        if (ext.equals("xdc")) return "game";
         return null;
     }
 

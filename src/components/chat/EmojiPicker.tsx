@@ -9,6 +9,7 @@ import { useStableNavigate } from "@/hooks/useStableNavigate";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { recordReaction } from "@/hooks/useFrequentReactions";
 import { syncEmojiMartCategories } from "@/lib/emojiMartCategories";
+import { FormattedMessage, useIntl } from "@/i18n";
 
 import type { CustomEmoji } from "@/hooks/useCustomEmojis";
 
@@ -67,6 +68,7 @@ const EMOJI_CELL = 40;
 const EMOJI_TILE = 34;
 
 export function EmojiPicker({ onSelect, customEmojis, onBrowsePacks, packsLinkInHost, recordUsage = true }: EmojiPickerProps) {
+  const intl = useIntl();
   const isMobile = useIsMobile();
   const { user } = useCurrentUser();
   const containerRef = useRef<HTMLDivElement>(null);
@@ -96,6 +98,7 @@ export function EmojiPicker({ onSelect, customEmojis, onBrowsePacks, packsLinkIn
   // emojis go in a generic "Custom" group.
   const customCategories = useMemo(() => {
     if (!customEmojis || customEmojis.length === 0) return undefined;
+    const customLabel = intl.formatMessage({ id: "emojiPicker.custom", defaultMessage: "Custom" });
 
     const groups = new Map<string, { id: string; name: string; emojis: EmojiMartCustomEmoji[] }>();
     for (const e of customEmojis) {
@@ -107,7 +110,7 @@ export function EmojiPicker({ onSelect, customEmojis, onBrowsePacks, packsLinkIn
           (group = {
             // Used for DOM ids, so keep a safe charset.
             id: key ? `custom-${key.replace(/[^a-zA-Z0-9]+/g, "-")}` : "custom-nostr",
-            name: (key && e.packName) || "Custom",
+            name: (key && e.packName) || customLabel,
             emojis: [],
           }),
         );
@@ -123,7 +126,7 @@ export function EmojiPicker({ onSelect, customEmojis, onBrowsePacks, packsLinkIn
     // No per-category `icon`: each would get its own nav button and overflow the
     // single-row nav. Without one, packs share the first's nav entry.
     return [...groups.values()];
-  }, [customEmojis]);
+  }, [customEmojis, intl]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -255,7 +258,11 @@ function BrowsePacksFooter({ hasCustom, onBrowse }: { hasCustom: boolean; onBrow
   return (
     <div className="flex shrink-0 items-center gap-2 border-t border-foreground/10 px-3 py-1.5">
       <div className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
-        {hasCustom ? "Find more emoji packs" : "Add custom emoji packs"}
+        {hasCustom ? (
+          <FormattedMessage id="emojiPicker.findMorePacks" defaultMessage="Find more emoji packs" />
+        ) : (
+          <FormattedMessage id="emojiPicker.addCustomPacks" defaultMessage="Add custom emoji packs" />
+        )}
       </div>
       <Button
         size="sm"
@@ -267,7 +274,7 @@ function BrowsePacksFooter({ hasCustom, onBrowse }: { hasCustom: boolean; onBrow
         }}
       >
         <Compass className="size-3" />
-        Browse
+        <FormattedMessage id="emojiPicker.browse" defaultMessage="Browse" />
       </Button>
     </div>
   );

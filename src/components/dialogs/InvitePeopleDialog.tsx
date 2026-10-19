@@ -14,6 +14,7 @@ import { useGroupModeration } from "@/hooks/useGroupModeration";
 import { useRelayClaim } from "@/hooks/useRelayMembership";
 import { useRelayInfo } from "@/hooks/useRelayInfo";
 import { toast } from "@/hooks/useToast";
+import { common, FormattedMessage, t, useIntl } from "@/i18n";
 import { writeClipboardText } from "@/lib/clipboard";
 import { buildGroupNaddr, type Nip29Group } from "@/lib/nip29";
 import { relayToHttpUrl, relayToRouteParam } from "@/lib/platform";
@@ -39,6 +40,7 @@ function buildInviteUrl(relayUrl: string, groupId: string, code: string): string
 
 /** Opening the dialog mints an invite code (kind 9009) and builds a shareable link. */
 export function InvitePeopleDialog({ relayUrl, group, open, onOpenChange }: InvitePeopleDialogProps) {
+  const intl = useIntl();
   const { user } = useCurrentUser();
   const { createInvite } = useGroupModeration(relayUrl, group.id);
   const { mutateAsync: fetchRelayClaim } = useRelayClaim();
@@ -110,7 +112,7 @@ export function InvitePeopleDialog({ relayUrl, group, open, onOpenChange }: Invi
         setCopied(true);
         setTimeout(() => setCopied(false), 1800);
       },
-      () => toast({ title: "Copy failed", variant: "destructive" }),
+      () => toast({ title: t({ id: "invitePeopleDialog.copyFailed", defaultMessage: "Copy failed" }), variant: "destructive" }),
     );
   };
 
@@ -121,15 +123,15 @@ export function InvitePeopleDialog({ relayUrl, group, open, onOpenChange }: Invi
         setNaddrCopied(true);
         setTimeout(() => setNaddrCopied(false), 1800);
       },
-      () => toast({ title: "Copy failed", variant: "destructive" }),
+      () => toast({ title: t({ id: "invitePeopleDialog.copyFailed", defaultMessage: "Copy failed" }), variant: "destructive" }),
     );
   };
 
   const share = () => {
     if (!url) return;
     void nativeShare({
-      title: `Join #${group.name} on Armada`,
-      text: `You're invited to #${group.name}!`,
+      title: t({ id: "invitePeopleDialog.shareTitle", defaultMessage: "Join #{name} on Armada" }, { name: group.name }),
+      text: t({ id: "invitePeopleDialog.shareText", defaultMessage: "You're invited to #{name}!" }, { name: group.name }),
       url,
     });
   };
@@ -138,30 +140,41 @@ export function InvitePeopleDialog({ relayUrl, group, open, onOpenChange }: Invi
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <ChromeDialogContent title={`Invite people to #${group.name}`}>
+      <ChromeDialogContent
+        title={intl.formatMessage(
+          { id: "invitePeopleDialog.title", defaultMessage: "Invite people to #{name}" },
+          { name: group.name },
+        )}
+      >
         <div className="flex flex-col items-center gap-2 text-center">
           <div className="flex size-12 items-center justify-center clip-corner-lg bg-primary/15 text-primary">
             <PartyPopper className="size-6" />
           </div>
           <h2 className="chrome-dialog-title font-mono font-bold lowercase tracking-tight text-foreground">
-            invite people
+            <FormattedMessage id="invitePeopleDialog.heading" defaultMessage="invite people" />
           </h2>
           <p className="text-sm text-muted-foreground">
-            Share this link and anyone who opens it joins <span className="text-foreground">#{group.name}</span> instantly.
+            <FormattedMessage
+              id="invitePeopleDialog.intro"
+              defaultMessage="Share this link and anyone who opens it joins <hl>#{name}</hl> instantly."
+              values={{ name: group.name, hl: (chunks) => <span className="text-foreground">{chunks}</span> }}
+            />
           </p>
         </div>
 
         <div className="mt-6 space-y-4 min-w-0">
           {error ? (
             <div className="text-center space-y-3 py-2">
-              <p className="text-sm text-muted-foreground">Couldn&apos;t create an invite link.</p>
+              <p className="text-sm text-muted-foreground">
+                <FormattedMessage id="invitePeopleDialog.createFailed" defaultMessage="Couldn't create an invite link." />
+              </p>
               <Button variant="outline" onClick={generate}>
-                <RefreshCw className="size-4 mr-2" /> Try again
+                <RefreshCw className="size-4 mr-2" /> <FormattedMessage {...common.tryAgain} />
               </Button>
             </div>
           ) : !url ? (
             <div className="flex items-center justify-center gap-2 py-8 text-sm text-muted-foreground">
-              <Loader2 className="size-4 animate-spin" /> Creating your invite link…
+              <Loader2 className="size-4 animate-spin" /> <FormattedMessage id="invitePeopleDialog.creating" defaultMessage="Creating your invite link…" />
             </div>
           ) : (
             <>
@@ -180,11 +193,11 @@ export function InvitePeopleDialog({ relayUrl, group, open, onOpenChange }: Invi
               <div className="flex gap-2">
                 <Button className="flex-1 clip-corner-lg" onClick={copy}>
                   {copied
-                    ? <><Check className="size-4 mr-2" /> Copied</>
-                    : <><Copy className="size-4 mr-2" /> Copy link</>}
+                    ? <><Check className="size-4 mr-2" /> <FormattedMessage {...common.copied} /></>
+                    : <><Copy className="size-4 mr-2" /> <FormattedMessage {...common.copyLink} /></>}
                 </Button>
                 {showShare && (
-                  <Button variant="outline" className="clip-corner-lg" onClick={share} aria-label="Share">
+                  <Button variant="outline" className="clip-corner-lg" onClick={share} aria-label={intl.formatMessage(common.share)}>
                     <Share2 className="size-4" />
                   </Button>
                 )}
@@ -200,7 +213,9 @@ export function InvitePeopleDialog({ relayUrl, group, open, onOpenChange }: Invi
                   {naddrCopied
                     ? <Check className="size-3.5 text-primary" />
                     : <Copy className="size-3.5" />}
-                  {naddrCopied ? "Copied naddr" : "Copy naddr for other Nostr apps"}
+                  {naddrCopied
+                    ? <FormattedMessage id="invitePeopleDialog.copiedNaddr" defaultMessage="Copied naddr" />
+                    : <FormattedMessage id="invitePeopleDialog.copyNaddr" defaultMessage="Copy naddr for other Nostr apps" />}
                 </button>
               )}
             </>

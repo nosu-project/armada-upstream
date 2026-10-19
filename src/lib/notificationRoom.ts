@@ -5,6 +5,8 @@
  * `@/concord/lib/control` because the service worker bundles it.
  */
 
+import { t } from "@/i18n/intl";
+import { notificationMessages } from "@/lib/notificationPreview";
 import { getArmadaDB } from "@/lib/db/armadaDB";
 import { appEventStore } from "@/lib/db/mainEventStore";
 import { decode } from "@/lib/foldedCache";
@@ -92,8 +94,8 @@ export async function concordRoomIdentity(
     const channel = asString(fold?.channels?.get(channelIdHex)?.name);
     identity = {
       title: community && channel
-        ? `${community} / #${channel}`
-        : community ?? (channel ? `#${channel}` : undefined),
+        ? t(notificationMessages.roomTitle, { community, channel })
+        : community ?? (channel ? t(notificationMessages.channelTitle, { channel }) : undefined),
       iconPointer: asImagePointer(fold?.metadata?.icon),
     };
   } catch { /* ignore */ }

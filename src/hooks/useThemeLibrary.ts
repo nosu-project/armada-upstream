@@ -3,6 +3,7 @@ import { useCallback } from "react";
 
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useNostrPublish } from "@/hooks/useNostrPublish";
+import { t } from "@/i18n";
 import { isPublishQueuedError } from "@/lib/publishOutbox";
 import {
   buildThemeDefinitionEvent,
@@ -107,7 +108,7 @@ export function useThemeLibrary() {
 
   /** NIP-09 delete of one of the user's themes; removed from every cached list at once. */
   const deleteTheme = useCallback(async (theme: UserTheme) => {
-    if (!user) throw new Error("Not signed in");
+    if (!user) throw new Error(t({ id: "useThemeLibrary.notSignedIn", defaultMessage: "Not signed in" }));
     try {
       await publishEvent(buildThemeDeletionEvent(user.pubkey, theme.identifier, theme.event.id));
     } catch (e) {

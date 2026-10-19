@@ -22,6 +22,7 @@ import { useCopyNaddrLink } from "@/hooks/useNaddrLink";
 import { useTheme } from "@/hooks/useTheme";
 import { useThemeLibrary } from "@/hooks/useThemeLibrary";
 import { toast } from "@/hooks/useToast";
+import { common, FormattedMessage, t, useIntl } from "@/i18n";
 
 import { builderStarterColors, type CoreThemeColors, type ThemeBackground } from "@/themes";
 import type { UserTheme } from "@/hooks/useUserThemes";
@@ -39,9 +40,12 @@ export function ThemeCreatorDialog({
   onOpenChange: (open: boolean) => void;
   editing?: UserTheme;
 }) {
+  const intl = useIntl();
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <ChromeDialogContent title={editing ? "Edit theme" : "Create theme"}>
+      <ChromeDialogContent
+        title={editing ? intl.formatMessage({ id: "themeCreatorDialog.editTitle", defaultMessage: "Edit theme" }) : intl.formatMessage({ id: "themeCreatorDialog.createTitle", defaultMessage: "Create theme" })}
+      >
         <ThemeCreatorForm editing={editing} onDone={() => onOpenChange(false)} />
       </ChromeDialogContent>
     </Dialog>
@@ -49,6 +53,7 @@ export function ThemeCreatorDialog({
 }
 
 function ThemeCreatorForm({ editing, onDone }: { editing?: UserTheme; onDone: () => void }) {
+  const intl = useIntl();
   const { publishTheme, deleteTheme, isPending: publishing } = useThemeLibrary();
   const { applyCustomTheme } = useTheme();
   const copyLinkFor = useCopyNaddrLink();
@@ -65,12 +70,12 @@ function ThemeCreatorForm({ editing, onDone }: { editing?: UserTheme; onDone: ()
   const canPublish = named && !busy;
 
   const hint = publishing
-    ? "Publishing…"
+    ? intl.formatMessage({ id: "themeCreatorDialog.publishing", defaultMessage: "Publishing…" })
     : uploading
-      ? "Uploading background…"
+      ? intl.formatMessage({ id: "themeCreatorDialog.uploadingBackground", defaultMessage: "Uploading background…" })
       : !named
-        ? "Give the theme a name."
-        : "Anyone will be able to find and apply this theme.";
+        ? intl.formatMessage({ id: "themeCreatorDialog.giveName", defaultMessage: "Give the theme a name." })
+        : intl.formatMessage({ id: "themeCreatorDialog.publicHint", defaultMessage: "Anyone will be able to find and apply this theme." });
 
   const publish = async () => {
     if (!canPublish) return;
@@ -93,8 +98,10 @@ function ThemeCreatorForm({ editing, onDone }: { editing?: UserTheme; onDone: ()
       });
     } catch (e) {
       toast({
-        title: editing ? "Couldn't save theme" : "Couldn't publish theme",
-        description: e instanceof Error ? e.message : "Publishing failed.",
+        title: editing
+          ? t({ id: "themeCreatorDialog.saveFailed", defaultMessage: "Couldn't save theme" })
+          : t({ id: "themeCreatorDialog.publishFailed", defaultMessage: "Couldn't publish theme" }),
+        description: e instanceof Error ? e.message : t({ id: "themeCreatorDialog.publishingFailed", defaultMessage: "Publishing failed." }),
         variant: "destructive",
       });
       return;
@@ -102,16 +109,21 @@ function ThemeCreatorForm({ editing, onDone }: { editing?: UserTheme; onDone: ()
 
     if (applyToMine) applyCustomTheme({ title, colors, background });
 
-    const applied = applyToMine ? ", applied as your theme" : "";
-    const syncing = result.queued ? " (syncing when the network is back)" : "";
     const copyLink = copyLinkFor(result.event);
     toast({
-      title: editing ? "Theme saved" : "Theme published",
-      description: `${title}${applied}${syncing}`,
+      title: editing ? t({ id: "themeCreatorDialog.themeSaved", defaultMessage: "Theme saved" }) : t({ id: "themeCreatorDialog.themePublished", defaultMessage: "Theme published" }),
+      description: t(
+        {
+          id: "themeCreatorDialog.publishedDescription",
+          defaultMessage:
+            "{title}{applied, select, true {, applied as your theme} other {}}{syncing, select, true { (syncing when the network is back)} other {}}",
+        },
+        { title, applied: applyToMine ? "true" : "false", syncing: result.queued ? "true" : "false" },
+      ),
       ...(copyLink && {
         action: (
-          <ToastAction altText="Copy theme link" onClick={copyLink}>
-            Copy link
+          <ToastAction altText={t({ id: "themeCreatorDialog.copyThemeLink", defaultMessage: "Copy theme link" })} onClick={copyLink}>
+            {t(common.copyLink)}
           </ToastAction>
         ),
       }),
@@ -124,12 +136,12 @@ function ThemeCreatorForm({ editing, onDone }: { editing?: UserTheme; onDone: ()
     setDeleting(true);
     try {
       await deleteTheme(editing);
-      toast({ title: "Theme deleted", description: editing.title });
+      toast({ title: t({ id: "themeCreatorDialog.themeDeleted", defaultMessage: "Theme deleted" }), description: editing.title });
       onDone();
     } catch (e) {
       toast({
-        title: "Couldn't delete theme",
-        description: e instanceof Error ? e.message : "Publishing failed.",
+        title: t({ id: "themeCreatorDialog.deleteFailed", defaultMessage: "Couldn't delete theme" }),
+        description: e instanceof Error ? e.message : t({ id: "themeCreatorDialog.publishingFailed", defaultMessage: "Publishing failed." }),
         variant: "destructive",
       });
     } finally {
@@ -144,10 +156,10 @@ function ThemeCreatorForm({ editing, onDone }: { editing?: UserTheme; onDone: ()
           <Palette className="size-6" />
         </div>
         <h2 className="chrome-dialog-title font-mono font-bold lowercase tracking-tight text-foreground">
-          {editing ? "edit theme" : "new theme"}
+          {editing ? <FormattedMessage id="themeCreatorDialog.editHeading" defaultMessage="edit theme" /> : <FormattedMessage id="themeCreatorDialog.newHeading" defaultMessage="new theme" />}
         </h2>
         <p className="text-sm text-muted-foreground">
-          Pick three colors. Every other shade is derived from them.
+          <FormattedMessage id="themeCreatorDialog.intro" defaultMessage="Pick three colors. Every other shade is derived from them." />
         </p>
       </div>
 
@@ -156,7 +168,7 @@ function ThemeCreatorForm({ editing, onDone }: { editing?: UserTheme; onDone: ()
         onColorsChange={setColors}
         title={name}
         onTitleChange={setName}
-        placeholder="My theme"
+        placeholder={intl.formatMessage({ id: "themeCreatorDialog.namePlaceholder", defaultMessage: "My theme" })}
       />
 
       <ThemeBackgroundField value={background} onChange={setBackground} onUploadingChange={setUploading} />
@@ -168,11 +180,11 @@ function ThemeCreatorForm({ editing, onDone }: { editing?: UserTheme; onDone: ()
             onCheckedChange={(v) => setApplyToMine(v === true)}
             className="shrink-0"
           />
-          Apply as my theme
+          <FormattedMessage id="themeCreatorDialog.applyAsMine" defaultMessage="Apply as my theme" />
         </Label>
         <Button className="w-full clip-corner-lg" onClick={publish} disabled={!canPublish}>
           {publishing && <Loader2 className="size-4 animate-spin" />}
-          {editing ? "Save changes" : "Publish theme"}
+          {editing ? <FormattedMessage id="themeCreatorDialog.saveChanges" defaultMessage="Save changes" /> : <FormattedMessage id="themeCreatorDialog.publishTheme" defaultMessage="Publish theme" />}
         </Button>
         <p className="text-center text-xs text-muted-foreground">{hint}</p>
         {editing && (
@@ -183,7 +195,7 @@ function ThemeCreatorForm({ editing, onDone }: { editing?: UserTheme; onDone: ()
             disabled={busy}
           >
             {deleting ? <Loader2 className="size-4 animate-spin" /> : <Trash2 className="size-4" />}
-            Delete theme
+            <FormattedMessage id="themeCreatorDialog.deleteTheme" defaultMessage="Delete theme" />
           </Button>
         )}
       </div>
@@ -192,18 +204,29 @@ function ThemeCreatorForm({ editing, onDone }: { editing?: UserTheme; onDone: ()
         <AlertDialog open={confirmDelete} onOpenChange={setConfirmDelete}>
           <AlertDialogContent>
             <AlertDialogHeader>
-              <AlertDialogTitle>Delete “{editing.title}”?</AlertDialogTitle>
+              <AlertDialogTitle>
+                <FormattedMessage
+                  id="themeCreatorDialog.deleteConfirmTitle"
+                  defaultMessage="Delete “{title}”?"
+                  values={{ title: editing.title }}
+                />
+              </AlertDialogTitle>
               <AlertDialogDescription>
-                It's removed from your themes and from Discover. Anyone already using it keeps their copy.
+                <FormattedMessage
+                  id="themeCreatorDialog.deleteConfirmDescription"
+                  defaultMessage="It's removed from your themes and from Discover. Anyone already using it keeps their copy."
+                />
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
-              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogCancel>
+                <FormattedMessage {...common.cancel} />
+              </AlertDialogCancel>
               <AlertDialogAction
                 className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
                 onClick={() => void remove()}
               >
-                Delete
+                <FormattedMessage {...common.delete} />
               </AlertDialogAction>
             </AlertDialogFooter>
           </AlertDialogContent>

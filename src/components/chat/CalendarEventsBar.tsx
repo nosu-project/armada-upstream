@@ -4,6 +4,7 @@ import { useState } from "react";
 import { EventDetailDialog } from "@/components/chat/CalendarEventCard";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { FormattedMessage, useIntl } from "@/i18n";
 import { type CalendarEvent, type CalendarTransport, formatCalendarEventWhen, isUpcoming, KIND_CALENDAR_TIME } from "@/lib/calendar";
 import { cn } from "@/lib/utils";
 
@@ -19,6 +20,8 @@ function EventRow({
   onDelete: (event: CalendarEvent) => void;
 }) {
   const past = !isUpcoming(event);
+  const intl = useIntl();
+  const deleteLabel = intl.formatMessage({ id: "calendarEventsBar.deleteEvent", defaultMessage: "Delete event" });
   return (
     <div className="group/event flex items-start gap-2 min-w-0 rounded-md px-2 py-1.5 hover:bg-secondary/60">
       <div className={cn("mt-0.5 shrink-0 text-amber-500", past && "text-muted-foreground")}>
@@ -42,7 +45,7 @@ function EventRow({
         className="h-6 touch:h-9 shrink-0 px-2 touch:px-3 text-2xs text-muted-foreground hover:text-primary"
         onClick={() => onOpen(event)}
       >
-        RSVP
+        <FormattedMessage id="calendarEventsBar.rsvp" defaultMessage="RSVP" />
       </Button>
       {canModerate && (
         <Tooltip>
@@ -50,14 +53,14 @@ function EventRow({
             <Button
               variant="ghost"
               size="icon"
-              aria-label="Delete event"
+              aria-label={deleteLabel}
               className="size-6 touch:size-10 shrink-0 text-muted-foreground hover:text-destructive opacity-0 group-hover/event:opacity-100 touch:opacity-100 focus-visible:opacity-100 transition-opacity"
               onClick={() => onDelete(event)}
             >
               <Trash2 className="size-3.5" />
             </Button>
           </TooltipTrigger>
-          <TooltipContent>Delete event</TooltipContent>
+          <TooltipContent>{deleteLabel}</TooltipContent>
         </Tooltip>
       )}
     </div>
@@ -85,6 +88,7 @@ export function CalendarEventsBar({
 }: CalendarEventsBarProps) {
   const { events, canModerate } = calendar;
   const [detail, setDetail] = useState<CalendarEvent | undefined>(undefined);
+  const intl = useIntl();
 
   // Upcoming soonest first (pre-sorted), then past most recent first.
   const upcoming = events.filter((e) => isUpcoming(e));
@@ -106,7 +110,7 @@ export function CalendarEventsBar({
           <div className="flex items-center justify-between gap-2 mb-1.5">
             <span className="flex items-center gap-1.5 text-2xs font-semibold uppercase tracking-wide text-muted-foreground/80">
               <CalendarClock className="size-3 text-amber-500" />
-              Events
+              <FormattedMessage id="calendarEventsBar.events" defaultMessage="Events" />
             </span>
             <div className="flex items-center gap-1">
               {canModerate && (
@@ -117,13 +121,13 @@ export function CalendarEventsBar({
                   onClick={onCreate}
                 >
                   <Plus className="size-3.5" />
-                  New event
+                  <FormattedMessage id="calendarEventsBar.newEvent" defaultMessage="New event" />
                 </Button>
               )}
               <Button
                 variant="ghost"
                 size="icon"
-                aria-label="Close events"
+                aria-label={intl.formatMessage({ id: "calendarEventsBar.close", defaultMessage: "Close events" })}
                 className="size-6 touch:size-10 text-muted-foreground"
                 onClick={onClose}
               >
@@ -134,7 +138,11 @@ export function CalendarEventsBar({
           <div className="max-h-60 overflow-y-auto space-y-0.5 pr-0.5">
             {ordered.length === 0 ? (
               <p className="px-2 py-3 text-center text-xs text-muted-foreground">
-                No events scheduled{canModerate ? ". Create one above." : "."}
+                {canModerate ? (
+                  <FormattedMessage id="calendarEventsBar.emptyModerator" defaultMessage="No events scheduled. Create one above." />
+                ) : (
+                  <FormattedMessage id="calendarEventsBar.empty" defaultMessage="No events scheduled." />
+                )}
               </p>
             ) : (
               ordered.map((event) => (

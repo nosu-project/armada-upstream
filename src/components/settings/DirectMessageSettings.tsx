@@ -5,9 +5,11 @@ import { SettingsGroup, SettingsRow } from "@/components/settings/SettingsSectio
 import { SettingsNavContext } from "@/components/settings/settingsNav";
 import { Switch } from "@/components/ui/switch";
 import { useAppContext } from "@/hooks/useAppContext";
+import { useIntl } from "@/i18n";
 
 /** Settings › Direct messages. */
 export function DirectMessageSettings() {
+  const intl = useIntl();
   const { config, updateConfig } = useAppContext();
   const nav = useContext(SettingsNavContext);
   const dmRelayCount = config.dmRelays.length;
@@ -17,8 +19,8 @@ export function DirectMessageSettings() {
       <SettingsGroup id="dms">
         {/* Empties every DM subscription's relay set; deletes no conversations and keeps the 10050. */}
         <SettingsRow
-          label="Turn off direct messages"
-          description="Stop receiving DMs on all your devices. Existing conversations are kept."
+          label={intl.formatMessage({ id: "directMessageSettings.turnOff", defaultMessage: "Turn off direct messages" })}
+          description={intl.formatMessage({ id: "directMessageSettings.turnOffDescription", defaultMessage: "Stop receiving DMs on all your devices. Existing conversations are kept." })}
         >
           <Switch
             checked={config.dmsDisabled}
@@ -30,11 +32,11 @@ export function DirectMessageSettings() {
       {/* With DMs disabled, only the master toggle remains. */}
       {!config.dmsDisabled && (
         <>
-          <SettingsGroup title="Inbox">
+          <SettingsGroup title={intl.formatMessage({ id: "directMessageSettings.inbox", defaultMessage: "Inbox" })}>
             {/* Display only: hiding the request tier drops no messages. */}
             <SettingsRow
-              label="Message requests"
-              description="Show DMs from strangers under Requests. Off hides them."
+              label={intl.formatMessage({ id: "directMessageSettings.requests", defaultMessage: "Message requests" })}
+              description={intl.formatMessage({ id: "directMessageSettings.requestsDescription", defaultMessage: "Show DMs from strangers under Requests. Off hides them." })}
             >
               <Switch
                 checked={config.showDmRequests}
@@ -42,8 +44,8 @@ export function DirectMessageSettings() {
               />
             </SettingsRow>
             <SettingsRow
-              label="Message previews"
-              description="Show the latest message under each conversation in your DM list."
+              label={intl.formatMessage({ id: "directMessageSettings.previews", defaultMessage: "Message previews" })}
+              description={intl.formatMessage({ id: "directMessageSettings.previewsDescription", defaultMessage: "Show the latest message under each conversation in your DM list." })}
             >
               <Switch
                 checked={config.showDmPreviews}
@@ -51,8 +53,8 @@ export function DirectMessageSettings() {
               />
             </SettingsRow>
             <SettingsRow
-              label="Recent DMs in the rail"
-              description="Show unread DMs at the top of the server rail."
+              label={intl.formatMessage({ id: "directMessageSettings.recentRail", defaultMessage: "Recent DMs in the rail" })}
+              description={intl.formatMessage({ id: "directMessageSettings.recentRailDescription", defaultMessage: "Show unread DMs at the top of the server rail." })}
             >
               <Switch
                 checked={config.showRecentRailDms}
@@ -61,12 +63,12 @@ export function DirectMessageSettings() {
             </SettingsRow>
           </SettingsGroup>
 
-          <SettingsGroup footer="Where messages from other Nostr apps arrive.">
+          <SettingsGroup footer={intl.formatMessage({ id: "directMessageSettings.relaysFooter", defaultMessage: "Where messages from other Nostr apps arrive." })}>
             <SettingsRow
               icon={Waypoints}
               tone="accent2"
-              label="Message relays"
-              value={dmRelayCount || "None"}
+              label={intl.formatMessage({ id: "directMessageSettings.messageRelays", defaultMessage: "Message relays" })}
+              value={dmRelayCount ? intl.formatNumber(dmRelayCount) : intl.formatMessage({ id: "directMessageSettings.none", defaultMessage: "None" })}
               chevron
               onClick={() => nav.open("relays")}
             />

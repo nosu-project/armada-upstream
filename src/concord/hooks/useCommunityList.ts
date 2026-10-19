@@ -52,6 +52,7 @@ import {
 import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
 import type { NUser } from "@nostrify/react/login";
 import type { NostrRumor } from "@/lib/nostrRumor";
+import { t } from "@/i18n";
 
 /**
  * The user's Concord Community List — kind-33302 fragment events, NIP-44
@@ -542,11 +543,11 @@ async function publishFragments(
   targetRelays: Iterable<string>,
   readFragsByRelay?: ReadonlyMap<string, ReadonlyMap<number, FragList>>,
 ): Promise<NostrRumor | null> {
-  if (!user.signer.nip44) throw new Error("NIP-44 encryption not supported by this signer");
+  if (!user.signer.nip44) throw new Error(t({ id: "useCommunityList.nip44Unsupported", defaultMessage: "NIP-44 encryption not supported by this signer" }));
   // Exact read cohort only: an unanswered relay may hold an unseen newer fact.
   const targets = uniqueRelayUrls(targetRelays);
   if (targets.length === 0 || !canPublish(nostr)) {
-    throw new Error("No relay is available for your community list update");
+    throw new Error(t({ id: "useCommunityList.noRelayAvailable", defaultMessage: "No relay is available for your community list update" }));
   }
   const publishNostr: PublishingNostr = nostr;
   const frags = fragment(list);
@@ -683,7 +684,7 @@ export async function signCommunityListSnapshot(
   list: CommunityList,
   previous: FragSet | null,
 ): Promise<NostrEvent[]> {
-  if (!user.signer.nip44) throw new Error("NIP-44 encryption not supported by this signer");
+  if (!user.signer.nip44) throw new Error(t({ id: "useCommunityList.nip44Unsupported", defaultMessage: "NIP-44 encryption not supported by this signer" }));
   const frags = fragment(list);
   const indices = new Set<number>([
     ...frags.map((_, index) => index),
@@ -699,7 +700,7 @@ export async function signCommunityListSnapshot(
       tags: [["d", String(index)]],
       created_at: Math.max(now, (previous?.createdAt.get(index) ?? 0) + 1),
     });
-    if (event.pubkey !== user.pubkey) throw new Error("The signer returned a different account");
+    if (event.pubkey !== user.pubkey) throw new Error(t({ id: "useCommunityList.signerMismatch", defaultMessage: "The signer returned a different account" }));
     events.push(event);
   }
   return events;
@@ -1146,7 +1147,7 @@ export async function updateCommunityList(
   const { set, unreadable } = read;
   if (unreadable) {
     throw new Error(
-      "Couldn't read your existing communities (decryption failed); not saving to avoid losing room keys.",
+      t({ id: "useCommunityList.undecryptable", defaultMessage: "Couldn't read your existing communities (decryption failed); not saving to avoid losing room keys." }),
     );
   }
   // Require a canonical account-state answer (stock only for legacy accounts
@@ -1155,12 +1156,18 @@ export async function updateCommunityList(
   const requiredFloor = canonical.length > 0 ? canonical : uniqueRelayUrls(RESCUE_RELAYS);
   if (!read.answered.some((url) => requiredFloor.includes(url))) {
     throw new Error(
-      "Couldn't confirm your community list on an account-state relay; not saving to avoid overwriting it.",
+      t({ id: "useCommunityList.unconfirmed", defaultMessage: "Couldn't confirm your community list on an account-state relay; not saving to avoid overwriting it." }),
     );
   }
   if (set && !set.complete) {
     throw new Error(
-      `Holding ${set.createdAt.size} of ${set.declared} community-list fragments; try again once the missing ones sync.`,
+      t(
+        {
+          id: "useCommunityList.incomplete",
+          defaultMessage: "Holding {held} of {declared} community-list fragments; try again once the missing ones sync.",
+        },
+        { held: set.createdAt.size, declared: set.declared },
+      ),
     );
   }
   if (!set) {
@@ -1170,7 +1177,7 @@ export async function updateCommunityList(
     const seeded = await readFolded<boolean>(seedKeyOf(user.pubkey));
     if (persisted?.event || seeded) {
       throw new Error(
-        "Couldn't reach your community list on any relay; not saving to avoid overwriting it.",
+        t({ id: "useCommunityList.unreachable", defaultMessage: "Couldn't reach your community list on any relay; not saving to avoid overwriting it." }),
       );
     }
   }
@@ -1251,8 +1258,8 @@ export function useUpdateCommunityList() {
     mutationKey: [...LIST_MUTATION_KEY],
     scope: { id: "concord-list" },
     mutationFn: async (action: CommunityListAction) => {
-      if (!user) throw new Error("User is not logged in");
-      if (!user.signer.nip44) throw new Error("NIP-44 encryption not supported by this signer");
+      if (!user) throw new Error(t({ id: "useCommunityList.notLoggedIn", defaultMessage: "User is not logged in" }));
+      if (!user.signer.nip44) throw new Error(t({ id: "useCommunityList.nip44Unsupported", defaultMessage: "NIP-44 encryption not supported by this signer" }));
 
       // Includes the stock rescue relays, where a partial fan-out may have put the newest copy.
       const relays = selfStateRelays(config, user.pubkey);

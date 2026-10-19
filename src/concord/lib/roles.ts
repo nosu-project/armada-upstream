@@ -6,6 +6,8 @@
  * DECIMAL STRING (JSON numbers lose precision past 2^53); either form is read.
  */
 
+import { t } from "@/i18n/intl";
+
 export const Permissions = {
   MANAGE_ROLES: 1n << 0n,
   MANAGE_CHANNELS: 1n << 1n,
@@ -66,17 +68,89 @@ export function isManagement(perms: bigint): boolean {
   return (perms & MANAGEMENT_MASK) !== 0n;
 }
 
-/** Human-facing labels for the assignable permission bits, in display order. */
-export const PERMISSION_LABELS: Array<{ bit: bigint; label: string; hint: string }> = [
-  { bit: Permissions.MANAGE_ROLES, label: "Manage roles", hint: "Create roles and assign them to members." },
-  { bit: Permissions.MANAGE_CHANNELS, label: "Manage channels", hint: "Create, rename, and delete channels." },
-  { bit: Permissions.MANAGE_METADATA, label: "Manage community", hint: "Edit name, description, logo, banner." },
-  { bit: Permissions.KICK, label: "Kick members", hint: "Remove members (they can rejoin via invite)." },
-  { bit: Permissions.BAN, label: "Ban members", hint: "Ban members and rotate keys to lock them out." },
-  { bit: Permissions.MANAGE_MESSAGES, label: "Manage messages", hint: "Hide other members' messages." },
-  { bit: Permissions.PIN_MESSAGES, label: "Pin messages", hint: "Pin messages so everyone sees them, including members who join later." },
-  { bit: Permissions.CREATE_INVITE, label: "Create invites", hint: "Mint public invite links." },
-  { bit: Permissions.MENTION_EVERYONE, label: "Mention everyone", hint: "Use @everyone." },
+/** Human-facing labels for the assignable permission bits, in display order (formatted on read). */
+export const PERMISSION_LABELS: Array<{ bit: bigint; readonly label: string; readonly hint: string }> = [
+  {
+    bit: Permissions.MANAGE_ROLES,
+    get label() {
+      return t({ id: "concordRoles.permission.manageRoles.label", defaultMessage: "Manage roles" });
+    },
+    get hint() {
+      return t({ id: "concordRoles.permission.manageRoles.hint", defaultMessage: "Create roles and assign them to members." });
+    },
+  },
+  {
+    bit: Permissions.MANAGE_CHANNELS,
+    get label() {
+      return t({ id: "concordRoles.permission.manageChannels.label", defaultMessage: "Manage channels" });
+    },
+    get hint() {
+      return t({ id: "concordRoles.permission.manageChannels.hint", defaultMessage: "Create, rename, and delete channels." });
+    },
+  },
+  {
+    bit: Permissions.MANAGE_METADATA,
+    get label() {
+      return t({ id: "concordRoles.permission.manageCommunity.label", defaultMessage: "Manage community" });
+    },
+    get hint() {
+      return t({ id: "concordRoles.permission.manageCommunity.hint", defaultMessage: "Edit name, description, logo, banner." });
+    },
+  },
+  {
+    bit: Permissions.KICK,
+    get label() {
+      return t({ id: "concordRoles.permission.kickMembers.label", defaultMessage: "Kick members" });
+    },
+    get hint() {
+      return t({ id: "concordRoles.permission.kickMembers.hint", defaultMessage: "Remove members (they can rejoin via invite)." });
+    },
+  },
+  {
+    bit: Permissions.BAN,
+    get label() {
+      return t({ id: "concordRoles.permission.banMembers.label", defaultMessage: "Ban members" });
+    },
+    get hint() {
+      return t({ id: "concordRoles.permission.banMembers.hint", defaultMessage: "Ban members and rotate keys to lock them out." });
+    },
+  },
+  {
+    bit: Permissions.MANAGE_MESSAGES,
+    get label() {
+      return t({ id: "concordRoles.permission.manageMessages.label", defaultMessage: "Manage messages" });
+    },
+    get hint() {
+      return t({ id: "concordRoles.permission.manageMessages.hint", defaultMessage: "Hide other members' messages." });
+    },
+  },
+  {
+    bit: Permissions.PIN_MESSAGES,
+    get label() {
+      return t({ id: "concordRoles.permission.pinMessages.label", defaultMessage: "Pin messages" });
+    },
+    get hint() {
+      return t({ id: "concordRoles.permission.pinMessages.hint", defaultMessage: "Pin messages so everyone sees them, including members who join later." });
+    },
+  },
+  {
+    bit: Permissions.CREATE_INVITE,
+    get label() {
+      return t({ id: "concordRoles.permission.createInvites.label", defaultMessage: "Create invites" });
+    },
+    get hint() {
+      return t({ id: "concordRoles.permission.createInvites.hint", defaultMessage: "Mint public invite links." });
+    },
+  },
+  {
+    bit: Permissions.MENTION_EVERYONE,
+    get label() {
+      return t({ id: "concordRoles.permission.mentionEveryone.label", defaultMessage: "Mention everyone" });
+    },
+    get hint() {
+      return t({ id: "concordRoles.permission.mentionEveryone.hint", defaultMessage: "Use @everyone." });
+    },
+  },
 ];
 
 export type RoleScope = { kind: "server" } | { kind: "channel"; channelId: string };
@@ -465,13 +539,13 @@ export function grantRefusal(
 ): string | undefined {
   if (actorHex === ownerHex) return undefined;
   if (!canActOnMember(roles, actorHex, ownerHex, memberHex, Permissions.MANAGE_ROLES)) {
-    return "You don't outrank this member.";
+    return t({ id: "concordRoles.grantRefusal.member", defaultMessage: "You don't outrank this member." });
   }
   for (const id of roleIds) {
     const r = roleById(roles, id);
-    if (!r) return "That role isn't in the synced roster yet.";
+    if (!r) return t({ id: "concordRoles.grantRefusal.unknownRole", defaultMessage: "That role isn't in the synced roster yet." });
     if (!canActOnPosition(roles, actorHex, ownerHex, r.position, Permissions.MANAGE_ROLES)) {
-      return `You don't outrank the "${r.name}" role.`;
+      return t({ id: "concordRoles.grantRefusal.role", defaultMessage: "You don't outrank the \"{role}\" role." }, { role: r.name });
     }
   }
   return undefined;

@@ -15,6 +15,7 @@ import {
 
 import type { NostrFilter, NRelay } from "@nostrify/nostrify";
 import type { NostrRumor } from "@/lib/nostrRumor";
+import { defineMessage, t } from "@/i18n";
 
 export interface GroupMetadataPatch {
   name?: string;
@@ -157,8 +158,10 @@ export function useGroupModeration(relayUrl: string, groupId: string) {
 /** Re-reads after a 9007, in ms from the OK. relay29 publishes the 39000 before answering. */
 const CREATE_POLL_MS = [0, 750, 2_000, 4_500];
 
-export const GROUP_NOT_CREATED_MESSAGE =
-  "The server accepted the request but didn't create the channel. It may not support NIP-29 groups.";
+export const GROUP_NOT_CREATED_MESSAGE = defineMessage({
+  id: "useGroupModeration.groupNotCreated",
+  defaultMessage: "The server accepted the request but didn't create the channel. It may not support NIP-29 groups.",
+});
 
 /**
  * Whether the relay published the kind 39000 a NIP-29 relay emits on accepting a 9007.
@@ -210,7 +213,7 @@ export function useCreateGroup(relayUrl: string) {
         relay: relayUrl,
       });
       if (verify && !(await waitForGroupMetadata(nostr.relay(relayUrl), groupId, verify.relaySelf))) {
-        throw new Error(GROUP_NOT_CREATED_MESSAGE);
+        throw new Error(t(GROUP_NOT_CREATED_MESSAGE));
       }
       return event;
     },

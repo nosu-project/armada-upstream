@@ -8,6 +8,8 @@ import {
   ContextMenuSubTrigger,
 } from "@/components/ui/context-menu";
 
+import { FormattedMessage, useIntl } from "@/i18n";
+
 import type { NotifLevel } from "@/hooks/useNotifLevels";
 
 /**
@@ -20,7 +22,9 @@ export function NotifLevelMenu(props: {
   level: NotifLevel;
   onChange: (level: NotifLevel) => void;
 }) {
-  const { label = "Notifications", level, onChange } = props;
+  const intl = useIntl();
+  const { level, onChange } = props;
+  const label = props.label ?? intl.formatMessage({ id: "notifLevelMenu.label", defaultMessage: "Notifications" });
   return (
     <ContextMenuSub>
       <ContextMenuSubTrigger>
@@ -36,13 +40,13 @@ export function NotifLevelMenu(props: {
       <ContextMenuSubContent className="w-48">
         <ContextMenuRadioGroup value={level} onValueChange={(v) => onChange(v as NotifLevel)}>
           <ContextMenuRadioItem value="all">
-            <Bell className="mr-2 size-4" /> All messages
+            <Bell className="mr-2 size-4" /> <FormattedMessage id="notifLevelMenu.all" defaultMessage="All messages" />
           </ContextMenuRadioItem>
           <ContextMenuRadioItem value="mentions">
-            <AtSign className="mr-2 size-4" /> Only @mentions
+            <AtSign className="mr-2 size-4" /> <FormattedMessage id="notifLevelMenu.mentions" defaultMessage="Only @mentions" />
           </ContextMenuRadioItem>
           <ContextMenuRadioItem value="nothing">
-            <BellOff className="mr-2 size-4" /> Nothing
+            <BellOff className="mr-2 size-4" /> <FormattedMessage id="notifLevelMenu.nothing" defaultMessage="Nothing" />
           </ContextMenuRadioItem>
         </ContextMenuRadioGroup>
       </ContextMenuSubContent>

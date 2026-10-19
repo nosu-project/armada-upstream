@@ -1,6 +1,7 @@
 import { Compass } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { useIntl } from "@/i18n";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useStableNavigate } from "@/hooks/useStableNavigate";
 import { cn } from "@/lib/utils";
@@ -11,6 +12,8 @@ import { cn } from "@/lib/utils";
  */
 export function BrowseEmojiPacksButton({ onBrowse, className }: { onBrowse: () => void; className?: string }) {
   const navigate = useStableNavigate();
+  const intl = useIntl();
+  const label = intl.formatMessage({ id: "browseEmojiPacksButton.label", defaultMessage: "Browse emoji packs" });
   return (
     <Tooltip>
       <TooltipTrigger asChild>
@@ -18,7 +21,7 @@ export function BrowseEmojiPacksButton({ onBrowse, className }: { onBrowse: () =
           type="button"
           variant="ghost"
           size="icon"
-          aria-label="Browse emoji packs"
+          aria-label={label}
           className={cn("size-8 touch:size-11 shrink-0 clip-corner-lg text-muted-foreground", className)}
           onClick={() => {
             onBrowse();
@@ -28,7 +31,7 @@ export function BrowseEmojiPacksButton({ onBrowse, className }: { onBrowse: () =
           <Compass className="size-4" />
         </Button>
       </TooltipTrigger>
-      <TooltipContent>Browse emoji packs</TooltipContent>
+      <TooltipContent>{label}</TooltipContent>
     </Tooltip>
   );
 }

@@ -37,6 +37,7 @@ import { useAuthor } from "@/hooks/useAuthor";
 import { useIsTouch } from "@/hooks/useIsMobile";
 import { useLongPress } from "@/hooks/useLongPress";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
+import { FormattedMessage, useIntl, type IntlShape } from "@/i18n";
 import { shortTimeAgo } from "@/lib/formatTime";
 import type { NostrRumor } from "@/lib/nostrRumor";
 
@@ -46,6 +47,7 @@ import type { NostrRumor } from "@/lib/nostrRumor";
  * privileged; any member can reconstruct it.
  */
 export function AuditLogView({ community }: { community: Community }) {
+  const intl = useIntl();
   const control = useControlEvents(community);
   const { data: folded } = useControlFold(community);
 
@@ -57,28 +59,29 @@ export function AuditLogView({ community }: { community: Community }) {
     return editions
       .map((e) => {
         const rumorHex = bytesToHex(e.rumorId);
-        return toRow(e, folded?.roster, folded, validity.get(rumorHex) ?? "unknown", rumorHex);
+        return toRow(intl, e, folded?.roster, folded, validity.get(rumorHex) ?? "unknown", rumorHex);
       })
       .sort((a, b) =>
         b.createdAt !== a.createdAt ? b.createdAt - a.createdAt : a.key < b.key ? 1 : -1,
       );
-  }, [control.data, folded]);
+  }, [control.data, folded, intl]);
 
   return (
     <div className="mx-auto w-full max-w-2xl px-3 py-4">
       <div className="mb-3 flex items-center gap-2">
         <ScrollText className="size-5 text-primary" />
-        <h2 className="text-lg font-semibold">Audit log</h2>
+        <h2 className="text-lg font-semibold"><FormattedMessage id="auditLogView.title" defaultMessage="Audit log" /></h2>
       </div>
       <p className="mb-4 text-sm text-muted-foreground">
-        Every action recorded in this community's control plane, signed by the member who took
-        it. Each row shows whether the fold honored the action in context, and anyone can
-        verify this from raw event access.
+        <FormattedMessage
+          id="auditLogView.intro"
+          defaultMessage="Every action recorded in this community's control plane, signed by the member who took it. Each row shows whether the fold honored the action in context, and anyone can verify this from raw event access."
+        />
       </p>
       {control.isLoading && rows.length === 0 ? (
-        <p className="text-sm text-muted-foreground">Loading the control plane…</p>
+        <p className="text-sm text-muted-foreground"><FormattedMessage id="auditLogView.loading" defaultMessage="Loading the control plane…" /></p>
       ) : rows.length === 0 ? (
-        <p className="text-sm text-muted-foreground">No control-plane actions yet.</p>
+        <p className="text-sm text-muted-foreground"><FormattedMessage id="auditLogView.empty" defaultMessage="No control-plane actions yet." /></p>
       ) : (
         <ol className="space-y-2">
           {rows.map((row) => (
@@ -111,6 +114,7 @@ interface AuditRow {
 }
 
 function AuditRowItem({ row, community }: { row: AuditRow; community: Community }) {
+  const intl = useIntl();
   const author = useAuthor(row.author);
   const actorName = useScopedDisplayName(row.author, author.data?.metadata);
   const isOwner = row.author === community.owner;
@@ -137,7 +141,7 @@ function AuditRowItem({ row, community }: { row: AuditRow; community: Community 
           </span>
           {isOwner && (
             <Badge variant="secondary" className="px-1.5 py-0 text-3xs">
-              Owner
+              <FormattedMessage id="auditLogView.ownerBadge" defaultMessage="Owner" />
             </Badge>
           )}
           <span className="text-muted-foreground">{row.action}</span>
@@ -150,14 +154,19 @@ function AuditRowItem({ row, community }: { row: AuditRow; community: Community 
           </p>
         ))}
         <p className="mt-0.5 text-2xs text-muted-foreground/70">
-          v{row.version.toString()}
-          {!isOwner && ` · ${row.citedAuthority ? "cited authority" : "no authority cited"}`}
+          {isOwner ? (
+            <FormattedMessage id="auditLogView.version" defaultMessage="v{version}" values={{ version: row.version.toString() }} />
+          ) : row.citedAuthority ? (
+            <FormattedMessage id="auditLogView.versionCitedAuthority" defaultMessage="v{version} · cited authority" values={{ version: row.version.toString() }} />
+          ) : (
+            <FormattedMessage id="auditLogView.versionNoAuthority" defaultMessage="v{version} · no authority cited" values={{ version: row.version.toString() }} />
+          )}
         </p>
       </div>
       <time
         className="mt-0.5 shrink-0 tabular-nums text-xs text-muted-foreground"
         dateTime={new Date(row.createdAt * 1000).toISOString()}
-        title={new Date(row.createdAt * 1000).toLocaleString()}
+        title={new Date(row.createdAt * 1000).toLocaleString(intl.locale)}
       >
         {shortTimeAgo(row.createdAt)}
       </time>
@@ -175,7 +184,7 @@ function AuditRowItem({ row, community }: { row: AuditRow; community: Community 
           <ContextMenuContent className="w-52">
             <ContextMenuItem onSelect={() => setJsonOpen(true)}>
               <Braces className="mr-2 size-4" />
-              View event JSON
+              <FormattedMessage id="auditLogView.viewEventJson" defaultMessage="View event JSON" />
             </ContextMenuItem>
           </ContextMenuContent>
         </ContextMenu>
@@ -185,7 +194,10 @@ function AuditRowItem({ row, community }: { row: AuditRow; community: Community 
           open={jsonOpen}
           onOpenChange={setJsonOpen}
           source={row.rumor}
-          description="The raw, unsigned control-plane edition its author signed. The signature is on the seal that carried it, which is stored separately."
+          description={intl.formatMessage({
+            id: "auditLogView.jsonDescription",
+            defaultMessage: "The raw, unsigned control-plane edition its author signed. The signature is on the seal that carried it, which is stored separately.",
+          })}
         />
       )}
     </>
@@ -199,31 +211,32 @@ function MemberName({ pubkey, community }: { pubkey: string; community: Communit
   return (
     <span className="inline-flex items-center gap-1 rounded bg-foreground/10 px-1.5 py-0.5 text-xs font-medium">
       <DisplayName pubkey={pubkey} name={name} />
-      {isOwner && <span className="text-3xs uppercase text-muted-foreground">owner</span>}
+      {isOwner && <span className="text-3xs uppercase text-muted-foreground"><FormattedMessage id="auditLogView.ownerTag" defaultMessage="owner" /></span>}
     </span>
   );
 }
 
 function ValidityBadge({ validity }: { validity: Validity }) {
+  const intl = useIntl();
   if (validity === "unknown") return null;
   const map = {
     current: {
       icon: <CheckCircle2 className="size-3" />,
-      label: "Applied",
+      label: intl.formatMessage({ id: "auditLogView.validity.applied", defaultMessage: "Applied" }),
       cls: "bg-success/15 text-success",
-      hint: "The fold honored this action and it is the entity's current state.",
+      hint: intl.formatMessage({ id: "auditLogView.validity.appliedHint", defaultMessage: "The fold honored this action and it is the entity's current state." }),
     },
     superseded: {
       icon: <Clock3 className="size-3" />,
-      label: "Superseded",
+      label: intl.formatMessage({ id: "auditLogView.validity.superseded", defaultMessage: "Superseded" }),
       cls: "bg-muted text-muted-foreground",
-      hint: "Was honored on the verified chain, then a later chained edition replaced it.",
+      hint: intl.formatMessage({ id: "auditLogView.validity.supersededHint", defaultMessage: "Was honored on the verified chain, then a later chained edition replaced it." }),
     },
     dropped: {
       icon: <XCircle className="size-3" />,
-      label: "Not applied",
+      label: intl.formatMessage({ id: "auditLogView.validity.notApplied", defaultMessage: "Not applied" }),
       cls: "bg-destructive/15 text-destructive",
-      hint: "This action wasn't applied. It was unauthorized, forged, or lost a same-version fork.",
+      hint: intl.formatMessage({ id: "auditLogView.validity.notAppliedHint", defaultMessage: "This action wasn't applied. It was unauthorized, forged, or lost a same-version fork." }),
     },
   }[validity];
   return (
@@ -241,13 +254,14 @@ function ValidityBadge({ validity }: { validity: Validity }) {
   );
 }
 
-function channelName(folded: FoldedControl | undefined, idHex: string): string {
-  return folded?.channels.get(idHex)?.name ?? `channel ${idHex.slice(0, 8)}…`;
+function channelName(intl: IntlShape, folded: FoldedControl | undefined, idHex: string): string {
+  return folded?.channels.get(idHex)?.name
+    ?? intl.formatMessage({ id: "auditLogView.unknownChannel", defaultMessage: "channel {id}…" }, { id: idHex.slice(0, 8) });
 }
 
-function permissionLabels(perms: bigint): string[] {
+function permissionLabels(intl: IntlShape, perms: bigint): string[] {
   const out = PERMISSION_LABELS.filter((p) => (perms & p.bit) === p.bit).map((p) => p.label);
-  return out.length ? out : ["no permissions"];
+  return out.length ? out : [intl.formatMessage({ id: "auditLogView.noPermissions", defaultMessage: "no permissions" })];
 }
 
 function roleNames(roster: CommunityRoles | undefined, roleIds: string[]): string {
@@ -257,6 +271,7 @@ function roleNames(roster: CommunityRoles | undefined, roleIds: string[]): strin
 }
 
 function toRow(
+  intl: IntlShape,
   e: ParsedEdition,
   roster: CommunityRoles | undefined,
   folded: FoldedControl | undefined,
@@ -284,11 +299,13 @@ function toRow(
         /* keep empty */
       }
       const details: string[] = [];
-      if (meta.name) details.push(`Name: ${meta.name}`);
-      if (meta.description) details.push(`Description: ${truncate(meta.description, 120)}`);
+      if (meta.name) details.push(intl.formatMessage({ id: "auditLogView.detail.name", defaultMessage: "Name: {name}" }, { name: meta.name }));
+      if (meta.description) details.push(intl.formatMessage({ id: "auditLogView.detail.description", defaultMessage: "Description: {description}" }, { description: truncate(meta.description, 120) }));
       return {
         ...base,
-        action: e.version === 1n ? "created the community" : "updated community settings",
+        action: e.version === 1n
+          ? intl.formatMessage({ id: "auditLogView.action.createdCommunity", defaultMessage: "created the community" })
+          : intl.formatMessage({ id: "auditLogView.action.updatedCommunity", defaultMessage: "updated community settings" }),
         details,
       };
     }
@@ -296,12 +313,14 @@ function toRow(
       const role = roleFromJSON(e.content);
       const details: string[] = [];
       if (role) {
-        details.push(`Role "${role.name}" at position ${role.position}`);
-        details.push(`Permissions: ${permissionLabels(role.permissions).join(", ")}`);
+        details.push(intl.formatMessage({ id: "auditLogView.detail.role", defaultMessage: "Role \"{name}\" at position {position}" }, { name: role.name, position: role.position }));
+        details.push(intl.formatMessage({ id: "auditLogView.detail.permissions", defaultMessage: "Permissions: {permissions}" }, { permissions: permissionLabels(intl, role.permissions).join(", ") }));
       }
       return {
         ...base,
-        action: e.version === 1n ? "created a role" : "updated a role",
+        action: e.version === 1n
+          ? intl.formatMessage({ id: "auditLogView.action.createdRole", defaultMessage: "created a role" })
+          : intl.formatMessage({ id: "auditLogView.action.updatedRole", defaultMessage: "updated a role" }),
         details,
       };
     }
@@ -312,12 +331,22 @@ function toRow(
       } catch {
         /* keep empty */
       }
-      const label = meta.name ?? channelName(folded, eidHex);
-      if (meta.deleted) return { ...base, action: "deleted a channel", details: [`#${label}`] };
-      const details = [`#${label}${meta.private ? " · private" : " · public"}`];
+      const label = meta.name ?? channelName(intl, folded, eidHex);
+      if (meta.deleted) {
+        return {
+          ...base,
+          action: intl.formatMessage({ id: "auditLogView.action.deletedChannel", defaultMessage: "deleted a channel" }),
+          details: [`#${label}`],
+        };
+      }
+      const details = [meta.private
+        ? intl.formatMessage({ id: "auditLogView.detail.privateChannel", defaultMessage: "#{name} · private" }, { name: label })
+        : intl.formatMessage({ id: "auditLogView.detail.publicChannel", defaultMessage: "#{name} · public" }, { name: label })];
       return {
         ...base,
-        action: e.version === 1n ? "created a channel" : "updated a channel",
+        action: e.version === 1n
+          ? intl.formatMessage({ id: "auditLogView.action.createdChannel", defaultMessage: "created a channel" })
+          : intl.formatMessage({ id: "auditLogView.action.updatedChannel", defaultMessage: "updated a channel" }),
         details,
       };
     }
@@ -326,16 +355,16 @@ function toRow(
       if (grant && grant.roleIds.length === 0) {
         return {
           ...base,
-          action: "revoked all roles from",
+          action: intl.formatMessage({ id: "auditLogView.action.revokedRoles", defaultMessage: "revoked all roles from" }),
           targetMembers: [grant.member],
           details: [],
         };
       }
       return {
         ...base,
-        action: "assigned roles to",
+        action: intl.formatMessage({ id: "auditLogView.action.assignedRoles", defaultMessage: "assigned roles to" }),
         targetMembers: grant ? [grant.member] : undefined,
-        details: grant ? [`Roles: ${roleNames(roster, grant.roleIds)}`] : [],
+        details: grant ? [intl.formatMessage({ id: "auditLogView.detail.roles", defaultMessage: "Roles: {roles}" }, { roles: roleNames(roster, grant.roleIds) })] : [],
       };
     }
     case VSK_BANLIST: {
@@ -350,9 +379,11 @@ function toRow(
       }
       return {
         ...base,
-        action: list.length ? "set the ban list to" : "cleared the ban list",
+        action: list.length
+          ? intl.formatMessage({ id: "auditLogView.action.setBanList", defaultMessage: "set the ban list to" })
+          : intl.formatMessage({ id: "auditLogView.action.clearedBanList", defaultMessage: "cleared the ban list" }),
         targetMembers: list.slice(0, 10),
-        details: list.length > 10 ? [`…and ${list.length - 10} more`] : [],
+        details: list.length > 10 ? [intl.formatMessage({ id: "auditLogView.detail.andMore", defaultMessage: "…and {count} more" }, { count: list.length - 10 })] : [],
       };
     }
     case VSK_INVITE_REGISTRY: {
@@ -365,12 +396,16 @@ function toRow(
       }
       return {
         ...base,
-        action: "updated their invite links",
-        details: count !== undefined ? [`${count} live link${count === 1 ? "" : "s"}`] : [],
+        action: intl.formatMessage({ id: "auditLogView.action.updatedInviteLinks", defaultMessage: "updated their invite links" }),
+        details: count !== undefined ? [intl.formatMessage({ id: "auditLogView.detail.liveLinks", defaultMessage: "{count, plural, one {# live link} other {# live links}}" }, { count })] : [],
       };
     }
     default:
-      return { ...base, action: `published a control edition (type ${e.vsk})`, details: [] };
+      return {
+        ...base,
+        action: intl.formatMessage({ id: "auditLogView.action.publishedEdition", defaultMessage: "published a control edition (type {type})" }, { type: String(e.vsk) }),
+        details: [],
+      };
   }
 }
 

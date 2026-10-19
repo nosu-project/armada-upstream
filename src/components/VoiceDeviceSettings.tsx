@@ -16,6 +16,7 @@ import {
 import { ownAvServers } from "@/concord/hooks/useVoice";
 import { probeAvBroker } from "@/concord/lib/voice";
 import { useAppContext } from "@/hooks/useAppContext";
+import { FormattedMessage, t, useIntl } from "@/i18n";
 import {
   desktopMicAccessStatus,
   isDesktop,
@@ -44,15 +45,31 @@ import {
   supportsSpeakerSelection,
 } from "@/lib/voiceDevices";
 
-function deviceLabel(device: MediaDeviceInfo, index: number, kind: string): string {
-  return audioDeviceLabel(device, `${kind} ${index + 1}`);
+function deviceLabel(device: MediaDeviceInfo, index: number, kind: "microphone" | "speaker"): string {
+  return audioDeviceLabel(
+    device,
+    t(
+      {
+        id: "voiceDeviceSettings.deviceFallback",
+        defaultMessage: "{kind, select, microphone {Microphone} other {Speaker}} {number}",
+      },
+      { kind, number: index + 1 },
+    ),
+  );
 }
+
+const osMicBlockedMessage = () =>
+  t({
+    id: "voiceDeviceSettings.osMicBlocked",
+    defaultMessage: "Microphone access is turned off for apps in your system settings.",
+  });
 
 /**
  * Settings-page mic/speaker pickers (raw mediaDevices API; outside a
  * LiveKitRoom), mic meter and test tone. Choices persist via `voiceDevices`.
  */
 export function VoiceDeviceSettings() {
+  const intl = useIntl();
   const { config, updateConfig } = useAppContext();
   const [mics, setMics] = useState<MediaDeviceInfo[]>([]);
   const [speakers, setSpeakers] = useState<MediaDeviceInfo[]>([]);
@@ -139,7 +156,7 @@ export function VoiceDeviceSettings() {
       if (status === "denied" || status === "restricted") {
         setOsMicBlocked(true);
         setPermissionError(
-          "Microphone access is turned off for apps in your system settings.",
+          osMicBlockedMessage(),
         );
       }
     });
@@ -209,7 +226,7 @@ export function VoiceDeviceSettings() {
         if (status === "denied" || status === "restricted") {
           setOsMicBlocked(true);
           setPermissionError(
-            "Microphone access is turned off for apps in your system settings.",
+            osMicBlockedMessage(),
           );
           stopMicTest();
           return;
@@ -217,8 +234,11 @@ export function VoiceDeviceSettings() {
       }
       setPermissionError(
         denied
-          ? "Microphone access denied. Allow it in your browser to test."
-          : "Could not access the microphone.",
+          ? t({
+              id: "voiceDeviceSettings.micDenied",
+              defaultMessage: "Microphone access denied. Allow it in your browser to test.",
+            })
+          : t({ id: "voiceDeviceSettings.micFailed", defaultMessage: "Could not access the microphone." }),
       );
       stopMicTest();
     }
@@ -352,7 +372,12 @@ export function VoiceDeviceSettings() {
     const opened = await openDesktopPushToTalkSystemSettings();
     setOpeningPushToTalkSettings(false);
     if (!opened) {
-      setPushToTalkSettingsError("Your desktop could not open its global-shortcut settings.");
+      setPushToTalkSettingsError(
+        t({
+          id: "voiceDeviceSettings.shortcutSettingsFailed",
+          defaultMessage: "Your desktop could not open its global-shortcut settings.",
+        }),
+      );
     }
   };
 
@@ -390,21 +415,23 @@ export function VoiceDeviceSettings() {
         <div className="flex items-center gap-2">
           <Mic className="size-4 text-muted-foreground shrink-0" />
           <label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-            Microphone
+            <FormattedMessage id="voiceDeviceSettings.microphone" defaultMessage="Microphone" />
           </label>
         </div>
         {routeChoice && (
           <Select value={micId} onValueChange={onMicChange}>
             <SelectTrigger className="bg-background/40 border-transparent">
-              <SelectValue placeholder="System default" />
+              <SelectValue placeholder={intl.formatMessage({ id: "voiceDeviceSettings.systemDefault", defaultMessage: "System default" })} />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="default">System default</SelectItem>
+              <SelectItem value="default">
+                <FormattedMessage id="voiceDeviceSettings.systemDefault" defaultMessage="System default" />
+              </SelectItem>
               {mics
                 .filter((d) => d.deviceId && d.deviceId !== "default")
                 .map((d, i) => (
                   <SelectItem key={d.deviceId} value={d.deviceId}>
-                    {deviceLabel(d, i, "Microphone")}
+                    {deviceLabel(d, i, "microphone")}
                   </SelectItem>
                 ))}
             </SelectContent>
@@ -420,7 +447,11 @@ export function VoiceDeviceSettings() {
             onClick={() => (testing ? stopMicTest() : void startMicTest())}
           >
             {testing ? <MicOff className="size-4" /> : <Mic className="size-4" />}
-            {testing ? "Stop" : "Test mic"}
+            {testing ? (
+              <FormattedMessage id="voiceDeviceSettings.stop" defaultMessage="Stop" />
+            ) : (
+              <FormattedMessage id="voiceDeviceSettings.testMic" defaultMessage="Test mic" />
+            )}
           </Button>
           <div className="flex flex-1 items-center gap-0.5" aria-hidden>
             {Array.from({ length: 16 }).map((_, i) => {
@@ -452,13 +483,15 @@ export function VoiceDeviceSettings() {
                 className="h-7 gap-2 clip-corner-lg"
                 onClick={() => void openDesktopMicSettings()}
               >
-                Open microphone settings
+                <FormattedMessage id="voiceDeviceSettings.openMicSettings" defaultMessage="Open microphone settings" />
               </Button>
             )}
           </div>
         )}
         {testing && !permissionError && (
-          <p className="text-xs text-muted-foreground">Speak and the meter should move.</p>
+          <p className="text-xs text-muted-foreground">
+            <FormattedMessage id="voiceDeviceSettings.speakHint" defaultMessage="Speak and the meter should move." />
+          </p>
         )}
       </div>
 
@@ -467,20 +500,22 @@ export function VoiceDeviceSettings() {
           <div className="flex items-center gap-2">
             <Volume2 className="size-4 text-muted-foreground shrink-0" />
             <label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-              Speaker
+              <FormattedMessage id="voiceDeviceSettings.speaker" defaultMessage="Speaker" />
             </label>
           </div>
           <Select value={speakerId} onValueChange={onSpeakerChange}>
             <SelectTrigger className="bg-background/40 border-transparent">
-              <SelectValue placeholder="System default" />
+              <SelectValue placeholder={intl.formatMessage({ id: "voiceDeviceSettings.systemDefault", defaultMessage: "System default" })} />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="default">System default</SelectItem>
+              <SelectItem value="default">
+                <FormattedMessage id="voiceDeviceSettings.systemDefault" defaultMessage="System default" />
+              </SelectItem>
               {speakers
                 .filter((d) => d.deviceId && d.deviceId !== "default")
                 .map((d, i) => (
                   <SelectItem key={d.deviceId} value={d.deviceId}>
-                    {deviceLabel(d, i, "Speaker")}
+                    {deviceLabel(d, i, "speaker")}
                   </SelectItem>
                 ))}
             </SelectContent>
@@ -493,7 +528,11 @@ export function VoiceDeviceSettings() {
             onClick={() => void playTestTone()}
           >
             <Volume2 className="size-4" />
-            {playingTone ? "Playing…" : "Test"}
+            {playingTone ? (
+              <FormattedMessage id="voiceDeviceSettings.playing" defaultMessage="Playing…" />
+            ) : (
+              <FormattedMessage id="voiceDeviceSettings.test" defaultMessage="Test" />
+            )}
           </Button>
         </div>
       )}
@@ -504,13 +543,13 @@ export function VoiceDeviceSettings() {
           <div className="flex items-center gap-2">
             <Keyboard className="size-4 text-muted-foreground shrink-0" />
             <label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-              Push to talk
+              <FormattedMessage id="voiceDeviceSettings.pushToTalk" defaultMessage="Push to talk" />
             </label>
             <Switch
               className="ml-auto"
               checked={pushToTalk.enabled}
               onCheckedChange={setPushToTalkEnabled}
-              aria-label="Enable push to talk"
+              aria-label={intl.formatMessage({ id: "voiceDeviceSettings.enablePushToTalk", defaultMessage: "Enable push to talk" })}
             />
           </div>
           <button
@@ -535,32 +574,54 @@ export function VoiceDeviceSettings() {
             )}
           >
             {recordingPushToTalk
-              ? "Press a key or shortcut…"
+              ? intl.formatMessage({ id: "voiceDeviceSettings.pressKey", defaultMessage: "Press a key or shortcut…" })
               : openingPushToTalkSettings
-                ? "Opening system shortcut settings…"
+                ? intl.formatMessage({
+                    id: "voiceDeviceSettings.openingShortcutSettings",
+                    defaultMessage: "Opening system shortcut settings…",
+                  })
                 : pushToTalkStatus?.backend === "portal"
-                  ? pushToTalkStatus.bindingLabel || "Set system shortcut"
+                  ? pushToTalkStatus.bindingLabel ||
+                    intl.formatMessage({ id: "voiceDeviceSettings.setSystemShortcut", defaultMessage: "Set system shortcut" })
                   : pushToTalk.binding.label}
           </button>
           {checkingPushToTalk ? (
-            <p className="text-xs text-muted-foreground">Registering global shortcut…</p>
+            <p className="text-xs text-muted-foreground">
+              <FormattedMessage id="voiceDeviceSettings.registering" defaultMessage="Registering global shortcut…" />
+            </p>
           ) : pushToTalk.enabled && pushToTalkStatus?.supported ? (
             <p className="text-xs text-success">
-              Ready globally: {pushToTalkStatus.bindingLabel || pushToTalk.binding.label}
-              {pushToTalkStatus.backend === "portal" ? " (managed by your desktop)" : ""}
+              {pushToTalkStatus.backend === "portal" ? (
+                <FormattedMessage
+                  id="voiceDeviceSettings.readyGloballyPortal"
+                  defaultMessage="Ready globally: {shortcut} (managed by your desktop)"
+                  values={{ shortcut: pushToTalkStatus.bindingLabel || pushToTalk.binding.label }}
+                />
+              ) : (
+                <FormattedMessage
+                  id="voiceDeviceSettings.readyGlobally"
+                  defaultMessage="Ready globally: {shortcut}"
+                  values={{ shortcut: pushToTalkStatus.bindingLabel || pushToTalk.binding.label }}
+                />
+              )}
             </p>
           ) : pushToTalk.enabled && pushToTalkStatus?.reason ? (
             <p className="text-xs text-destructive">{pushToTalkStatus.reason}</p>
           ) : (
             <p className="text-xs text-muted-foreground">
-              Hold this shortcut to transmit; releasing it mutes immediately, even while Armada
-              is in the background. Press Escape while recording to cancel.
+              <FormattedMessage
+                id="voiceDeviceSettings.pushToTalkHelp"
+                defaultMessage="Hold this shortcut to transmit; releasing it mutes immediately, even while Armada is in the background. Press Escape while recording to cancel."
+              />
             </p>
           )}
           {pushToTalkStatus?.backend === "portal" && pushToTalkStatus.supported && (
             <p className="text-xs text-muted-foreground">
               {pushToTalkStatus.settingsHint ||
-                "Wayland requires your desktop's Global Shortcuts portal for push to talk."}
+                intl.formatMessage({
+                  id: "voiceDeviceSettings.waylandHint",
+                  defaultMessage: "Wayland requires your desktop's Global Shortcuts portal for push to talk.",
+                })}
             </p>
           )}
           {pushToTalkSettingsError && (
@@ -574,12 +635,13 @@ export function VoiceDeviceSettings() {
         <div className="flex items-center gap-2">
           <Globe className="size-4 text-muted-foreground shrink-0" />
           <label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-            Voice server
+            <FormattedMessage id="voiceDeviceSettings.voiceServer" defaultMessage="Voice server" />
           </label>
-          <InfoTip label="About the voice server">
-            Used for direct-message calls and for communities that set no voice servers of their
-            own; a community that sets them uses only those, and this is ignored there. A custom
-            address replaces the built-in Armada voice servers on every synced client.
+          <InfoTip label={intl.formatMessage({ id: "voiceDeviceSettings.aboutVoiceServer", defaultMessage: "About the voice server" })}>
+            <FormattedMessage
+              id="voiceDeviceSettings.voiceServerHelp"
+              defaultMessage="Used for direct-message calls and for communities that set no voice servers of their own; a community that sets them uses only those, and this is ignored there. A custom address replaces the built-in Armada voice servers on every synced client."
+            />
           </InfoTip>
         </div>
         <Input
@@ -594,20 +656,41 @@ export function VoiceDeviceSettings() {
         />
         {voiceServerInvalid ? (
           <p className="text-xs text-destructive">
-            Not a valid server address. Enter a host like armada.example.com (https only).
+            <FormattedMessage
+              id="voiceDeviceSettings.invalidServer"
+              defaultMessage="Not a valid server address. Enter a host like armada.example.com (https only)."
+            />
           </p>
         ) : checkingServer ? (
-          <p className="text-xs text-muted-foreground">Checking voice server…</p>
+          <p className="text-xs text-muted-foreground">
+            <FormattedMessage id="voiceDeviceSettings.checkingServer" defaultMessage="Checking voice server…" />
+          </p>
         ) : reachableServer ? (
-          <p className="text-xs text-success">Voice server reachable: {reachableServer}</p>
+          <p className="text-xs text-success">
+            <FormattedMessage
+              id="voiceDeviceSettings.serverReachable"
+              defaultMessage="Voice server reachable: {server}"
+              values={{ server: reachableServer }}
+            />
+          </p>
         ) : (
           <p className="text-xs text-destructive">
-            No voice server reachable, so calls can’t start. Check the address or your connection.
+            <FormattedMessage
+              id="voiceDeviceSettings.serverUnreachable"
+              defaultMessage="No voice server reachable, so calls can’t start. Check the address or your connection."
+            />
           </p>
         )}
         <p className="text-xs text-muted-foreground">
-          Leave empty for the default
-          {CONCORD_AV_SERVERS[0] ? ` (${CONCORD_AV_SERVERS[0]})` : ""}.
+          {CONCORD_AV_SERVERS[0] ? (
+            <FormattedMessage
+              id="voiceDeviceSettings.leaveEmptyDefault"
+              defaultMessage="Leave empty for the default ({server})."
+              values={{ server: CONCORD_AV_SERVERS[0] }}
+            />
+          ) : (
+            <FormattedMessage id="voiceDeviceSettings.leaveEmpty" defaultMessage="Leave empty for the default." />
+          )}
         </p>
       </div>
     </div>

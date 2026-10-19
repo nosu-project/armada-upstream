@@ -11,6 +11,7 @@ import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useCustomEmojis } from "@/hooks/useCustomEmojis";
 import { useInsertText } from "@/hooks/useInsertText";
 import { toast } from "@/hooks/useToast";
+import { common, defineMessages, FormattedMessage, t, useIntl } from "@/i18n";
 import { useSetUserStatus, useUserStatus } from "@/hooks/useUserStatus";
 import { collectEmojiTags } from "@/lib/customEmoji";
 
@@ -24,12 +25,22 @@ interface StatusDialogProps {
   onOpenChange: (open: boolean) => void;
 }
 
-const PRESETS = ["Available", "Focusing", "Away", "Sleeping", "At lunch"];
+/** Formatted in the viewer's language; the chosen text is what gets published. */
+const PRESETS = Object.values(
+  defineMessages({
+    available: { id: "statusDialog.preset.available", defaultMessage: "Available" },
+    focusing: { id: "statusDialog.preset.focusing", defaultMessage: "Focusing" },
+    away: { id: "statusDialog.preset.away", defaultMessage: "Away" },
+    sleeping: { id: "statusDialog.preset.sleeping", defaultMessage: "Sleeping" },
+    atLunch: { id: "statusDialog.preset.atLunch", defaultMessage: "At lunch" },
+  }),
+);
 
 const MAX_LEN = 140;
 
 /** Set or clear the user's NIP-38 status (kind 30315, `d: "general"`). Saving empty clears it. */
 export function StatusDialog({ open, onOpenChange }: StatusDialogProps) {
+  const intl = useIntl();
   const { user } = useCurrentUser();
   const { data } = useUserStatus(user?.pubkey);
   const { mutateAsync: setStatus, isPending } = useSetUserStatus();
@@ -56,13 +67,15 @@ export function StatusDialog({ open, onOpenChange }: StatusDialogProps) {
         emojiTags: collectEmojiTags(next, customEmojis),
       });
       toast({
-        title: next.trim() ? "Status updated" : "Status cleared",
+        title: next.trim()
+          ? t({ id: "statusDialog.statusUpdated", defaultMessage: "Status updated" })
+          : t({ id: "statusDialog.statusCleared", defaultMessage: "Status cleared" }),
       });
       onOpenChange(false);
     } catch (err) {
       toast({
-        title: "Couldn’t update status",
-        description: err instanceof Error ? err.message : "Please try again.",
+        title: t({ id: "statusDialog.updateFailed", defaultMessage: "Couldn’t update status" }),
+        description: err instanceof Error ? err.message : t({ id: "statusDialog.pleaseTryAgain", defaultMessage: "Please try again." }),
         variant: "destructive",
       });
     }
@@ -71,7 +84,7 @@ export function StatusDialog({ open, onOpenChange }: StatusDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <ChromeDialogContent
-        title="Set a status"
+        title={intl.formatMessage({ id: "statusDialog.title", defaultMessage: "Set a status" })}
         // The autocomplete dropdown portals to body; don't treat taps on it as outside.
         onInteractOutside={(e) => {
           const target = e.target as Element | null;
@@ -85,10 +98,13 @@ export function StatusDialog({ open, onOpenChange }: StatusDialogProps) {
             <Smile className="size-6" />
           </div>
           <h2 className="chrome-dialog-title font-mono font-bold lowercase tracking-tight text-foreground">
-            set a status
+            <FormattedMessage id="statusDialog.heading" defaultMessage="set a status" />
           </h2>
           <p className="text-sm text-muted-foreground">
-            A short message shown next to your name. Visible to everyone. Clear it any time.
+            <FormattedMessage
+              id="statusDialog.intro"
+              defaultMessage="A short message shown next to your name. Visible to everyone. Clear it any time."
+            />
           </p>
         </div>
 
@@ -104,7 +120,7 @@ export function StatusDialog({ open, onOpenChange }: StatusDialogProps) {
               htmlFor="user-status"
               className="text-xs font-medium uppercase tracking-wide text-muted-foreground"
             >
-              What's happening?
+              <FormattedMessage id="statusDialog.whatsHappening" defaultMessage="What's happening?" />
             </Label>
             <div className="relative">
               <Input
@@ -112,7 +128,7 @@ export function StatusDialog({ open, onOpenChange }: StatusDialogProps) {
                 id="user-status"
                 value={content}
                 onChange={(e) => setContent(e.target.value)}
-                placeholder="e.g. 🎧 Heads down or :shortcode:"
+                placeholder={intl.formatMessage({ id: "statusDialog.placeholder", defaultMessage: "e.g. 🎧 Heads down or :shortcode:" })}
                 autoComplete="off"
                 maxLength={MAX_LEN}
                 autoFocus
@@ -129,7 +145,7 @@ export function StatusDialog({ open, onOpenChange }: StatusDialogProps) {
                     type="button"
                     variant="ghost"
                     size="icon"
-                    aria-label="Add emoji"
+                    aria-label={intl.formatMessage({ id: "statusDialog.addEmoji", defaultMessage: "Add emoji" })}
                     className="absolute right-1 top-1/2 -translate-y-1/2 size-8 text-muted-foreground hover:text-primary"
                   >
                     <SmilePlus className="size-4" />
@@ -158,16 +174,19 @@ export function StatusDialog({ open, onOpenChange }: StatusDialogProps) {
               </Popover>
             </div>
             <div className="flex flex-wrap gap-1.5 pt-1">
-              {PRESETS.map((preset) => (
-                <button
-                  key={preset}
-                  type="button"
-                  onClick={() => setContent(preset)}
-                  className="clip-corner-lg bg-background/40 px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-                >
-                  {preset}
-                </button>
-              ))}
+              {PRESETS.map((descriptor) => {
+                const preset = intl.formatMessage(descriptor);
+                return (
+                  <button
+                    key={descriptor.id}
+                    type="button"
+                    onClick={() => setContent(preset)}
+                    className="clip-corner-lg bg-background/40 px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                  >
+                    {preset}
+                  </button>
+                );
+              })}
             </div>
           </div>
 
@@ -180,7 +199,7 @@ export function StatusDialog({ open, onOpenChange }: StatusDialogProps) {
                 disabled={isPending}
                 onClick={() => save("")}
               >
-                Clear status
+                <FormattedMessage id="statusDialog.clearStatus" defaultMessage="Clear status" />
               </Button>
             )}
             <Button
@@ -189,10 +208,16 @@ export function StatusDialog({ open, onOpenChange }: StatusDialogProps) {
               className="flex-1 clip-corner-lg"
               onClick={() => onOpenChange(false)}
             >
-              Cancel
+              <FormattedMessage {...common.cancel} />
             </Button>
             <Button type="submit" className="flex-1 clip-corner-lg" disabled={isPending}>
-              {isPending ? <><Loader2 className="size-4 mr-2 animate-spin" /> Saving…</> : "Save"}
+              {isPending ? (
+                <>
+                  <Loader2 className="size-4 mr-2 animate-spin" /> <FormattedMessage {...common.saving} />
+                </>
+              ) : (
+                <FormattedMessage {...common.save} />
+              )}
             </Button>
           </div>
         </form>

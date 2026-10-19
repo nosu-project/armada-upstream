@@ -50,6 +50,7 @@ import { routeMediaCandidates, type MediaPolicy } from "@/lib/mediaPolicy";
 import { sanitizeUrl } from "@/lib/sanitizeUrl";
 import { useMediaPolicy } from "@/hooks/useMediaPolicy";
 import { plainProfilePicture } from "@/lib/profileImeta";
+import { t } from "@/i18n";
 
 /** Backfill rounds per channel; each round pages up to 20×50 wraps oldest-ward. */
 const MAX_BACKFILL_ROUNDS = 60;
@@ -66,6 +67,7 @@ export type AuditPhase = "idle" | "control" | "channels" | "profiles" | "assets"
 
 export interface AuditProgress {
   phase: AuditPhase;
+  /** Content to show in place of the phase's own label (a channel name); phases are worded by the view. */
   label?: string;
   done: number;
   total: number;
@@ -254,7 +256,7 @@ export function useHistoryAudit(community: Community | undefined) {
       setResult(null);
       try {
         // 1. Control plane — exhaustive sweep.
-        setProgress({ phase: "control", done: 0, total: 1, label: "Reading the control plane" });
+        setProgress({ phase: "control", done: 0, total: 1 });
         await sweepControl(nostr, community, { exhaustive: true });
         // sweepControl takes no signal; stop here if cancelled meanwhile.
         if (signal.aborted) throw new Error("cancelled");
@@ -315,7 +317,7 @@ export function useHistoryAudit(community: Community | undefined) {
           });
         }
 
-        setProgress({ phase: "profiles", done: 0, total: 1, label: "Resolving members" });
+        setProgress({ phase: "profiles", done: 0, total: 1 });
         const profiles: Record<string, ExportProfile> = {};
         const authorList = [...authors];
         for (const batch of chunk(authorList, PROFILE_BATCH)) {
@@ -347,7 +349,7 @@ export function useHistoryAudit(community: Community | undefined) {
           }
           const total = authorList.length + pendingAssets.length;
           let done = 0;
-          setProgress({ phase: "assets", done, total, label: "Embedding media" });
+          setProgress({ phase: "assets", done, total });
           for (const pk of authorList) {
             if (signal.aborted) throw new Error("cancelled");
             const pic = profiles[pk].picture;
@@ -361,7 +363,7 @@ export function useHistoryAudit(community: Community | undefined) {
                 profiles[pk] = rest;
               }
             }
-            setProgress({ phase: "assets", done: ++done, total, label: "Embedding media" });
+            setProgress({ phase: "assets", done: ++done, total });
           }
           for (const { ref, entry } of pendingAssets) {
             if (signal.aborted) throw new Error("cancelled");
@@ -372,7 +374,7 @@ export function useHistoryAudit(community: Community | undefined) {
             } else if (r.failed) {
               ref.failed = true;
             }
-            setProgress({ phase: "assets", done: ++done, total, label: "Embedding media" });
+            setProgress({ phase: "assets", done: ++done, total });
           }
         }
 
@@ -401,7 +403,7 @@ export function useHistoryAudit(community: Community | undefined) {
           setProgress({ phase: "idle", done: 0, total: 0 });
           return undefined;
         }
-        setError(e instanceof Error ? e.message : "The history audit failed.");
+        setError(e instanceof Error ? e.message : t({ id: "useHistoryAudit.failed", defaultMessage: "The history audit failed." }));
         setProgress({ phase: "error", done: 0, total: 0 });
         return undefined;
       }

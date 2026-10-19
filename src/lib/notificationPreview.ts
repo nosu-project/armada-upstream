@@ -9,6 +9,7 @@
 // `nostr-tools/nip19` subpath, not the barrel: this is bundled into the service worker.
 import { decode as nip19Decode } from "nostr-tools/nip19";
 
+import { defineMessages, t } from "@/i18n/intl";
 import { ALL_MEDIA_EXTS } from "@/lib/mediaUrls";
 import { isWebxdcMime } from "@/lib/webxdcMime";
 
@@ -77,34 +78,37 @@ export function cleanContent(content: string, names?: Map<string, string>): stri
     .trim();
 }
 
+/** What kind of media a message carries, for its "Sent …" line. */
+export type MediaKind = "gif" | "image" | "video" | "voice" | "game";
+
 /**
- * Label for attached media ("Sent an image"). The imeta MIME beats the URL
- * extension: encrypted blob URLs have none, and voice notes in .webm/.mp4 are
- * only distinguishable by `audio/*`.
+ * Media kind for attached media. The imeta MIME beats the URL extension:
+ * encrypted blob URLs have none, and voice notes in .webm/.mp4 are only
+ * distinguishable by `audio/*`.
  */
-export function mediaLabel(imetaMime: string | undefined, content: string): string | undefined {
-  const byMime = labelForMime(imetaMime);
+export function mediaKind(imetaMime: string | undefined, content: string): MediaKind | undefined {
+  const byMime = kindForMime(imetaMime);
   if (byMime) return byMime;
   if (!content) return undefined;
   const match = new RegExp(MEDIA_URL.source, "i").exec(content);
-  return match ? labelForExt(match[1].toLowerCase()) : undefined;
+  return match ? kindForExt(match[1].toLowerCase()) : undefined;
 }
 
-function labelForMime(mime: string | undefined): string | undefined {
+function kindForMime(mime: string | undefined): MediaKind | undefined {
   if (!mime) return undefined;
   const m = mime.toLowerCase();
-  if (m === "image/gif") return "a GIF";
-  if (m.startsWith("image/")) return "an image";
-  if (m.startsWith("video/")) return "a video";
-  if (m.startsWith("audio/")) return "a voice message";
-  if (isWebxdcMime(m)) return "a game";
+  if (m === "image/gif") return "gif";
+  if (m.startsWith("image/")) return "image";
+  if (m.startsWith("video/")) return "video";
+  if (m.startsWith("audio/")) return "voice";
+  if (isWebxdcMime(m)) return "game";
   return undefined;
 }
 
-function labelForExt(ext: string): string | undefined {
-  if (ext === "gif") return "a GIF";
-  if (ext === "xdc") return "a game";
-  return labelForMime(mimeForMediaExt(ext));
+function kindForExt(ext: string): MediaKind | undefined {
+  if (ext === "gif") return "gif";
+  if (ext === "xdc") return "game";
+  return kindForMime(mimeForMediaExt(ext));
 }
 
 /** Coarse MIME for a media extension — enough to pick a label. */
@@ -171,24 +175,70 @@ export interface NotificationMessage {
   mentionNames?: Map<string, string>;
 }
 
+/**
+ * Every notification text, in every notifier. The `notification.` prefix is
+ * the slice handed to the service worker, and Android's `strings.xml` and
+ * iOS's `Strings.swift` carry the same messages.
+ */
+export const notificationMessages = defineMessages({
+  reacted: { id: "notification.reacted", defaultMessage: "Reacted {emoji} to your message" },
+  repliedInThreadWith: { id: "notification.repliedInThreadWith", defaultMessage: "Replied in thread: {text}" },
+  repliedInThread: { id: "notification.repliedInThread", defaultMessage: "Replied in thread" },
+  sentMedia: {
+    id: "notification.sentMedia",
+    defaultMessage: "{kind, select, gif {Sent a GIF} image {Sent an image} video {Sent a video} voice {Sent a voice message} game {Sent a game} other {Sent a file}}",
+  },
+  sentFile: { id: "notification.sentFile", defaultMessage: "Sent a file" },
+  sentDirectMessage: { id: "notification.sentDirectMessage", defaultMessage: "Sent you a direct message" },
+  sentMessage: { id: "notification.sentMessage", defaultMessage: "Sent a message" },
+  mentionedYou: { id: "notification.mentionedYou", defaultMessage: "@you {text}" },
+  attributed: { id: "notification.attributed", defaultMessage: "{name}: {text}" },
+  chat: { id: "notification.chat", defaultMessage: "Chat" },
+  anonymous: { id: "notification.anonymous", defaultMessage: "Anonymous" },
+  appName: { id: "notification.appName", defaultMessage: "Armada" },
+  messagesSynced: { id: "notification.messagesSynced", defaultMessage: "Messages synced" },
+  newMessage: { id: "notification.newMessage", defaultMessage: "New message" },
+  newDirectMessage: { id: "notification.newDirectMessage", defaultMessage: "New direct message" },
+  newCommunityMessage: { id: "notification.newCommunityMessage", defaultMessage: "New message in a community" },
+  newChannelMessage: { id: "notification.newChannelMessage", defaultMessage: "New message in a channel" },
+  someoneMentionedYou: { id: "notification.someoneMentionedYou", defaultMessage: "Someone mentioned you" },
+  messageRequests: { id: "notification.messageRequests", defaultMessage: "Message requests" },
+  messageRequest: { id: "notification.messageRequest", defaultMessage: "Message request" },
+  newMessageRequest: {
+    id: "notification.newMessageRequest",
+    defaultMessage: "{count, plural, one {You have a new message request} other {You have new message requests}}",
+  },
+  gitActivity: {
+    id: "notification.gitActivity",
+    defaultMessage: "{name} {action, select, issue {opened an issue} pr {opened a pull request} comment {commented on a ticket} other {changed a ticket status}} in {repository}",
+  },
+  gitActivityFallback: { id: "notification.gitActivityFallback", defaultMessage: "New activity in the destination channel" },
+  roomTitle: { id: "notification.roomTitle", defaultMessage: "{community} / #{channel}" },
+  channelTitle: { id: "notification.channelTitle", defaultMessage: "#{channel}" },
+});
+
 /** Body text for one message; thread replies get Signal-style "Replied in thread: …". */
 export function messageLine(msg: NotificationMessage): string {
-  if (msg.reaction) return `Reacted ${reactionEmoji(msg.content)} to your message`;
+  if (msg.reaction) return t(notificationMessages.reacted, { emoji: reactionEmoji(msg.content) });
 
   const cleaned = truncate(cleanContent(msg.content, msg.mentionNames));
   let text: string;
   if (cleaned) {
-    text = msg.threadReply ? `Replied in thread: ${cleaned}` : cleaned;
+    text = msg.threadReply ? t(notificationMessages.repliedInThreadWith, { text: cleaned }) : cleaned;
   } else {
-    const label = mediaLabel(msg.imetaMime, msg.content);
-    if (label) text = `Sent ${label}`;
-    else if (msg.kind === KIND_DM_FILE) text = "Sent a file";
-    else if (msg.threadReply) text = "Replied in thread";
-    else text = msg.plane === "dm" ? "Sent you a direct message" : "Sent a message";
+    const kind = mediaKind(msg.imetaMime, msg.content);
+    if (kind) text = t(notificationMessages.sentMedia, { kind });
+    else if (msg.kind === KIND_DM_FILE) text = t(notificationMessages.sentFile);
+    else if (msg.threadReply) text = t(notificationMessages.repliedInThread);
+    else text = t(msg.plane === "dm" ? notificationMessages.sentDirectMessage : notificationMessages.sentMessage);
   }
 
   // Where the room is the title, flag the mention in the body.
-  return msg.mention && msg.plane !== "dm" ? `@you ${text}` : text;
+  return msg.mention && msg.plane !== "dm" ? t(notificationMessages.mentionedYou, { text }) : text;
+}
+
+function attribute(name: string, text: string): string {
+  return t(notificationMessages.attributed, { name, text });
 }
 
 /** A notification's presentation, ready to hand to the platform. */
@@ -211,11 +261,11 @@ export function presentNotification(
   const isDm = msg.plane === "dm";
 
   // Room lines are attributed to their sender; DM lines aren't (the title is the sender).
-  const attributed = isDm ? line : `${msg.authorName}: ${line}`;
+  const attributed = isDm ? line : attribute(msg.authorName, line);
   const body = lines && lines.length > 0 ? lines.join("\n") : attributed;
 
   return {
-    title: isDm ? msg.authorName : (msg.roomTitle || "Chat"),
+    title: isDm ? msg.authorName : (msg.roomTitle || t(notificationMessages.chat)),
     body,
     icon: (isDm ? msg.authorAvatar : msg.roomImage || msg.authorAvatar)
       || NOTIFICATION_FALLBACK_ICON,
@@ -226,5 +276,5 @@ export function presentNotification(
 /** The line {@link presentNotification} would append for `msg`. */
 export function attributedLine(msg: NotificationMessage): string {
   const line = messageLine(msg);
-  return msg.plane === "dm" ? line : `${msg.authorName}: ${line}`;
+  return msg.plane === "dm" ? line : attribute(msg.authorName, line);
 }

@@ -1,5 +1,6 @@
 import { nip19 } from "nostr-tools";
 
+import { t } from "@/i18n";
 import { config } from "@/lib/env";
 import { isNostrId } from "@/lib/nostrId";
 import { normalizeRelayUrl } from "@/lib/platform";
@@ -57,7 +58,7 @@ function hints(relays: string[] | undefined): string[] {
 /** Parse a curation source (`none`, naddr, npub/nprofile/hex, optional `nostr:`); errors are UI-worded. */
 export function parseDiscoverCuration(input: string): ParsedCuration {
   const value = input.trim().replace(/^nostr:/i, "");
-  if (!value) return { ok: false, error: "Enter an naddr, npub, or hex pubkey." };
+  if (!value) return { ok: false, error: t({ id: "discoverSource.empty", defaultMessage: "Enter an naddr, npub, or hex pubkey." }) };
   if (value.toLowerCase() === DISCOVER_CURATION_NONE) return { ok: true, curation: NONE };
   if (isNostrId(value.toLowerCase())) {
     return { ok: true, curation: { type: "follows", pubkey: value.toLowerCase(), relays: [] } };
@@ -66,13 +67,13 @@ export function parseDiscoverCuration(input: string): ParsedCuration {
   try {
     decoded = nip19.decode(value);
   } catch {
-    return { ok: false, error: "Not a valid naddr, npub, or hex pubkey." };
+    return { ok: false, error: t({ id: "discoverSource.invalid", defaultMessage: "Not a valid naddr, npub, or hex pubkey." }) };
   }
   switch (decoded.type) {
     case "naddr": {
       const { kind, pubkey, identifier, relays } = decoded.data;
       if (kind < 30000 || kind >= 40000 || !isNostrId(pubkey)) {
-        return { ok: false, error: "That naddr doesn't point to an addressable list." };
+        return { ok: false, error: t({ id: "discoverSource.notList", defaultMessage: "That naddr doesn't point to an addressable list." }) };
       }
       return { ok: true, curation: { type: "list", kind, pubkey, identifier, relays: hints(relays) } };
     }
@@ -84,7 +85,7 @@ export function parseDiscoverCuration(input: string): ParsedCuration {
         curation: { type: "follows", pubkey: decoded.data.pubkey, relays: hints(decoded.data.relays) },
       };
     default:
-      return { ok: false, error: "Use an naddr (a list), an npub, or a hex pubkey." };
+      return { ok: false, error: t({ id: "discoverSource.unsupported", defaultMessage: "Use an naddr (a list), an npub, or a hex pubkey." }) };
   }
 }
 

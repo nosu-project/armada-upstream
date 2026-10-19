@@ -6,6 +6,7 @@ import { useAuthor } from "@/hooks/useAuthor";
 import { usePortalDropdown } from "@/hooks/usePortalDropdown";
 import { matchSlashCommands, type SlashCapability, type SlashCommand } from "@/lib/slashCommands";
 import { cn } from "@/lib/utils";
+import { useIntl } from "@/i18n";
 
 import type { BotCommandEntry } from "@/lib/botCommands";
 
@@ -89,6 +90,7 @@ export function SlashCommandAutocomplete({
   botRecents,
   onRunBotCommand,
 }: SlashCommandAutocompleteProps) {
+  const intl = useIntl();
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [isOpen, setIsOpen] = useState(false);
@@ -126,7 +128,7 @@ export function SlashCommandAutocomplete({
       if (hit) recentRows.push({ type: "bot", entry: hit });
     }
     if (recentRows.length > 0) {
-      out.push({ key: "recents", label: "Recently used", rows: recentRows });
+      out.push({ key: "recents", label: intl.formatMessage({ id: "slashCommandAutocomplete.recentlyUsed", defaultMessage: "Recently used" }), rows: recentRows });
     }
 
     const base = matchSlashCommands(query, canModerate, capabilities);
@@ -135,7 +137,8 @@ export function SlashCommandAutocomplete({
       out.push({
         key: "local",
         // No label when it's the whole menu.
-        label: recentRows.length > 0 || ranked.length > 0 ? "Built-in" : undefined,
+        label: recentRows.length > 0 || ranked.length > 0 ? intl.formatMessage({ id: "slashCommandAutocomplete.builtIn", defaultMessage: "Built-in" })
+          : undefined,
         rows: local.map((command) => ({ type: "local", command })),
       });
     }
@@ -151,7 +154,7 @@ export function SlashCommandAutocomplete({
     }
 
     return out;
-  }, [isOpen, query, canModerate, capabilities, commandFilter, botEntries, botRecents]);
+  }, [isOpen, query, canModerate, capabilities, commandFilter, botEntries, botRecents, intl]);
 
   const rows = useMemo(() => sections.flatMap((s) => s.rows), [sections]);
 
@@ -333,7 +336,12 @@ export function SlashCommandAutocomplete({
           {showLoading && (
             <div className="flex items-center gap-2 px-3 py-2 text-xs text-muted-foreground">
               <span className="size-3 shrink-0 animate-spin rounded-full border-2 border-current border-t-transparent" />
-              {botCount > 0 ? `Loading ${botCount} bot${botCount === 1 ? "" : "s"}…` : "Looking for bots…"}
+              {botCount > 0
+                ? intl.formatMessage(
+                  { id: "slashCommandAutocomplete.loadingBots", defaultMessage: "Loading {count, plural, one {# bot} other {# bots}}…" },
+                  { count: botCount },
+                )
+                : intl.formatMessage({ id: "slashCommandAutocomplete.lookingForBots", defaultMessage: "Looking for bots…" })}
             </div>
           )}
         </div>

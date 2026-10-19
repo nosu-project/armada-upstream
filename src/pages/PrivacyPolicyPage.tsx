@@ -2,19 +2,23 @@ import { ArrowLeft } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { useBackOrHome } from "@/hooks/useBackOrHome";
+import { FormattedMessage, common, useIntl } from "@/i18n";
 import { APP_NAME } from "@/lib/platform";
 
 export function PrivacyPolicyPage() {
+  const intl = useIntl();
   const back = useBackOrHome();
 
   return (
     <main className="flex-1 min-w-0 flex flex-col safe-area-top">
       {/* Header — a detached floating command bar matching the settings page chrome. */}
       <header className="relative h-12 touch:h-[3.25rem] mx-gutter mt-1 sidebar:mt-3 w-[calc(100%-2*var(--gutter))] max-w-2xl sm:mx-auto px-2 sidebar:px-3 flex items-center gap-1.5 shrink-0 clip-corner-lg bg-chrome">
-        <Button variant="ghost" size="icon" className="size-9 shrink-0" aria-label="Back" onClick={back}>
+        <Button variant="ghost" size="icon" className="size-9 shrink-0" aria-label={intl.formatMessage(common.back)} onClick={back}>
           <ArrowLeft className="size-5" />
         </Button>
-        <h1 className="font-semibold truncate leading-tight">Privacy Policy</h1>
+        <h1 className="font-semibold truncate leading-tight">
+          <FormattedMessage id="privacyPolicyPage.title" defaultMessage="Privacy Policy" />
+        </h1>
       </header>
 
       <div className="flex-1 min-h-0 overflow-y-auto safe-area-bottom">

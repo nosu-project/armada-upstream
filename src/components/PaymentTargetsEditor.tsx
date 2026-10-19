@@ -13,6 +13,7 @@ import { PaymentMethodIcon } from '@/components/PaymentMethodIcon';
 import { useCurrentUser } from '@/hooks/useCurrentUser';
 import { usePaymentTargets, useUpdatePaymentTargets } from '@/hooks/usePaymentTargets';
 import { useToast } from '@/hooks/useToast';
+import { common, FormattedMessage, t, useIntl } from '@/i18n';
 import {
   PAYMENT_METHODS,
   PAYMENT_METHOD_LIST,
@@ -43,6 +44,7 @@ export interface PaymentTargetsEditorHandle {
  */
 export const PaymentTargetsEditor = forwardRef<PaymentTargetsEditorHandle>(
   function PaymentTargetsEditor(_props, ref) {
+    const intl = useIntl();
     const { user } = useCurrentUser();
     const { toast } = useToast();
     const { targets, isLoading } = usePaymentTargets(user?.pubkey);
@@ -88,10 +90,22 @@ export const PaymentTargetsEditor = forwardRef<PaymentTargetsEditorHandle>(
           const method = PAYMENT_METHODS[d.type];
           if (!method.validate(authority)) {
             toast({
-              title: `Invalid ${method.label} address`,
+              title: t(
+                { id: 'paymentTargetsEditor.invalidTitle', defaultMessage: 'Invalid {method} address' },
+                { method: method.label },
+              ),
               description: d.type === 'lightning'
-                ? `"${authority}" doesn't look like a valid ${method.label} address.`
-                : `"${authority}" doesn't look like a valid ${method.label} address/handle.`,
+                ? t(
+                  { id: 'paymentTargetsEditor.invalidAddress', defaultMessage: '"{value}" doesn\'t look like a valid {method} address.' },
+                  { value: authority, method: method.label },
+                )
+                : t(
+                  {
+                    id: 'paymentTargetsEditor.invalidHandle',
+                    defaultMessage: '"{value}" doesn\'t look like a valid {method} address/handle.',
+                  },
+                  { value: authority, method: method.label },
+                ),
               variant: 'destructive',
             });
             return false;
@@ -114,9 +128,11 @@ export const PaymentTargetsEditor = forwardRef<PaymentTargetsEditorHandle>(
           return true;
         } catch (err) {
           toast({
-            title: 'Error',
+            title: t(common.error),
             description:
-              err instanceof Error ? err.message : 'Failed to save payment methods.',
+              err instanceof Error
+                ? err.message
+                : t({ id: 'paymentTargetsEditor.saveFailed', defaultMessage: 'Failed to save payment methods.' }),
             variant: 'destructive',
           });
           return false;
@@ -129,16 +145,18 @@ export const PaymentTargetsEditor = forwardRef<PaymentTargetsEditorHandle>(
     return (
       <div className="space-y-4">
         <div>
-          <h2 className="text-sm font-semibold">Accept Donations</h2>
+          <h2 className="text-sm font-semibold">
+            <FormattedMessage id="paymentTargetsEditor.title" defaultMessage="Accept Donations" />
+          </h2>
           <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
-            Let supporters send you crypto and tips.
+            <FormattedMessage id="paymentTargetsEditor.description" defaultMessage="Let supporters send you crypto and tips." />
           </p>
         </div>
 
         {isLoading && drafts.length === 0 ? (
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            Loading…
+            <FormattedMessage {...common.loading} />
           </div>
         ) : drafts.length > 0 ? (
           <>
@@ -159,7 +177,10 @@ export const PaymentTargetsEditor = forwardRef<PaymentTargetsEditorHandle>(
                       onChange={(e) => updateDraft(draft.key, e.target.value)}
                       placeholder={method.placeholder}
                       className="h-9 flex-1 min-w-0 font-mono text-xs"
-                      aria-label={`${method.label} address`}
+                      aria-label={intl.formatMessage(
+                        { id: 'paymentTargetsEditor.addressLabel', defaultMessage: '{method} address' },
+                        { method: method.label },
+                      )}
                     />
                     <Button
                       type="button"
@@ -167,8 +188,14 @@ export const PaymentTargetsEditor = forwardRef<PaymentTargetsEditorHandle>(
                       size="icon"
                       onClick={() => removeDraft(draft.key)}
                       className="h-9 w-9 touch:size-11 shrink-0 text-muted-foreground hover:text-destructive"
-                      title={`Remove ${method.label}`}
-                      aria-label={`Remove ${method.label}`}
+                      title={intl.formatMessage(
+                        { id: 'paymentTargetsEditor.remove', defaultMessage: 'Remove {method}' },
+                        { method: method.label },
+                      )}
+                      aria-label={intl.formatMessage(
+                        { id: 'paymentTargetsEditor.remove', defaultMessage: 'Remove {method}' },
+                        { method: method.label },
+                      )}
                     >
                       <Trash2 className="h-4 w-4" />
                     </Button>
@@ -187,7 +214,7 @@ export const PaymentTargetsEditor = forwardRef<PaymentTargetsEditorHandle>(
                   className="h-8 text-xs gap-1.5"
                 >
                   <Plus className="h-3.5 w-3.5" />
-                  Add method
+                  <FormattedMessage id="paymentTargetsEditor.addMethod" defaultMessage="Add method" />
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="start" className="min-w-44">
@@ -210,7 +237,7 @@ export const PaymentTargetsEditor = forwardRef<PaymentTargetsEditorHandle>(
                 className="w-full h-11 gap-2 clip-corner-lg"
               >
                 <Plus className="h-4 w-4" />
-                Add donation
+                <FormattedMessage id="paymentTargetsEditor.addDonation" defaultMessage="Add donation" />
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start" className="min-w-44">

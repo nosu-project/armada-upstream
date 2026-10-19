@@ -4,6 +4,7 @@ import { useState } from "react";
 import { ArmadaCrest, ArmadaCrestKeyframes } from "@/components/brand/ArmadaCrest";
 import { Dialog, ChromeDialogContent } from "@/components/ui/dialog";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { FormattedMessage, useIntl } from "@/i18n";
 import { cn } from "@/lib/utils";
 
 import type { ReactNode } from "react";
@@ -15,10 +16,11 @@ interface AccountStandingDialogProps {
 
 /** A joke rendition of Discord's "Account Standing": the meter is pegged and snapped. */
 export function AccountStandingDialog({ open, onOpenChange }: AccountStandingDialogProps) {
+  const intl = useIntl();
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <ChromeDialogContent
-        title="Account standing"
+        title={intl.formatMessage({ id: "accountStandingDialog.title", defaultMessage: "Account standing" })}
         contentClassName="overflow-hidden text-center"
         // Focusing the punchline would open its explanation before the joke is read.
         onOpenAutoFocus={(e) => {
@@ -36,10 +38,10 @@ export function AccountStandingDialog({ open, onOpenChange }: AccountStandingDia
               className="pointer-events-none absolute inset-x-0 -inset-y-4 m-auto size-48 rounded-full bg-emerald-500/25 blur-3xl animate-[armada-epic-halo_0.9s_ease-in-out_infinite]"
             />
             <p className="relative text-2xs font-semibold uppercase tracking-[0.35em] text-muted-foreground">
-              Your account is
+              <FormattedMessage id="accountStandingDialog.yourAccountIs" defaultMessage="Your account is" />
             </p>
             <p className="relative text-[clamp(3rem,26cqw,5rem)] font-black leading-none tracking-tight text-emerald-400 animate-[armada-epic-pulse_0.9s_ease-in-out_infinite]">
-              EPIC
+              <FormattedMessage id="accountStandingDialog.epic" defaultMessage="EPIC" />
             </p>
             <EpicPulseKeyframes />
           </div>
@@ -72,13 +74,15 @@ function Punchline() {
             setOpen((o) => !o);
           }}
         >
-          We can't ban you.
+          <FormattedMessage id="accountStandingDialog.punchline" defaultMessage="We can't ban you." />
         </button>
       </TooltipTrigger>
       {/* Above the dialog (z-[250]), which the default tooltip layer is not. */}
       <TooltipContent className="z-[260] max-w-64 text-left text-xs leading-snug">
-        There's no Armada account to ban: your identity is a key only you hold. A community can remove you
-        from itself, but nobody can remove you from Armada.
+        <FormattedMessage
+          id="accountStandingDialog.punchlineExplanation"
+          defaultMessage="There's no Armada account to ban: your identity is a key only you hold. A community can remove you from itself, but nobody can remove you from Armada."
+        />
       </TooltipContent>
     </Tooltip>
   );
@@ -140,8 +144,8 @@ function StandingMeter() {
       </div>
 
       <div className="-mr-9 mt-2.5 flex items-baseline justify-between pr-8 text-3xs font-bold uppercase tracking-wider text-emerald-400/70 sm:-mr-11">
-        <span>All good!</span>
-        <span className="text-emerald-400">Off the charts</span>
+        <span><FormattedMessage id="accountStandingDialog.allGood" defaultMessage="All good!" /></span>
+        <span className="text-emerald-400"><FormattedMessage id="accountStandingDialog.offTheCharts" defaultMessage="Off the charts" /></span>
       </div>
     </div>
   );

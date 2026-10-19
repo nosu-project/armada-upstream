@@ -40,6 +40,7 @@ import { useAuthor } from "@/hooks/useAuthor";
 import { useFollowList } from "@/hooks/useFollowList";
 import { concordInviteReadKey, useReadState } from "@/hooks/useReadState";
 import { toast } from "@/hooks/useToast";
+import { FormattedMessage, t, useIntl } from "@/i18n";
 import { getAvatarShape } from "@/lib/avatarShape";
 import { relativeTime, shortTimeAgo } from "@/lib/formatTime";
 import { getDisplayName } from "@/lib/getDisplayName";
@@ -133,7 +134,7 @@ function RelayList({ relays }: { relays: string[] }) {
   return (
     <>
       <p className="px-3.5 pb-1.5 pt-3 text-2xs font-semibold uppercase tracking-wider text-muted-foreground">
-        Hosted on
+        <FormattedMessage id="invitesPage.hostedOn" defaultMessage="Hosted on" />
       </p>
       <div className="max-h-80 overflow-y-auto pb-2.5">
         {relays.map((url) => (
@@ -259,21 +260,46 @@ function FriendStack({ pubkeys }: { pubkeys: string[] }) {
       </span>
       {/* Narrow screens get a count: names would truncate mid-word. */}
       <span className="shrink-0 sm:hidden">
-        {pubkeys.length} friend{pubkeys.length === 1 ? " is" : "s are"} here
+        <FormattedMessage
+          id="invitesPage.friendCount"
+          defaultMessage="{count, plural, one {# friend is here} other {# friends are here}}"
+          values={{ count: pubkeys.length }}
+        />
       </span>
       <span className="hidden min-w-0 truncate sm:inline">
-        {named.map((pubkey, i) => (
-          <Fragment key={pubkey}>
-            {i > 0 && (i === named.length - 1 && rest === 0 ? " and " : ", ")}
-            <span className="font-medium text-foreground">
+        <FriendLine
+          names={named.map((pubkey) => (
+            <span key={pubkey} className="font-medium text-foreground">
               <FriendName pubkey={pubkey} />
             </span>
-          </Fragment>
-        ))}
-        {rest > 0 && ` and ${rest} other${rest === 1 ? "" : "s"}`}
-        {pubkeys.length === 1 ? " is here" : " are here"}
+          ))}
+          rest={rest}
+        />
       </span>
     </div>
+  );
+}
+
+/** "A, B and 2 others are here" — one whole sentence per shape, so word order can move. */
+function FriendLine({ names, rest }: { names: React.ReactNode[]; rest: number }) {
+  const [a, b, c] = names;
+  if (rest > 0) {
+    return (
+      <FormattedMessage
+        id="invitesPage.friendsHere.twoAndRest"
+        defaultMessage="{a}, {b} and {rest, plural, one {# other} other {# others}} are here"
+        values={{ a, b, rest }}
+      />
+    );
+  }
+  if (names.length === 1) {
+    return <FormattedMessage id="invitesPage.friendsHere.one" defaultMessage="{a} is here" values={{ a }} />;
+  }
+  if (names.length === 2) {
+    return <FormattedMessage id="invitesPage.friendsHere.two" defaultMessage="{a} and {b} are here" values={{ a, b }} />;
+  }
+  return (
+    <FormattedMessage id="invitesPage.friendsHere.three" defaultMessage="{a}, {b} and {c} are here" values={{ a, b, c }} />
   );
 }
 
@@ -292,6 +318,7 @@ function InviteRow({
   const channels = channelCount(invite);
   const sender = useAuthor(invite.sender);
   const senderName = getDisplayName(sender.data?.metadata, invite.sender);
+  const intl = useIntl();
 
   return (
     <button
@@ -326,16 +353,24 @@ function InviteRow({
         >
           <ShieldCheck className="size-3 shrink-0 text-success" />
           <span className="truncate">
-            {isCatchUp ? "Updated keys" : "Invited"} by {senderName}
+            {isCatchUp ? (
+              <FormattedMessage id="invitesPage.row.keysBy" defaultMessage="Updated keys by {name}" values={{ name: senderName }} />
+            ) : (
+              <FormattedMessage id="invitesPage.row.invitedBy" defaultMessage="Invited by {name}" values={{ name: senderName }} />
+            )}
           </span>
         </p>
         {channels > 0 && (
           <p className="mt-0.5 truncate text-2xs leading-snug text-muted-foreground/70">
-            {channels} channel{channels === 1 ? "" : "s"} included
+            <FormattedMessage
+              id="invitesPage.row.channelsIncluded"
+              defaultMessage="{count, plural, one {# channel included} other {# channels included}}"
+              values={{ count: channels }}
+            />
           </p>
         )}
       </div>
-      {unread && <span className="size-2 shrink-0 rounded-full bg-primary" aria-label="Unread" />}
+      {unread && <span className="size-2 shrink-0 rounded-full bg-primary" aria-label={intl.formatMessage({ id: "invitesPage.row.unread", defaultMessage: "Unread" })} />}
     </button>
   );
 }
@@ -380,6 +415,7 @@ export function InviteDetail({
   signInSlot?: React.ReactNode;
 }) {
   const busy = accepting || declining;
+  const intl = useIntl();
 
   const hue = communityHue(communityId);
   const channels = Array.isArray(bundle.channels) ? bundle.channels.length : 0;
@@ -419,8 +455,18 @@ export function InviteDetail({
   const facts: React.ReactNode[] = [];
   if (channels > 0) {
     facts.push(
-      <span key="channels" title="Channels this invite gets you into. There may be more inside.">
-        {channels} channel{channels === 1 ? "" : "s"}
+      <span
+        key="channels"
+        title={intl.formatMessage({
+          id: "invitesPage.detail.channelsHint",
+          defaultMessage: "Channels this invite gets you into. There may be more inside.",
+        })}
+      >
+        <FormattedMessage
+          id="invitesPage.detail.channels"
+          defaultMessage="{count, plural, one {# channel} other {# channels}}"
+          values={{ count: channels }}
+        />
       </span>,
     );
   }
@@ -429,8 +475,14 @@ export function InviteDetail({
       <StatPopover
         key="relays"
         icon={Radio}
-        label={`${relays} relay${relays === 1 ? "" : "s"}`}
-        hint="Servers that carry this community's messages."
+        label={intl.formatMessage(
+          { id: "invitesPage.detail.relays", defaultMessage: "{count, plural, one {# relay} other {# relays}}" },
+          { count: relays },
+        )}
+        hint={intl.formatMessage({
+          id: "invitesPage.detail.relaysHint",
+          defaultMessage: "Servers that carry this community's messages.",
+        })}
         width="w-80"
       >
         <RelayList relays={relayUrls} />
@@ -438,12 +490,23 @@ export function InviteDetail({
     );
   }
   if (receivedAt !== undefined) {
-    facts.push(<span key="sent">Sent {relativeTime(receivedAt)}</span>);
+    facts.push(
+      <span key="sent">
+        <FormattedMessage id="invitesPage.detail.sent" defaultMessage="Sent {time}" values={{ time: relativeTime(receivedAt) }} />
+      </span>,
+    );
   }
   if (expired) {
     facts.push(
-      <span key="expired" title="This invite can no longer be accepted." className="text-destructive">
-        Expired
+      <span
+        key="expired"
+        title={intl.formatMessage({
+          id: "invitesPage.detail.expiredHint",
+          defaultMessage: "This invite can no longer be accepted.",
+        })}
+        className="text-destructive"
+      >
+        <FormattedMessage id="invitesPage.detail.expired" defaultMessage="Expired" />
       </span>,
     );
   }
@@ -455,7 +518,7 @@ export function InviteDetail({
         <Button
           variant="ghost"
           size="icon"
-          aria-label="Back to invites"
+          aria-label={intl.formatMessage({ id: "invitesPage.detail.backToInvites", defaultMessage: "Back to invites" })}
           className="size-9 touch:size-11 shrink-0 sidebar:hidden"
           onClick={onBack}
         >
@@ -463,7 +526,11 @@ export function InviteDetail({
         </Button>
         <ShieldCheck className="size-5 text-success shrink-0" />
         <h1 className="font-semibold truncate leading-tight">
-          {isCatchUp ? "Updated community keys" : "Encrypted community invite"}
+          {isCatchUp ? (
+            <FormattedMessage id="invitesPage.detail.titleCatchUp" defaultMessage="Updated community keys" />
+          ) : (
+            <FormattedMessage id="invitesPage.detail.title" defaultMessage="Encrypted community invite" />
+          )}
         </h1>
       </header>
 
@@ -543,7 +610,11 @@ export function InviteDetail({
           {sender && (
             <div className="mt-4 clip-corner-lg bg-secondary/40 p-3.5">
               <p className="text-2xs font-semibold uppercase tracking-wider text-muted-foreground">
-                {isCatchUp ? "Keys sent by" : "Invited by"}
+                {isCatchUp ? (
+                  <FormattedMessage id="invitesPage.detail.keysSentBy" defaultMessage="Keys sent by" />
+                ) : (
+                  <FormattedMessage id="invitesPage.detail.invitedBy" defaultMessage="Invited by" />
+                )}
               </p>
               <ProfilePreviewCard pubkey={sender}>
                 <button
@@ -559,7 +630,7 @@ export function InviteDetail({
                     </Avatar>
                     {followsSender && (
                       <span
-                        title="Following"
+                        title={intl.formatMessage({ id: "invitesPage.detail.following", defaultMessage: "Following" })}
                         className="absolute -bottom-0.5 -right-0.5 grid size-4 place-items-center rounded-full bg-success text-success-foreground ring-2 ring-background"
                       >
                         <UserRoundCheck className="size-2.5" />
@@ -590,15 +661,15 @@ export function InviteDetail({
 
           <p className="mt-4 text-pretty text-sm leading-relaxed text-muted-foreground">
             {isCatchUp ? (
-              <>
-                Someone sent you access to more channels in a community you&rsquo;re already in.
-                Accepting just adds those channels, and nothing else changes.
-              </>
+              <FormattedMessage
+                id="invitesPage.detail.catchUpExplainer"
+                defaultMessage="Someone sent you access to more channels in a community you’re already in. Accepting just adds those channels, and nothing else changes."
+              />
             ) : (
-              <>
-                Accepting adds this community to your list. What&rsquo;s said inside stays private
-                to the people in it.
-              </>
+              <FormattedMessage
+                id="invitesPage.detail.explainer"
+                defaultMessage="Accepting adds this community to your list. What’s said inside stays private to the people in it."
+              />
             )}
           </p>
 
@@ -611,7 +682,11 @@ export function InviteDetail({
               disabled={busy}
             >
               {declining ? <Loader2 className="size-4 animate-spin" /> : <X className="size-4" />}
-              {isCatchUp ? "Not now" : "Decline"}
+              {isCatchUp ? (
+                <FormattedMessage id="invitesPage.detail.notNow" defaultMessage="Not now" />
+              ) : (
+                <FormattedMessage id="invitesPage.detail.decline" defaultMessage="Decline" />
+              )}
             </Button>
             {signInSlot ?? (
               <Button
@@ -621,14 +696,14 @@ export function InviteDetail({
               >
                 {accepting ? <Loader2 className="size-4 animate-spin" /> : <Check className="size-4" />}
                 {expired
-                  ? "Invite expired"
+                  ? intl.formatMessage({ id: "invitesPage.detail.inviteExpired", defaultMessage: "Invite expired" })
                   : accepting
                     ? isCatchUp
-                      ? "Adding…"
-                      : "Joining…"
+                      ? intl.formatMessage({ id: "invitesPage.detail.adding", defaultMessage: "Adding…" })
+                      : intl.formatMessage({ id: "invitesPage.detail.joining", defaultMessage: "Joining…" })
                     : isCatchUp
-                      ? "Add channels"
-                      : "Accept invite"}
+                      ? intl.formatMessage({ id: "invitesPage.detail.addChannels", defaultMessage: "Add channels" })
+                      : intl.formatMessage({ id: "invitesPage.detail.acceptInvite", defaultMessage: "Accept invite" })}
               </Button>
             )}
           </div>
@@ -675,13 +750,13 @@ function InboxInviteDetail({
   const handleAccept = async () => {
     try {
       const { communityId, name } = await accept({ invite });
-      toast({ title: "Joined encrypted community", description: name });
+      toast({ title: t({ id: "invitesPage.toast.joined", defaultMessage: "Joined encrypted community" }), description: name });
       navigate(`/c/${encodeURIComponent(communityId)}`);
     } catch (e) {
       if (e instanceof BannedFromCommunityError) {
         toast({
-          title: "You're banned",
-          description: "You can't join this community.",
+          title: t({ id: "invitesPage.toast.bannedTitle", defaultMessage: "You're banned" }),
+          description: t({ id: "invitesPage.toast.bannedDescription", defaultMessage: "You can't join this community." }),
           variant: "destructive",
         });
         await handleDecline();
@@ -689,7 +764,7 @@ function InboxInviteDetail({
       }
       if (e instanceof DissolvedCommunityError) {
         toast({
-          title: `${invite.name} was dissolved`,
+          title: t({ id: "invitesPage.toast.dissolved", defaultMessage: "{name} was dissolved" }, { name: invite.name }),
           description: e.message,
           variant: "destructive",
         });
@@ -697,8 +772,8 @@ function InboxInviteDetail({
         return;
       }
       toast({
-        title: "Couldn't join",
-        description: e instanceof Error ? e.message : "Unknown error",
+        title: t({ id: "invitesPage.toast.joinFailed", defaultMessage: "Couldn't join" }),
+        description: e instanceof Error ? e.message : t({ id: "invitesPage.toast.unknownError", defaultMessage: "Unknown error" }),
         variant: "destructive",
       });
     }
@@ -760,7 +835,9 @@ export function InvitesPage() {
           <div className="flex flex-1 sidebar:flex-none sidebar:w-80 min-w-0 flex-col safe-area-top h-full">
             <header className="relative h-12 touch:h-[3.25rem] mx-gutter mt-1 sidebar:mt-3 px-2 sidebar:px-3 flex items-center gap-1.5 shrink-0 clip-corner-lg bg-chrome">
               <MailPlus className="size-5 text-muted-foreground shrink-0" />
-              <h1 className="font-semibold truncate leading-tight">Invites</h1>
+              <h1 className="font-semibold truncate leading-tight">
+                <FormattedMessage id="invitesPage.title" defaultMessage="Invites" />
+              </h1>
               {unreadCount > 0 && (
                 <span className="ml-1 flex min-w-5 h-5 px-1.5 items-center justify-center rounded-full bg-primary text-primary-foreground text-xs font-bold leading-none">
                   {unreadCount}
@@ -772,8 +849,10 @@ export function InvitesPage() {
                 <div className="flex flex-col items-center gap-3 px-3 py-16 text-center text-muted-foreground">
                   <MailPlus className="size-10 opacity-40" />
                   <p className="text-sm">
-                    No invites. When someone hands you the keys to an encrypted community, it&rsquo;ll
-                    show up here.
+                    <FormattedMessage
+                      id="invitesPage.empty"
+                      defaultMessage="No invites. When someone hands you the keys to an encrypted community, it’ll show up here."
+                    />
                   </p>
                 </div>
               ) : (
@@ -806,7 +885,11 @@ export function InvitesPage() {
             <div className="flex flex-col items-center gap-3 max-w-sm">
               <MailPlus className="size-12 opacity-30" />
               <p className="text-sm">
-                {items.length === 0 ? "You have no pending invites." : "Select an invite to review it."}
+                {items.length === 0 ? (
+                  <FormattedMessage id="invitesPage.noPending" defaultMessage="You have no pending invites." />
+                ) : (
+                  <FormattedMessage id="invitesPage.selectInvite" defaultMessage="Select an invite to review it." />
+                )}
               </p>
             </div>
           </div>

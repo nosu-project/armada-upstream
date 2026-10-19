@@ -2,6 +2,7 @@ import { useState, type ReactNode } from "react";
 import { Loader2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { common, FormattedMessage } from "@/i18n";
 
 export interface SignerAppLink {
   href: string;
@@ -40,7 +41,7 @@ function OpenSignerRow({ links, onCancel }: { links: SignerAppLink[]; onCancel: 
       {waiting ? (
         <span className="text-sm opacity-80 inline-flex items-center gap-1.5">
           <Loader2 className="size-4 animate-spin" />
-          Waiting for signer…
+          <FormattedMessage id="signerToastContent.waiting" defaultMessage="Waiting for signer…" />
         </span>
       ) : (
         links.map((link) => (
@@ -53,7 +54,7 @@ function OpenSignerRow({ links, onCancel }: { links: SignerAppLink[]; onCancel: 
       )}
       {waiting ? (
         <Button type="button" variant="ghost" size="sm" onClick={onCancel}>
-          Cancel
+          <FormattedMessage {...common.cancel} />
         </Button>
       ) : (
         <SkipButton onClick={onCancel} />
@@ -69,7 +70,7 @@ function SkipButton({ onClick }: { onClick: () => void }) {
       onClick={onClick}
       className="text-sm bg-transparent border-none p-0 cursor-pointer opacity-80 underline underline-offset-2 min-h-[44px] inline-flex items-center"
     >
-      Skip
+      <FormattedMessage {...common.skip} />
     </button>
   );
 }

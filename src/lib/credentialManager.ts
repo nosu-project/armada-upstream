@@ -8,6 +8,8 @@
 
 import { Capacitor, registerPlugin } from "@capacitor/core";
 
+import { t } from "@/i18n";
+
 interface NsecCredential {
   npub: string;
   nsec: string;
@@ -52,7 +54,7 @@ export async function saveToKeyring(npub: string, nsec: string): Promise<Keyring
   }
   try {
     if ("credentials" in navigator && window.PasswordCredential) {
-      const cred = new window.PasswordCredential({ id: npub, password: nsec, name: "Nostr secret key" });
+      const cred = new window.PasswordCredential({ id: npub, password: nsec, name: t({ id: "credentialManager.credentialName", defaultMessage: "Nostr secret key" }) });
       await navigator.credentials.store(cred);
       return "saved";
     }
@@ -101,7 +103,7 @@ export async function exportNsec(nsec: string): Promise<ExportResult> {
         directory: Directory.Documents,
         encoding: Encoding.UTF8,
       });
-      return { status: "saved", location: `the Armada folder in Files (${KEY_FILENAME})` };
+      return { status: "saved", location: t({ id: "credentialManager.iosLocation", defaultMessage: "the Armada folder in Files ({filename})" }, { filename: KEY_FILENAME }) };
     } catch {
       return { status: "failed" };
     }
@@ -112,7 +114,7 @@ export async function exportNsec(nsec: string): Promise<ExportResult> {
     try {
       const handle = await picker({
         suggestedName: KEY_FILENAME,
-        types: [{ description: "Text file", accept: { "text/plain": [".txt"] } }],
+        types: [{ description: t({ id: "credentialManager.textFile", defaultMessage: "Text file" }), accept: { "text/plain": [".txt"] } }],
       });
       const writable = await handle.createWritable();
       await writable.write(nsec);
@@ -125,7 +127,7 @@ export async function exportNsec(nsec: string): Promise<ExportResult> {
   }
 
   downloadTextFile(KEY_FILENAME, nsec);
-  return { status: "saved", location: `your downloads (${KEY_FILENAME})` };
+  return { status: "saved", location: t({ id: "credentialManager.downloadsLocation", defaultMessage: "your downloads ({filename})" }, { filename: KEY_FILENAME }) };
 }
 
 export type ExportResult =

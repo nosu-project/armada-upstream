@@ -21,6 +21,7 @@ import {
 import type { Channel, Community } from "@/concord/lib/types";
 import { isRelayUnreachable } from "@/lib/relayHealth";
 import { beginSyncTask } from "@/lib/syncActivity";
+import { t } from "@/i18n/intl";
 import { invalidateSyncTopic, registerSyncTopic } from "@/sync/syncManager";
 import { emitWireScopes } from "@/wire/bus";
 
@@ -398,7 +399,12 @@ export async function syncChannelRound(
     const authGate = (url: string) => whenAuthSettled(url, () => channel.streams.map((s) => s.group));
     let synced = 0;
     const tick = () => {
-      if (synced > 0) task?.update({ detail: `${synced} ${synced === 1 ? "message" : "messages"}` });
+      if (synced > 0) task?.update({
+          detail: t(
+            { id: "channelSync.messageCount", defaultMessage: "{count, plural, one {# message} other {# messages}}" },
+            { count: synced },
+          ),
+        });
     };
     // Decrypt + commit per page (each write rings the bus). A page that failed to
     // commit must never be covered by a saved cursor.

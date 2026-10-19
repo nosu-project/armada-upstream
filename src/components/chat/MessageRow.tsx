@@ -16,6 +16,7 @@ import { getAvatarShape } from "@/lib/avatarShape";
 import { shortClockTime, shortTimeAgo } from "@/lib/formatTime";
 import { formatTimeLeft } from "@/lib/nip17/disappearing";
 import { cn } from "@/lib/utils";
+import { FormattedMessage, useIntl } from "@/i18n";
 import { useLongPress } from "@/hooks/useLongPress";
 import { useSwipeToReply } from "@/hooks/useSwipeToReply";
 
@@ -40,6 +41,7 @@ const EXPIRY_URGENT_SECS = 60 * 60;
  * last hour; this wrapper's timer exists just for that text.
  */
 function ExpirationClock({ createdAt, expiresAt }: { createdAt: number; expiresAt: number }) {
+  const intl = useIntl();
   const [now, setNow] = useState(() => Math.floor(Date.now() / 1000));
 
   useEffect(() => {
@@ -57,12 +59,21 @@ function ExpirationClock({ createdAt, expiresAt }: { createdAt: number; expiresA
   return (
     <span
       className="inline-flex items-center gap-0.5 shrink-0 text-3xs text-muted-foreground/60 tabular-nums"
-      title={`Disappears in ${label}`}
+      title={intl.formatMessage({ id: "messageRow.disappearsIn", defaultMessage: "Disappears in {time}" }, { time: label })}
       role="img"
-      aria-label={`Disappearing message, ${label} left`}
+      aria-label={intl.formatMessage({ id: "messageRow.disappearingLeft", defaultMessage: "Disappearing message, {time} left" }, { time: label })}
     >
       <ExpirationTimerIcon createdAt={createdAt} expiresAt={expiresAt} />
       {left <= EXPIRY_URGENT_SECS && <span>{label}</span>}
+    </span>
+  );
+}
+
+function EditedMark() {
+  const intl = useIntl();
+  return (
+    <span className="text-3xs text-muted-foreground/60 shrink-0" title={intl.formatMessage({ id: "messageRow.editedTitle", defaultMessage: "Edited" })}>
+      <FormattedMessage id="messageRow.edited" defaultMessage="(edited)" />
     </span>
   );
 }
@@ -313,7 +324,7 @@ export const MessageRow = memo(function MessageRow({
               {shortTimeAgo(createdAt)}
             </span>
             {edited && (
-              <span className="text-3xs text-muted-foreground/60 shrink-0" title="Edited">(edited)</span>
+              <EditedMark />
             )}
             {expiresAt !== undefined && <ExpirationClock createdAt={createdAt} expiresAt={expiresAt} />}
           </div>
@@ -333,7 +344,7 @@ export const MessageRow = memo(function MessageRow({
         {continuation && edited && (
           // Continuation rows have no header, so (edited) trails the body in normal flow.
           <div className="mt-0.5 flex items-center gap-2 leading-none">
-            <span className="text-3xs text-muted-foreground/60 shrink-0" title="Edited">(edited)</span>
+            <EditedMark />
           </div>
         )}
         {afterBody}

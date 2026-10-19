@@ -7,6 +7,7 @@ import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useEventStore } from "@/hooks/useEventStore";
 import { copyLegacySettingsDocs } from "@/hooks/useSettingsDoc";
+import { t } from "@/i18n";
 import {
   ensureSettingsKeys,
   resolveSettingsKeys,
@@ -73,7 +74,7 @@ export function useSettingsKeys(): UseSettingsKeysReturn {
   }, [pubkey, query.data, queryClient]);
 
   const ensure = useCallback(async (explicit = false) => {
-    if (!user) throw new Error("Not logged in");
+    if (!user) throw new Error(t({ id: "useSettingsKeys.notLoggedIn", defaultMessage: "Not logged in" }));
     const store = await eventStore;
     const ensured = await ensureSettingsKeys({
       nostr,

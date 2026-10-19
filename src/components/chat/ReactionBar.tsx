@@ -22,6 +22,7 @@ import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { isRenderableReactionKey } from "@/lib/customEmoji";
 import { QUICK_SLOTS_POINTER, toggleInput } from "@/lib/reactionToggle";
 import { cn } from "@/lib/utils";
+import { FormattedMessage, useIntl } from "@/i18n";
 
 import type { ReactInput, ReactionTally } from "@/hooks/useReactions";
 
@@ -136,7 +137,11 @@ function ReactionDetail({ tally }: { tally: ReactionTally }) {
       <div className="flex items-center gap-2 border-b border-border/60 px-3 py-2">
         <ReactionGlyph emojiKey={tally.key} url={shown.url} className="h-6 w-6 text-xl" />
         <span className="text-xs text-muted-foreground">
-          {tally.count} {tally.count === 1 ? "reaction" : "reactions"}
+          <FormattedMessage
+            id="reactionBar.count"
+            defaultMessage="{count, plural, one {# reaction} other {# reactions}}"
+            values={{ count: tally.count }}
+          />
         </span>
       </div>
       <div className="max-h-48 overflow-y-auto py-1">
@@ -162,6 +167,7 @@ function ReactionPill({
   canReact: boolean;
   onReact: (input: ReactInput) => void;
 }) {
+  const intl = useIntl();
   const { user } = useCurrentUser();
   const isTouch = useIsTouch();
   const [open, setOpen] = useState(false);
@@ -222,7 +228,13 @@ function ReactionPill({
         <button
           type="button"
           aria-pressed={tally.mine}
-          aria-label={`${tally.key}, ${tally.count} ${tally.count === 1 ? "reaction" : "reactions"}`}
+          aria-label={intl.formatMessage(
+            {
+              id: "reactionBar.pillLabel",
+              defaultMessage: "{emoji}, {count, plural, one {# reaction} other {# reactions}}",
+            },
+            { emoji: tally.key, count: tally.count },
+          )}
           className={cn(
             // Keep the button as the pointer target: native selection/drag on the nested
             // glyph fires `pointercancel` and kills the long-press.
@@ -439,6 +451,7 @@ export function ReactionActions({
   tallies = NO_TALLIES,
   quickSlots = QUICK_SLOTS_POINTER,
 }: ReactionActionsProps) {
+  const intl = useIntl();
   const { user } = useCurrentUser();
   const [open, setOpen] = useState(false);
   const pointerOpened = usePointerOpened();
@@ -454,7 +467,9 @@ export function ReactionActions({
           <Button
             variant="ghost"
             size="icon"
-            aria-label={mine ? `Remove ${f.key} reaction` : `React with ${f.key}`}
+            aria-label={mine
+              ? intl.formatMessage({ id: "reactionBar.removeReaction", defaultMessage: "Remove {emoji} reaction" }, { emoji: f.key })
+              : intl.formatMessage({ id: "reactionBar.reactWith", defaultMessage: "React with {emoji}" }, { emoji: f.key })}
             aria-pressed={mine}
             className={cn(
               "size-9 md:size-7 touch:size-11 touch:md:size-11",
@@ -474,7 +489,11 @@ export function ReactionActions({
         return (
           <Tooltip key={f.key}>
             <TooltipTrigger asChild>{button}</TooltipTrigger>
-            <TooltipContent>{mine ? `Remove ${f.key}` : f.key}</TooltipContent>
+            <TooltipContent>
+              {mine
+                ? intl.formatMessage({ id: "reactionBar.remove", defaultMessage: "Remove {emoji}" }, { emoji: f.key })
+                : f.key}
+            </TooltipContent>
           </Tooltip>
         );
       })}
@@ -485,7 +504,7 @@ export function ReactionActions({
               <Button
                 variant="ghost"
                 size="icon"
-                aria-label="Add reaction"
+                aria-label={intl.formatMessage({ id: "reactionBar.addReaction", defaultMessage: "Add reaction" })}
                 className="size-9 md:size-7 touch:size-11 touch:md:size-11 text-muted-foreground hover:text-primary"
                 {...pointerOpened.triggerProps}
               >
@@ -493,7 +512,7 @@ export function ReactionActions({
               </Button>
             </PopoverTrigger>
           </TooltipTrigger>
-          <TooltipContent>Add reaction</TooltipContent>
+          <TooltipContent>{intl.formatMessage({ id: "reactionBar.addReaction", defaultMessage: "Add reaction" })}</TooltipContent>
         </Tooltip>
         <PopoverContent
           side="top"

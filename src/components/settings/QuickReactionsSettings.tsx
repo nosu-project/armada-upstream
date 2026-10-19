@@ -9,6 +9,7 @@ import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { quickReactionRow, useFrequentReactionTable, type QuickReactionSlot } from "@/hooks/useFrequentReactions";
 import { usePublishQuickReactions, useQuickReactionList } from "@/hooks/useQuickReactionList";
 import { toast } from "@/hooks/useToast";
+import { FormattedMessage, t, useIntl } from "@/i18n";
 import { MAX_QUICK_REACTIONS } from "@/lib/reactionToggle";
 import {
   arrayMove,
@@ -53,8 +54,8 @@ export function QuickReactionsSettings() {
       .mutateAsync({ reactions: next, basis: list.event?.id ?? null })
       .catch((e: unknown) => {
         toast({
-          title: "Couldn't save quick reactions",
-          description: e instanceof Error ? e.message : "Publishing failed.",
+          title: t({ id: "quickReactionsSettings.saveFailed", defaultMessage: "Couldn't save quick reactions" }),
+          description: e instanceof Error ? e.message : t({ id: "quickReactionsSettings.publishFailed", defaultMessage: "Publishing failed." }),
           variant: "destructive",
         });
       })
@@ -93,9 +94,11 @@ export function QuickReactionsSettings() {
     <SettingsRow className="space-y-3">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 space-y-0.5">
-          <div className="text-sm font-medium leading-tight">Quick reactions</div>
+          <div className="text-sm font-medium leading-tight">
+            <FormattedMessage id="quickReactionsSettings.title" defaultMessage="Quick reactions" />
+          </div>
           <div className="text-xs text-muted-foreground leading-snug">
-            The reactions offered on a message. Choose one to swap it, or drag to reorder.
+            <FormattedMessage id="quickReactionsSettings.description" defaultMessage="The reactions offered on a message. Choose one to swap it, or drag to reorder." />
           </div>
         </div>
         {pinned.length > 0 && (
@@ -106,7 +109,7 @@ export function QuickReactionsSettings() {
             disabled={!ready}
             onClick={() => save([])}
           >
-            Reset
+            <FormattedMessage id="quickReactionsSettings.reset" defaultMessage="Reset" />
           </Button>
         )}
       </div>
@@ -128,7 +131,7 @@ export function QuickReactionsSettings() {
       </DndContext>
       {slots.some((s) => !s.pinned) && (
         <div className="text-xs text-muted-foreground leading-snug">
-          Faded reactions fill in from the ones you use most, and change as you react.
+          <FormattedMessage id="quickReactionsSettings.fadedHint" defaultMessage="Faded reactions fill in from the ones you use most, and change as you react." />
         </div>
       )}
     </SettingsRow>
@@ -150,6 +153,7 @@ function QuickReactionSlotButton({
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: slot.key, disabled });
   const [open, setOpen] = useState(false);
+  const intl = useIntl();
 
   return (
     <div
@@ -163,8 +167,8 @@ function QuickReactionSlotButton({
             type="button"
             disabled={disabled}
             aria-label={slot.pinned
-              ? `Change quick reaction ${position}`
-              : `Change quick reaction ${position}, filled in from your most used`}
+              ? intl.formatMessage({ id: "quickReactionsSettings.change", defaultMessage: "Change quick reaction {position}" }, { position })
+              : intl.formatMessage({ id: "quickReactionsSettings.changeFrequent", defaultMessage: "Change quick reaction {position}, filled in from your most used" }, { position })}
             {...attributes}
             {...listeners}
             className={cn(
@@ -198,7 +202,7 @@ function QuickReactionSlotButton({
           type="button"
           disabled={disabled}
           onClick={onUnpin}
-          aria-label={`Remove quick reaction ${position}`}
+          aria-label={intl.formatMessage({ id: "quickReactionsSettings.remove", defaultMessage: "Remove quick reaction {position}" }, { position })}
           className={cn(
             "absolute -right-2 -top-2 flex size-5 items-center justify-center rounded-full bg-background/80 text-muted-foreground shadow-sm backdrop-blur-sm transition-[color,opacity] hover:bg-background hover:text-destructive",
             "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",

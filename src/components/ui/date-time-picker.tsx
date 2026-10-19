@@ -1,10 +1,18 @@
-import { format } from "date-fns";
+import { format, type Locale } from "date-fns";
+import { de, enUS, es, fr, it, ja, nl } from "date-fns/locale";
 import { ArrowLeft, CalendarDays, Check, Clock } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
+import { common, FormattedMessage, useIntl, type IntlShape } from "@/i18n";
 import { cn } from "@/lib/utils";
+
+const DATE_FNS_LOCALES: Record<string, Locale> = { de, en: enUS, es, fr, it, ja, nl };
+
+function dateFnsLocale(locale: string): Locale {
+  return DATE_FNS_LOCALES[locale] ?? DATE_FNS_LOCALES[locale.split("-")[0]] ?? enUS;
+}
 
 const pad = (n: number) => String(n).padStart(2, "0");
 
@@ -41,9 +49,15 @@ interface DateTimePickerProps {
 
 const SLOTS = Array.from({ length: 48 }, (_, i) => ({ h: Math.floor(i / 2), m: i % 2 === 0 ? 0 : 30 }));
 
-function formatLabel(date: Date | undefined, mode: "date" | "datetime", placeholder?: string): string {
-  if (!date) return placeholder ?? "Pick a date";
-  return format(date, mode === "datetime" ? "EEE, MMM d, yyyy 'at' h:mm a" : "EEE, MMM d, yyyy");
+function formatLabel(intl: IntlShape, date: Date | undefined, mode: "date" | "datetime", placeholder?: string): string {
+  if (!date) return placeholder ?? intl.formatMessage({ id: "dateTimePicker.pickDate", defaultMessage: "Pick a date" });
+  const locale = dateFnsLocale(intl.locale);
+  const day = format(date, "EEE, MMM d, yyyy", { locale });
+  if (mode !== "datetime") return day;
+  return intl.formatMessage(
+    { id: "dateTimePicker.dateAtTime", defaultMessage: "{date} at {time}" },
+    { date: day, time: format(date, "h:mm a", { locale }) },
+  );
 }
 
 /**
@@ -51,6 +65,7 @@ function formatLabel(date: Date | undefined, mode: "date" | "datetime", placehol
  * the parent must be `relative`. Keeps its own draft so picking re-renders only the overlay.
  */
 export function DateTimePicker({ mode, value, onChange, onOpenChange, id, placeholder }: DateTimePickerProps) {
+  const intl = useIntl();
   const [open, setOpen] = useState(false);
   const date = parseValue(value);
 
@@ -71,7 +86,7 @@ export function DateTimePicker({ mode, value, onChange, onOpenChange, id, placeh
         className={cn("h-10 w-full justify-start gap-2 px-3 font-normal", !date && "text-muted-foreground")}
       >
         <Icon className="size-4 shrink-0 text-muted-foreground" />
-        <span className="truncate">{formatLabel(date, mode, placeholder)}</span>
+        <span className="truncate">{formatLabel(intl, date, mode, placeholder)}</span>
       </Button>
 
       {open && (
@@ -112,6 +127,7 @@ function PickerOverlay({
   onChange: (value: string) => void;
   onClose: () => void;
 }) {
+  const intl = useIntl();
   // Pushed to the parent only on close, so picking never re-renders the heavy dialog.
   const [draft, setDraft] = useState<Date | undefined>(initial);
   const listRef = useRef<HTMLDivElement>(null);
@@ -198,7 +214,7 @@ function PickerOverlay({
             type="button"
             variant="ghost"
             size="icon"
-            aria-label="Back"
+            aria-label={intl.formatMessage(common.back)}
             className="size-7 touch:size-10 shrink-0 text-muted-foreground hover:text-foreground"
             onClick={commitAndClose}
           >
@@ -206,7 +222,7 @@ function PickerOverlay({
           </Button>
           <span className="flex min-w-0 items-center gap-2 font-mono text-sm text-foreground">
             <Clock className="size-4 shrink-0 text-primary" />
-            <span className="truncate">{formatLabel(draft, mode, placeholder)}</span>
+            <span className="truncate">{formatLabel(intl, draft, mode, placeholder)}</span>
           </span>
         </div>
         <Button
@@ -215,7 +231,7 @@ function PickerOverlay({
           className="h-7 shrink-0 gap-1 px-3 clip-corner-lg"
           onClick={commitAndClose}
         >
-          <Check className="size-3.5" /> Set
+          <Check className="size-3.5" /> <FormattedMessage id="dateTimePicker.set" defaultMessage="Set" />
         </Button>
       </div>
 
@@ -226,7 +242,7 @@ function PickerOverlay({
         {mode === "datetime" && (
           <div className="flex w-32 flex-col border-l border-border/60">
             <div className="flex items-center gap-1.5 border-b border-border/60 px-3 py-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-              <Clock className="size-3.5" /> Time
+              <Clock className="size-3.5" /> <FormattedMessage id="dateTimePicker.time" defaultMessage="Time" />
             </div>
             <div ref={listRef} className="min-h-0 flex-1 overflow-y-auto p-1.5">
               {timeList}

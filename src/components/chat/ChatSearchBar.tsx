@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { PaneCoveredContext } from "@/contexts/PaneCoveredContext";
 import { useAndroidBack } from "@/hooks/useAndroidBack";
 import { cn } from "@/lib/utils";
+import { useIntl } from "@/i18n";
 
 /**
  * Inline message-search bar sliding over the chat header. Focuses with
@@ -17,7 +18,7 @@ export function ChatSearchBar({
   onChange,
   onClose,
   placeholder,
-  label = "Search messages",
+  label,
   filters,
   suggestions,
 }: {
@@ -32,6 +33,7 @@ export function ChatSearchBar({
   /** A caret-driven dropdown bound to the input (Concord's typed filter tokens). */
   suggestions?: (input: RefObject<HTMLInputElement | null>) => ReactNode;
 }) {
+  const intl = useIntl();
   const inputRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
     if (open) inputRef.current?.focus({ preventScroll: true });
@@ -66,7 +68,7 @@ export function ChatSearchBar({
           }
         }}
         placeholder={placeholder}
-        aria-label={label}
+        aria-label={label ?? intl.formatMessage({ id: "chatSearchBar.label", defaultMessage: "Search messages" })}
         className="h-8 touch:h-11 flex-1 border-0 bg-transparent px-1 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
       />
       {open && suggestions?.(inputRef)}
@@ -74,7 +76,7 @@ export function ChatSearchBar({
       <Button
         variant="ghost"
         size="icon"
-        aria-label="Close search"
+        aria-label={intl.formatMessage({ id: "chatSearchBar.close", defaultMessage: "Close search" })}
         className="size-8 touch:size-10 shrink-0 text-muted-foreground"
         onClick={onClose}
       >

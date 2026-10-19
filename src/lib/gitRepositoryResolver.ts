@@ -8,6 +8,7 @@ import {
   type GitRepositoryAddress,
   type GitRepositoryAnnouncement,
 } from "@/lib/gitActivity";
+import { t } from "@/i18n";
 import { isNostrId } from "@/lib/nostrId";
 import { GIT_ANNOUNCEMENT_DISCOVERY_RELAY, normalizeRelayUrl } from "@/lib/platform";
 
@@ -32,20 +33,20 @@ type NostrClient = {
 /** Resolve user input to a canonical repository coordinate. NIP-05 goes through nostr-tools' verified resolver. */
 export async function resolveGitRepositoryInput(input: string): Promise<GitRepositoryResolution> {
   const value = input.trim();
-  if (!value) throw new Error("Enter a repository address.");
+  if (!value) throw new Error(t({ id: "gitRepositoryResolver.enterAddress", defaultMessage: "Enter a repository address." }));
 
   try {
     const decoded = nip19.decode(value);
-    if (decoded.type !== "naddr") throw new Error("Unsupported Nostr address kind.");
+    if (decoded.type !== "naddr") throw new Error(t({ id: "gitRepositoryResolver.unsupportedKind", defaultMessage: "Unsupported Nostr address kind." }));
     const data = decoded.data;
-    if (data.kind !== GIT_REPOSITORY_ANNOUNCEMENT_KIND) throw new Error("Only kind-30617 repository addresses are supported.");
+    if (data.kind !== GIT_REPOSITORY_ANNOUNCEMENT_KIND) throw new Error(t({ id: "gitRepositoryResolver.onlyRepositoryKind", defaultMessage: "Only kind-30617 repository addresses are supported." }));
     const address = parseGitRepositoryAddress(`${data.kind}:${data.pubkey}:${data.identifier}`);
-    if (!address) throw new Error("Repository address has an invalid owner or identifier.");
+    if (!address) throw new Error(t({ id: "gitRepositoryResolver.invalidAddress", defaultMessage: "Repository address has an invalid owner or identifier." }));
     return { address, relayHints: normalizedRelays(data.relays ?? []) };
   } catch (error) {
     // An actual naddr decoding/validation error should not be treated as a URI.
     if (value.toLowerCase().startsWith("naddr1")) {
-      throw error instanceof Error ? error : new Error("Invalid repository address.");
+      throw error instanceof Error ? error : new Error(t({ id: "gitRepositoryResolver.invalidRepositoryAddress", defaultMessage: "Invalid repository address." }));
     }
   }
 
@@ -53,11 +54,11 @@ export async function resolveGitRepositoryInput(input: string): Promise<GitRepos
   try {
     url = new URL(value);
   } catch {
-    throw new Error("Enter an naddr or nostr:// repository address.");
+    throw new Error(t({ id: "gitRepositoryResolver.enterNaddrOrUri", defaultMessage: "Enter an naddr or nostr:// repository address." }));
   }
-  if (url.protocol !== "nostr:") throw new Error("Enter an naddr or nostr:// repository address.");
+  if (url.protocol !== "nostr:") throw new Error(t({ id: "gitRepositoryResolver.enterNaddrOrUri", defaultMessage: "Enter an naddr or nostr:// repository address." }));
   // `username` is the NIP-05 local part in nostr://alice@example.com/repo.
-  if (url.password || url.port || url.search || url.hash) throw new Error("Invalid nostr:// repository address.");
+  if (url.password || url.port || url.search || url.hash) throw new Error(t({ id: "gitRepositoryResolver.invalidUri", defaultMessage: "Invalid nostr:// repository address." }));
 
   // NIP-34 remote: `nostr://<owner>[/<relay>]/<identifier>` (ngit's .git/config form).
   // The identifier is the LAST segment; a relay hint is a preference, not a requirement.
@@ -65,14 +66,14 @@ export async function resolveGitRepositoryInput(input: string): Promise<GitRepos
   try {
     segments = url.pathname.split("/").filter(Boolean).map(decodeURIComponent);
   } catch {
-    throw new Error("Repository identifier is invalid.");
+    throw new Error(t({ id: "gitRepositoryResolver.identifierInvalid", defaultMessage: "Repository identifier is invalid." }));
   }
   if (segments.length < 1 || segments.length > 2) {
-    throw new Error("Repository identifier is required.");
+    throw new Error(t({ id: "gitRepositoryResolver.identifierRequired", defaultMessage: "Repository identifier is required." }));
   }
   const identifier = segments[segments.length - 1];
   const hintedRelays = segments.length === 2 ? [`wss://${segments[0]}`] : [];
-  if (!identifier) throw new Error("Repository identifier is required.");
+  if (!identifier) throw new Error(t({ id: "gitRepositoryResolver.identifierRequired", defaultMessage: "Repository identifier is required." }));
 
   let owner: string;
   if (url.hostname.toLowerCase().startsWith("npub1")) {
@@ -81,7 +82,7 @@ export async function resolveGitRepositoryInput(input: string): Promise<GitRepos
       if (decoded.type !== "npub" || !isNostrId(decoded.data)) throw new Error();
       owner = decoded.data;
     } catch {
-      throw new Error("Repository owner is not a valid npub.");
+      throw new Error(t({ id: "gitRepositoryResolver.ownerNotNpub", defaultMessage: "Repository owner is not a valid npub." }));
     }
   } else {
     // URL puts NIP-05's local part in `username`. Bare domains are rejected as ambiguous.
@@ -89,16 +90,16 @@ export async function resolveGitRepositoryInput(input: string): Promise<GitRepos
     try {
       nip05Address = url.username ? `${decodeURIComponent(url.username)}@${url.hostname}` : "";
     } catch {
-      throw new Error("Repository owner is not a valid NIP-05 address.");
+      throw new Error(t({ id: "gitRepositoryResolver.ownerNotNip05", defaultMessage: "Repository owner is not a valid NIP-05 address." }));
     }
-    if (!nip05Address) throw new Error("Repository owner must be an npub or verified NIP-05 address.");
+    if (!nip05Address) throw new Error(t({ id: "gitRepositoryResolver.ownerRequired", defaultMessage: "Repository owner must be an npub or verified NIP-05 address." }));
     const profile = await nip05.queryProfile(nip05Address);
-    if (!profile || !isNostrId(profile.pubkey)) throw new Error("Couldn't verify that NIP-05 repository owner.");
+    if (!profile || !isNostrId(profile.pubkey)) throw new Error(t({ id: "gitRepositoryResolver.ownerUnverified", defaultMessage: "Couldn't verify that NIP-05 repository owner." }));
     owner = profile.pubkey;
   }
 
   const address = parseGitRepositoryAddress(`${GIT_REPOSITORY_ANNOUNCEMENT_KIND}:${owner}:${identifier}`);
-  if (!address) throw new Error("Repository address has an invalid owner or identifier.");
+  if (!address) throw new Error(t({ id: "gitRepositoryResolver.invalidAddress", defaultMessage: "Repository address has an invalid owner or identifier." }));
   return { address, relayHints: hintedRelays };
 }
 
@@ -145,8 +146,8 @@ export async function fetchGitRepositoryAnnouncement(
 
   await collect(primary);
   await collect(discovery);
-  if (!newest) throw new Error("Repository announcement not found.");
-  if (!newest.relays.length) throw new Error("Repository announcement has no usable activity relays.");
+  if (!newest) throw new Error(t({ id: "gitRepositoryResolver.notFound", defaultMessage: "Repository announcement not found." }));
+  if (!newest.relays.length) throw new Error(t({ id: "gitRepositoryResolver.noRelays", defaultMessage: "Repository announcement has no usable activity relays." }));
   return { ...resolved, announcement: newest, relayHints: normalizedRelays([...newest.relays, ...resolved.relayHints]) };
 }
 

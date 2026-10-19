@@ -77,6 +77,9 @@ export interface SwPushConfig {
   mediaPolicy?: MediaPolicyConfig;
   /** The pool's general read relays, asked for a kind 0 missing from ArmadaDB. */
   profileRelays?: string[];
+  /** The interface language, with its `notification.*` messages; absent = English. */
+  locale?: string;
+  messages?: Record<string, string>;
 }
 
 function pushConfigUrl(): string {

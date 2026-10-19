@@ -10,6 +10,7 @@ import { useSearchProfiles, useMemberProfiles, type SearchProfile } from "@/hook
 import { getAvatarShape } from "@/lib/avatarShape";
 import { getCaretCoordinates } from "@/lib/caretCoordinates";
 import { cn } from "@/lib/utils";
+import { FormattedMessage, useIntl } from "@/i18n";
 import { parseProfileImeta } from "@/lib/profileImeta";
 
 interface MentionAutocompleteProps {
@@ -262,7 +263,9 @@ function EveryoneMentionItem({
       </span>
       <span className="min-w-0 flex-1">
         <span className="block text-sm font-semibold">@everyone</span>
-        <span className="block truncate text-xs text-muted-foreground">Notify everyone in this channel</span>
+        <span className="block truncate text-xs text-muted-foreground">
+          <FormattedMessage id="mentionAutocomplete.everyoneDescription" defaultMessage="Notify everyone in this channel" />
+        </span>
       </span>
     </button>
   );
@@ -277,8 +280,10 @@ function MentionItem({
   isSelected: boolean;
   onSelect: () => void;
 }) {
+  const intl = useIntl();
   const { metadata, pubkey } = profile;
-  const displayName = metadata.name || metadata.display_name || "Anonymous";
+  const displayName = metadata.name || metadata.display_name
+    || intl.formatMessage({ id: "mentionAutocomplete.anonymous", defaultMessage: "Anonymous" });
   const identifier = metadata.nip05 || nip19.npubEncode(pubkey);
 
   return (

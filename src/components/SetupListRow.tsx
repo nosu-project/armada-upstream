@@ -2,6 +2,7 @@ import { ChevronDown } from "lucide-react";
 
 import { BlossomLed, RelayLed } from "@/components/RelayLed";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { FormattedMessage } from "@/i18n";
 import { cn } from "@/lib/utils";
 
 import type { ReactNode } from "react";
@@ -49,7 +50,7 @@ export function SetupListRow({
           <span className="ml-auto flex min-w-0 items-center gap-1.5 font-mono text-xs text-muted-foreground">
             {first && (kind === "blossom" ? <BlossomLed url={first} /> : <RelayLed url={first} />)}
             <span className="truncate">
-              {first ? setupHost(first) : "None"}
+              {first ? setupHost(first) : <FormattedMessage id="setupListRow.none" defaultMessage="None" />}
               {urls.length > 1 && ` +${urls.length - 1}`}
             </span>
           </span>

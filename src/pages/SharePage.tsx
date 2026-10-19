@@ -23,6 +23,7 @@ import { useNip29Servers } from "@/hooks/useNip29Servers";
 import { usePinnedDms } from "@/hooks/usePinnedDms";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { useLiveCommunities } from "@/concord/hooks/useCommunityList";
+import { FormattedMessage, useIntl } from "@/i18n";
 import { flattenLayout, mergeLayout } from "@/lib/railLayout";
 import { chatRoute } from "@/lib/routes";
 import {
@@ -83,6 +84,7 @@ function DmDestination({
  * local-cache model ({@link buildSwitcherEntries}) plus DMs.
  */
 export function SharePage() {
+  const intl = useIntl();
   const [params] = useSearchParams();
   const navigate = useNavigate();
   // Set by an in-app forward (the origin conversation); OS shares fall back to "/".
@@ -171,13 +173,15 @@ export function SharePage() {
       <div className="mx-auto flex min-h-full max-w-xl flex-col gap-4 px-4 py-6">
         <div className="flex items-center justify-between gap-2">
           <h1 className="text-lg font-semibold leading-tight">
-            {forwardFrom ? "Forward to…" : "Share to…"}
+            {forwardFrom
+              ? <FormattedMessage id="sharePage.forwardTo" defaultMessage="Forward to…" />
+              : <FormattedMessage id="sharePage.shareTo" defaultMessage="Share to…" />}
           </h1>
           <Button
             variant="ghost"
             size="icon"
             className="size-8 shrink-0 touch:size-11"
-            aria-label="Dismiss"
+            aria-label={intl.formatMessage({ id: "sharePage.dismiss", defaultMessage: "Dismiss" })}
             onClick={dismiss}
           >
             <X className="size-4" />
@@ -199,17 +203,21 @@ export function SharePage() {
           ))}
           {!hasContent && (
             <p className="text-sm italic text-muted-foreground">
-              {hasShareTarget() ? "Preparing shared content…" : "Nothing shared"}
+              {hasShareTarget()
+                ? <FormattedMessage id="sharePage.preparing" defaultMessage="Preparing shared content…" />
+                : <FormattedMessage id="sharePage.nothingShared" defaultMessage="Nothing shared" />}
             </p>
           )}
         </div>
 
         <Command className="bg-chrome clip-corner-lg">
-          <CommandInput placeholder="Search conversations…" autoFocus />
+          <CommandInput placeholder={intl.formatMessage({ id: "sharePage.searchPlaceholder", defaultMessage: "Search conversations…" })} autoFocus />
           <CommandList className="max-h-none">
-            <CommandEmpty>No conversations found.</CommandEmpty>
+            <CommandEmpty>
+              <FormattedMessage id="sharePage.empty" defaultMessage="No conversations found." />
+            </CommandEmpty>
             {user && dmPeers.length > 0 && (
-              <CommandGroup heading="Direct messages">
+              <CommandGroup heading={intl.formatMessage({ id: "sharePage.directMessages", defaultMessage: "Direct messages" })}>
                 {dmPeers.map(({ peer, pinned: isPinned }) => (
                   <DmDestination
                     key={peer}
@@ -221,7 +229,7 @@ export function SharePage() {
               </CommandGroup>
             )}
             {entries.channels.length > 0 && (
-              <CommandGroup heading="Channels">
+              <CommandGroup heading={intl.formatMessage({ id: "sharePage.channels", defaultMessage: "Channels" })}>
                 {entries.channels.map((c) => (
                   <CommandItem
                     key={c.key}

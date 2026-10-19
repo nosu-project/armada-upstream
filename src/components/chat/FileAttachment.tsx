@@ -15,6 +15,7 @@ import { formatBytes, safeFilename } from "@/lib/fileBytes";
 import { companionEncryption } from "@/lib/imeta";
 import { modelFormat } from "@/lib/mediaUrls";
 import { cn } from "@/lib/utils";
+import { FormattedMessage, t, useIntl } from "@/i18n";
 
 import type { ImetaEncryption } from "@/lib/imeta";
 
@@ -71,6 +72,7 @@ function typeLabel(name: string, mime: string | undefined): string | null {
  * with — on a tap, into a canvas, with no outside resources (`modelRenderer`).
  */
 export function FileAttachment({ url, mime, name, size, encryption, fallbacks, thumbnail, compact, className }: FileAttachmentProps) {
+  const intl = useIntl();
   const [status, setStatus] = useState<"idle" | "loading" | "error">("idle");
   const [viewing3d, setViewing3d] = useState(false);
 
@@ -97,12 +99,16 @@ export function FileAttachment({ url, mime, name, size, encryption, fallbacks, t
 
       // Force a save, never a render; the sender's MIME is discarded.
       const location = await downloadBinaryFile(displayName, bytes);
-      if (location) toast({ title: "Saved", description: savedDescription(location) });
+      if (location) toast({ title: t({ id: "fileAttachment.saved", defaultMessage: "Saved" }), description: savedDescription(location) });
       setStatus("idle");
     } catch {
       setStatus("error");
       // A model card has no status line to say so.
-      if (format) toast({ title: "Download failed", description: displayName, variant: "destructive" });
+      if (format) toast({
+          title: t({ id: "fileAttachment.downloadFailed", defaultMessage: "Download failed" }),
+          description: displayName,
+          variant: "destructive",
+        });
     }
   }, [status, candidates, encryption, displayName, format]);
 
@@ -128,7 +134,10 @@ export function FileAttachment({ url, mime, name, size, encryption, fallbacks, t
               type="button"
               onClick={() => void download()}
               disabled={status === "loading"}
-              aria-label={`Download ${displayName}`}
+              aria-label={intl.formatMessage(
+                { id: "fileAttachment.downloadName", defaultMessage: "Download {name}" },
+                { name: displayName },
+              )}
               className="absolute right-3 top-3 z-10 flex size-10 touch:size-11 items-center justify-center clip-corner-lg bg-background/90 text-foreground shadow-sm backdrop-blur transition-colors hover:bg-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
             >
               {status === "loading" ? <Loader2 className="size-5 animate-spin" /> : <Download className="size-5" />}
@@ -138,7 +147,10 @@ export function FileAttachment({ url, mime, name, size, encryption, fallbacks, t
           <button
             type="button"
             onClick={() => setViewing3d(true)}
-            aria-label={`View ${displayName} in 3D`}
+            aria-label={intl.formatMessage(
+              { id: "fileAttachment.view3dName", defaultMessage: "View {name} in 3D" },
+              { name: displayName },
+            )}
             className="relative block aspect-[4/3] w-full bg-gradient-to-b from-muted/40 to-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
           >
             {thumbnail ? (
@@ -149,7 +161,7 @@ export function FileAttachment({ url, mime, name, size, encryption, fallbacks, t
             <span className="absolute inset-x-0 bottom-0 flex justify-center p-4">
               <span className="inline-flex items-center gap-2 clip-corner-lg bg-background/90 px-4 py-2 text-sm font-medium shadow-sm backdrop-blur transition-colors hover:bg-background">
                 <Rotate3d className="size-4" />
-                View in 3D
+                <FormattedMessage id="fileAttachment.view3d" defaultMessage="View in 3D" />
                 {size ? <span className="text-muted-foreground tabular-nums">· {formatBytes(size)}</span> : null}
               </span>
             </span>
@@ -178,8 +190,12 @@ export function FileAttachment({ url, mime, name, size, encryption, fallbacks, t
         <span className="block truncate text-sm font-medium">{displayName}</span>
         <span className="block text-2xs text-muted-foreground tabular-nums">
           {status === "error"
-            ? "Download failed. Tap to retry"
-            : [kind, size ? formatBytes(size) : null, "Tap to download"].filter(Boolean).join(" · ")}
+            ? intl.formatMessage({ id: "fileAttachment.retry", defaultMessage: "Download failed. Tap to retry" })
+            : [
+                kind,
+                size ? formatBytes(size) : null,
+                intl.formatMessage({ id: "fileAttachment.tapToDownload", defaultMessage: "Tap to download" }),
+              ].filter(Boolean).join(" · ")}
         </span>
       </span>
       <span className="size-8 shrink-0 rounded-full flex items-center justify-center text-muted-foreground group-hover:text-foreground">

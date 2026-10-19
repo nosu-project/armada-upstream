@@ -4,6 +4,7 @@ import { DisplayName } from "@/components/DisplayName";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Dialog, ChromeDialogContent } from "@/components/ui/dialog";
 import { useAuthor } from "@/hooks/useAuthor";
+import { FormattedMessage, useIntl } from "@/i18n";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { dittoHashtagUrl } from "@/lib/dittoUrl";
 import {
@@ -58,6 +59,7 @@ interface RsvpControlsProps {
  */
 export function RsvpControls({ tally, canRsvp, isSettingRsvp, onSet }: RsvpControlsProps) {
   const { accepted, declined, tentative, mine: myStatus } = tally;
+  const intl = useIntl();
 
   const choose = (status: RsvpStatus) => {
     onSet(status);
@@ -70,7 +72,7 @@ export function RsvpControls({ tally, canRsvp, isSettingRsvp, onSet }: RsvpContr
           <RsvpButton
             active={myStatus === "accepted"}
             icon={<Check className="size-4" />}
-            label="Going"
+            label={intl.formatMessage({ id: "calendarEventCard.going", defaultMessage: "Going" })}
             tone="success"
             disabled={isSettingRsvp}
             onClick={() => choose("accepted")}
@@ -78,7 +80,7 @@ export function RsvpControls({ tally, canRsvp, isSettingRsvp, onSet }: RsvpContr
           <RsvpButton
             active={myStatus === "tentative"}
             icon={<HelpCircle className="size-4" />}
-            label="Maybe"
+            label={intl.formatMessage({ id: "calendarEventCard.maybe", defaultMessage: "Maybe" })}
             tone="muted"
             disabled={isSettingRsvp}
             onClick={() => choose("tentative")}
@@ -86,7 +88,7 @@ export function RsvpControls({ tally, canRsvp, isSettingRsvp, onSet }: RsvpContr
           <RsvpButton
             active={myStatus === "declined"}
             icon={<X className="size-4" />}
-            label="Can't go"
+            label={intl.formatMessage({ id: "calendarEventCard.cantGo", defaultMessage: "Can't go" })}
             tone="destructive"
             disabled={isSettingRsvp}
             onClick={() => choose("declined")}
@@ -97,24 +99,32 @@ export function RsvpControls({ tally, canRsvp, isSettingRsvp, onSet }: RsvpContr
       <div className="space-y-2 text-sm">
         {accepted.length > 0 && (
           <div className="flex items-center justify-between gap-2">
-            <span className="text-muted-foreground">{accepted.length} going</span>
+            <span className="text-muted-foreground">
+              <FormattedMessage id="calendarEventCard.goingCount" defaultMessage="{count} going" values={{ count: accepted.length }} />
+            </span>
             <AttendeeAvatars pubkeys={accepted} />
           </div>
         )}
         {tentative.length > 0 && (
           <div className="flex items-center justify-between gap-2">
-            <span className="text-muted-foreground">{tentative.length} maybe</span>
+            <span className="text-muted-foreground">
+              <FormattedMessage id="calendarEventCard.maybeCount" defaultMessage="{count} maybe" values={{ count: tentative.length }} />
+            </span>
             <AttendeeAvatars pubkeys={tentative} />
           </div>
         )}
         {declined.length > 0 && (
           <div className="flex items-center justify-between gap-2">
-            <span className="text-muted-foreground">{declined.length} can't go</span>
+            <span className="text-muted-foreground">
+              <FormattedMessage id="calendarEventCard.cantGoCount" defaultMessage="{count} can't go" values={{ count: declined.length }} />
+            </span>
             <AttendeeAvatars pubkeys={declined} />
           </div>
         )}
         {accepted.length === 0 && tentative.length === 0 && declined.length === 0 && (
-          <p className="text-xs text-muted-foreground">No RSVPs yet.</p>
+          <p className="text-xs text-muted-foreground">
+            <FormattedMessage id="calendarEventCard.noRsvps" defaultMessage="No RSVPs yet." />
+          </p>
         )}
       </div>
     </div>
@@ -195,7 +205,11 @@ export function CalendarEventMessageCard({
         </div>
         <div className="min-w-0 flex-1">
           <div className="text-2xs font-medium uppercase tracking-wide text-muted-foreground">
-            {past ? "Past event" : "Event"}
+            {past ? (
+              <FormattedMessage id="calendarEventCard.pastEvent" defaultMessage="Past event" />
+            ) : (
+              <FormattedMessage id="calendarEventCard.event" defaultMessage="Event" />
+            )}
           </div>
           <h3 className="font-semibold leading-tight break-words">{event.title}</h3>
           <div className="mt-0.5 flex items-center gap-1.5 text-xs text-muted-foreground">
@@ -246,7 +260,11 @@ export function EventDetailDialog({ calendar, event, open, onOpenChange }: Event
             <div className="min-w-0">
               <h2 className="text-lg font-semibold leading-tight break-words">{event.title}</h2>
               <p className="text-xs text-muted-foreground">
-                Organized by <DisplayName pubkey={event?.event.pubkey} name={organizerName} />
+                <FormattedMessage
+                  id="calendarEventCard.organizedBy"
+                  defaultMessage="Organized by {name}"
+                  values={{ name: <DisplayName pubkey={event?.event.pubkey} name={organizerName} /> }}
+                />
               </p>
             </div>
           </div>

@@ -29,6 +29,7 @@ import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { toast } from "@/hooks/useToast";
 import { writeClipboardText } from "@/lib/clipboard";
+import { common, FormattedMessage, t, useIntl } from "@/i18n";
 
 /**
  * Invite-link admin panel (CORD-05): Public/Private status (registry, vsk 8),
@@ -47,6 +48,7 @@ export function InvitesView({ community }: { community: Community }) {
     isPublic,
     revokeWouldPrivatize,
   } = useInviteActions(community);
+  const intl = useIntl();
   const { user } = useCurrentUser();
   const { data: linkEpochs } = useMyLinkEpochs(community);
   const [copied, setCopied] = useState<string | null>(null);
@@ -89,7 +91,7 @@ export function InvitesView({ community }: { community: Community }) {
       setCopied(url);
       setTimeout(() => setCopied((c) => (c === url ? null : c)), 1500);
     } catch {
-      toast({ title: "Copy failed", variant: "destructive" });
+      toast({ title: t({ id: "invitesView.copyFailed", defaultMessage: "Copy failed" }), variant: "destructive" });
     }
   };
 
@@ -98,7 +100,11 @@ export function InvitesView({ community }: { community: Community }) {
     if (
       privatizes &&
       !confirm(
-        "This is the last live invite link. Revoking it makes the community private: new members can then only be added by direct invite, and banning a member will rotate the community keys.",
+        t({
+          id: "invitesView.confirmRevokeLast",
+          defaultMessage:
+            "This is the last live invite link. Revoking it makes the community private: new members can then only be added by direct invite, and banning a member will rotate the community keys.",
+        }),
       )
     ) {
       return;
@@ -107,14 +113,17 @@ export function InvitesView({ community }: { community: Community }) {
     try {
       await revokeLink({ url });
       toast({
-        title: "Invite link revoked",
+        title: t({ id: "invitesView.revokedTitle", defaultMessage: "Invite link revoked" }),
         description: privatizes
-          ? "It can no longer be used to join. This community is now private."
-          : "It can no longer be used to join.",
+          ? t({
+              id: "invitesView.revokedPrivate",
+              defaultMessage: "It can no longer be used to join. This community is now private.",
+            })
+          : t({ id: "invitesView.revokedDescription", defaultMessage: "It can no longer be used to join." }),
       });
     } catch (e) {
       toast({
-        title: "Couldn't revoke the link",
+        title: t({ id: "invitesView.revokeFailed", defaultMessage: "Couldn't revoke the link" }),
         description: e instanceof Error ? e.message : undefined,
         variant: "destructive",
       });
@@ -130,17 +139,37 @@ export function InvitesView({ community }: { community: Community }) {
     try {
       const { revoked, delisted, failed } = await revokeAllMyLinks();
       const parts: string[] = [];
-      if (revoked > 0) parts.push(`${revoked} revoked`);
-      if (delisted > revoked) parts.push(`${delisted - revoked} delisted from the registry`);
-      if (failed > 0) parts.push(`${failed} failed. Try revoking ${failed === 1 ? "it" : "them"} individually`);
+      if (revoked > 0) parts.push(t({ id: "invitesView.revokeAll.revoked", defaultMessage: "{count} revoked" }, { count: revoked }));
+      if (delisted > revoked) {
+        parts.push(
+          t(
+            { id: "invitesView.revokeAll.delisted", defaultMessage: "{count} delisted from the registry" },
+            { count: delisted - revoked },
+          ),
+        );
+      }
+      if (failed > 0) {
+        parts.push(
+          t(
+            {
+              id: "invitesView.revokeAll.failed",
+              defaultMessage: "{count, plural, one {# failed. Try revoking it individually} other {# failed. Try revoking them individually}}",
+            },
+            { count: failed },
+          ),
+        );
+      }
       toast({
-        title: failed > 0 ? "Some invite links couldn't be revoked" : "Invite links revoked",
-        description: parts.join(", ") + ".",
+        title:
+          failed > 0
+            ? t({ id: "invitesView.revokeAll.someFailedTitle", defaultMessage: "Some invite links couldn't be revoked" })
+            : t({ id: "invitesView.revokeAll.doneTitle", defaultMessage: "Invite links revoked" }),
+        description: t({ id: "invitesView.revokeAll.summary", defaultMessage: "{parts}." }, { parts: parts.join(", ") }),
         variant: failed > 0 ? "destructive" : undefined,
       });
     } catch (e) {
       toast({
-        title: "Couldn't revoke your links",
+        title: t({ id: "invitesView.revokeAll.error", defaultMessage: "Couldn't revoke your links" }),
         description: e instanceof Error ? e.message : undefined,
         variant: "destructive",
       });
@@ -151,7 +180,9 @@ export function InvitesView({ community }: { community: Community }) {
     <div className="mx-auto w-full max-w-2xl space-y-6 px-3 py-4">
       <div className="flex items-center gap-2">
         <LinkIcon className="size-5 text-primary" />
-        <h2 className="text-lg font-semibold">Invite links</h2>
+        <h2 className="text-lg font-semibold">
+          <FormattedMessage id="invitesView.title" defaultMessage="Invite links" />
+        </h2>
       </div>
 
       <section
@@ -165,16 +196,33 @@ export function InvitesView({ community }: { community: Community }) {
           <Lock className="mt-0.5 size-5 shrink-0 text-muted-foreground" />
         )}
         <div className="min-w-0">
-          <p className="font-medium">{isPublic ? "This community is public" : "This community is private"}</p>
+          <p className="font-medium">
+            {isPublic ? (
+              <FormattedMessage id="invitesView.publicTitle" defaultMessage="This community is public" />
+            ) : (
+              <FormattedMessage id="invitesView.privateTitle" defaultMessage="This community is private" />
+            )}
+          </p>
           <p className="text-muted-foreground">
-            {isPublic
-              ? "One or more live invite links let anyone with the link join. Revoke every live link to make it private again."
-              : "There are no live public invite links. People join only by direct invite."}
+            {isPublic ? (
+              <FormattedMessage
+                id="invitesView.publicDescription"
+                defaultMessage="One or more live invite links let anyone with the link join. Revoke every live link to make it private again."
+              />
+            ) : (
+              <FormattedMessage
+                id="invitesView.privateDescription"
+                defaultMessage="There are no live public invite links. People join only by direct invite."
+              />
+            )}
           </p>
           {isPublic && listings.length > 0 && (
             <p className="mt-1 flex items-center gap-1.5 font-medium text-primary">
               <Megaphone className="size-3.5 shrink-0" />
-              Listed on Discover, so anyone browsing can find and join it.
+              <FormattedMessage
+                id="invitesView.listedOnDiscover"
+                defaultMessage="Listed on Discover, so anyone browsing can find and join it."
+              />
             </p>
           )}
         </div>
@@ -192,11 +240,14 @@ export function InvitesView({ community }: { community: Community }) {
 
       <section className="space-y-2">
         <h3 className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-          Your live links
+          <FormattedMessage id="invitesView.yourLiveLinks" defaultMessage="Your live links" />
         </h3>
         {myLinks.length === 0 && orphanCount === 0 && (
           <p className="text-sm text-muted-foreground">
-            You haven't created any invite links for this community.
+            <FormattedMessage
+              id="invitesView.noLinks"
+              defaultMessage="You haven't created any invite links for this community."
+            />
           </p>
         )}
         {myLinks.length > 0 && (
@@ -219,7 +270,7 @@ export function InvitesView({ community }: { community: Community }) {
                     size="icon"
                     variant="outline"
                     className="shrink-0"
-                    aria-label="View link details"
+                    aria-label={intl.formatMessage({ id: "invitesView.viewLinkDetails", defaultMessage: "View link details" })}
                     onClick={() => setInspecting(e)}
                   >
                     <Braces className="size-3.5" />
@@ -229,7 +280,7 @@ export function InvitesView({ community }: { community: Community }) {
                     size="icon"
                     variant="outline"
                     className="shrink-0"
-                    aria-label="Copy link"
+                    aria-label={intl.formatMessage(common.copyLink)}
                     onClick={() => handleCopy(e.url)}
                   >
                     {copied === e.url ? (
@@ -246,35 +297,67 @@ export function InvitesView({ community }: { community: Community }) {
                     disabled={isRevoking && revoking === e.url}
                     onClick={() => handleRevoke(e.url)}
                   >
-                    {revoking === e.url ? <Loader2 className="size-3.5 animate-spin" /> : "Revoke"}
+                    {revoking === e.url ? <Loader2 className="size-3.5 animate-spin" /> : <FormattedMessage id="invitesView.revoke" defaultMessage="Revoke" />}
                   </Button>
                 </div>
                 <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-2xs text-muted-foreground">
                   <span
                     className="tabular-nums"
-                    title="The community epoch this link's keys belong to. It advances each time the community rekeys."
+                    title={intl.formatMessage({
+                      id: "invitesView.epochTitle",
+                      defaultMessage:
+                        "The community epoch this link's keys belong to. It advances each time the community rekeys.",
+                    })}
                   >
-                    Epoch {servedEpoch ?? epoch}
+                    <FormattedMessage
+                      id="invitesView.epoch"
+                      defaultMessage="Epoch {epoch}"
+                      values={{ epoch: servedEpoch ?? epoch }}
+                    />
                   </span>
-                  {e.label && <span>Label: {e.label}</span>}
-                  <span>Created {new Date(e.created_at * 1000).toLocaleDateString()}</span>
+                  {e.label && (
+                    <span>
+                      <FormattedMessage id="invitesView.label" defaultMessage="Label: {label}" values={{ label: e.label }} />
+                    </span>
+                  )}
+                  <span>
+                    <FormattedMessage
+                      id="invitesView.created"
+                      defaultMessage="Created {date}"
+                      values={{ date: new Date(e.created_at * 1000).toLocaleDateString(intl.locale) }}
+                    />
+                  </span>
                   {e.expires_at ? (
                     <span className={e.expires_at * 1000 < Date.now() ? "text-destructive" : undefined}>
-                      {e.expires_at * 1000 < Date.now() ? "Expired " : "Expires "}
-                      {new Date(e.expires_at * 1000).toLocaleDateString()}
+                      {e.expires_at * 1000 < Date.now() ? (
+                        <FormattedMessage
+                          id="invitesView.expired"
+                          defaultMessage="Expired {date}"
+                          values={{ date: new Date(e.expires_at * 1000).toLocaleDateString(intl.locale) }}
+                        />
+                      ) : (
+                        <FormattedMessage
+                          id="invitesView.expires"
+                          defaultMessage="Expires {date}"
+                          values={{ date: new Date(e.expires_at * 1000).toLocaleDateString(intl.locale) }}
+                        />
+                      )}
                     </span>
                   ) : (
-                    <span>Never expires</span>
+                    <span>
+                      <FormattedMessage id="invitesView.neverExpires" defaultMessage="Never expires" />
+                    </span>
                   )}
                 </div>
                 {behind && (
                   <div className="flex items-start gap-1.5 rounded bg-warning/10 px-2 py-1.5 text-2xs text-warning">
                     <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />
                     <span>
-                      This link is on epoch {servedEpoch}, but the community has since moved to epoch{" "}
-                      {epoch}. Someone joining now could land on the old keys. It refreshes
-                      automatically when you reopen this community from a device that holds it;
-                      if it lingers, revoke and mint a fresh link.
+                      <FormattedMessage
+                        id="invitesView.behindEpoch"
+                        defaultMessage="This link is on epoch {served}, but the community has since moved to epoch {current}. Someone joining now could land on the old keys. It refreshes automatically when you reopen this community from a device that holds it; if it lingers, revoke and mint a fresh link."
+                        values={{ served: servedEpoch, current: epoch }}
+                      />
                     </span>
                   </div>
                 )}
@@ -287,11 +370,11 @@ export function InvitesView({ community }: { community: Community }) {
           <div className="flex items-start gap-1.5 rounded-md bg-warning/10 px-3 py-2 text-xs text-warning">
             <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />
             <span>
-              The community registry lists {orphanCount} more invite link
-              {orphanCount === 1 ? "" : "s"} of yours whose signing secret{" "}
-              {orphanCount === 1 ? "isn't" : "aren't"} on this account (created elsewhere, or the
-              synced record was lost), so {orphanCount === 1 ? "it" : "they"} can't be revoked one
-              by one. "Revoke all" removes {orphanCount === 1 ? "it" : "them"} from the registry.
+              <FormattedMessage
+                id="invitesView.orphans"
+                defaultMessage={`{count, plural, one {The community registry lists # more invite link of yours whose signing secret isn't on this account (created elsewhere, or the synced record was lost), so it can't be revoked one by one. "Revoke all" removes it from the registry.} other {The community registry lists # more invite links of yours whose signing secret aren't on this account (created elsewhere, or the synced record was lost), so they can't be revoked one by one. "Revoke all" removes them from the registry.}}`}
+                values={{ count: orphanCount }}
+              />
             </span>
           </div>
         )}
@@ -306,10 +389,15 @@ export function InvitesView({ community }: { community: Community }) {
           >
             {isRevokingAll ? (
               <>
-                <Loader2 className="size-3.5 animate-spin" /> Revoking…
+                <Loader2 className="size-3.5 animate-spin" />{" "}
+                <FormattedMessage id="invitesView.revoking" defaultMessage="Revoking…" />
               </>
             ) : (
-              `Revoke all my invite links (${myLinks.length + orphanCount})`
+              <FormattedMessage
+                id="invitesView.revokeAllButton"
+                defaultMessage="Revoke all my invite links ({count})"
+                values={{ count: myLinks.length + orphanCount }}
+              />
             )}
           </Button>
         )}
@@ -317,14 +405,18 @@ export function InvitesView({ community }: { community: Community }) {
 
       <section className="space-y-2">
         <h3 className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-          All invite links in this community
+          <FormattedMessage id="invitesView.allLinks" defaultMessage="All invite links in this community" />
         </h3>
         <p className="text-xs text-muted-foreground">
-          Every member who has live invite links, and how many. Only a link's creator can see
-          its URL. This list shows who invited and how many links they hold.
+          <FormattedMessage
+            id="invitesView.allLinksDescription"
+            defaultMessage="Every member who has live invite links, and how many. Only a link's creator can see its URL. This list shows who invited and how many links they hold."
+          />
         </p>
         {registry.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No live invite links.</p>
+          <p className="text-sm text-muted-foreground">
+            <FormattedMessage id="invitesView.noLiveLinks" defaultMessage="No live invite links." />
+          </p>
         ) : (
           <ul className="space-y-1.5">
             {registry.map((r) => (
@@ -351,33 +443,45 @@ export function InvitesView({ community }: { community: Community }) {
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>
-              Revoke all {myLinks.length + orphanCount} of your invite links?
+              <FormattedMessage
+                id="invitesView.revokeAllDialog.title"
+                defaultMessage="Revoke all {count} of your invite links?"
+                values={{ count: myLinks.length + orphanCount }}
+              />
             </AlertDialogTitle>
             <AlertDialogDescription>
-              Links whose secrets this device holds stop working immediately.
+              <FormattedMessage
+                id="invitesView.revokeAllDialog.description"
+                defaultMessage="Links whose secrets this device holds stop working immediately."
+              />
             </AlertDialogDescription>
             {orphanCount > 0 && (
               <AlertDialogDescription>
-                {orphanCount} of them {orphanCount === 1 ? "has" : "have"} no signing secret on
-                this account, so {orphanCount === 1 ? "it" : "they"} can only be delisted: anyone
-                who already has the URL may still join until the community next rotates its keys.
+                <FormattedMessage
+                  id="invitesView.revokeAllDialog.orphans"
+                  defaultMessage="{count, plural, one {# of them has no signing secret on this account, so it can only be delisted: anyone who already has the URL may still join until the community next rotates its keys.} other {# of them have no signing secret on this account, so they can only be delisted: anyone who already has the URL may still join until the community next rotates its keys.}}"
+                  values={{ count: orphanCount }}
+                />
               </AlertDialogDescription>
             )}
             {revokeAllWouldPrivatize() && (
               <AlertDialogDescription>
-                These are the last live invite links, so this makes the community private: new
-                members can then only be added by direct invite, and banning a member will rotate
-                the community keys.
+                <FormattedMessage
+                  id="invitesView.revokeAllDialog.privatizes"
+                  defaultMessage="These are the last live invite links, so this makes the community private: new members can then only be added by direct invite, and banning a member will rotate the community keys."
+                />
               </AlertDialogDescription>
             )}
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogCancel>
+              <FormattedMessage {...common.cancel} />
+            </AlertDialogCancel>
             <AlertDialogAction
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
               onClick={() => void handleRevokeAll()}
             >
-              Revoke all
+              <FormattedMessage id="invitesView.revokeAllDialog.confirm" defaultMessage="Revoke all" />
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -413,14 +517,21 @@ function LinkDetailsDialog({
       2,
     );
   }, [entry, servedEpoch, currentEpoch]);
+  const intl = useIntl();
 
   return (
     <Dialog open={entry !== null} onOpenChange={(open) => !open && onClose()}>
-      <ChromeDialogContent title="Invite link details" className="sm:max-w-2xl">
+      <ChromeDialogContent
+        title={intl.formatMessage({ id: "invitesView.details.title", defaultMessage: "Invite link details" })}
+        className="sm:max-w-2xl"
+      >
         <ChromeDialogHeader
           icon={Braces}
-          title="invite link details"
-          description="The stored record for this link. Secrets are redacted."
+          title={intl.formatMessage({ id: "invitesView.details.header", defaultMessage: "invite link details" })}
+          description={intl.formatMessage({
+            id: "invitesView.details.description",
+            defaultMessage: "The stored record for this link. Secrets are redacted.",
+          })}
         />
         <JsonBlock json={json} className="mt-5" />
       </ChromeDialogContent>
@@ -455,16 +566,20 @@ function RegistryRow({
       </span>
       {isOwner && (
         <Badge variant="secondary" className="px-1.5 py-0 text-3xs">
-          Owner
+          <FormattedMessage id="invitesView.owner" defaultMessage="Owner" />
         </Badge>
       )}
       {mine && (
         <Badge variant="outline" className="px-1.5 py-0 text-3xs">
-          You
+          <FormattedMessage id="invitesView.you" defaultMessage="You" />
         </Badge>
       )}
       <span className="shrink-0 tabular-nums text-xs text-muted-foreground">
-        {count} live link{count === 1 ? "" : "s"}
+        <FormattedMessage
+          id="invitesView.liveLinkCount"
+          defaultMessage="{count, plural, one {# live link} other {# live links}}"
+          values={{ count }}
+        />
       </span>
     </li>
   );
@@ -493,6 +608,7 @@ function DiscoverListingsSection({
 }) {
   const { user } = useCurrentUser();
   const { unlist } = useUnlistAnnouncements();
+  const intl = useIntl();
   const [unlisting, setUnlisting] = useState<string | null>(null);
 
   // One row per (author, link); deleting must delete every copy.
@@ -512,10 +628,10 @@ function DiscoverListingsSection({
     setUnlisting(key);
     try {
       await unlist(copies);
-      toast({ title: "Removed from Discover" });
+      toast({ title: t({ id: "invitesView.unlisted", defaultMessage: "Removed from Discover" }) });
     } catch (e) {
       toast({
-        title: "Couldn't remove the listing",
+        title: t({ id: "invitesView.unlistFailed", defaultMessage: "Couldn't remove the listing" }),
         description: e instanceof Error ? e.message : undefined,
         variant: "destructive",
       });
@@ -527,19 +643,24 @@ function DiscoverListingsSection({
   return (
     <section className="space-y-2">
       <h3 className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-        Discover listings
+        <FormattedMessage id="invitesView.discoverListings" defaultMessage="Discover listings" />
       </h3>
       {loading ? (
         <p className="flex items-center gap-2 text-sm text-muted-foreground">
-          <Loader2 className="size-3.5 animate-spin" /> Checking Discover…
+          <Loader2 className="size-3.5 animate-spin" />{" "}
+          <FormattedMessage id="invitesView.checkingDiscover" defaultMessage="Checking Discover…" />
         </p>
       ) : rows.length === 0 ? (
-        <p className="text-sm text-muted-foreground">This community isn't listed on Discover.</p>
+        <p className="text-sm text-muted-foreground">
+          <FormattedMessage id="invitesView.notListed" defaultMessage="This community isn't listed on Discover." />
+        </p>
       ) : (
         <>
           <p className="text-xs text-muted-foreground">
-            Public posts of this community's invite links. Anyone browsing Discover can use them to
-            join.
+            <FormattedMessage
+              id="invitesView.listingsDescription"
+              defaultMessage="Public posts of this community's invite links. Anyone browsing Discover can use them to join."
+            />
           </p>
           <ul className="space-y-1.5">
             {rows.map(({ key, copies, newest }) => {
@@ -561,7 +682,7 @@ function DiscoverListingsSection({
                         disabled={unlisting === key}
                         onClick={() => void handleUnlist(key, copies)}
                       >
-                        {unlisting === key ? <Loader2 className="size-3.5 animate-spin" /> : "Remove"}
+                        {unlisting === key ? <Loader2 className="size-3.5 animate-spin" /> : <FormattedMessage {...common.remove} />}
                       </Button>
                     ) : myUrl ? (
                       <Button
@@ -570,10 +691,15 @@ function DiscoverListingsSection({
                         variant="ghost"
                         className="shrink-0 text-destructive hover:text-destructive"
                         disabled={revoking === myUrl}
-                        title="The listing carries your link: revoking it takes the listing down."
+                        title={intl.formatMessage({
+                          id: "invitesView.revokeListingTitle",
+                          defaultMessage: "The listing carries your link: revoking it takes the listing down.",
+                        })}
                         onClick={() => onRevoke(myUrl)}
                       >
-                        {revoking === myUrl ? <Loader2 className="size-3.5 animate-spin" /> : "Revoke link"}
+                        {revoking === myUrl ? <Loader2 className="size-3.5 animate-spin" /> : (
+                          <FormattedMessage id="invitesView.revokeLink" defaultMessage="Revoke link" />
+                        )}
                       </Button>
                     ) : null
                   }
@@ -602,6 +728,7 @@ function ListingRow({
   const name = useScopedDisplayName(author, profile.data?.metadata);
   const creatorProfile = useAuthor(linkCreator && linkCreator !== author ? linkCreator : undefined);
   const creatorName = useScopedDisplayName(linkCreator, creatorProfile.data?.metadata);
+  const intl = useIntl();
   return (
     <li className="flex items-center gap-2.5 rounded-md bg-foreground/5 px-3 py-2 text-sm">
       <Avatar className="size-6 shrink-0">
@@ -615,11 +742,21 @@ function ListingRow({
           <DisplayName pubkey={author} name={name} />
         </p>
         <p className="truncate text-2xs text-muted-foreground">
-          Posted {new Date(postedAt * 1000).toLocaleDateString()}
-          {linkCreator && linkCreator !== author && (
-            <>
-              {" · "}link by <DisplayName pubkey={linkCreator} name={creatorName} />
-            </>
+          {linkCreator && linkCreator !== author ? (
+            <FormattedMessage
+              id="invitesView.postedLinkBy"
+              defaultMessage="Posted {date} · link by {creator}"
+              values={{
+                date: new Date(postedAt * 1000).toLocaleDateString(intl.locale),
+                creator: <DisplayName pubkey={linkCreator} name={creatorName} />,
+              }}
+            />
+          ) : (
+            <FormattedMessage
+              id="invitesView.posted"
+              defaultMessage="Posted {date}"
+              values={{ date: new Date(postedAt * 1000).toLocaleDateString(intl.locale) }}
+            />
           )}
         </p>
       </div>

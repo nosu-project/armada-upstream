@@ -29,6 +29,7 @@ import {
 } from "@/lib/nip29";
 
 import type { NostrRumor } from "@/lib/nostrRumor";
+import { t } from "@/i18n";
 
 export { isUpcoming } from "@/lib/calendar";
 
@@ -74,7 +75,7 @@ export function useCalendarEvents(relayUrl: string | undefined, groupId: string 
     },
     onError: (err) => {
       toast({
-        title: "Couldn't save event",
+        title: t({ id: "useCalendarEvents.saveFailed", defaultMessage: "Couldn't save event" }),
         description: relayRejectionMessage(err),
         variant: "destructive",
       });
@@ -99,7 +100,7 @@ export function useCalendarEvents(relayUrl: string | undefined, groupId: string 
     },
     onError: (err) => {
       toast({
-        title: "Couldn't delete event",
+        title: t({ id: "useCalendarEvents.deleteFailed", defaultMessage: "Couldn't delete event" }),
         description: relayRejectionMessage(err),
         variant: "destructive",
       });
@@ -208,7 +209,7 @@ export function useNip29CalendarTransport(
     },
     onError: (err, _vars, ctx) => {
       if (ctx?.prev) queryClient.setQueryData(rsvpKey, ctx.prev);
-      toast({ title: "RSVP failed", description: relayRejectionMessage(err), variant: "destructive" });
+      toast({ title: t({ id: "useCalendarEvents.rsvpFailed", defaultMessage: "RSVP failed" }), description: relayRejectionMessage(err), variant: "destructive" });
     },
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: rsvpKey });

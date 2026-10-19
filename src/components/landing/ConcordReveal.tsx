@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 
+import { FormattedMessage, useIntl } from "@/i18n";
 import { cn } from "@/lib/utils";
 
 /** The quiz's off-ramp: the Concord grid (concordprotocol.org) glows up behind one line and a spec link. */
@@ -86,6 +87,7 @@ const DRAW_TICK = 40;
 
 /** Drawn in when `shown`, writing text directly (not state); reduced motion gets it whole. */
 export function ConcordMark({ shown }: { shown: boolean }) {
+  const intl = useIntl();
   const layersRef = useRef<(HTMLPreElement | null)[]>([]);
 
   useEffect(() => {
@@ -135,7 +137,7 @@ export function ConcordMark({ shown }: { shown: boolean }) {
   return (
     <div
       role="img"
-      aria-label="The Concord protocol mark"
+      aria-label={intl.formatMessage({ id: "concordReveal.markLabel", defaultMessage: "The Concord protocol mark" })}
       className="grid select-none font-mono text-[6px] leading-none sm:text-[8px]"
     >
       {MARK.map((_, i) => (
@@ -164,8 +166,10 @@ export function ConcordReveal({ shown }: { shown: boolean }) {
       )}
     >
       <p className="max-w-md text-pretty text-xs leading-relaxed text-muted-foreground sm:text-sm">
-        Messages are locked on your device with keys only your community holds.
-        The servers only see noise.
+        <FormattedMessage
+          id="concordReveal.body"
+          defaultMessage="Messages are locked on your device with keys only your community holds. The servers only see noise."
+        />
       </p>
       <a
         href="https://concordprotocol.org/"
@@ -173,7 +177,7 @@ export function ConcordReveal({ shown }: { shown: boolean }) {
         rel="noreferrer"
         className="font-mono text-xs tracking-wide text-[hsl(var(--accent2,180_90%_55%))] underline decoration-[hsl(var(--accent2)/0.3)] underline-offset-4 transition-colors hover:decoration-current sm:text-sm"
       >
-        how: the Concord protocol &#8594;
+        <FormattedMessage id="concordReveal.specLink" defaultMessage="how: the Concord protocol →" />
       </a>
     </div>
   );

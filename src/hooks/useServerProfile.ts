@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useNostrPublish } from "@/hooks/useNostrPublish";
+import { t } from "@/i18n";
 import {
   buildServerProfileTags,
   KIND_LABEL,
@@ -57,8 +58,8 @@ export function useUpdateServerProfile(relayUrl: string | undefined) {
 
   return useMutation({
     mutationFn: async (profile: { nickname?: string; label?: string; color?: string }) => {
-      if (!user) throw new Error("You must be logged in to set a server nickname.");
-      if (!relayUrl) throw new Error("No server selected.");
+      if (!user) throw new Error(t({ id: "useServerProfile.notLoggedIn", defaultMessage: "You must be logged in to set a server nickname." }));
+      if (!relayUrl) throw new Error(t({ id: "useServerProfile.noServer", defaultMessage: "No server selected." }));
 
       const tags = buildServerProfileTags(user.pubkey, relayUrl, profile);
 

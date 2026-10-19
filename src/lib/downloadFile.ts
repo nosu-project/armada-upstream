@@ -1,5 +1,6 @@
 import { Capacitor } from "@capacitor/core";
 
+import { t } from "@/i18n";
 import { bytesToBase64, filenameFromUrl, safeFilename, sniffImageMime } from "@/lib/fileBytes";
 import { hasMediaGallery, saveToDevice } from "@/lib/mediaGallery";
 import { openUrl } from "@/lib/share";
@@ -30,7 +31,7 @@ export async function downloadBinaryFile(
       data: bytesToBase64(bytes),
       directory: Directory.Documents,
     });
-    return "the Armada folder in Files";
+    return t({ id: "downloadFile.iosLocation", defaultMessage: "the Armada folder in Files" });
   }
   const blob = new Blob([bytes as BlobPart], { type: "application/octet-stream" });
   const url = URL.createObjectURL(blob);
@@ -47,7 +48,9 @@ export async function downloadBinaryFile(
 
 /** The "Saved" toast's description for a {@link downloadBinaryFile} result. */
 export function savedDescription(location: string | undefined): string {
-  return location ? `You'll find it in ${location}.` : "Check your downloads folder.";
+  return location
+    ? t({ id: "downloadFile.savedIn", defaultMessage: "You'll find it in {location}." }, { location })
+    : t({ id: "downloadFile.checkDownloads", defaultMessage: "Check your downloads folder." });
 }
 
 export type DownloadResult = { status: "downloaded"; location?: string } | { status: "opened" };

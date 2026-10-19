@@ -1,5 +1,7 @@
 import { RefreshCw } from "lucide-react";
-import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+
+import { defineMessages, FormattedMessage, useIntl } from "@/i18n";
 
 import { TvDrum } from "./TvDrum";
 
@@ -10,12 +12,28 @@ import { TvDrum } from "./TvDrum";
  */
 
 /** Word plus its capture (`e2e/landing-screenshots.spec.ts`). */
+const msg = defineMessages({
+  raidCrewWord: { id: "pitchToy.raidCrew.word", defaultMessage: "raid crew" },
+  raidCrewLabel: {
+    id: "pitchToy.raidCrew.label",
+    defaultMessage: "a gaming community's #general, with reactions, an inline reply and a thread",
+  },
+  bookClubWord: { id: "pitchToy.bookClub.word", defaultMessage: "book club" },
+  bookClubLabel: { id: "pitchToy.bookClub.label", defaultMessage: "a book club's #general, with a vote, reactions and a thread" },
+  bandWord: { id: "pitchToy.band.word", defaultMessage: "band" },
+  bandLabel: { id: "pitchToy.band.label", defaultMessage: "a band's #general, planning a show" },
+  devTeamWord: { id: "pitchToy.devTeam.word", defaultMessage: "dev team" },
+  devTeamLabel: { id: "pitchToy.devTeam.label", defaultMessage: "a dev team's #general, fixing a crash in a thread" },
+  familyWord: { id: "pitchToy.family.word", defaultMessage: "family" },
+  familyLabel: { id: "pitchToy.family.label", defaultMessage: "a family's #general, planning a Sunday call" },
+});
+
 const CREWS = [
-  { word: "raid crew", slug: "raid-crew", label: "a gaming community's #general, with reactions, an inline reply and a thread" },
-  { word: "book club", slug: "book-club", label: "a book club's #general, with a vote, reactions and a thread" },
-  { word: "band", slug: "band", label: "a band's #general, planning a show" },
-  { word: "dev team", slug: "dev-team", label: "a dev team's #general, fixing a crash in a thread" },
-  { word: "family", slug: "family", label: "a family's #general, planning a Sunday call" },
+  { word: msg.raidCrewWord, slug: "raid-crew", label: msg.raidCrewLabel },
+  { word: msg.bookClubWord, slug: "book-club", label: msg.bookClubLabel },
+  { word: msg.bandWord, slug: "band", label: msg.bandLabel },
+  { word: msg.devTeamWord, slug: "dev-team", label: msg.devTeamLabel },
+  { word: msg.familyWord, slug: "family", label: msg.familyLabel },
 ] as const;
 
 const TYPE_MS = 55;
@@ -25,6 +43,16 @@ function prefersReducedMotion() {
 }
 
 export const PitchToy = memo(function PitchToy() {
+  const intl = useIntl();
+  const channels = useMemo(
+    () =>
+      CREWS.map((crew) => ({
+        slug: crew.slug,
+        word: intl.formatMessage(crew.word),
+        label: intl.formatMessage(crew.label),
+      })),
+    [intl],
+  );
   const [step, setStep] = useState(0);
   const [index, setIndex] = useState(0);
   const wordRef = useRef<HTMLSpanElement>(null);
@@ -35,7 +63,7 @@ export const PitchToy = memo(function PitchToy() {
   useEffect(() => {
     const el = wordRef.current;
     if (!el) return;
-    const word = CREWS[index].word;
+    const word = channels[index].word;
     if (prefersReducedMotion()) {
       el.textContent = word;
       return;
@@ -48,18 +76,22 @@ export const PitchToy = memo(function PitchToy() {
       if (n >= word.length) clearInterval(id);
     }, TYPE_MS);
     return () => clearInterval(id);
-  }, [index]);
+  }, [index, channels]);
 
   return (
     <div className="flex w-full flex-col items-center">
       <h2 className="text-center font-mono text-3xl font-bold tracking-tight text-foreground sm:text-5xl">
-        <span className="sr-only">Armada is a group chat for your communities.</span>
-        <span aria-hidden="true">Armada is a group chat for your</span>
+        <span className="sr-only">
+          <FormattedMessage id="pitchToy.headingFull" defaultMessage="Armada is a group chat for your communities." />
+        </span>
+        <span aria-hidden="true">
+          <FormattedMessage id="pitchToy.headingPrefix" defaultMessage="Armada is a group chat for your" />
+        </span>
       </h2>
       <button
         type="button"
         onClick={next}
-        aria-label="Show another kind of community"
+        aria-label={intl.formatMessage({ id: "pitchToy.another", defaultMessage: "Show another kind of community" })}
         className="group mt-2 inline-flex min-h-[2.75rem] items-center gap-3 font-mono text-3xl font-bold tracking-tight text-[hsl(var(--primary))] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring sm:min-h-[3.75rem] sm:text-5xl"
       >
         <span aria-hidden="true">
@@ -73,11 +105,14 @@ export const PitchToy = memo(function PitchToy() {
       </button>
 
       <div className="mt-10 w-full">
-        <TvDrum channels={CREWS} step={step} onTune={tune} onFront={setIndex} />
+        <TvDrum channels={channels} step={step} onTune={tune} onFront={setIndex} />
       </div>
 
       <p className="mt-10 text-balance text-center font-mono text-xs tracking-wide text-muted-foreground sm:text-sm">
-        Channels, voice and games. Encrypted, and nobody owns the server.
+        <FormattedMessage
+          id="pitchToy.tagline"
+          defaultMessage="Channels, voice and games. Encrypted, and nobody owns the server."
+        />
       </p>
     </div>
   );

@@ -24,6 +24,7 @@ import { canActOnMember, Permissions } from "@/concord/lib/roles";
 import type { Community } from "@/concord/lib/types";
 import { queueSignedEvent, recordQueuedPublishAttempt } from "@/lib/publishOutbox";
 import { emitWireScopes, onWireScopes } from "@/wire/bus";
+import { t } from "@/i18n";
 
 /**
  * The Guestbook Plane (CORD-02 §5): membership motion, coalesced flat.
@@ -187,11 +188,11 @@ export function useGuestbookPublisher(community: Community | undefined) {
         | { type: "leave" }
         | { type: "kick"; target: string; vac?: { eid: string; version: bigint; hash: string } },
     ) => {
-      if (!user || !community) throw new Error("Not ready.");
+      if (!user || !community) throw new Error(t({ id: "useGuestbook.notReady", defaultMessage: "Not ready." }));
       // A dissolved community honors no new authority action (CORD-02 §9); a Leave
       // is self-signed housekeeping and stays allowed.
       if (dissolvedNow != null && action.type === "kick") {
-        throw new Error("This community has been dissolved; it accepts no new moderation.");
+        throw new Error(t({ id: "useGuestbook.dissolved", defaultMessage: "This community has been dissolved; it accepts no new moderation." }));
       }
       const group = currentGuestbookGroup(community);
       const ms = Date.now();
@@ -221,7 +222,7 @@ export function useGuestbookPublisher(community: Community | undefined) {
         await recordQueuedPublishAttempt(wrap.id, community.relays, rejected).catch(() => undefined);
       }
       if (!results.some((r) => r.status === "fulfilled")) {
-        throw new Error("No relay accepted the update.");
+        throw new Error(t({ id: "useGuestbook.noRelayAccepted", defaultMessage: "No relay accepted the update." }));
       }
       // Seed the store with our own rumor (as ingest would) and ring `c2gb`; the
       // publisher gets no echo of its own wrap otherwise.

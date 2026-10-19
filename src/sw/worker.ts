@@ -21,6 +21,8 @@
 
 import type { NostrEvent } from "@nostrify/nostrify";
 
+import { t } from "@/i18n/intl";
+import { notificationMessages } from "@/lib/notificationPreview";
 import type { PushScope } from "@/lib/pushSubscriptions";
 import type { SwPushConfig } from "@/lib/swPushConfig";
 import type { PreparedPush, PushData } from "@/sw/pushRuntime";
@@ -289,13 +291,13 @@ async function markSeen(
  */
 async function quietSync(mustShow: () => Promise<boolean>, tag = "armada-quiet-sync"): Promise<void> {
   if (!(await mustShow())) return;
-  await self.registration.showNotification("Armada", {
+  await self.registration.showNotification(t(notificationMessages.appName), {
     // Deliberately fixed, not inherited from the gateway payload: suppression
     // covers own/replayed/policy-hidden events, so no sender-controlled title,
     // body, icon, route, or other message metadata may survive this fallback.
     icon: "/favicon.png",
     badge: "/badge-96.png",
-    body: "Messages synced",
+    body: t(notificationMessages.messagesSynced),
     tag,
     renotify: false,
     silent: true,
@@ -780,7 +782,7 @@ async function handlePush(
   const silent = await roomAlertSilent(rateKey);
   const alertBase = silent ? { ...base, silent: true, renotify: false } : base;
   const routeData = routeDataOf(data);
-  await self.registration.showNotification(payload.title ?? "Armada", {
+  await self.registration.showNotification(payload.title ?? t(notificationMessages.appName), {
     ...alertBase,
     body: payload.body ?? "",
     data: routeData,
@@ -829,7 +831,7 @@ async function handlePush(
   }
 
   const h = tagValue(ev, "h");
-  await self.registration.showNotification(payload.title ?? "Armada", {
+  await self.registration.showNotification(payload.title ?? t(notificationMessages.appName), {
     ...base,
     body: truncate(ev.content, 140) || payload.body || "",
     tag,
@@ -880,12 +882,12 @@ function pushRunner(runtime: PushRuntime) {
 const NAPP_PUSH_PAYLOAD_TYPE = "napp.push.payload";
 
 /** What the worker shows when it can't open the event, per plane. */
-const FALLBACK_TEXT: Record<PushScope, string> = {
-  dm: "New direct message",
-  c2: "New message in a community",
-  group: "New message in a channel",
-  "group-mention": "Someone mentioned you",
-};
+const FALLBACK_TEXT = {
+  dm: notificationMessages.newDirectMessage,
+  c2: notificationMessages.newCommunityMessage,
+  group: notificationMessages.newChannelMessage,
+  "group-mention": notificationMessages.someoneMentionedYou,
+} satisfies Record<PushScope, unknown>;
 
 /** The plane an event belongs to, or undefined for anything unplaceable. */
 async function scopeOfEvent(
@@ -935,8 +937,8 @@ async function nappPush(
   }
   return {
     payload: scope
-      ? { title: "New message", body: FALLBACK_TEXT[scope] }
-      : { title: "Armada", body: "New message" },
+      ? { title: t(notificationMessages.newMessage), body: t(FALLBACK_TEXT[scope]) }
+      : { title: t(notificationMessages.appName), body: t(notificationMessages.newMessage) },
     data,
   };
 }
@@ -1133,27 +1135,35 @@ export function installServiceWorker(runtime: PushRuntime): void {
   });
 
   self.addEventListener("push", (event) => {
-    let payload: PushPayload;
-    if (!event.data) {
-      payload = { title: "Armada", body: "Messages synced", data: {} };
-    } else {
+    // Read synchronously: the payload is the event's, not the promise's.
+    let parsed: PushPayload | null = null;
+    let isJson = false;
+    let text: string | undefined;
+    if (event.data) {
       try {
-        payload = event.data.json();
+        parsed = event.data.json();
+        isJson = true;
       } catch {
-        payload = { title: "Armada", body: event.data.text(), data: {} };
+        text = event.data.text();
       }
     }
 
-    const base: NotificationBase = {
-      icon: payload?.icon || "/favicon.png",
-      // Single-colour on transparency: the platform keeps only this image's
-      // alpha channel, so a full-colour icon renders as a solid blob.
-      badge: payload?.badge || "/badge-96.png",
-      renotify: true,
-    };
+    event.waitUntil((async () => {
+      // Opening the config installs its language, for every string shown below.
+      await readConfig(runtime);
+      const payload = isJson
+        ? parsed
+        : { title: t(notificationMessages.appName), body: text ?? t(notificationMessages.messagesSynced), data: {} };
 
-    if (payload?.$type === NAPP_PUSH_PAYLOAD_TYPE) {
-      event.waitUntil((async () => {
+      const base: NotificationBase = {
+        icon: payload?.icon || "/favicon.png",
+        // Single-colour on transparency: the platform keeps only this image's
+        // alpha channel, so a full-colour icon renders as a solid blob.
+        badge: payload?.badge || "/badge-96.png",
+        renotify: true,
+      };
+
+      if (payload?.$type === NAPP_PUSH_PAYLOAD_TYPE) {
         // The kill switch before the fetch: a disabled install asks no relay
         // anything on a push's behalf.
         if (await pushDisabled()) {
@@ -1162,11 +1172,11 @@ export function installServiceWorker(runtime: PushRuntime): void {
         }
         const normalized = await nappPush(runtime, payload);
         await runPush(normalized.payload, normalized.data, base);
-      })());
-      return;
-    }
+        return;
+      }
 
-    event.waitUntil(runPush(payload ?? {}, payload?.data ?? {}, base));
+      await runPush(payload ?? {}, payload?.data ?? {}, base);
+    })());
   });
 
   self.addEventListener("pushsubscriptionchange", (event: Event) => {

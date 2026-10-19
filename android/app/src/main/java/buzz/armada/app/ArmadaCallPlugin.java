@@ -95,7 +95,8 @@ public class ArmadaCallPlugin extends Plugin {
         Intent intent = new Intent(getContext(), CallForegroundService.class);
         intent.setAction(CallForegroundService.ACTION_UPDATE);
         intent.putExtra(CallForegroundService.EXTRA_TITLE,
-                title != null && !title.isEmpty() ? title : "Voice call");
+                title != null && !title.isEmpty()
+                        ? title : AppLocale.string(getContext(), R.string.call_voice_call));
         intent.putExtra(CallForegroundService.EXTRA_TEXT, text != null ? text : "");
         intent.putExtra(CallForegroundService.EXTRA_ICON, call.getString("icon", ""));
         // Before the service: the call's audio behaviour doesn't depend on the notification.

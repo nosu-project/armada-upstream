@@ -26,9 +26,10 @@ export type InlineNode<A = never> =
 
 /**
  * Fenced code block (closing fence required): ```lang\n … ``` anywhere, or a
- * `~~~` fence on lines of its own, so inline `~~strike~~` can't open one.
+ * `~~~` fence on lines of its own, so inline `~~strike~~` can't open one. A
+ * language needs its newline, so ```https://…``` keeps its scheme.
  */
-const FENCE_RE = /```([\w+-]*)\n?([\s\S]*?)```|(?<![^\n])~~~([\w+-]*)\n((?:[\s\S]*?\n)?)~~~(?![^\n])/g;
+const FENCE_RE = /```(?:([\w+-]*)\n)?([\s\S]*?)```|(?<![^\n])~~~([\w+-]*)\n((?:[\s\S]*?\n)?)~~~(?![^\n])/g;
 
 /**
  * A quote line: `> text` (or a bare `>`), Discord-style. The space is required
@@ -255,6 +256,26 @@ export function splitInlineCode(src: string): InlineCodeSegment[] {
   }
   if (last < src.length) out.push({ code: false, value: src.slice(last) });
   return out;
+}
+
+const blankOut = (s: string) => s.replace(/[^\n]/g, " ");
+
+/**
+ * `src` with what renders as code (fences, inline code) blanked to spaces,
+ * offsets kept — for scans deriving tags or embeds, which must not see a URL
+ * or reference the reader is shown as literal code.
+ */
+export function withoutCode(src: string): string {
+  const outside = (s: string) => s.replace(INLINE_CODE_RE, blankOut);
+  let out = "";
+  let last = 0;
+  for (const m of src.matchAll(FENCE_RE)) {
+    // An empty fence renders as text (see `splitFencedBlocks`).
+    if ((m[2] ?? m[4]).trim() === "") continue;
+    out += outside(src.slice(last, m.index)) + blankOut(m[0]);
+    last = m.index + m[0].length;
+  }
+  return out + outside(src.slice(last));
 }
 
 /** Inline patterns in tie-break priority order (longer delimiters first). */

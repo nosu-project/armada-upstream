@@ -4,6 +4,7 @@ import { useMutation } from "@tanstack/react-query";
 import { useAppContext } from "./useAppContext";
 import { useCurrentUser } from "./useCurrentUser";
 import { useNip29Servers } from "./useNip29Servers";
+import { t } from "@/i18n";
 
 /**
  * Publish a NIP-62 Request to Vanish (kind 62): targeted (`relay` tags) or global (ALL_RELAYS).
@@ -17,7 +18,7 @@ export function useRequestToVanish() {
 
   return useMutation({
     mutationFn: async ({ relayUrls, content }: { relayUrls: string[]; content: string }) => {
-      if (!user) throw new Error("User is not logged in");
+      if (!user) throw new Error(t({ id: "useRequestToVanish.notLoggedIn", defaultMessage: "User is not logged in" }));
 
       const isGlobal = relayUrls.includes("ALL_RELAYS");
 

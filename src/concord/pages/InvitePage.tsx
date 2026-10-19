@@ -14,7 +14,19 @@ import {
 import { InviteDetail } from "@/concord/pages/InvitesPage";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { toast } from "@/hooks/useToast";
-import { parseInviteRoute } from "@/concord/lib/invite";
+import { InviteError, parseInviteRoute } from "@/concord/lib/invite";
+import { FormattedMessage, t } from "@/i18n";
+
+/** A user-facing reason for an invite failure; protocol-level InviteError text stays English. */
+function inviteErrorText(e: unknown, fallback: string): string {
+  if (e instanceof InviteError && e.code === "revoked") {
+    return t({ id: "invitePage.error.revoked", defaultMessage: "this invite link has been revoked" });
+  }
+  if (e instanceof InviteError && e.code === "expired") {
+    return t({ id: "invitePage.error.expired", defaultMessage: "this invite link has expired" });
+  }
+  return e instanceof Error ? e.message : fallback;
+}
 
 /**
  * Landing page for a Concord invite link — `/invite/<naddr>#<fragment>` (CORD-05).
@@ -39,11 +51,13 @@ export function InvitePage() {
   // Resolve the bundle even before sign-in, so the consent surface can paint.
   useEffect(() => {
     if (!naddr || !fragment) {
-      setError("This invite link is missing its secret. Ask for a fresh link.");
+      setError(
+        t({ id: "invitePage.error.missingSecret", defaultMessage: "This invite link is missing its secret. Ask for a fresh link." }),
+      );
       return;
     }
     if (!invite) {
-      setError("This invite link is malformed or from a newer client.");
+      setError(t({ id: "invitePage.error.malformed", defaultMessage: "This invite link is malformed or from a newer client." }));
       return;
     }
     let cancelled = false;
@@ -55,7 +69,7 @@ export function InvitePage() {
       .catch((e) => {
         if (cancelled) return;
         setDissolved(e instanceof DissolvedCommunityError);
-        setError(e instanceof Error ? e.message : "Couldn't load that invite link.");
+        setError(inviteErrorText(e, t({ id: "invitePage.error.loadFailed", defaultMessage: "Couldn't load that invite link." })));
       });
     return () => {
       cancelled = true;
@@ -69,12 +83,12 @@ export function InvitePage() {
       // Optimistic: the durable join chain runs in the background (failures toast
       // via useCommunityActions).
       const { communityId, name } = await join({ invite, bundle: resolved.bundle });
-      toast({ title: "Joined", description: name });
+      toast({ title: t({ id: "invitePage.joined", defaultMessage: "Joined" }), description: name });
       navigate(`/c/${encodeURIComponent(communityId)}`, { replace: true });
     } catch (e) {
       setBanned(e instanceof BannedFromCommunityError);
       setDissolved(e instanceof DissolvedCommunityError);
-      setError(e instanceof Error ? e.message : "Couldn't join with that invite link.");
+      setError(inviteErrorText(e, t({ id: "invitePage.error.joinFailed", defaultMessage: "Couldn't join with that invite link." })));
     }
   };
 
@@ -89,11 +103,19 @@ export function InvitePage() {
             <ShieldCheck className="size-12 text-muted-foreground" />
           )}
           <h1 className="text-2xl font-bold">
-            {banned ? "You’re banned" : dissolved ? "Community dissolved" : "Invite link didn’t work"}
+            {banned ? (
+              <FormattedMessage id="invitePage.bannedTitle" defaultMessage="You’re banned" />
+            ) : dissolved ? (
+              <FormattedMessage id="invitePage.dissolvedTitle" defaultMessage="Community dissolved" />
+            ) : (
+              <FormattedMessage id="invitePage.failedTitle" defaultMessage="Invite link didn’t work" />
+            )}
           </h1>
           <p className="max-w-md text-muted-foreground">{error}</p>
           <Button asChild>
-            <Link to="/">Back to base</Link>
+            <Link to="/">
+              <FormattedMessage id="invitePage.backToBase" defaultMessage="Back to base" />
+            </Link>
           </Button>
         </main>
       </>
@@ -106,7 +128,9 @@ export function InvitePage() {
         <ServerRail />
         <main className="flex-1 min-w-0 flex flex-col items-center justify-center gap-4 p-8 text-center">
           <Loader2 className="size-6 animate-spin text-muted-foreground" />
-          <p className="text-muted-foreground">Opening the invite…</p>
+          <p className="text-muted-foreground">
+            <FormattedMessage id="invitePage.opening" defaultMessage="Opening the invite…" />
+          </p>
         </main>
       </>
     );
@@ -130,7 +154,7 @@ export function InvitePage() {
                 size="lg"
                 className="h-12 min-w-0 flex-1 clip-corner-lg text-base font-medium"
               >
-                Sign in to accept
+                <FormattedMessage id="invitePage.signInToAccept" defaultMessage="Sign in to accept" />
               </JoinButton>
             )
           }

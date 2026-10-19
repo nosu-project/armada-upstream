@@ -3,6 +3,7 @@ import { useState, type ComponentType, type ReactNode } from "react";
 
 import { useIsTouch } from "@/hooks/useIsMobile";
 import { cn } from "@/lib/utils";
+import { useIntl } from "@/i18n";
 
 import type { MemberActionItem } from "@/contexts/MemberActionsContext";
 
@@ -20,13 +21,15 @@ export interface ModerationMenuParts {
  */
 export function ModerationMenuSection({
   parts: { Item, Sub, SubTrigger, SubContent },
-  label = "Moderation",
+  label: labelProp,
   children,
 }: {
   parts: ModerationMenuParts;
   label?: string;
   children: ReactNode;
 }) {
+  const intl = useIntl();
+  const label = labelProp ?? intl.formatMessage({ id: "moderationMenuSection.moderation", defaultMessage: "Moderation" });
   const isTouch = useIsTouch();
   const [open, setOpen] = useState(false);
 

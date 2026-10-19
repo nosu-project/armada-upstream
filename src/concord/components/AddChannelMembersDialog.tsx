@@ -18,6 +18,7 @@ import {
 import { authorQueryOptions, useAuthor } from "@/hooks/useAuthor";
 import { useEventStore } from "@/hooks/useEventStore";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
+import { common, FormattedMessage, useIntl } from "@/i18n";
 import { profileMatches, type SearchProfile } from "@/hooks/useSearchProfiles";
 
 /** Render cap before "Show all" (slicing, not virtualization). */
@@ -54,6 +55,7 @@ export function AddChannelMembersDialog({
   hasRole,
   holdsKey,
 }: AddChannelMembersDialogProps) {
+  const intl = useIntl();
   const queryClient = useQueryClient();
   const eventStore = useEventStore();
   const [query, setQuery] = useState("");
@@ -102,27 +104,37 @@ export function AddChannelMembersDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <ChromeDialogContent title={`Add members to #${channelName}`} contentClassName="grid gap-4">
+      <ChromeDialogContent title={intl.formatMessage({ id: "addChannelMembersDialog.title", defaultMessage: "Add members to #{channelName}" }, { channelName })} contentClassName="grid gap-4">
         <ChromeDialogHeader
           icon={Lock}
-          title={<>add members to <span className="normal-case">#{channelName}</span></>}
+          title={<FormattedMessage
+            id="addChannelMembersDialog.heading"
+            defaultMessage="add members to <channel>#{channelName}</channel>"
+            values={{ channelName, channel: (chunks) => <span className="normal-case">{chunks}</span> }}
+          />}
           description={roles.length === 1
-            ? <>Adding grants the <span className="text-foreground">{roles[0].name}</span> role and sends them the channel key.</>
-            : <>Adding grants the chosen role and sends them the channel key.</>}
+            ? <FormattedMessage
+              id="addChannelMembersDialog.grantsRole"
+              defaultMessage="Adding grants the <role>{roleName}</role> role and sends them the channel key."
+              values={{ roleName: roles[0].name, role: (chunks) => <span className="text-foreground">{chunks}</span> }}
+            />
+            : <FormattedMessage id="addChannelMembersDialog.grantsChosenRole" defaultMessage="Adding grants the chosen role and sends them the channel key." />}
           className="mb-2"
         />
 
         {!holdsKey && (
           <p className="clip-corner-lg bg-warning/10 px-3 py-2 text-xs text-warning">
-            You don't hold this channel's key, so members you add get the role
-            but a member who does hold it has to share it before they can read.
+            <FormattedMessage
+              id="addChannelMembersDialog.noKey"
+              defaultMessage="You don't hold this channel's key, so members you add get the role but a member who does hold it has to share it before they can read."
+            />
           </p>
         )}
 
         {roles.length > 1 && (
           <Select value={roleId} onValueChange={setRoleId}>
             <SelectTrigger className="w-full">
-              <SelectValue placeholder="Role to grant" />
+              <SelectValue placeholder={intl.formatMessage({ id: "addChannelMembersDialog.rolePlaceholder", defaultMessage: "Role to grant" })} />
             </SelectTrigger>
             <SelectContent>
               {roles.map((r) => (
@@ -134,20 +146,20 @@ export function AddChannelMembersDialog({
 
         {candidates.length === 0 ? (
           <p className="py-2 text-sm text-muted-foreground">
-            Everyone in the community already has access to this channel.
+            <FormattedMessage id="addChannelMembersDialog.everyoneHasAccess" defaultMessage="Everyone in the community already has access to this channel." />
           </p>
         ) : (
           <>
             <SearchField
               value={query}
               onChange={setQuery}
-              placeholder="Search members"
+              placeholder={intl.formatMessage({ id: "addChannelMembersDialog.searchPlaceholder", defaultMessage: "Search members" })}
               className="bg-background/40"
               autoFocus
             />
 
             {matches.length === 0 ? (
-              <p className="py-2 text-sm text-muted-foreground">No member matches.</p>
+              <p className="py-2 text-sm text-muted-foreground"><FormattedMessage id="addChannelMembersDialog.noMatches" defaultMessage="No member matches." /></p>
             ) : (
               <ul className="-mx-2 max-h-72 overflow-y-auto">
                 {visible.map((pk) => (
@@ -166,7 +178,7 @@ export function AddChannelMembersDialog({
                       className="text-xs text-muted-foreground underline"
                       onClick={() => setShowAll(true)}
                     >
-                      Show all {matches.length}
+                      <FormattedMessage id="addChannelMembersDialog.showAll" defaultMessage="Show all {count}" values={{ count: matches.length }} />
                     </button>
                   </li>
                 )}
@@ -185,6 +197,7 @@ function CandidateRow({ pubkey, added, busy, onAdd }: {
   busy: boolean;
   onAdd?: () => void;
 }) {
+  const intl = useIntl();
   const author = useAuthor(pubkey);
   const name = useScopedDisplayName(pubkey, author.data?.metadata);
   return (
@@ -200,7 +213,7 @@ function CandidateRow({ pubkey, added, busy, onAdd }: {
       </span>
       {added ? (
         <span className="flex shrink-0 items-center gap-1 text-xs text-success">
-          <Check className="size-3.5" aria-hidden /> Added
+          <Check className="size-3.5" aria-hidden /> <FormattedMessage id="addChannelMembersDialog.added" defaultMessage="Added" />
         </span>
       ) : (
         <Button
@@ -210,10 +223,10 @@ function CandidateRow({ pubkey, added, busy, onAdd }: {
           className="shrink-0"
           disabled={busy || !onAdd}
           onClick={onAdd}
-          aria-label={`Add ${name}`}
+          aria-label={intl.formatMessage({ id: "addChannelMembersDialog.addMember", defaultMessage: "Add {name}" }, { name })}
         >
           {busy ? <Loader2 className="size-4 animate-spin" /> : <UserPlus className="size-4" />}
-          Add
+          <FormattedMessage {...common.add} />
         </Button>
       )}
     </li>

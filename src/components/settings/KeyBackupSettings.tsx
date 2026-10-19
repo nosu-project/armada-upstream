@@ -7,6 +7,7 @@ import { SettingsRow } from "@/components/settings/SettingsSection";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { toast } from "@/hooks/useToast";
+import { common, FormattedMessage, t, useIntl } from "@/i18n";
 import { writeClipboardText } from "@/lib/clipboard";
 import { saveNsec } from "@/lib/credentialManager";
 import { desktopSecretsStatus, isDesktop } from "@/lib/desktop";
@@ -20,6 +21,7 @@ import type { SecretsStatus } from "@/lib/desktop";
  * fallback (obfuscated, not encrypted); say so rather than claim protection.
  */
 function KeyStorageRow() {
+  const intl = useIntl();
   const [status, setStatus] = useState<SecretsStatus | null>(null);
 
   useEffect(() => {
@@ -39,24 +41,24 @@ function KeyStorageRow() {
 
   return (
     <SettingsRow
-      label="Storage on this device"
+      label={intl.formatMessage({ id: "keyBackupSettings.storage", defaultMessage: "Storage on this device" })}
       description={
         encrypted
-          ? "Encrypted by your system's credential store."
+          ? intl.formatMessage({ id: "keyBackupSettings.storageEncrypted", defaultMessage: "Encrypted by your system's credential store." })
           : status.available
-            ? "Only obfuscated on disk."
-            : "Stored unencrypted on this device."
+            ? intl.formatMessage({ id: "keyBackupSettings.storageObfuscated", defaultMessage: "Only obfuscated on disk." })
+            : intl.formatMessage({ id: "keyBackupSettings.storageUnencrypted", defaultMessage: "Stored unencrypted on this device." })
       }
       info={
         !encrypted && status.available
-          ? "No system keyring was found, so your key is only obfuscated on disk. Installing a keyring (GNOME Keyring or KWallet) enables real encryption."
+          ? intl.formatMessage({ id: "keyBackupSettings.storageInfo", defaultMessage: "No system keyring was found, so your key is only obfuscated on disk. Installing a keyring (GNOME Keyring or KWallet) enables real encryption." })
           : undefined
       }
     >
       {encrypted ? (
-        <Lock className="size-4 text-success" aria-label="Encrypted" />
+        <Lock className="size-4 text-success" aria-label={intl.formatMessage({ id: "keyBackupSettings.encrypted", defaultMessage: "Encrypted" })} />
       ) : (
-        <ShieldAlert className="size-4 text-warning" aria-label="Not encrypted" />
+        <ShieldAlert className="size-4 text-warning" aria-label={intl.formatMessage({ id: "keyBackupSettings.notEncrypted", defaultMessage: "Not encrypted" })} />
       )}
     </SettingsRow>
   );
@@ -69,6 +71,7 @@ interface KeyBackupSettingsProps {
 
 /** Reveal/copy/download the secret key. Only rendered for nsec logins. */
 export function KeyBackupSettings({ nsec, pubkey }: KeyBackupSettingsProps) {
+  const intl = useIntl();
   const [showKey, setShowKey] = useState(false);
   const [copied, setCopied] = useState<"nsec" | "npub" | null>(null);
   const npub = nip19.npubEncode(pubkey);
@@ -81,8 +84,8 @@ export function KeyBackupSettings({ nsec, pubkey }: KeyBackupSettingsProps) {
       setTimeout(() => setCopied(null), 2000);
     } catch {
       toast({
-        title: "Copy failed",
-        description: "Could not copy to the clipboard. Please select and copy it manually.",
+        title: t({ id: "keyBackupSettings.copyFailed", defaultMessage: "Copy failed" }),
+        description: t({ id: "keyBackupSettings.copyFailedDescription", defaultMessage: "Could not copy to the clipboard. Please select and copy it manually." }),
         variant: "destructive",
       });
     }
@@ -93,9 +96,9 @@ export function KeyBackupSettings({ nsec, pubkey }: KeyBackupSettingsProps) {
     try {
       if (Capacitor.isNativePlatform()) {
         await share({
-          title: "Armada secret key",
+          title: t({ id: "keyBackupSettings.shareTitle", defaultMessage: "Armada secret key" }),
           text: nsec,
-          dialogTitle: "Back up your secret key",
+          dialogTitle: t({ id: "keyBackupSettings.shareDialogTitle", defaultMessage: "Back up your secret key" }),
         });
       } else {
         await saveNsec(npub, nsec);
@@ -104,8 +107,8 @@ export function KeyBackupSettings({ nsec, pubkey }: KeyBackupSettingsProps) {
       clearKeyBackupPending(pubkey);
     } catch {
       toast({
-        title: "Backup failed",
-        description: "Could not save the key. Please copy it manually.",
+        title: t({ id: "keyBackupSettings.backupFailed", defaultMessage: "Backup failed" }),
+        description: t({ id: "keyBackupSettings.backupFailedDescription", defaultMessage: "Could not save the key. Please copy it manually." }),
         variant: "destructive",
       });
     }
@@ -117,19 +120,23 @@ export function KeyBackupSettings({ nsec, pubkey }: KeyBackupSettingsProps) {
         <div className="clip-corner-lg bg-warning/10 p-3">
           <div className="flex items-center gap-2 mb-1">
             <span className="text-xs font-semibold text-warning">
-              Keep this key secret
+              <FormattedMessage id="keyBackupSettings.warningTitle" defaultMessage="Keep this key secret" />
             </span>
           </div>
           <p className="text-xs text-warning">
-            It's the only way into your account, with no reset, and anyone who sees it controls
-            your identity. Keep it in a password manager.
+            <FormattedMessage
+              id="keyBackupSettings.warning"
+              defaultMessage="It's the only way into your account, with no reset, and anyone who sees it controls your identity. Keep it in a password manager."
+            />
           </p>
         </div>
       </SettingsRow>
 
       <SettingsRow>
         <div className="space-y-2">
-          <div className="text-sm font-medium leading-tight">Secret key</div>
+          <div className="text-sm font-medium leading-tight">
+            <FormattedMessage id="keyBackupSettings.secretKey" defaultMessage="Secret key" />
+          </div>
           <div className="relative">
             <Input
               type={showKey ? "text" : "password"}
@@ -143,7 +150,9 @@ export function KeyBackupSettings({ nsec, pubkey }: KeyBackupSettingsProps) {
               size="icon"
               className="absolute right-0 top-0 h-full px-3 hover:bg-transparent"
               onClick={() => setShowKey(!showKey)}
-              aria-label={showKey ? "Hide secret key" : "Reveal secret key"}
+              aria-label={showKey
+                ? intl.formatMessage({ id: "keyBackupSettings.hideKey", defaultMessage: "Hide secret key" })
+                : intl.formatMessage({ id: "keyBackupSettings.revealKey", defaultMessage: "Reveal secret key" })}
             >
               {showKey ? (
                 <EyeOff className="h-4 w-4 text-muted-foreground" />
@@ -163,7 +172,7 @@ export function KeyBackupSettings({ nsec, pubkey }: KeyBackupSettingsProps) {
               ) : (
                 <Copy className="size-4" />
               )}
-              Copy
+              <FormattedMessage {...common.copy} />
             </Button>
             <Button variant="secondary" className="flex-1 clip-corner-lg" onClick={backup}>
               {Capacitor.isNativePlatform() ? (
@@ -171,7 +180,7 @@ export function KeyBackupSettings({ nsec, pubkey }: KeyBackupSettingsProps) {
               ) : (
                 <Download className="size-4" />
               )}
-              Back up
+              <FormattedMessage id="keyBackupSettings.backUp" defaultMessage="Back up" />
             </Button>
           </div>
         </div>
@@ -180,15 +189,15 @@ export function KeyBackupSettings({ nsec, pubkey }: KeyBackupSettingsProps) {
       <KeyStorageRow />
 
       <SettingsRow
-        label="Public key"
-        description="Your public identity, safe to share with anyone."
+        label={intl.formatMessage({ id: "keyBackupSettings.publicKey", defaultMessage: "Public key" })}
+        description={intl.formatMessage({ id: "keyBackupSettings.publicKeyDescription", defaultMessage: "Your public identity, safe to share with anyone." })}
       >
         <Button
           variant="ghost"
           size="icon"
           className="size-9 touch:size-11"
           onClick={() => copy(npub, "npub")}
-          aria-label="Copy public key"
+          aria-label={intl.formatMessage({ id: "keyBackupSettings.copyPublicKey", defaultMessage: "Copy public key" })}
         >
           {copied === "npub" ? (
             <Check className="size-4 text-success" />

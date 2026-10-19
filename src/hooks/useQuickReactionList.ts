@@ -8,6 +8,7 @@ import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useEventStore } from "@/hooks/useEventStore";
 import { quickReactionRow, useFrequentReactionTable, type QuickReactionSlot } from "@/hooks/useFrequentReactions";
 import { useNostrPublish } from "@/hooks/useNostrPublish";
+import { t } from "@/i18n";
 import { newestCanonicalSelfList, readStoredCanonicalSelfLists } from "@/lib/canonicalSelfList";
 import { queryExplicitRelaysWithStatus } from "@/lib/nip65";
 import { nextQuickReactionTags, parseQuickReactions, type QuickReaction } from "@/lib/quickReactions";
@@ -60,7 +61,7 @@ export function useQuickReactions(pubkey: string | undefined, limit = 3): QuickR
 /** Thrown when the list moved since the row the user edited was shown. */
 export class QuickReactionsChangedError extends Error {
   constructor() {
-    super("Your quick reactions changed on another device. Check them and try again.");
+    super(t({ id: "useQuickReactionList.changedElsewhere", defaultMessage: "Your quick reactions changed on another device. Check them and try again." }));
   }
 }
 
@@ -80,7 +81,7 @@ export function usePublishQuickReactions() {
 
   return useMutation({
     mutationFn: async ({ reactions, basis }: { reactions: QuickReaction[]; basis: string | null }) => {
-      if (!user) throw new Error("Sign in to choose quick reactions.");
+      if (!user) throw new Error(t({ id: "useQuickReactionList.signIn", defaultMessage: "Sign in to choose quick reactions." }));
       const queryKey = ["quick-reactions", user.pubkey];
       const deadline = AbortSignal.timeout(8_000);
       const filter = { kinds: [KIND_QUICK_REACTIONS], authors: [user.pubkey], limit: 1 };
@@ -89,7 +90,7 @@ export function usePublishQuickReactions() {
         readStoredCanonicalSelfLists(eventStore, user.pubkey, [KIND_QUICK_REACTIONS], deadline),
       ]);
       if (response.answered.length === 0) {
-        throw new Error("Couldn't reach your relays to check your quick reactions. Nothing was changed.");
+        throw new Error(t({ id: "useQuickReactionList.unreachable", defaultMessage: "Couldn't reach your relays to check your quick reactions. Nothing was changed." }));
       }
       const cached = queryClient.getQueryData<QuickReactionListQuery>(queryKey);
       const prev = newestCanonicalSelfList(

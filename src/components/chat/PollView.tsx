@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { formatEndsAt, isPollEnded, parsePoll, type PollTally } from "@/lib/polls";
 import { cn } from "@/lib/utils";
+import { FormattedMessage, useIntl } from "@/i18n";
 
 interface PollViewProps {
   /** Only its tags are read. */
@@ -17,6 +18,7 @@ interface PollViewProps {
 
 /** Transport-agnostic NIP-88 poll card (NIP-29 relay polls and Concord sealed polls). */
 export function PollView({ event, tally, canVote, isVoting, onVote }: PollViewProps) {
+  const intl = useIntl();
   const { user } = useCurrentUser();
   const { options, pollType, endsAt } = useMemo(() => parsePoll(event), [event]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -50,9 +52,15 @@ export function PollView({ event, tally, canVote, isVoting, onVote }: PollViewPr
     <div className="max-w-md clip-hairline-lg [--edge:var(--border)/0.5] [--fill:var(--secondary)/0.2] [--fill-hover:var(--secondary)/0.2] px-3 py-2.5 my-1.5 space-y-2">
       <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
         <BarChart3 className="size-3.5" />
-        <span>Poll{pollType === "multiplechoice" ? " · multiple choice" : ""}</span>
+        <span>
+          {pollType === "multiplechoice"
+            ? <FormattedMessage id="pollView.pollMultiple" defaultMessage="Poll · multiple choice" />
+            : <FormattedMessage id="pollView.poll" defaultMessage="Poll" />}
+        </span>
         {endsAt !== undefined && (
-          <span className="ml-auto">{isEnded ? "Ended" : `Ends ${formatEndsAt(endsAt)}`}</span>
+          <span className="ml-auto">{isEnded
+              ? intl.formatMessage({ id: "pollView.ended", defaultMessage: "Ended" })
+              : intl.formatMessage({ id: "pollView.ends", defaultMessage: "Ends {when}" }, { when: formatEndsAt(endsAt) })}</span>
         )}
       </div>
 
@@ -108,7 +116,11 @@ export function PollView({ event, tally, canVote, isVoting, onVote }: PollViewPr
 
       <div className="flex items-center justify-between">
         <span className="text-xs text-muted-foreground">
-          {totalVoters} {totalVoters === 1 ? "vote" : "votes"}
+          <FormattedMessage
+            id="pollView.votes"
+            defaultMessage="{count, plural, one {# vote} other {# votes}}"
+            values={{ count: totalVoters }}
+          />
         </span>
         {!showResults && (
           <Button
@@ -117,7 +129,7 @@ export function PollView({ event, tally, canVote, isVoting, onVote }: PollViewPr
             disabled={selected.size === 0 || isVoting || !user}
             onClick={submit}
           >
-            {isVoting ? <Loader2 className="size-3.5 animate-spin" /> : "Vote"}
+            {isVoting ? <Loader2 className="size-3.5 animate-spin" /> : intl.formatMessage({ id: "pollView.vote", defaultMessage: "Vote" })}
           </Button>
         )}
       </div>

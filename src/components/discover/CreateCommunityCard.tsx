@@ -6,6 +6,7 @@ import { ArmadaCrest, ArmadaCrestKeyframes } from "@/components/brand/ArmadaCres
 import { ImportFromDiscordButton } from "@/components/ImportFromDiscord";
 import { Button } from "@/components/ui/button";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { FormattedMessage } from "@/i18n";
 import { cn } from "@/lib/utils";
 
 const AddDialog = lazy(() =>
@@ -41,18 +42,18 @@ export function CreateCommunityCard({ className }: { className?: string }) {
       <div className="flex flex-1 flex-col gap-2.5 px-3.5 py-3">
         <div className="min-w-0">
           <p className="font-mono font-bold lowercase tracking-tight leading-tight">
-            create your own
+            <FormattedMessage id="createCommunityCard.heading" defaultMessage="create your own" />
           </p>
           <p className="text-2xs text-muted-foreground">
-            An encrypted community that runs without a server.
+            <FormattedMessage id="createCommunityCard.subtitle" defaultMessage="An encrypted community that runs without a server." />
           </p>
         </div>
         <p className="text-xs text-muted-foreground">
-          Yours in seconds. Invite people when you're ready.
+          <FormattedMessage id="createCommunityCard.body" defaultMessage="Yours in seconds. Invite people when you're ready." />
         </p>
         <Button className="mt-auto w-full clip-corner-lg" onClick={onCreate}>
           <Plus className="size-4" />
-          Create community
+          <FormattedMessage id="createCommunityCard.createCommunity" defaultMessage="Create community" />
         </Button>
         <ImportFromDiscordButton size="sm" />
       </div>

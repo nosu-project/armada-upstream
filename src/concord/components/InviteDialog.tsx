@@ -21,6 +21,7 @@ import type { SearchProfile } from "@/hooks/useSearchProfiles";
 import { writeClipboardText } from "@/lib/clipboard";
 import { canShare, share } from "@/lib/share";
 import { cn } from "@/lib/utils";
+import { common, FormattedMessage, t, useIntl } from "@/i18n";
 import type { Community } from "@/concord/lib/types";
 
 /**
@@ -40,7 +41,9 @@ export function InviteDialog({
   /** Owner/admin only; members can still invite directly. */
   canCreateLink: boolean;
 }) {
+  const intl = useIntl();
   const isMobile = useIsMobile();
+  const title = intl.formatMessage({ id: "inviteDialog.title", defaultMessage: "Invite people" });
   // Radix RemoveScroll only allows scrolling in the content node, so popovers
   // portal into it (also lets vaul treat the list as scrollable).
   const [portalNode, setPortalNode] = useState<HTMLDivElement | null>(null);
@@ -52,14 +55,14 @@ export function InviteDialog({
           ref={setPortalNode}
           className="mt-0 h-[100dvh] max-h-[100dvh] rounded-none bg-chrome pt-[env(safe-area-inset-top)]"
         >
-          <DrawerTitle className="sr-only">Invite people</DrawerTitle>
+          <DrawerTitle className="sr-only">{title}</DrawerTitle>
           {/* A full-screen sheet has no visible edge to swipe, so offer a close button. */}
           <DrawerClose asChild>
             <Button
               type="button"
               variant="ghost"
               size="icon"
-              aria-label="Close"
+              aria-label={intl.formatMessage(common.close)}
               className="absolute right-2 top-[calc(env(safe-area-inset-top)+0.5rem)] z-10 size-9 touch:size-11"
             >
               <X className="size-5" />
@@ -79,7 +82,7 @@ export function InviteDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <ChromeDialogContent ref={setPortalNode} title="Invite people">
+      <ChromeDialogContent ref={setPortalNode} title={title}>
         <PortalContainerProvider value={portalNode ?? undefined}>
           <InviteBody community={community} canCreateLink={canCreateLink} />
         </PortalContainerProvider>
@@ -90,6 +93,7 @@ export function InviteDialog({
 }
 
 function InviteBody({ community, canCreateLink }: { community: Community | undefined; canCreateLink: boolean }) {
+  const intl = useIntl();
   const { createLink, revokeLink, myLinks, sendDirectInvite, isSendingInvite, isPublic, revokeWouldPrivatize } =
     useInviteActions(community);
   const [sharing, setSharing] = useState(false);
@@ -122,14 +126,22 @@ function InviteBody({ community, canCreateLink }: { community: Community | undef
       if (!mounted.current) return;
       setSentPubkey(profile.pubkey);
       toast({
-        title: "Invite sent",
-        description: `${name || "They"} will be asked to accept.`,
+        title: t({ id: "inviteDialog.inviteSent", defaultMessage: "Invite sent" }),
+        description: name
+          ? t({ id: "inviteDialog.willBeAsked", defaultMessage: "{name} will be asked to accept." }, { name })
+          : t({ id: "inviteDialog.theyWillBeAsked", defaultMessage: "They will be asked to accept." }),
       });
     } catch (e) {
-      const message = e instanceof Error ? e.message : "Couldn't send the invite.";
+      const message = e instanceof Error ? e.message : t({ id: "inviteDialog.sendFailed", defaultMessage: "Couldn't send the invite." });
       // A failure stays worth hearing about after close; nowhere else reports it.
       if (!mounted.current) {
-        toast({ title: `Couldn't invite ${name || "them"}`, description: message, variant: "destructive" });
+        toast({
+          title: name
+            ? t({ id: "inviteDialog.inviteFailedNamed", defaultMessage: "Couldn't invite {name}" }, { name })
+            : t({ id: "inviteDialog.inviteFailed", defaultMessage: "Couldn't invite them" }),
+          description: message,
+          variant: "destructive",
+        });
         return;
       }
       setError(message);
@@ -153,7 +165,10 @@ function InviteBody({ community, canCreateLink }: { community: Community | undef
     if (
       !isPublic &&
       !confirm(
-        "Creating an invite link makes this community public: anyone with the link can join. Revoking every link makes it private again.",
+        t({
+          id: "inviteDialog.confirmPublic",
+          defaultMessage: "Creating an invite link makes this community public: anyone with the link can join. Revoking every link makes it private again.",
+        }),
       )
     ) {
       throw new Error("Cancelled");
@@ -162,7 +177,10 @@ function InviteBody({ community, canCreateLink }: { community: Community | undef
     if (
       listPublicly &&
       !confirm(
-        "Sharing to Discover posts this invite link, secret included, as a public note from your account. Anyone can find it and join. Only do this for a community you want strangers to join.",
+        t({
+          id: "inviteDialog.confirmDiscover",
+          defaultMessage: "Sharing to Discover posts this invite link, secret included, as a public note from your account. Anyone can find it and join. Only do this for a community you want strangers to join.",
+        }),
       )
     ) {
       throw new Error("Cancelled");
@@ -184,17 +202,22 @@ function InviteBody({ community, canCreateLink }: { community: Community | undef
     try {
       const url = forceNew || !liveLink ? await mintLink() : liveLink;
       const shared = await share({
-        title: community?.name ? `Join ${community.name}` : "Join my community",
+        title: community?.name
+          ? t({ id: "inviteDialog.shareTitle", defaultMessage: "Join {name}" }, { name: community.name })
+          : t({ id: "inviteDialog.shareTitleGeneric", defaultMessage: "Join my community" }),
         url,
-        dialogTitle: "Share invite link",
+        dialogTitle: t({ id: "inviteDialog.shareDialogTitle", defaultMessage: "Share invite link" }),
       });
       if (!shared) {
         await handleCopy(url);
-        toast({ title: "Invite link copied", description: "It's on your clipboard, ready to paste." });
+        toast({
+          title: t({ id: "inviteDialog.linkCopied", defaultMessage: "Invite link copied" }),
+          description: t({ id: "inviteDialog.linkCopiedDescription", defaultMessage: "It's on your clipboard, ready to paste." }),
+        });
       }
     } catch (e) {
       if (e instanceof Error && e.message === "Cancelled") return;
-      setError(e instanceof Error ? e.message : "Couldn't create the link.");
+      setError(e instanceof Error ? e.message : t({ id: "inviteDialog.createFailed", defaultMessage: "Couldn't create the link." }));
     } finally {
       setSharing(false);
     }
@@ -206,7 +229,10 @@ function InviteBody({ community, canCreateLink }: { community: Community | undef
     if (
       privatizes &&
       !confirm(
-        "This is the last live invite link. Revoking it makes the community private: new members can then only be added by direct invite, and banning a member will rotate the community keys.",
+        t({
+          id: "inviteDialog.confirmRevokeLast",
+          defaultMessage: "This is the last live invite link. Revoking it makes the community private: new members can then only be added by direct invite, and banning a member will rotate the community keys.",
+        }),
       )
     ) {
       return;
@@ -215,13 +241,13 @@ function InviteBody({ community, canCreateLink }: { community: Community | undef
     try {
       await revokeLink({ url });
       toast({
-        title: "Invite link revoked",
+        title: t({ id: "inviteDialog.linkRevoked", defaultMessage: "Invite link revoked" }),
         description: privatizes
-          ? "It can no longer be used to join. This community is now private."
-          : "It can no longer be used to join.",
+          ? t({ id: "inviteDialog.linkRevokedPrivate", defaultMessage: "It can no longer be used to join. This community is now private." })
+          : t({ id: "inviteDialog.linkRevokedDescription", defaultMessage: "It can no longer be used to join." }),
       });
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Couldn't revoke the link.");
+      setError(e instanceof Error ? e.message : t({ id: "inviteDialog.revokeFailed", defaultMessage: "Couldn't revoke the link." }));
     } finally {
       setRevoking(null);
     }
@@ -233,7 +259,7 @@ function InviteBody({ community, canCreateLink }: { community: Community | undef
       setCopied(url);
       setTimeout(() => setCopied((c) => (c === url ? null : c)), 1500);
     } catch {
-      toast({ title: "Copy failed", variant: "destructive" });
+      toast({ title: t({ id: "inviteDialog.copyFailed", defaultMessage: "Copy failed" }), variant: "destructive" });
     }
   };
 
@@ -243,15 +269,17 @@ function InviteBody({ community, canCreateLink }: { community: Community | undef
         <ArmadaCrest size={72} />
         <div className="space-y-1">
           <h2 className="chrome-dialog-title font-mono font-bold lowercase tracking-tight text-foreground">
-            invite people
+            <FormattedMessage id="inviteDialog.heading" defaultMessage="invite people" />
           </h2>
           <p className="text-sm text-muted-foreground">
             {community?.name ? (
-              <>
-                Bring people into <span className="text-foreground">{community.name}</span>.
-              </>
+              <FormattedMessage
+                id="inviteDialog.bringInto"
+                defaultMessage="Bring people into <name>{community}</name>."
+                values={{ community: community.name, name: (chunks) => <span className="text-foreground">{chunks}</span> }}
+              />
             ) : (
-              <>Bring people into your community.</>
+              <FormattedMessage id="inviteDialog.bringIntoGeneric" defaultMessage="Bring people into your community." />
             )}
           </p>
         </div>
@@ -261,12 +289,13 @@ function InviteBody({ community, canCreateLink }: { community: Community | undef
       <div className="w-full space-y-2">
         <div className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wider text-muted-foreground">
           <UserPlus className="size-3.5" />
-          Invite someone directly
+          <FormattedMessage id="inviteDialog.inviteDirectly" defaultMessage="Invite someone directly" />
         </div>
         <ProfileSearchSelect onSelect={handleSelect} busyPubkey={pendingPubkey} />
         {sentPubkey && !isSendingInvite && (
           <p className="flex items-center gap-1.5 text-xs text-success">
-            <Check className="size-3.5" /> Invite sent. Search again to invite more.
+            <Check className="size-3.5" />{" "}
+            <FormattedMessage id="inviteDialog.sentInline" defaultMessage="Invite sent. Search again to invite more." />
           </p>
         )}
       </div>
@@ -275,16 +304,18 @@ function InviteBody({ community, canCreateLink }: { community: Community | undef
       <div className="w-full space-y-2 border-t border-chrome pt-5">
         <div className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wider text-muted-foreground">
           <LinkIcon className="size-3.5" />
-          Or share a link
+          <FormattedMessage id="inviteDialog.orShareLink" defaultMessage="Or share a link" />
           <Popover>
             <PopoverTrigger asChild>
-              <button type="button" className="ml-auto text-muted-foreground/70 hover:text-foreground" aria-label="About invite links">
+              <button type="button" className="ml-auto text-muted-foreground/70 hover:text-foreground" aria-label={intl.formatMessage({ id: "inviteDialog.aboutLinks", defaultMessage: "About invite links" })}>
                 <Info className="size-3.5" />
               </button>
             </PopoverTrigger>
             <PopoverContent side="top" className="w-64 p-3 text-xs normal-case tracking-normal font-normal text-muted-foreground">
-              Anyone with the link can join. The secret lives in the # fragment, never sent to a server. Revoking a
-              link doesn't require changing anyone's keys.
+              <FormattedMessage
+                id="inviteDialog.aboutLinksBody"
+                defaultMessage="Anyone with the link can join. The secret lives in the # fragment, never sent to a server. Revoking a link doesn't require changing anyone's keys."
+              />
             </PopoverContent>
           </Popover>
         </div>
@@ -303,40 +334,56 @@ function InviteBody({ community, canCreateLink }: { community: Community | undef
           ) : (
             <Copy className="size-4 mr-2" />
           )}
-          Invite
+          <FormattedMessage id="inviteDialog.invite" defaultMessage="Invite" />
         </Button>
         <Collapsible open={optionsOpen} onOpenChange={setOptionsOpen}>
           <CollapsibleTrigger className="flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground">
             <ChevronRight className={cn("size-3.5 transition-transform", optionsOpen && "rotate-90")} />
-            Link options
+            <FormattedMessage id="inviteDialog.linkOptions" defaultMessage="Link options" />
             {!optionsOpen && (expiryDays > 0 || label.trim()) && (
               <span className="text-foreground/70">
                 {" · "}
-                {[expiryDays > 0 ? `expires in ${expiryDays} day${expiryDays > 1 ? "s" : ""}` : null, label.trim() ? `"${label.trim()}"` : null]
-                  .filter(Boolean)
-                  .join(", ")}
+                {expiryDays > 0 && label.trim()
+                  ? intl.formatMessage(
+                    { id: "inviteDialog.optionsSummaryBoth", defaultMessage: "{days, plural, one {expires in # day} other {expires in # days}}, \"{label}\"" },
+                    { days: expiryDays, label: label.trim() },
+                  )
+                  : expiryDays > 0
+                    ? intl.formatMessage(
+                      { id: "inviteDialog.optionsSummaryExpiry", defaultMessage: "{days, plural, one {expires in # day} other {expires in # days}}" },
+                      { days: expiryDays },
+                    )
+                    : `"${label.trim()}"`}
               </span>
             )}
           </CollapsibleTrigger>
           <CollapsibleContent className="pt-2">
             <div className="flex gap-2">
               <Select value={String(expiryDays)} onValueChange={(v) => setExpiryDays(Number(v))}>
-                <SelectTrigger className="w-40 shrink-0" aria-label="Link expiry">
+                <SelectTrigger className="w-40 shrink-0" aria-label={intl.formatMessage({ id: "inviteDialog.expiry", defaultMessage: "Link expiry" })}>
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="0">Never expires</SelectItem>
-                  <SelectItem value="1">Expires in 1 day</SelectItem>
-                  <SelectItem value="7">Expires in 7 days</SelectItem>
-                  <SelectItem value="30">Expires in 30 days</SelectItem>
+                  <SelectItem value="0">
+                    <FormattedMessage id="inviteDialog.neverExpires" defaultMessage="Never expires" />
+                  </SelectItem>
+                  {[1, 7, 30].map((days) => (
+                    <SelectItem key={days} value={String(days)}>
+                      <FormattedMessage
+                        id="inviteDialog.expiresIn"
+                        defaultMessage="{days, plural, one {Expires in # day} other {Expires in # days}}"
+                        values={{ days }}
+                      />
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
               <Input
                 value={label}
                 onChange={(e) => setLabel(e.target.value)}
-                placeholder="Label (optional)"
+                placeholder={intl.formatMessage({ id: "inviteDialog.labelPlaceholder", defaultMessage: "Label (optional)" })}
                 className="min-w-0 text-sm"
-                aria-label="Invite label"
+                aria-label={intl.formatMessage({ id: "inviteDialog.labelAria", defaultMessage: "Invite label" })}
               />
             </div>
 
@@ -347,11 +394,13 @@ function InviteBody({ community, canCreateLink }: { community: Community | undef
               >
                 <span className="space-y-0.5">
                   <span className="block text-sm font-medium normal-case tracking-normal">
-                    Share to Discover
+                    <FormattedMessage id="inviteDialog.shareToDiscover" defaultMessage="Share to Discover" />
                   </span>
                   <span className="block text-xs font-normal normal-case tracking-normal text-muted-foreground">
-                    List the community publicly on the Discover page so anyone can find and
-                    join it. The link's secret becomes public.
+                    <FormattedMessage
+                      id="inviteDialog.shareToDiscoverHint"
+                      defaultMessage="List the community publicly on the Discover page so anyone can find and join it. The link's secret becomes public."
+                    />
                   </span>
                 </span>
                 <Switch id="list-publicly" checked={listPublicly} onCheckedChange={setListPublicly} />
@@ -367,7 +416,7 @@ function InviteBody({ community, canCreateLink }: { community: Community | undef
               onClick={() => void handleInvite(true)}
               disabled={sharing || !community}
             >
-              Create a new link with these options
+              <FormattedMessage id="inviteDialog.createWithOptions" defaultMessage="Create a new link with these options" />
             </Button>
           </CollapsibleContent>
         </Collapsible>
@@ -376,11 +425,13 @@ function InviteBody({ community, canCreateLink }: { community: Community | undef
 
       {canCreateLink && myLinks.length > 0 && (
         <div className="w-full space-y-1.5 border-t border-chrome pt-4">
-          <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Your live links</div>
+          <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+            <FormattedMessage id="inviteDialog.liveLinks" defaultMessage="Your live links" />
+          </div>
           {myLinks.map((e) => (
             <div key={e.token} className="flex items-center gap-2">
               <Input readOnly value={e.url} className="min-w-0 font-mono text-3xs" onFocus={(ev) => ev.currentTarget.select()} />
-              <Button type="button" size="icon" variant="outline" className="shrink-0" aria-label="Copy link" onClick={() => handleCopy(e.url)}>
+              <Button type="button" size="icon" variant="outline" className="shrink-0" aria-label={intl.formatMessage(common.copyLink)} onClick={() => handleCopy(e.url)}>
                 {copied === e.url ? <Check className="size-3.5 text-success" /> : <Copy className="size-3.5" />}
               </Button>
               <Button
@@ -391,7 +442,7 @@ function InviteBody({ community, canCreateLink }: { community: Community | undef
                 disabled={revoking === e.url}
                 onClick={() => handleRevoke(e.url)}
               >
-                {revoking === e.url ? <Loader2 className="size-3.5 animate-spin" /> : "Revoke"}
+                {revoking === e.url ? <Loader2 className="size-3.5 animate-spin" /> : <FormattedMessage id="inviteDialog.revoke" defaultMessage="Revoke" />}
               </Button>
             </div>
           ))}

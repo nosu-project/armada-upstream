@@ -4,6 +4,7 @@ import { rememberEmbedHeight, seenEmbedHeight } from "@/components/chat/imageDim
 import { useEmbedLiveness } from "@/hooks/useEmbedLiveness";
 
 import { cn } from "@/lib/utils";
+import { useIntl } from "@/i18n";
 
 interface InstagramEmbedProps {
   shortcode: string;
@@ -18,6 +19,7 @@ interface InstagramEmbedProps {
  * inline playback is behind Instagram's login wall.
  */
 export function InstagramEmbed({ shortcode, className, fallback }: InstagramEmbedProps) {
+  const intl = useIntl();
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const { failed, markAlive, onLoad } = useEmbedLiveness(iframeRef);
   // Seeded from this session's last measure, so a remount doesn't grow into it.
@@ -62,7 +64,7 @@ export function InstagramEmbed({ shortcode, className, fallback }: InstagramEmbe
       <iframe
         ref={iframeRef}
         src={`https://www.instagram.com/p/${shortcode}/embed/captioned/`}
-        title="Instagram post"
+        title={intl.formatMessage({ id: "instagramEmbed.title", defaultMessage: "Instagram post" })}
         className="w-full border-0 bg-white"
         style={{ height: height ?? undefined, minHeight: 480 }}
         scrolling="no"

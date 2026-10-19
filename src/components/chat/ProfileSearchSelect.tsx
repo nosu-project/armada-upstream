@@ -13,6 +13,7 @@ import { getAvatarShape } from "@/lib/avatarShape";
 import { resolvePubkey } from "@/lib/resolvePubkey";
 import { cn } from "@/lib/utils";
 import { parseProfileImeta } from "@/lib/profileImeta";
+import { useIntl } from "@/i18n";
 
 /**
  * Single-select user picker on NIP-50 profile search (follows first). Inline,
@@ -21,7 +22,7 @@ import { parseProfileImeta } from "@/lib/profileImeta";
 export function ProfileSearchSelect({
   onSelect,
   busyPubkey,
-  placeholder = "Search a name or paste an npub…",
+  placeholder: placeholderProp,
   autoFocus,
 }: {
   onSelect: (profile: SearchProfile) => void;
@@ -29,6 +30,9 @@ export function ProfileSearchSelect({
   placeholder?: string;
   autoFocus?: boolean;
 }) {
+  const intl = useIntl();
+  const placeholder = placeholderProp
+    ?? intl.formatMessage({ id: "profileSearchSelect.placeholder", defaultMessage: "Search a name or paste an npub…" });
   const [query, setQuery] = useState("");
   const { data: profiles, isFetching, followedPubkeys } = useSearchProfiles(query);
 
@@ -52,7 +56,7 @@ export function ProfileSearchSelect({
           value={query}
           onChange={setQuery}
           placeholder={placeholder}
-          aria-label="Search people"
+          aria-label={intl.formatMessage({ id: "profileSearchSelect.searchPeople", defaultMessage: "Search people" })}
           autoComplete="off"
           autoCapitalize="off"
           autoCorrect="off"
@@ -80,7 +84,9 @@ export function ProfileSearchSelect({
           />
         ) : results.length === 0 ? (
           <div className="px-3 py-6 text-center text-xs text-muted-foreground">
-            {isFetching ? "Searching…" : "No one found. Try a different name, or paste an npub."}
+            {isFetching
+              ? intl.formatMessage({ id: "profileSearchSelect.searching", defaultMessage: "Searching…" })
+              : intl.formatMessage({ id: "profileSearchSelect.noResults", defaultMessage: "No one found. Try a different name, or paste an npub." })}
           </div>
         ) : (
           results.map((profile) => (
@@ -134,8 +140,10 @@ function ProfileRow({
   isBusy: boolean;
   onClick: () => void;
 }) {
+  const intl = useIntl();
   const { metadata, pubkey } = profile;
-  const displayName = metadata.name || metadata.display_name || "Anonymous";
+  const displayName = metadata.name || metadata.display_name
+    || intl.formatMessage({ id: "profileSearchSelect.anonymous", defaultMessage: "Anonymous" });
   const identifier = metadata.nip05 || nip19.npubEncode(pubkey);
 
   return (
@@ -157,7 +165,7 @@ function ProfileRow({
         </Avatar>
         {isFollowed && (
           <span
-            title="Following"
+            title={intl.formatMessage({ id: "profileSearchSelect.following", defaultMessage: "Following" })}
             className="absolute -bottom-0.5 -right-0.5 grid size-4 place-items-center rounded-full bg-success text-success-foreground ring-2 ring-background"
           >
             <UserRoundCheck className="size-2.5" />

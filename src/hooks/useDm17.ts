@@ -91,6 +91,7 @@ import { dm17NotifyCandidates, feedNotifyCandidates } from "@/wire/notify";
 import type { SendStatus } from "@/hooks/useSendStatusMap";
 import { shareByRumorId } from "@/lib/shareRows";
 import type { NostrEvent, NostrFilter, NostrSigner } from "@nostrify/nostrify";
+import { t } from "@/i18n";
 
 const SYNC_MIN_INTERVAL_MS = 30_000;
 /** Wraps are backdated ≤ 2 days; a FULL scan re-reads this far behind the cursor. */
@@ -1369,7 +1370,7 @@ export function useDm17Thread(
   const send = useCallback(
     async (content: string, extraTags?: string[][]) => {
       if (!canSend || !self || peers.length === 0) {
-        throw new Error("This conversation isn't reachable over private DMs yet.");
+        throw new Error(t({ id: "useDm17.unreachable", defaultMessage: "This conversation isn't reachable over private DMs yet." }));
       }
       const trimmed = content.trim();
       if (!trimmed) return;
@@ -1393,11 +1394,11 @@ export function useDm17Thread(
   const editMessage = useCallback(
     async (targetId: string, content: string) => {
       if (!canSend || !self || peers.length === 0) {
-        throw new Error("This conversation isn't reachable over private DMs yet.");
+        throw new Error(t({ id: "useDm17.unreachable", defaultMessage: "This conversation isn't reachable over private DMs yet." }));
       }
       const original = messages.find((message) => message.rumorId === targetId);
       if (!original || original.author !== self || original.kind !== KIND_DM_CHAT) {
-        throw new Error("Only your own NIP-17 chat messages can be edited");
+        throw new Error(t({ id: "useDm17.onlyOwnEditable", defaultMessage: "Only your own NIP-17 chat messages can be edited" }));
       }
       const trimmed = content.trim();
       if (!trimmed || trimmed === original.content.trim()) return;
@@ -1534,7 +1535,7 @@ export function useDm17Thread(
   const sendWebxdc = useCallback(
     async (uuid: string, payload: string, meta?: DmWebxdcMeta) => {
       if (!canSend || !self || peers.length === 0) {
-        throw new Error("This conversation isn't reachable over private DMs yet.");
+        throw new Error(t({ id: "useDm17.unreachable", defaultMessage: "This conversation isn't reachable over private DMs yet." }));
       }
       const expiresAt = await resolveExpiry();
       const rumor = buildDmRumor({

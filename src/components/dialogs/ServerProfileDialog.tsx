@@ -14,6 +14,7 @@ import { Label } from "@/components/ui/label";
 import { useCurrentUserProfile } from "@/hooks/useCurrentUser";
 import { useServerProfile, useUpdateServerProfile } from "@/hooks/useServerProfile";
 import { toast } from "@/hooks/useToast";
+import { common, FormattedMessage, t, useIntl } from "@/i18n";
 import { getAvatarShape } from "@/lib/avatarShape";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { isHexColor } from "@/lib/nip29";
@@ -33,6 +34,7 @@ const PRESET_COLORS = [
 
 /** Per-server nickname, label and username color: NIP-32 self-labels scoped to this relay only. */
 export function ServerProfileDialog({ relayUrl, open, onOpenChange }: ServerProfileDialogProps) {
+  const intl = useIntl();
   const { user, metadata, imeta } = useCurrentUserProfile();
   const { data: profile, isLoading } = useServerProfile(relayUrl, user?.pubkey);
   const { mutateAsync: save, isPending } = useUpdateServerProfile(relayUrl);
@@ -58,12 +60,15 @@ export function ServerProfileDialog({ relayUrl, open, onOpenChange }: ServerProf
         label,
         color: colorEnabled ? (color || DEFAULT_COLOR) : "",
       });
-      toast({ title: "Saved", description: "Your server identity has been updated." });
+      toast({
+        title: t({ id: "serverProfileDialog.saved", defaultMessage: "Saved" }),
+        description: t({ id: "serverProfileDialog.savedDescription", defaultMessage: "Your server identity has been updated." }),
+      });
       onOpenChange(false);
     } catch (err) {
       toast({
-        title: "Couldn’t save",
-        description: err instanceof Error ? err.message : "Please try again.",
+        title: t({ id: "serverProfileDialog.saveFailed", defaultMessage: "Couldn’t save" }),
+        description: err instanceof Error ? err.message : t({ id: "serverProfileDialog.pleaseTryAgain", defaultMessage: "Please try again." }),
         variant: "destructive",
       });
     }
@@ -82,23 +87,22 @@ export function ServerProfileDialog({ relayUrl, open, onOpenChange }: ServerProf
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <ChromeDialogContent title="Server identity">
+      <ChromeDialogContent title={intl.formatMessage({ id: "serverProfileDialog.title", defaultMessage: "Server identity" })}>
         <div className="flex flex-col items-center gap-2 text-center">
           <div className="flex size-12 items-center justify-center clip-corner-lg bg-primary/15 text-primary">
             <UserCog className="size-6" />
           </div>
           <h2 className="chrome-dialog-title font-mono font-bold lowercase tracking-tight text-foreground">
-            server identity
+            <FormattedMessage id="serverProfileDialog.heading" defaultMessage="server identity" />
           </h2>
           <p className="text-sm text-muted-foreground">
-            A nickname, label and color for this server only. They don't change other
-            servers or your global profile.
+            <FormattedMessage id="serverProfileDialog.intro" defaultMessage="A nickname, label and color for this server only. They don't change other servers or your global profile." />
           </p>
         </div>
 
         <div className="mt-6">
           <div className="text-2xs font-medium uppercase tracking-wider text-muted-foreground/70 mb-2">
-            Preview
+            <FormattedMessage id="serverProfileDialog.preview" defaultMessage="Preview" />
           </div>
           <div className="clip-corner-lg bg-background/40 p-3">
             <div className="flex items-start gap-3">
@@ -122,10 +126,12 @@ export function ServerProfileDialog({ relayUrl, open, onOpenChange }: ServerProf
                       {label.trim()}
                     </Badge>
                   )}
-                  <span className="text-2xs text-muted-foreground/70">just now</span>
+                  <span className="text-2xs text-muted-foreground/70">
+                    <FormattedMessage id="serverProfileDialog.justNow" defaultMessage="just now" />
+                  </span>
                 </div>
                 <p className="text-sm text-foreground/90 mt-0.5">
-                  Hey everyone, glad to be here.
+                  <FormattedMessage id="serverProfileDialog.sampleMessage" defaultMessage="Hey everyone, glad to be here." />
                 </p>
               </div>
             </div>
@@ -140,12 +146,14 @@ export function ServerProfileDialog({ relayUrl, open, onOpenChange }: ServerProf
           className="mt-6 space-y-4"
         >
           <div className="space-y-2">
-            <Label htmlFor="server-nickname">Nickname</Label>
+            <Label htmlFor="server-nickname">
+              <FormattedMessage id="serverProfileDialog.nickname" defaultMessage="Nickname" />
+            </Label>
             <Input
               id="server-nickname"
               value={nickname}
               onChange={(e) => setNickname(e.target.value)}
-              placeholder="How others see you here"
+              placeholder={intl.formatMessage({ id: "serverProfileDialog.nicknamePlaceholder", defaultMessage: "How others see you here" })}
               autoComplete="off"
               maxLength={64}
               disabled={isLoading}
@@ -154,12 +162,14 @@ export function ServerProfileDialog({ relayUrl, open, onOpenChange }: ServerProf
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="server-label">Label</Label>
+            <Label htmlFor="server-label">
+              <FormattedMessage id="serverProfileDialog.label" defaultMessage="Label" />
+            </Label>
             <Input
               id="server-label"
               value={label}
               onChange={(e) => setLabel(e.target.value)}
-              placeholder="A short tag, e.g. “Founder”"
+              placeholder={intl.formatMessage({ id: "serverProfileDialog.labelPlaceholder", defaultMessage: "A short tag, e.g. “Founder”" })}
               autoComplete="off"
               maxLength={32}
               disabled={isLoading}
@@ -169,7 +179,9 @@ export function ServerProfileDialog({ relayUrl, open, onOpenChange }: ServerProf
 
           <div className="space-y-2">
             <div className="flex items-center justify-between">
-              <Label>Username color</Label>
+              <Label>
+                <FormattedMessage id="serverProfileDialog.usernameColor" defaultMessage="Username color" />
+              </Label>
               {colorEnabled && (
                 <button
                   type="button"
@@ -181,7 +193,7 @@ export function ServerProfileDialog({ relayUrl, open, onOpenChange }: ServerProf
                   className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
                 >
                   <RotateCcw className="size-3" />
-                  Reset
+                  <FormattedMessage id="serverProfileDialog.reset" defaultMessage="Reset" />
                 </button>
               )}
             </div>
@@ -189,11 +201,11 @@ export function ServerProfileDialog({ relayUrl, open, onOpenChange }: ServerProf
               <label
                 className="relative size-9 shrink-0 cursor-pointer clip-corner-lg overflow-hidden"
                 style={{ backgroundColor: colorEnabled ? swatch : "hsl(var(--background) / 0.4)" }}
-                title="Custom color"
+                title={intl.formatMessage({ id: "serverProfileDialog.customColor", defaultMessage: "Custom color" })}
               >
                 <input
                   type="color"
-                  aria-label="Custom username color"
+                  aria-label={intl.formatMessage({ id: "serverProfileDialog.customUsernameColor", defaultMessage: "Custom username color" })}
                   value={swatch}
                   onChange={(e) => pickColor(e.target.value)}
                   disabled={isLoading}
@@ -207,7 +219,7 @@ export function ServerProfileDialog({ relayUrl, open, onOpenChange }: ServerProf
                     <button
                       key={c}
                       type="button"
-                      aria-label={`Use color ${c}`}
+                      aria-label={intl.formatMessage({ id: "serverProfileDialog.useColor", defaultMessage: "Use color {color}" }, { color: c })}
                       onClick={() => pickColor(c)}
                       disabled={isLoading}
                       className="size-6 rounded-full ring-offset-2 ring-offset-background transition-transform hover:scale-110"
@@ -224,10 +236,16 @@ export function ServerProfileDialog({ relayUrl, open, onOpenChange }: ServerProf
 
           <div className="flex gap-2 pt-2">
             <Button type="button" variant="ghost" className="flex-1 clip-corner-lg" onClick={() => onOpenChange(false)}>
-              Cancel
+              <FormattedMessage {...common.cancel} />
             </Button>
             <Button type="submit" className="flex-1 clip-corner-lg" disabled={isPending || isLoading}>
-              {isPending ? <><Loader2 className="size-4 mr-2 animate-spin" /> Saving…</> : "Save"}
+              {isPending ? (
+                <>
+                  <Loader2 className="size-4 mr-2 animate-spin" /> <FormattedMessage {...common.saving} />
+                </>
+              ) : (
+                <FormattedMessage {...common.save} />
+              )}
             </Button>
           </div>
         </form>

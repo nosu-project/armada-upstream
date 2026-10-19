@@ -12,6 +12,7 @@ import { authorQueryOptions } from "@/hooks/useAuthor";
 import type { AuthorResult } from "@/lib/authorCache";
 import { useEventStore } from "@/hooks/useEventStore";
 import { NOTE_TO_SELF_NAME } from "@/components/NoteToSelfAvatar";
+import { useIntl } from "@/i18n";
 import {
   dmConversationName,
   dmConversationSearchText,
@@ -71,12 +72,14 @@ export function useDmConversationName(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [peerKey, resultsKey]);
 
+  const intl = useIntl();
   return useMemo(() => {
     if (targets.length === 1 && targets[0] === selfPubkey) {
+      const noteToSelf = intl.formatMessage(NOTE_TO_SELF_NAME);
       return {
-        name: NOTE_TO_SELF_NAME,
-        searchText: `${NOTE_TO_SELF_NAME} ${dmConversationSearchText(targets, (peer) => metadataByPeer.get(peer))}`,
-        names: [NOTE_TO_SELF_NAME],
+        name: noteToSelf,
+        searchText: `${noteToSelf} ${dmConversationSearchText(targets, (peer) => metadataByPeer.get(peer))}`,
+        names: [noteToSelf],
         metadata: undefined,
         emojiTags: undefined,
       };
@@ -90,5 +93,5 @@ export function useDmConversationName(
       metadata: single ? metadataByPeer.get(single) : undefined,
       emojiTags: single ? eventTagsByPeer.get(single) : undefined,
     };
-  }, [targets, selfPubkey, metadataByPeer, eventTagsByPeer]);
+  }, [targets, selfPubkey, metadataByPeer, eventTagsByPeer, intl]);
 }
