@@ -5,6 +5,7 @@ import { ChromeDialogContent, ChromeDialogFooter, ChromeDialogHeader, Dialog } f
 import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
 import { Crop, ZoomIn, ZoomOut, RotateCcw } from 'lucide-react';
+import { hasTransparency } from '@/lib/canvasAlpha';
 import { isGifBytes, runGifCrop } from '@/lib/runGifCrop';
 import { FormattedMessage, common, useIntl } from '@/i18n';
 
@@ -42,11 +43,14 @@ async function getCroppedBlob(imageSrc: string, pixelCrop: Area, maxEdge?: numbe
     canvas.width,
     canvas.height,
   );
+  image.close();
+  // JPEG has no alpha channel and would paint a transparent icon's background black.
+  const type = hasTransparency(ctx, canvas.width, canvas.height) ? 'image/png' : 'image/jpeg';
   return new Promise<Blob>((resolve, reject) => {
     canvas.toBlob((blob) => {
       if (blob) resolve(blob);
       else reject(new Error('Failed to create blob'));
-    }, 'image/jpeg', 0.92);
+    }, type, 0.92);
   });
 }
 

@@ -4,6 +4,7 @@
  * the push service worker can bundle it.
  */
 
+import { hasTransparency } from "@/lib/canvasAlpha";
 import { bytesToBase64, sniffImageMime } from "@/lib/fileBytes";
 
 /** Longest edge drawn; a notification shows a face at well under this. */
@@ -15,10 +16,10 @@ export const NOTIFICATION_ICON_EDGE = 256;
  */
 export const MAX_NOTIFICATION_ICON_CHARS = 48 * 1024;
 
-/** Kept as PNG (transparency) up to here; past it, a photo is far smaller as JPEG. */
+/** Kept as PNG up to here; past it, an opaque photo is far smaller as JPEG. */
 const PNG_PREFERRED_BYTES = 16 * 1024;
 
-const JPEG_QUALITIES = [0.85, 0.6];
+const LOSSY_QUALITIES = [0.85, 0.6];
 
 function canRedraw(): boolean {
   return typeof createImageBitmap === "function" && typeof OffscreenCanvas === "function";
@@ -60,7 +61,19 @@ export async function notificationIconDataUrl(
 
     const png = await canvas.convertToBlob({ type: "image/png" });
     if (png.size <= PNG_PREFERRED_BYTES) return await dataUrl(png);
-    for (const quality of JPEG_QUALITIES) {
+    // JPEG would paint the transparent parts black: no icon beats a wrong one.
+    if (hasTransparency(context, canvas.width, canvas.height)) {
+      const url = await dataUrl(png);
+      if (url.length <= MAX_NOTIFICATION_ICON_CHARS) return url;
+      for (const quality of LOSSY_QUALITIES) {
+        const webp = await canvas.convertToBlob({ type: "image/webp", quality });
+        if (webp.type !== "image/webp") return undefined;
+        const lossy = await dataUrl(webp);
+        if (lossy.length <= MAX_NOTIFICATION_ICON_CHARS) return lossy;
+      }
+      return undefined;
+    }
+    for (const quality of LOSSY_QUALITIES) {
       const url = await dataUrl(await canvas.convertToBlob({ type: "image/jpeg", quality }));
       if (url.length <= MAX_NOTIFICATION_ICON_CHARS) return url;
     }

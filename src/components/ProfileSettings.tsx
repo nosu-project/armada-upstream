@@ -663,8 +663,8 @@ export function ProfileSettings({ onSaved, saveLabel, centerSave, showNip05 = tr
     if (!cropState) return;
     const { field } = cropState;
     setCropState(null);
-    const gif = blob.type === 'image/gif';
-    const file = new File([blob], `${field}.${gif ? 'gif' : 'jpg'}`, { type: gif ? 'image/gif' : 'image/jpeg' });
+    const ext = blob.type === 'image/gif' ? 'gif' : blob.type === 'image/png' ? 'png' : 'jpg';
+    const file = new File([blob], `${field}.${ext}`, { type: blob.type || 'image/jpeg' });
     await uploadImage(file, field);
   };
 

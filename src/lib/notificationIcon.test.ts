@@ -13,17 +13,31 @@ function png(size: number): Uint8Array<ArrayBuffer> {
 }
 
 /** OffscreenCanvas whose encoder output size is chosen per type. */
-function stubCanvas(sizes: { png: number; jpeg: (quality: number) => number }) {
+function stubCanvas(sizes: {
+  png: number;
+  jpeg: (quality: number) => number;
+  /** Absent: the encoder can't write WebP and hands back PNG, as Safari's does. */
+  webp?: (quality: number) => number;
+  transparent?: boolean;
+}) {
   const drawn: Array<{ width: number; height: number }> = [];
   const encoded: Array<{ type: string; quality?: number }> = [];
   class FakeCanvas {
     constructor(public width: number, public height: number) {}
     getContext() {
-      return { drawImage: () => drawn.push({ width: this.width, height: this.height }) };
+      return {
+        drawImage: () => drawn.push({ width: this.width, height: this.height }),
+        getImageData: () => ({ data: new Uint8ClampedArray([0, 0, 0, sizes.transparent ? 0 : 255]) }),
+      };
     }
     async convertToBlob({ type, quality }: { type: string; quality?: number }) {
       encoded.push({ type, quality });
-      const size = type === "image/png" ? sizes.png : sizes.jpeg(quality ?? 1);
+      if (type === "image/webp" && !sizes.webp) return new Blob([new Uint8Array(sizes.png)], { type: "image/png" });
+      const size = type === "image/png"
+        ? sizes.png
+        : type === "image/webp"
+          ? sizes.webp!(quality ?? 1)
+          : sizes.jpeg(quality ?? 1);
       return new Blob([new Uint8Array(size)], { type });
     }
   }
@@ -54,6 +68,23 @@ describe("notificationIconDataUrl", () => {
     expect(encoded.map((e) => e.type)).toEqual(["image/png", "image/jpeg", "image/jpeg"]);
     expect(url).toMatch(/^data:image\/jpeg;base64,/);
     expect(url!.length).toBeLessThanOrEqual(MAX_NOTIFICATION_ICON_CHARS);
+  });
+
+  it("never flattens a transparent icon to JPEG", async () => {
+    const { encoded } = stubCanvas({ png: 24 * 1024, jpeg: () => 4 * 1024, transparent: true });
+    const url = await notificationIconDataUrl(png(600_000), "image/png");
+    expect(encoded.map((e) => e.type)).toEqual(["image/png"]);
+    expect(url).toMatch(/^data:image\/png;base64,/);
+  });
+
+  it("shrinks a large transparent icon as WebP, and gives up where WebP can't be written", async () => {
+    const withWebp = stubCanvas({ png: 120 * 1024, jpeg: () => 4 * 1024, webp: () => 8 * 1024, transparent: true });
+    expect(await notificationIconDataUrl(png(600_000), "image/png")).toMatch(/^data:image\/webp;base64,/);
+    expect(withWebp.encoded.map((e) => e.type)).not.toContain("image/jpeg");
+
+    const without = stubCanvas({ png: 120 * 1024, jpeg: () => 4 * 1024, transparent: true });
+    expect(await notificationIconDataUrl(png(600_000), "image/png")).toBeUndefined();
+    expect(without.encoded.map((e) => e.type)).not.toContain("image/jpeg");
   });
 
   it("gives up rather than hand over an icon too large to be drawn", async () => {
