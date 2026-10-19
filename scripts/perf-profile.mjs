@@ -32,6 +32,8 @@
  *                   untouched, while the background history walk reads the rest
  *                   (--walk-sec <s>, 90). Reports how far it got and what it cost
  *   discover     /discover idle — the one scenario with real relay traffic
+ *   discover-all /discover with "show all communities" on, scrolled 30 times
+ *                so every page of listings loads and its cards mount
  *   live-switch  switching in and out of a REAL community, joined from an
  *                invite given as `--invite <url>` (or ARMADA_PERF_INVITE);
  *                skipped without one. Reads its real relays; every publish is
@@ -1071,6 +1073,34 @@ try {
     await until(page, async () => false, 15_000);
     const idle = await measureIdle(page, cdp, IDLE_SEC);
     save("discover", { idle, errors: errorsSince(mark), report: await report(page) });
+  }
+
+  if (wants("discover-all")) {
+    console.log(`\n▶ discover-all (unfiltered world, scrolled to the end, live relays)`);
+    const mark = errors.length;
+    await page.evaluate(() => {
+      const pk = localStorage.getItem("armada:active-pubkey");
+      const key = `armada:app-config:${pk}`;
+      const cur = JSON.parse(localStorage.getItem(key) ?? "{}");
+      localStorage.setItem(key, JSON.stringify({ ...cur, discoverAllContent: true }));
+    });
+    await page.goto("/discover");
+    await perfReady(page);
+    await resetCounters(page);
+    const a = await metrics(cdp);
+    const t = Date.now();
+    // Each step reaches the infinite-scroll sentinel, so later pages load too.
+    const viewport = page.viewportSize() ?? { width: 1280, height: 800 };
+    await page.mouse.move(viewport.width / 2, viewport.height / 2);
+    const { hot } = await cpuProfile("discover-all", async () => {
+      for (let i = 0; i < 30; i++) {
+        await dismissRestore(page);
+        await page.mouse.wheel(0, 1500);
+        await page.waitForTimeout(1000);
+      }
+    });
+    const b = await metrics(cdp);
+    save("discover-all", { scroll: cost(a, b, (Date.now() - t) / 1000), hot, errors: errorsSince(mark), report: await report(page) });
   }
 } finally {
   await browser.close();
