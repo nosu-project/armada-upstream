@@ -29,29 +29,36 @@ export function useLocalStorage<T>(
   const serializeRef = useRef(serialize);
   serializeRef.current = serialize;
 
+  // The value the next update builds on: committed state plus any update not yet rendered.
+  const latestRef = useRef(state);
+  const assign = useCallback((next: T) => {
+    latestRef.current = next;
+    setState(next);
+  }, []);
+
+  // A no-op returns before reaching React: an eagerly bailed-out update stays queued on the
+  // fiber until it next renders, and this one (AppProvider's config) rarely does, so every
+  // unchanged write would keep its caller's closures — and their render — alive.
   const setValue = useCallback((value: T | ((prev: T) => T)) => {
-    // Functional setState so batched calls and non-setter updates (key re-read, `storage`
-    // listener) are seen.
-    setState((prev) => {
-      const next = value instanceof Function ? value(prev) : value;
-      if (next === prev) return prev;
-      try {
-        localStorage.setItem(key, serializeRef.current(next));
-      } catch (error) {
-        console.warn(`Failed to save ${key} to localStorage:`, error);
-      }
-      return next;
-    });
-  }, [key]);
+    const prev = latestRef.current;
+    const next = value instanceof Function ? value(prev) : value;
+    if (Object.is(next, prev)) return;
+    try {
+      localStorage.setItem(key, serializeRef.current(next));
+    } catch (error) {
+      console.warn(`Failed to save ${key} to localStorage:`, error);
+    }
+    assign(next);
+  }, [key, assign]);
 
   // The useState initializer runs once, so a key change (e.g. user-scoped keys) needs a re-read.
   useEffect(() => {
     try {
       const item = localStorage.getItem(key);
-      setState(item ? deserialize(item) : defaultValue);
+      assign(item ? deserialize(item) : defaultValue);
     } catch (error) {
       console.warn(`Failed to load ${key} from localStorage:`, error);
-      setState(defaultValue);
+      assign(defaultValue);
     }
   // defaultValue is excluded: re-read only when the key changes.
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -62,7 +69,7 @@ export function useLocalStorage<T>(
     const handleStorageChange = (e: StorageEvent) => {
       if (e.key === key && e.newValue !== null) {
         try {
-          setState(deserialize(e.newValue));
+          assign(deserialize(e.newValue));
         } catch (error) {
           console.warn(`Failed to sync ${key} from localStorage:`, error);
         }
@@ -71,7 +78,7 @@ export function useLocalStorage<T>(
 
     window.addEventListener('storage', handleStorageChange);
     return () => window.removeEventListener('storage', handleStorageChange);
-  }, [key, deserialize]);
+  }, [key, deserialize, assign]);
 
   return [state, setValue] as const;
 }

@@ -21,6 +21,9 @@ export default mergeConfig(base, {
     outDir: "dist-perf",
     emptyOutDir: true,
     rollupOptions: {
+      // Unmangled module scopes: a heap snapshot then names the cache that grew
+      // (`.seenWrapIds`) instead of its minified letter (scripts/heap-diff.mjs).
+      output: { minify: { compress: true, mangle: false, codegen: true } },
       input: {
         index: path.resolve(import.meta.dirname, "index.html"),
         seed: path.resolve(import.meta.dirname, "e2e/screenshotSeed.html"),
