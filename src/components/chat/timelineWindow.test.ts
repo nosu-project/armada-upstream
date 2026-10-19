@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { resolveWindowStart, stepBackRows } from "@/components/chat/timelineWindow";
+import {
+  countRows,
+  resolveWindowEnd,
+  resolveWindowStart,
+  stepBackRows,
+  stepForwardRows,
+} from "@/components/chat/timelineWindow";
 
 /** `n` messages with ids "m{offset}".."m{offset+n-1}", oldest first. */
 function history(n: number, offset = 0): { id: string }[] {
@@ -102,5 +108,41 @@ describe("window sizing when a flood is folded", () => {
     expect(stepBackRows(entries, entries.length, 10, isSpam)).toBeLessThan(40);
     // With no predicate it is the old fixed message step.
     expect(stepBackRows(entries, entries.length, 10)).toBe(entries.length - 10);
+  });
+});
+
+describe("resolveWindowEnd", () => {
+  it("reaches the newest entry when no anchor is set", () => {
+    expect(resolveWindowEnd(history(100), null, 40)).toBe(100);
+  });
+
+  it("ends on the anchored message, so appends stay below the window", () => {
+    const before = history(100);
+    const after = [...before, { id: "m100" }];
+    expect(resolveWindowEnd(before, "m60", 40)).toBe(61);
+    expect(resolveWindowEnd(after, "m60", 40)).toBe(61);
+  });
+
+  it("stays bounded from the start when its anchor is lost", () => {
+    expect(resolveWindowEnd(history(1000), "gone", 100, 240)).toBe(340);
+  });
+});
+
+describe("window edges with a folded flood", () => {
+  const rows = (pattern: string) => [...pattern].map((c, i) => ({ id: `m${i}`, spam: c === "s" }));
+  const isSpam = (m: { spam: boolean }) => m.spam;
+
+  it("counts a run as one row", () => {
+    expect(countRows(rows("..sss.."), 0, 7, isSpam)).toBe(5);
+    expect(countRows(rows("..sss.."), 3, 7, isSpam)).toBe(3);
+    expect(countRows(rows("..sss.."), 0, 7)).toBe(7);
+  });
+
+  it("steps forward by rows without splitting a run", () => {
+    const entries = rows("..sss..");
+    expect(stepForwardRows(entries, 0, 3, isSpam)).toBe(5);
+    expect(stepForwardRows(entries, 0, 2, isSpam)).toBe(2);
+    expect(stepForwardRows(entries, 0, 99, isSpam)).toBe(7);
+    expect(stepForwardRows(entries, 0, 3)).toBe(3);
   });
 });

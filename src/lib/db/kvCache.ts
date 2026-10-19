@@ -8,6 +8,8 @@
  * re-renders on warm. The whole prefix is held in memory, so the key space must
  * be bounded by user actions, not traffic.
  */
+import { registerMemoryProbe } from "@/lib/memoryProbes";
+
 import { getArmadaDB } from "./armadaDB";
 
 /** What the registry needs of a cache, independent of what it holds. */
@@ -38,6 +40,7 @@ export class KvPrefixCache<T> {
   constructor(opts: KvPrefixCacheOpts) {
     this.prefix = opts.prefix;
     registry.add(this);
+    registerMemoryProbe(`kv:${opts.prefix}`, () => this.entries.size);
   }
 
   /** The value for `id`, or `undefined` on a miss or before the warm lands. */

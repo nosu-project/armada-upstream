@@ -314,6 +314,36 @@ describe("MessageTimeline reading anchor", () => {
     expect(offset).toBeLessThan(scroller.clientHeight);
   });
 
+  it("drops the newest rows while reading far back, and restores them on jump to present", async () => {
+    const { scroller, content } = await mountedTimeline(500);
+    const rows = () => content.querySelectorAll("[data-scroll-anchor]").length;
+
+    scroll(scroller, 2_500);
+    for (let i = 0; i < 30; i++) {
+      scroll(scroller, 0);
+      await act(async () => {
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+      });
+      expect(rows()).toBeLessThanOrEqual(240 + 64 + 16);
+    }
+    expect(screen.queryByText("chat:m40")).not.toBeNull();
+    expect(screen.queryByText("chat:m499")).toBeNull();
+
+    // Reading back down reveals the newer rows again, still bounded.
+    for (let i = 0; i < 8; i++) {
+      scroll(scroller, scroller.scrollHeight - scroller.clientHeight);
+      await act(async () => {
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+      });
+      expect(rows()).toBeLessThanOrEqual(240 + 64 + 16);
+    }
+    expect(screen.queryByText("chat:m40")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Jump to the latest messages" }));
+    await screen.findByText("chat:m499");
+    expect(rows()).toBeLessThanOrEqual(30);
+  }, 30_000);
+
   it("continues from a reveal step into a backfill without a second gesture", async () => {
     // A single scroll to the top can have more to do than one step: the window
     // starts short of everything loaded, so the first `maybeExtend` REVEALS the

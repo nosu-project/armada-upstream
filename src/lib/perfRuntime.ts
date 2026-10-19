@@ -19,6 +19,7 @@ import { Capacitor } from "@capacitor/core";
 import { isDesktop } from "@/lib/desktop";
 import { ArmadaNotification } from "@/lib/nativeNotifications";
 import { hasNativeNotificationService } from "@/lib/platform";
+import { readMemoryProbes } from "@/lib/memoryProbes";
 import { perfReport, perfReset, type PerfReport } from "@/lib/perf";
 
 function now(): number {
@@ -520,6 +521,11 @@ export function queryFamily(key: readonly unknown[]): string {
 
 /** The slice of a TanStack QueryCache this reads. */
 interface QueryCacheLike {
+  getAll?(): {
+    queryKey: readonly unknown[];
+    state: { data: unknown };
+    getObserversCount(): number;
+  }[];
   subscribe(listener: (event: {
     type: string;
     query: { queryKey: readonly unknown[] };
@@ -532,6 +538,7 @@ interface QueryCacheLike {
  * observer). Excess of either is the "idle CPU, quiet wire" signature.
  */
 export function instrumentQueryCache(cache: QueryCacheLike): () => void {
+  instrumentedCache = cache;
   return cache.subscribe((event) => {
     if (event.type === "observerAdded") {
       entry(queryFamily(event.query.queryKey)).observers += 1;
@@ -574,6 +581,65 @@ export function instrumentQueryCache(cache: QueryCacheLike): () => void {
     }
     return e;
   }
+}
+
+let instrumentedCache: QueryCacheLike | undefined;
+
+/** Rough retained size of a cached value: JSON length, capped so a census stays cheap. */
+function approxBytes(value: unknown): number {
+  if (value === undefined) return 0;
+  try {
+    return Math.min(JSON.stringify(value)?.length ?? 0, 50_000_000);
+  } catch {
+    // cyclic or a class instance: counted, not sized
+    return 0;
+  }
+}
+
+export interface MemoryCensus {
+  /** Per query family: queries held, those with no observer (kept only by gcTime), observers, approx data KB. */
+  queries: { family: string; queries: number; unobserved: number; observers: number; dataKB: number }[];
+  queryTotals: { queries: number; unobserved: number; dataKB: number };
+  /** Sizes reported by `registerMemoryProbe` (entries, not bytes). */
+  probes: Record<string, number>;
+  liveIntervals: number;
+  openSockets: number;
+  domNodes: number;
+}
+
+/**
+ * What the page holds, by owner: the query cache and every registered module
+ * cache. A leak shows as one line climbing across rounds that should repeat.
+ */
+export function memoryCensus(): MemoryCensus {
+  const families = new Map<string, { queries: number; unobserved: number; observers: number; bytes: number }>();
+  for (const q of instrumentedCache?.getAll?.() ?? []) {
+    const family = queryFamily(q.queryKey);
+    let e = families.get(family);
+    if (!e) families.set(family, (e = { queries: 0, unobserved: 0, observers: 0, bytes: 0 }));
+    const observers = q.getObserversCount();
+    e.queries += 1;
+    e.observers += observers;
+    if (observers === 0) e.unobserved += 1;
+    e.bytes += approxBytes(q.state.data);
+  }
+  const queries = [...families.entries()]
+    .map(([family, e]) => ({ family, queries: e.queries, unobserved: e.unobserved, observers: e.observers, dataKB: Math.round(e.bytes / 1024) }))
+    .sort((a, b) => b.dataKB - a.dataKB || b.queries - a.queries);
+  let openSockets = 0;
+  for (const r of relays.values()) openSockets += r.open;
+  return {
+    queries,
+    queryTotals: {
+      queries: queries.reduce((n, q) => n + q.queries, 0),
+      unobserved: queries.reduce((n, q) => n + q.unobserved, 0),
+      dataKB: queries.reduce((n, q) => n + q.dataKB, 0),
+    },
+    probes: readMemoryProbes(),
+    liveIntervals: liveIntervals.size,
+    openSockets,
+    domNodes: typeof document !== "undefined" ? document.getElementsByTagName("*").length : 0,
+  };
 }
 
 /** The slice of a React Fiber this reads. Internal, but stable since 16. */
@@ -1124,5 +1190,6 @@ export function installRuntimeProfiler(): void {
     reader.json = () => JSON.stringify(fullPerfReport(), null, 2);
     reader.reset = resetRuntimeProfile;
     reader.native = nativeServiceProfile;
+    reader.memory = memoryCensus;
   }
 }

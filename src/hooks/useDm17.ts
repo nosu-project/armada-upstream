@@ -1570,7 +1570,13 @@ export function useDm17Thread(
       const until =
         oldestRef.current ??
         (before.length > 0 ? before[0].createdAt : Math.floor(Date.now() / 1000));
-      const { oldest, exhausted, scanned } = await pageOlderDmWraps(ctx, until, true);
+      // A relay the history walk read to an empty page is already wholly in the
+      // store, so a thread page there can only re-read it.
+      const cursor = await readDm17Cursor(self);
+      const unwalked = ctx.relays.filter((relay) => !cursor?.relayExhaustedAt?.[relay]);
+      const { oldest, exhausted, scanned } = unwalked.length > 0
+        ? await pageOlderDmWraps({ ...ctx, relays: unwalked }, until, true)
+        : { oldest: undefined, exhausted: true, scanned: 0 };
       if (oldest !== undefined) oldestRef.current = oldest;
 
       // Probe deep enough for this conversation's rows beside existing ones, but clamp the new

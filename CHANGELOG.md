@@ -4,6 +4,36 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.66.0] - 2026-10-19
+
+Armada now speaks German, Spanish, French, Italian, Dutch and Japanese. The
+composer shows mentions as names and styles markdown as you type, with a
+formatting toolbar, and community search gains a date range and typed filters.
+Channel and direct-message history fills in quietly in the background.
+
+### Added
+- The app is translated into German, Spanish, French, Italian, Dutch and Japanese, with dates and numbers in your region's format
+- The composer shows mentions as names, custom emoji as images, and styles markdown live, with a formatting toolbar and shortcuts
+- Community search has a date range and from:, in:, has:, before:, after: and during: filters with suggestions
+- Channel and direct-message history backfills in the background, and search notes when history is still incomplete
+- Toasts can be swiped away left, right or up
+
+### Changed
+- Character card fields render as markdown with a copy button each, and in-chat cards get a cleaner frame
+- Mention and profile search ranks name matches ahead of address matches
+- Links written as `<url>` show without the brackets or a preview card
+- Android downloads are saved under Armada/ in Pictures, Movies, Music or Download
+- An image dragged into the composer is uploaded rather than pasted as a link
+- Each conversation keeps its own unsent draft
+- Smoother channel scrolling, swiping and loading on mobile, and less slowdown in long timelines and the Discover page
+
+### Fixed
+- Cropped images and icon thumbnails keep their transparency
+- A link inside a spoiler reveals the spoiler on first click instead of opening, and links end at spoiler bars
+- Mentions keep working while you edit them before the name has loaded
+- Android notifications start without waiting on a permission check, and a blocked notification channel is reported first
+- Mention labels can no longer reorder surrounding text
+
 ## [0.65.0] - 2026-10-16
 
 Settings is rebuilt as a native-style list of pages, signing up takes just a

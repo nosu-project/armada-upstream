@@ -25,6 +25,13 @@
  *   concord-idle    #general open, nobody touching anything
  *   concord-scroll  paging #general's history back
  *   concord-switch  hopping between the community's channels, heap per round
+ *                   (--switch-rounds <n>, 4; --heap-snapshot diffs round 1 against the last)
+ *   leak         the same tour of the app (DM threads, the DM list, channels,
+ *                notifications, settings, a profile) round after round, with the
+ *                heap/DOM/listener floor after a forced GC per round, a census of
+ *                the query cache and module caches, and a heap-snapshot diff of
+ *                round 2 against the last (`leak-diff.txt`: what grew, and what
+ *                holds it). --leak-rounds <n> (10)
  *   concord-type    composing in #general: per-keystroke cost to the next frame
  *   concord-type-touch  the same, phone-sized with touch emulation
  *   concord-walk    a community with only each channel's newest page on disk and
@@ -32,6 +39,8 @@
  *                   untouched, while the background history walk reads the rest
  *                   (--walk-sec <s>, 90). Reports how far it got and what it cost
  *   discover     /discover idle — the one scenario with real relay traffic
+ *   discover-all /discover with "show all communities" on, scrolled 30 times
+ *                so every page of listings loads and its cards mount
  *   live-switch  switching in and out of a REAL community, joined from an
  *                invite given as `--invite <url>` (or ARMADA_PERF_INVITE);
  *                skipped without one. Reads its real relays; every publish is
@@ -65,11 +74,13 @@
  * its time and relay, to see a republish loop's cadence.
  */
 import { spawn, spawnSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { chromium } from "playwright";
+
+import { formatDiff } from "./heap-diff.mjs";
 import { finalizeEvent, generateSecretKey, getEventHash, getPublicKey, nip19, nip44 } from "nostr-tools";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -340,6 +351,77 @@ async function heapFloorMB(cdp) {
   await cdp.send("HeapProfiler.collectGarbage");
   const m = await metrics(cdp);
   return Math.round((m.JSHeapUsedSize / 1048576) * 10) / 10;
+}
+
+/** A heap snapshot into `perf-reports/<name>`, for DevTools → Memory → load. */
+async function writeHeapSnapshot(cdp, name) {
+  const chunks = [];
+  const onChunk = ({ chunk }) => chunks.push(chunk);
+  cdp.on("HeapProfiler.addHeapSnapshotChunk", onChunk);
+  await cdp.send("HeapProfiler.takeHeapSnapshot", { reportProgress: false });
+  cdp.off("HeapProfiler.addHeapSnapshotChunk", onChunk);
+  writeFileSync(resolve(OUT, name), chunks.join(""));
+}
+
+/**
+ * Everything a leak raises, after a forced GC: JS heap, DOM nodes, listeners,
+ * and the page's own census (query cache and registered module caches).
+ */
+async function memoryFloor(cdp) {
+  const heapMB = await heapFloorMB(cdp);
+  const m = await metrics(cdp);
+  const census = await page.evaluate(() => window.__armadaPerf.memory?.());
+  return { heapMB, domNodes: m.Nodes, listeners: m.JSEventListeners, documents: m.Documents, census };
+}
+
+/** Least-squares slope of `ys` per step: growth per round, robust to one noisy round. */
+function slope(ys) {
+  const n = ys.length;
+  if (n < 2) return 0;
+  const mx = (n - 1) / 2;
+  const my = ys.reduce((a, b) => a + b, 0) / n;
+  let num = 0, den = 0;
+  ys.forEach((y, x) => {
+    num += (x - mx) * (y - my);
+    den += (x - mx) ** 2;
+  });
+  return Math.round((num / den) * 1000) / 1000;
+}
+
+/** Per census line, first → last value, for the lines that moved. */
+function censusGrowth(first, last) {
+  const out = {};
+  const pairs = (c) => ({
+    ...Object.fromEntries((c?.queries ?? []).map((q) => [`query ${q.family}`, q.queries])),
+    ...Object.fromEntries((c?.queries ?? []).map((q) => [`queryKB ${q.family}`, q.dataKB])),
+    ...Object.fromEntries(Object.entries(c?.probes ?? {}).map(([k, v]) => [`probe ${k}`, v])),
+    "queries (all)": c?.queryTotals?.queries ?? 0,
+    "queries unobserved": c?.queryTotals?.unobserved ?? 0,
+    "query data KB": c?.queryTotals?.dataKB ?? 0,
+    "live intervals": c?.liveIntervals ?? 0,
+    "open sockets": c?.openSockets ?? 0,
+  });
+  const a = pairs(first);
+  const b = pairs(last);
+  for (const k of new Set([...Object.keys(a), ...Object.keys(b)])) {
+    if ((b[k] ?? 0) !== (a[k] ?? 0)) out[k] = `${a[k] ?? 0} → ${b[k] ?? 0}`;
+  }
+  return Object.fromEntries(Object.entries(out).sort((x, y) => {
+    const d = (s) => { const [p, q] = s.split(" → ").map(Number); return q - p; };
+    return d(y[1]) - d(x[1]);
+  }));
+}
+
+/** Diff two snapshots in a child (they parse to GBs), writing `<name>.txt` and returning the parsed diff. */
+function runHeapDiff(early, late, name) {
+  const json = resolve(OUT, `${name}.json`);
+  const r = spawnSync(process.execPath, ["--max-old-space-size=8192", resolve(root, "scripts/heap-diff.mjs"), resolve(OUT, early), resolve(OUT, late), "--json", json], {
+    encoding: "utf8",
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  if (r.status !== 0) return { error: (r.stderr || "").slice(-2000) };
+  writeFileSync(resolve(OUT, `${name}.txt`), r.stdout);
+  return JSON.parse(readFileSync(json, "utf8"));
 }
 
 /** Main-thread cost between two metric snapshots, as a share of wall time. */
@@ -622,7 +704,7 @@ try {
     });
   }
 
-  const concordScenarios = ["concord-boot", "concord-idle", "concord-scroll", "concord-switch", "concord-type", "concord-type-touch"];
+  const concordScenarios = ["concord-boot", "concord-idle", "concord-scroll", "concord-switch", "concord-type", "concord-type-touch", "leak"];
   if (concordScenarios.some(wants)) {
     // Seed a community: a 3000-message #general and seven small channels.
     await page.goto("/e2e/concordSeed.html");
@@ -699,7 +781,7 @@ try {
       await resetCounters(page);
       const a = await metrics(cdp);
       const t = Date.now();
-      const rounds = 4;
+      const rounds = Number(opt("switch-rounds", "4"));
       const { hot } = await cpuProfile("concord-switch", async () => {
         for (let round = 0; round < rounds; round++) {
           for (let i = 1; i < concord.channelIds.length; i++) {
@@ -707,6 +789,10 @@ try {
             await page.waitForTimeout(600);
           }
           floors.push(await heapFloorMB(cdp));
+          // With --heap-snapshot: an early and a final snapshot, to diff what the rounds retained.
+          if (flag("heap-snapshot") && (round === 1 || round === rounds - 1)) {
+            await writeHeapSnapshot(cdp, `concord-switch-r${round}.heapsnapshot`);
+          }
         }
       });
       const b = await metrics(cdp);
@@ -789,6 +875,73 @@ try {
         await page.setViewportSize({ width: 1280, height: 800 });
       }
     }
+
+    if (wants("leak")) {
+      const rounds = Math.max(3, Number(opt("leak-rounds", "10")));
+      console.log(`▶ leak (${rounds} rounds of the same tour, floor per round)`);
+      mark = errors.length;
+      const tour = [
+        `/dm/${big.npub}`,
+        ...world.peers.slice(1, 4).map((p) => `/dm/${p.npub}`),
+        "/dm",
+        ...[0, 1, 2, 3].map(channelPath),
+        "/notifications",
+        "/settings",
+        `/${world.peers[1].npub}`,
+      ];
+      await page.goto(tour[0]);
+      await until(page, bigVisible, 90_000);
+      await page.waitForTimeout(3000);
+      const floors = [];
+      const t = Date.now();
+      const a = await metrics(cdp);
+      for (let round = 0; round < rounds; round++) {
+        for (const path of tour) {
+          await softNavigate(page, path);
+          await page.waitForTimeout(700);
+          await dismissRestore(page);
+        }
+        // Back to the same place every round, so every floor measures one state.
+        await softNavigate(page, tour[0]);
+        await page.waitForTimeout(1500);
+        // The profiler's own per-window counters are measurement, not the app.
+        await resetCounters(page);
+        floors.push(await memoryFloor(cdp));
+        // Round 1 is still warming (lazy chunks, first-open caches): diff from round 2.
+        if (flag("no-heap-snapshot")) continue;
+        if (round === 1) await writeHeapSnapshot(cdp, "leak-early.heapsnapshot");
+        if (round === rounds - 1) await writeHeapSnapshot(cdp, "leak-late.heapsnapshot");
+      }
+      const b = await metrics(cdp);
+      const warm = floors.slice(1);
+      const diff = flag("no-heap-snapshot") ? undefined : runHeapDiff("leak-early.heapsnapshot", "leak-late.heapsnapshot", "leak-diff");
+      save("leak", {
+        rounds,
+        tour: tour.length,
+        cost: cost(a, b, (Date.now() - t) / 1000),
+        perRound: {
+          heapMB: slope(warm.map((f) => f.heapMB)),
+          domNodes: slope(warm.map((f) => f.domNodes)),
+          listeners: slope(warm.map((f) => f.listeners)),
+        },
+        heapFloorMB: floors.map((f) => f.heapMB),
+        domNodes: floors.map((f) => f.domNodes),
+        listeners: floors.map((f) => f.listeners),
+        documents: floors.map((f) => f.documents),
+        censusGrowth: censusGrowth(floors[1]?.census, floors.at(-1)?.census),
+        census: floors.at(-1)?.census,
+        heapDiff: diff && {
+          error: diff.error,
+          heapMB: diff.heapMB,
+          detachedNodes: diff.detachedNodes,
+          growers: diff.growers?.filter((g) => !g.profiler && !g.devtools).slice(0, 10).map((g) => `+${g.entriesAdded} ${g.owner || "?"} (${g.object})`),
+          newByClass: diff.newByClass?.slice(0, 10).map((c) => `${Math.round(c.bytes / 1024)}KB ×${c.count} ${c.class}`),
+        },
+        errors: errorsSince(mark),
+        report: await report(page),
+      });
+      if (diff && !diff.error) console.log(`\n${formatDiff(diff).split("\n").slice(0, 60).join("\n")}\n(full: perf-reports/leak-diff.txt)`);
+    }
   }
 
 
@@ -840,15 +993,8 @@ try {
     // The same page once the walk has had its window: what it costs to sit there afterwards.
     const after = await measureIdle(page, cdp, Number(opt("walk-after-sec", "60")));
     const heapFloorAfterMB = await heapFloorMB(cdp);
-    if (flag("heap-snapshot")) {
-      // What the walk left retained, for DevTools → Memory → load.
-      const chunks = [];
-      const onChunk = ({ chunk }) => chunks.push(chunk);
-      cdp.on("HeapProfiler.addHeapSnapshotChunk", onChunk);
-      await cdp.send("HeapProfiler.takeHeapSnapshot", { reportProgress: false });
-      cdp.off("HeapProfiler.addHeapSnapshotChunk", onChunk);
-      writeFileSync(resolve(OUT, "concord-walk.heapsnapshot"), chunks.join(""));
-    }
+    // What the walk left retained, for DevTools → Memory → load.
+    if (flag("heap-snapshot")) await writeHeapSnapshot(cdp, "concord-walk.heapsnapshot");
     // Read the coverage from the seed page, which bundles the store's readers.
     await page.goto("/e2e/concordSeed.html");
     await page.waitForFunction(() => Boolean(window.__armadaConcordCoverage), null, { timeout: 60_000 });
@@ -1071,6 +1217,34 @@ try {
     await until(page, async () => false, 15_000);
     const idle = await measureIdle(page, cdp, IDLE_SEC);
     save("discover", { idle, errors: errorsSince(mark), report: await report(page) });
+  }
+
+  if (wants("discover-all")) {
+    console.log(`\n▶ discover-all (unfiltered world, scrolled to the end, live relays)`);
+    const mark = errors.length;
+    await page.evaluate(() => {
+      const pk = localStorage.getItem("armada:active-pubkey");
+      const key = `armada:app-config:${pk}`;
+      const cur = JSON.parse(localStorage.getItem(key) ?? "{}");
+      localStorage.setItem(key, JSON.stringify({ ...cur, discoverAllContent: true }));
+    });
+    await page.goto("/discover");
+    await perfReady(page);
+    await resetCounters(page);
+    const a = await metrics(cdp);
+    const t = Date.now();
+    // Each step reaches the infinite-scroll sentinel, so later pages load too.
+    const viewport = page.viewportSize() ?? { width: 1280, height: 800 };
+    await page.mouse.move(viewport.width / 2, viewport.height / 2);
+    const { hot } = await cpuProfile("discover-all", async () => {
+      for (let i = 0; i < 30; i++) {
+        await dismissRestore(page);
+        await page.mouse.wheel(0, 1500);
+        await page.waitForTimeout(1000);
+      }
+    });
+    const b = await metrics(cdp);
+    save("discover-all", { scroll: cost(a, b, (Date.now() - t) / 1000), hot, errors: errorsSince(mark), report: await report(page) });
   }
 } finally {
   await browser.close();

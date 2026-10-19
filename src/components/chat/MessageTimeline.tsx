@@ -2,11 +2,16 @@ import { ChevronDown, KeyRound, Loader2, MessagesSquare, Pause } from "lucide-re
 import { memo, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import {
+  countRows,
   FIRST_PAINT_WINDOW,
   INITIAL_WINDOW,
+  MAX_WINDOW,
+  resolveWindowEnd,
   resolveWindowStart,
   stepBackRows,
+  stepForwardRows,
   TRIM_ABOVE,
+  TRIM_SLACK,
   WINDOW_STEP,
 } from "@/components/chat/timelineWindow";
 import { flashRow } from "@/components/chat/rowFlash";
@@ -62,6 +67,13 @@ const AT_BOTTOM_PX = 60;
 const JUMP_PILL_PX = 300;
 
 const JUMP_CONTEXT = 15;
+
+/**
+ * Added to the measured distance while newer loaded rows are unrendered below
+ * the window: the scroller's bottom is then not the newest message, so nothing
+ * may treat the reader as at the bottom.
+ */
+const UNRENDERED_BELOW_PX = 1_000_000;
 
 /** Rows per commit as a conversation opens, one step per frame; the switch click's commit mounts none. */
 const OPENING_RAMP = [0, FIRST_PAINT_WINDOW, INITIAL_WINDOW];
@@ -366,7 +378,8 @@ const TimelineSkeleton = memo(function TimelineSkeleton() {
  * Instead the data is bounded:
  * - **Bounded window**: opens with {@link FIRST_PAINT_WINDOW} rows, fills to
  *   {@link INITIAL_WINDOW}, reveals {@link WINDOW_STEP} more near the top before
- *   asking the transport, and trims back at the bottom.
+ *   asking the transport, and trims back at the bottom. Away from the bottom it
+ *   holds at most {@link MAX_WINDOW} rows: revealing one edge drops the other.
  * - **Anchored position**: the first visible row and its offset are restored
  *   after reveals/prepends/growth (explicitly; WebKit lacks CSS scroll anchoring).
  * - **Stick-to-bottom** preserves distance from the bottom rather than snapping.
@@ -519,6 +532,30 @@ export function MessageTimeline({
   const startIndexRef = useRef(startIndex);
   startIndexRef.current = startIndex;
 
+  // Newest message currently rendered. `null` = the newest loaded.
+  const [windowEndId, setWindowEndId] = useState<string | null>(null);
+  const endIndex = useMemo(
+    () => resolveWindowEnd(timelineEntries, windowEndId, startIndex, MAX_WINDOW, (entry) =>
+      entry.type === "chat" ? !!quarantinedIds?.has(entry.message.id) : false,
+    ),
+    [timelineEntries, windowEndId, startIndex, quarantinedIds],
+  );
+  const endIndexRef = useRef(endIndex);
+  endIndexRef.current = endIndex;
+
+  const isFolded = useCallback(
+    (entry: ChannelTimelineEntry) =>
+      entry.type === "chat" && Boolean(quarantinedIdsRef.current?.has(entry.message.id)),
+    [],
+  );
+
+  /** Distance from the newest message: the scroller's bottom, unless rows are unrendered below it. */
+  const readerDistance = useCallback(
+    (el: HTMLElement) =>
+      distanceFromBottom(el) + (endIndexRef.current < entriesRef.current.length ? UNRENDERED_BELOW_PX : 0),
+    [],
+  );
+
   // Continuation is computed against the entry before the window so the top row
   // doesn't change shape as it grows.
   const items = useMemo<TimelineItem[]>(() => {
@@ -535,7 +572,7 @@ export function MessageTimeline({
       newDividerId !== entry.message.id &&
       !rotationDividerIds?.has(entry.message.id);
 
-    for (let i = startIndex; i < timelineEntries.length; i++) {
+    for (let i = startIndex; i < endIndex; i++) {
       const entry = timelineEntries[i];
       const prev = timelineEntries[i - 1];
       const newDay = !!prev && !isSameDay(prev.createdAt, entry.createdAt);
@@ -544,7 +581,7 @@ export function MessageTimeline({
       if (floodable(entry)) {
         const run: ChatMsg[] = [];
         let j = i;
-        for (; j < timelineEntries.length; j++) {
+        for (; j < endIndex; j++) {
           const at = timelineEntries[j];
           if (!floodable(at) || at.type !== "chat") break;
           if (j > i && !isSameDay(timelineEntries[j - 1].createdAt, at.createdAt)) break;
@@ -598,7 +635,7 @@ export function MessageTimeline({
     // Assigned during render so it never lags the rows by a commit.
     floodRunOfRef.current = runOf;
     return out;
-  }, [timelineEntries, startIndex, newDividerId, rotationDividerIds, quarantinedIds, pausedIds]);
+  }, [timelineEntries, startIndex, endIndex, newDividerId, rotationDividerIds, quarantinedIds, pausedIds]);
 
   const captureReadingAnchor = useCallback(() => {
     const scroller = scrollRef.current;
@@ -621,10 +658,34 @@ export function MessageTimeline({
       readingAnchorRef.current = null;
       return false;
     }
-    distanceRef.current = distanceFromBottom(scroller);
+    distanceRef.current = readerDistance(scroller);
     lastScrollTopRef.current = clampedScrollTop(scroller);
     return true;
-  }, []);
+  }, [readerDistance]);
+
+  /**
+   * Reveal older rows from `index`. Past {@link MAX_WINDOW} the newest edge is
+   * dropped too — only while the reader is in the reveal band, so the dropped
+   * rows are well below the viewport.
+   */
+  const revealUp = useCallback(
+    (index: number) => {
+      const all = entriesRef.current;
+      const next = all[index];
+      if (!next) return false;
+      const el = scrollRef.current;
+      if (
+        el &&
+        clampedScrollTop(el) < REVEAL_TRIGGER_PX &&
+        countRows(all, index, endIndexRef.current, isFolded) > MAX_WINDOW + TRIM_SLACK
+      ) {
+        setWindowEndId(all[stepForwardRows(all, index, MAX_WINDOW, isFolded) - 1].id);
+      }
+      revealFrom(next.id);
+      return true;
+    },
+    [isFolded, revealFrom],
+  );
 
   const pinToBottomNow = useCallback(() => {
     const el = scrollRef.current;
@@ -653,7 +714,7 @@ export function MessageTimeline({
       const row = contentRef.current?.querySelector<HTMLElement>(`[data-event-id="${id}"]`);
       if (!row) return;
       flashRow(row, focus);
-      distanceRef.current = distanceFromBottom(el);
+      distanceRef.current = readerDistance(el);
       lastScrollTopRef.current = clampedScrollTop(el);
       captureReadingAnchor();
     };
@@ -666,7 +727,7 @@ export function MessageTimeline({
     if (!runKey) return;
     setExpandedFloods((prev) => (prev.has(runKey) ? prev : new Set(prev).add(runKey)));
     requestAnimationFrame(settle);
-  }, [captureReadingAnchor]);
+  }, [captureReadingAnchor, readerDistance]);
 
   // The one place scroll is adjusted for a rendered-slice change; exactly one
   // branch applies, in priority order.
@@ -681,6 +742,7 @@ export function MessageTimeline({
       pinBottomRef.current = true;
       setRampStep(0);
       setWindowStart(null);
+      setWindowEndId(null);
       return;
     }
     const jump = pendingJumpRef.current;
@@ -702,18 +764,9 @@ export function MessageTimeline({
         // Restore the old viewport first, then capture afresh for the exposing commit.
         if (distanceRef.current > AT_BOTTOM_PX) restoreReadingAnchor();
         captureReadingAnchor();
-        const nextIndex = stepBackRows(
-          timelineEntries,
-          boundaryIndex,
-          WINDOW_STEP,
-          (entry) => entry.type === "chat" && Boolean(quarantinedIdsRef.current?.has(entry.message.id)),
-        );
-        const next = timelineEntries[nextIndex];
+        const nextIndex = stepBackRows(timelineEntries, boundaryIndex, WINDOW_STEP, isFolded);
         backfillRevealRef.current = null;
-        if (next) {
-          revealFrom(next.id);
-          return;
-        }
+        if (revealUp(nextIndex)) return;
       } else if (!loadingOlderRef.current) {
         // Empty/duplicate/error page. The pulse in finally guarantees this render.
         backfillRevealRef.current = null;
@@ -742,7 +795,7 @@ export function MessageTimeline({
     }
     stickToBottom();
     // `listVisible`: the scroller this effect moves may only just have mounted.
-  }, [items, listVisible, anchorLost, timelineEntries, backfillPulse, captureReadingAnchor, setWindowStart, revealFrom, jumpToRow, pinToBottomNow, restoreReadingAnchor, stickToBottom]);
+  }, [items, listVisible, anchorLost, timelineEntries, backfillPulse, captureReadingAnchor, setWindowStart, isFolded, revealUp, jumpToRow, pinToBottomNow, restoreReadingAnchor, stickToBottom]);
 
   // Content growth and container reflows (thread panel, composer swap) land here.
   useLayoutEffect(() => {
@@ -758,7 +811,7 @@ export function MessageTimeline({
       else if (resized && distanceRef.current > 1) {
         // The pane resized under a reader just short of the bottom (the composer
         // grew a line): keep what they're reading still rather than shifting it.
-        distanceRef.current = distanceFromBottom(el);
+        distanceRef.current = readerDistance(el);
         lastScrollTopRef.current = clampedScrollTop(el);
         setShowJumpPill(distanceRef.current > JUMP_PILL_PX);
         captureReadingAnchor();
@@ -767,7 +820,7 @@ export function MessageTimeline({
     ro.observe(content);
     ro.observe(el);
     return () => ro.disconnect();
-  }, [listVisible, captureReadingAnchor, restoreReadingAnchor, stickToBottom]);
+  }, [listVisible, captureReadingAnchor, readerDistance, restoreReadingAnchor, stickToBottom]);
 
   /**
    * Near the top: reveal loaded messages, else request an older page. Only when
@@ -780,14 +833,11 @@ export function MessageTimeline({
     const start = startIndexRef.current;
     if (start > 0) {
       if (clampedScrollTop(el) >= REVEAL_TRIGGER_PX) return;
-      const nextIndex = stepBackRows(entriesRef.current, start, WINDOW_STEP, (entry) =>
-        entry.type === "chat" ? !!quarantinedIdsRef.current?.has(entry.message.id) : false,
-      );
-      const next = entriesRef.current[nextIndex];
-      if (!next) return;
+      const nextIndex = stepBackRows(entriesRef.current, start, WINDOW_STEP, isFolded);
+      if (!entriesRef.current[nextIndex]) return;
       extendLockRef.current = true;
       captureReadingAnchor();
-      revealFrom(next.id);
+      revealUp(nextIndex);
       // Fetch the next page while hidden rows remain, so a fling never waits on it at
       // the top. The window is anchored by id, so rows landing above it move nothing.
       if (nextIndex < PREFETCH_ROWS && loadOlder && hasMore && !isLoadingOlder && !loadingOlderRef.current) {
@@ -810,7 +860,28 @@ export function MessageTimeline({
       loadingOlderRef.current = false;
       setBackfillPulse((pulse) => pulse + 1);
     });
-  }, [paused, loadOlder, hasMore, isLoadingOlder, captureReadingAnchor, revealFrom]);
+  }, [paused, loadOlder, hasMore, isLoadingOlder, captureReadingAnchor, isFolded, revealUp]);
+
+  /**
+   * Near the window's bottom while newer loaded rows are unrendered: reveal a
+   * step below, dropping the oldest edge past {@link MAX_WINDOW}. Rows added
+   * below the reader move nothing; a trim above is restored by the anchor.
+   */
+  const maybeExtendDown = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el || paused || extendLockRef.current) return;
+    const all = entriesRef.current;
+    const end = endIndexRef.current;
+    if (end >= all.length) return;
+    if (distanceFromBottom(el) >= REVEAL_TRIGGER_PX) return;
+    const nextEnd = stepForwardRows(all, end, WINDOW_STEP, isFolded);
+    extendLockRef.current = true;
+    captureReadingAnchor();
+    if (countRows(all, startIndexRef.current, nextEnd, isFolded) > MAX_WINDOW + TRIM_SLACK) {
+      setWindowStart(all[stepBackRows(all, nextEnd, MAX_WINDOW, isFolded)].id);
+    }
+    setWindowEndId(nextEnd >= all.length ? null : all[nextEnd - 1].id);
+  }, [paused, captureReadingAnchor, isFolded, setWindowStart]);
   // Called via ref from the earlier-declared layout effect. Cancel on unmount.
   maybeExtendRef.current = maybeExtend;
   useEffect(
@@ -831,14 +902,10 @@ export function MessageTimeline({
       if (!el || el.clientHeight === 0) return;
       if (el.scrollHeight > el.clientHeight + AT_BOTTOM_PX) return;
       if (startIndexRef.current > 0) {
-        const next = entriesRef.current[
-          stepBackRows(entriesRef.current, startIndexRef.current, WINDOW_STEP, (entry) =>
-            entry.type === "chat" ? !!quarantinedIdsRef.current?.has(entry.message.id) : false,
-          )
-        ];
-        if (next) {
+        const nextIndex = stepBackRows(entriesRef.current, startIndexRef.current, WINDOW_STEP, isFolded);
+        if (entriesRef.current[nextIndex]) {
           captureReadingAnchor();
-          revealFrom(next.id);
+          revealUp(nextIndex);
         }
         return;
       }
@@ -862,7 +929,7 @@ export function MessageTimeline({
         });
     });
     return () => cancelAnimationFrame(frame);
-  }, [items, listVisible, paused, loadOlder, hasMore, isLoadingOlder, captureReadingAnchor, revealFrom]);
+  }, [items, listVisible, paused, loadOlder, hasMore, isLoadingOlder, captureReadingAnchor, isFolded, revealUp]);
 
   // Older-history paging surfaces through the header's sync indicator, not an overlay.
   useEffect(() => {
@@ -878,18 +945,19 @@ export function MessageTimeline({
     // offsets, so we don't react to ourselves.
     const top = clampedScrollTop(el);
     const movingUp = top < lastScrollTopRef.current;
+    const movingDown = top > lastScrollTopRef.current;
     lastScrollTopRef.current = top;
     // Growth below the fold raises distance without a scroll; scroll events lag a
     // frame, so only count growth when the reader moved, or stick-to-bottom latches off.
-    const distance = distanceFromBottom(el);
+    const distance = readerDistance(el);
     if (movingUp || distance <= distanceRef.current) distanceRef.current = distance;
     setShowJumpPill(distanceRef.current > JUMP_PILL_PX);
     if (el.scrollTop === top) captureReadingAnchor();
     if (movingUp) {
       chainedRevealsRef.current = 0;
       maybeExtend();
-    }
-  }, [captureReadingAnchor, maybeExtend]);
+    } else if (movingDown) maybeExtendDown();
+  }, [captureReadingAnchor, readerDistance, maybeExtend, maybeExtendDown]);
 
   // Let rows that have been laid out once be skipped offscreen (`.timeline-row`).
   // Two frames: the size `contain-intrinsic-size: auto` remembers is recorded
@@ -923,35 +991,49 @@ export function MessageTimeline({
     setWindowStart(null);
   }, [timelineEntries, startIndex, setWindowStart]);
 
-  // Extends the window first if the target is older than it.
+  // Moves the window first if the target is outside it, keeping it bounded.
   const scrollToMessage = useCallback(
     (id: string, focus = false) => {
       // Entry-space indexes; callers jump by message id.
       const all = entriesRef.current;
       const index = all.findIndex((entry) => entry.type === "chat" && entry.message.id === id);
       if (index === -1) return false;
-      if (index < startIndexRef.current) {
+      if (index < startIndexRef.current || index >= endIndexRef.current) {
         pendingJumpRef.current = { id, focus };
-        setWindowStart(all[Math.max(0, index - JUMP_CONTEXT)].id);
+        const from = Math.max(0, index - JUMP_CONTEXT);
+        const to = stepForwardRows(all, from, MAX_WINDOW, isFolded);
+        setWindowStart(all[from].id);
+        setWindowEndId(to >= all.length ? null : all[to - 1].id);
         return true;
       }
       jumpToRow(id, focus);
       return true;
     },
-    [jumpToRow, setWindowStart],
+    [jumpToRow, isFolded, setWindowStart],
   );
+
+  /** Back to the newest message; a window ending above it is re-anchored there first. */
+  const returnToPresent = useCallback(() => {
+    distanceRef.current = 0;
+    if (endIndexRef.current >= entriesRef.current.length) {
+      pinToBottomNow();
+      return;
+    }
+    readingAnchorRef.current = null;
+    pinBottomRef.current = true;
+    setShowJumpPill(false);
+    setWindowStart(null);
+    setWindowEndId(null);
+  }, [pinToBottomNow, setWindowStart]);
 
   useImperativeHandle(
     handleRef,
     () => ({
       scrollToMessage,
-      pinToBottom: () => {
-        distanceRef.current = 0;
-        pinToBottomNow();
-      },
+      pinToBottom: returnToPresent,
       maintainBottom: stickToBottom,
     }),
-    [scrollToMessage, pinToBottomNow, stickToBottom],
+    [scrollToMessage, returnToPresent, stickToBottom],
   );
 
   return (
@@ -1033,10 +1115,7 @@ export function MessageTimeline({
             <div className="absolute bottom-3 inset-x-0 z-10 flex justify-center pointer-events-none">
               <button
                 type="button"
-                onClick={() => {
-                  distanceRef.current = 0;
-                  pinToBottomNow();
-                }}
+                onClick={returnToPresent}
                 className="pointer-events-auto inline-flex items-center gap-2 clip-corner-lg bg-secondary/90 backdrop-blur px-5 py-2.5 text-sm font-medium text-foreground shadow-lg hover:bg-secondary transition-colors"
                 aria-label={intl.formatMessage({
                   id: "messageTimeline.jumpToLatest",

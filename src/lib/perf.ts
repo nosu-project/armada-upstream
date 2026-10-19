@@ -16,6 +16,12 @@ function now(): number {
 
 /** One-shot boot milestones, in the order they were reached. */
 const marks: { label: string; at: number; detail?: string }[] = [];
+/**
+ * Always on, and some milestones repeat per conversation opened: keep the boot
+ * timeline at the front and count the rest rather than grow for the session.
+ */
+const MAX_MARKS = 300;
+let droppedMarks = 0;
 
 /** Aggregate per label. `unit` is a caller-defined work count (rows, wraps, …). */
 interface Bucket {
@@ -39,6 +45,10 @@ function bucket(label: string): Bucket {
 
 /** Record a one-shot milestone. Repeats are kept (a repeat is itself a finding). */
 export function perfMark(label: string, detail?: string): void {
+  if (marks.length >= MAX_MARKS) {
+    droppedMarks += 1;
+    return;
+  }
   marks.push({ label, at: now() - t0, detail });
 }
 
@@ -92,6 +102,8 @@ export function perfKvWrite(key: string, value: unknown): void {
 export interface PerfReport {
   elapsed: number;
   timeline: { label: string; at: number; detail?: string }[];
+  /** Milestones past the timeline's cap, not recorded. */
+  droppedMarks: number;
   aggregates: {
     label: string;
     count: number;
@@ -108,6 +120,7 @@ export function perfReport(): PerfReport {
   return {
     elapsed: now() - t0,
     timeline: marks.map((m) => ({ ...m })),
+    droppedMarks,
     aggregates: [...buckets.entries()]
       .map(([label, b]) => ({
         label,
@@ -152,6 +165,7 @@ export function startLoopLagSampler(intervalMs = 250): () => void {
 export function __resetPerfForTests(): void {
   buckets.clear();
   marks.length = 0;
+  droppedMarks = 0;
 }
 
 function round(ms: number): number {

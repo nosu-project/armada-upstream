@@ -15,13 +15,20 @@ const h = vi.hoisted(() => ({
   relayEvents: [] as NostrEvent[],
   openedByWrap: new Map<string, OpenedDm>(),
   queryLimits: [] as number[],
+  relayQueries: 0,
+  cursor: undefined as { relayExhaustedAt?: Record<string, number> } | undefined,
   scope: 0,
 }));
 
 vi.mock("@nostrify/react", () => ({
   useNostr: () => ({
     nostr: {
-      relay: () => ({ query: async () => h.relayEvents }),
+      relay: () => ({
+        query: async () => {
+          h.relayQueries += 1;
+          return h.relayEvents;
+        },
+      }),
       group: () => ({ event: async () => undefined }),
     },
   }),
@@ -121,7 +128,7 @@ vi.mock("@/lib/nip17/dm17Store", async (importOriginal) => {
       );
     },
     queryDm17Timer: async () => 0,
-    readDm17Cursor: async () => undefined,
+    readDm17Cursor: async () => h.cursor,
     readDm17SeenWrapIds: async () => [],
     updateDm17Cursor: async () => undefined,
     writeDm17Rumors: async (_self: string, opened: OpenedDm[]) => {
@@ -163,6 +170,8 @@ beforeEach(() => {
   h.relayEvents = [];
   h.openedByWrap.clear();
   h.queryLimits = [];
+  h.relayQueries = 0;
+  h.cursor = undefined;
 });
 
 describe("useDm17Thread history window", () => {
@@ -252,6 +261,32 @@ describe("useDm17Thread history window", () => {
     });
     expect(added).toBe(0);
     expect(result.current.hasMore).toBe(false);
+  });
+
+  it("pages the store without asking a relay the history walk already read to the end", async () => {
+    h.rows = Array.from({ length: 400 }, (_, index) => row(index, 1_700_000_000 + index));
+    h.cursor = { relayExhaustedAt: { [RELAY]: 1 } };
+
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } },
+    });
+    const { result } = renderHook(() => useDm17Thread(h.peer), {
+      wrapper: wrapperFor(client),
+    });
+    await waitFor(() => expect(result.current.messages).toHaveLength(300));
+    const before = h.relayQueries;
+
+    let added = 0;
+    await act(async () => {
+      added = await result.current.loadOlder();
+    });
+    expect(added).toBe(100);
+    await act(async () => {
+      added = await result.current.loadOlder();
+    });
+    expect(added).toBe(0);
+    expect(result.current.hasMore).toBe(false);
+    expect(h.relayQueries).toBe(before);
   });
 
   it("grows the floor by this conversation's rows, not the whole inbox page", async () => {

@@ -12,7 +12,7 @@ import {
   Users,
   UsersRound,
 } from "lucide-react";
-import { lazy, Suspense, useCallback, useContext, useMemo, useState, type ReactNode } from "react";
+import { lazy, memo, Suspense, useCallback, useContext, useMemo, useState, type ReactNode } from "react";
 import { useSearchParams } from "react-router-dom";
 
 import {
@@ -695,23 +695,52 @@ function CommunitiesTab({ query, scope }: { query: string; scope: DiscoverScope 
       {(ordered ?? [])
         .filter((invite) => !duplicates.has(invite.linkSigner))
         .map((invite) => (
-          // No windowing, so defer mounting to a screenful of lead time. Off
-          // while searching: cards self-hide on a miss.
-          <DeferredRow key={invite.linkSigner} active={!query.trim()} minHeight={240}>
-            <CommunityListingCard
-              invite={invite}
-              filter={query}
-              onResolved={onResolved}
-              onActivityTarget={onActivityTarget}
-              lastActiveAt={lastActiveBySigner[invite.linkSigner]}
-            />
-          </DeferredRow>
+          <CommunityRow
+            key={invite.linkSigner}
+            invite={invite}
+            query={query}
+            onResolved={onResolved}
+            onActivityTarget={onActivityTarget}
+            lastActiveAt={lastActiveBySigner[invite.linkSigner]}
+          />
         ))}
     </div>
     <LoadMore sentinelRef={sentinelRef} loading={isFetchingNextPage} />
     </>
   );
 }
+
+/**
+ * Memoized so one card reporting its bundle or activity target (grid state)
+ * doesn't re-render every other card; all props are stable per card.
+ */
+const CommunityRow = memo(function CommunityRow({
+  invite,
+  query,
+  onResolved,
+  onActivityTarget,
+  lastActiveAt,
+}: {
+  invite: DiscoveredInvite;
+  query: string;
+  onResolved: (linkSigner: string, communityId: string, owner: string) => void;
+  onActivityTarget: (linkSigner: string, target: DiscoverActivityTarget | null) => void;
+  lastActiveAt: number | undefined;
+}) {
+  return (
+    // No windowing, so defer mounting to a screenful of lead time. Off
+    // while searching: cards self-hide on a miss.
+    <DeferredRow active={!query.trim()} minHeight={240}>
+      <CommunityListingCard
+        invite={invite}
+        filter={query}
+        onResolved={onResolved}
+        onActivityTarget={onActivityTarget}
+        lastActiveAt={lastActiveAt}
+      />
+    </DeferredRow>
+  );
+});
 
 function EmojisTab({ query, scope }: { query: string; scope: DiscoverScope }) {
   const { data, isLoading, isError, fetchNextPage, hasNextPage, isFetchingNextPage, pageCount } =

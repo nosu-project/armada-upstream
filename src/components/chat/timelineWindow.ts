@@ -20,6 +20,70 @@ export const WINDOW_STEP = 16;
 export const TRIM_ABOVE = 200;
 
 /**
+ * Rows a window scrolled away from the bottom keeps. Revealing past it drops
+ * the far edge, so reading back through history holds a bounded DOM.
+ */
+export const MAX_WINDOW = 240;
+
+/** Over-run tolerated before trimming, so the far edge moves in batches (each trim above the reader is a scroll write). */
+export const TRIM_SLACK = 4 * WINDOW_STEP;
+
+/** Rendered rows in `[from, to)` (a folded run counts as one). */
+export function countRows<T>(
+  entries: readonly T[],
+  from: number,
+  to: number,
+  folded?: (entry: T) => boolean,
+): number {
+  if (!folded) return Math.max(0, to - from);
+  let rows = 0;
+  for (let i = Math.max(0, from); i < Math.min(to, entries.length); i++) {
+    if (!folded(entries[i]) || i === from || !folded(entries[i - 1])) rows++;
+  }
+  return rows;
+}
+
+/**
+ * Step forward `rows` RENDERED rows from `fromIndex`. Returns the exclusive end
+ * index, which never splits a folded run.
+ */
+export function stepForwardRows<T>(
+  entries: readonly T[],
+  fromIndex: number,
+  rows: number = WINDOW_STEP,
+  folded?: (entry: T) => boolean,
+): number {
+  if (!folded) return Math.min(entries.length, Math.max(0, fromIndex) + rows);
+  let counted = 0;
+  let i = Math.max(0, fromIndex);
+  for (; i < entries.length; i++) {
+    if (!folded(entries[i]) || i === fromIndex || !folded(entries[i - 1])) {
+      if (counted >= rows) break;
+      counted++;
+    }
+  }
+  return i;
+}
+
+/**
+ * Exclusive window end, anchored by the id of its newest rendered entry.
+ * `null` = the newest loaded entry, so appends render. A lost anchor keeps the
+ * window bounded at `maxRows` from its start rather than reaching to the newest.
+ */
+export function resolveWindowEnd<T extends { id: string }>(
+  entries: readonly T[],
+  endId: string | null,
+  startIndex: number,
+  maxRows: number = MAX_WINDOW,
+  folded?: (entry: T) => boolean,
+): number {
+  if (endId === null) return entries.length;
+  const index = entries.findIndex((entry) => entry.id === endId);
+  if (index >= startIndex) return index + 1;
+  return stepForwardRows(entries, startIndex, maxRows, folded);
+}
+
+/**
  * Window start in the loaded history, anchored by message ID so appends grow it
  * and prepends keep it. `anchorLost`: the anchor is gone (conversation switch);
  * fall back to the newest `initial` and re-pin.

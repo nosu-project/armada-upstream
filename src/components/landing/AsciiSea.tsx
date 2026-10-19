@@ -216,7 +216,7 @@ export function AsciiSea({
 
     const schedule = () => {
       if (released || timer !== undefined || raf) return;
-      if (document.hidden) return;
+      if (document.hidden || offscreen) return;
       timer = setTimeout(() => {
         timer = undefined;
         raf = requestAnimationFrame(tick);
@@ -235,6 +235,13 @@ export function AsciiSea({
     scroller?.addEventListener("scroll", onScroll, { passive: true });
     const onVisibility = () => schedule();
     document.addEventListener("visibilitychange", onVisibility);
+    // Scrolled out of view: stop painting a sea nobody sees.
+    let offscreen = false;
+    const io = new IntersectionObserver(([entry]) => {
+      offscreen = !entry.isIntersecting;
+      schedule();
+    });
+    io.observe(host);
 
     veil();
     raf = requestAnimationFrame(tick);
@@ -246,6 +253,7 @@ export function AsciiSea({
       cancelAnimationFrame(veilRaf);
       scroller?.removeEventListener("scroll", onScroll);
       document.removeEventListener("visibilitychange", onVisibility);
+      io.disconnect();
       observer.disconnect();
       host.replaceChildren();
     };
