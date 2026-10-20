@@ -28,13 +28,13 @@
   },
   "dependencies": {
     "@capacitor-community/safe-area": "^8.0.1",
-    "@capacitor/android": "^8.1.0",
+    "@capacitor/android": "^8.5.3",
     "@capacitor/app": "^8.0.0",
     "@capacitor/clipboard": "^8.0.1",
-    "@capacitor/core": "^8.1.0",
+    "@capacitor/core": "^8.5.3",
     "@capacitor/filesystem": "^8.1.2",
     "@capacitor/haptics": "^8.0.2",
-    "@capacitor/ios": "^8.4.2",
+    "@capacitor/ios": "^8.5.3",
     "@capacitor/keyboard": "^8.0.5",
     "@capacitor/share": "^8.0.1",
     "@capacitor/status-bar": "^8.0.2",
@@ -140,10 +140,11 @@
     "typescript": "^5.5.3",
     "typescript-eslint": "^8.0.1",
     "vite": "^8.0.3",
-    "vitest": "^4.1.8"
+    "vitest": "^4.1.12"
   },
   "overrides": {
     "react": "$react",
-    "react-dom": "$react-dom"
+    "react-dom": "$react-dom",
+    "postcss-selector-parser": "^7.1.6"
   }
 }
