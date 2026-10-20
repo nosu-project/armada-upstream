@@ -94,7 +94,9 @@ export async function minePow<T extends EventTemplate>(
     if (leadingZeroBits(hash) >= difficulty) {
       return { ...template, tags: [...tags, ["nonce", nonce, target]] };
     }
-    if ((n & 0xff) === 0xff && performance.now() - sliceStart >= SLICE_MS) {
+    // Checked every attempt: one hashes the whole content, so on a slow phone a
+    // few dozen already overrun the slice, and a typical mine is under 256.
+    if (performance.now() - sliceStart >= SLICE_MS) {
       await yieldToEventLoop();
       sliceStart = performance.now();
     }
