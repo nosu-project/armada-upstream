@@ -19,7 +19,7 @@ import { FormattedMessage } from "@/i18n";
 export function CommunityBlocked() {
   return (
     <div
-      className={`${WRECK_SCOPE} relative flex h-full flex-col items-center justify-center gap-4 overflow-hidden p-8 text-center`}
+      className={`${WRECK_SCOPE} relative flex h-full min-w-0 flex-1 flex-col items-center justify-center gap-4 overflow-hidden p-8 text-center`}
     >
       <ArmadaWreckKeyframes />
       <WreckSky />
