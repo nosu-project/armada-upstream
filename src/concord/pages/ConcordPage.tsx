@@ -517,6 +517,15 @@ export const ChannelRow = memo(function ChannelRow({
     () => new Set(fold.present.filter((p) => p.hand).map((p) => p.author)),
     [fold],
   );
+  // So a call being recorded, and who refuses, are both known before joining.
+  const recordingVoice = useMemo(
+    () => new Set(fold.present.filter((p) => p.recording).map((p) => p.author)),
+    [fold],
+  );
+  const refusingVoice = useMemo(
+    () => new Set(fold.present.filter((p) => p.noRecord).map((p) => p.author)),
+    [fold],
+  );
   // While in this call, LiveKit's live roster is authoritative (presence lags).
   const participants = inCall && voiceRoomPubkeys ? voiceRoomPubkeys : foldedParticipants;
 
@@ -603,6 +612,8 @@ export const ChannelRow = memo(function ChannelRow({
               muted={mutedVoice}
               streaming={inCall ? streamingPubkeys : undefined}
               raised={raisedVoice}
+              recording={recordingVoice}
+              refusing={refusingVoice}
             />
           )}
         </div>

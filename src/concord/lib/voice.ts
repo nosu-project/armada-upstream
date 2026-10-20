@@ -215,6 +215,17 @@ export interface VoicePresenceEntry {
    * ignored by old clients (CORD-02 §6). Sticky, carried on every heartbeat.
    */
   hand?: boolean;
+  /**
+   * Recording the call (joined only) — an ARMADA EXTENSION: additive
+   * `["recording","1"]`, announced before capture starts. Sticky like `hand`.
+   */
+  recording?: boolean;
+  /**
+   * Refuses to be recorded (joined only) — an ARMADA EXTENSION: additive
+   * `["norecord","1"]`. Honest recorders capture only members whose fresh
+   * presence lacks it, so an unknown member is never recorded either.
+   */
+  noRecord?: boolean;
   /** Millisecond ordering basis (CORD-02 §4). */
   ms: number;
   /** The rumor id — the equal-ms tiebreak. */
@@ -222,14 +233,19 @@ export interface VoicePresenceEntry {
 }
 
 /**
- * Presence tags beyond the channel/epoch binding. `hand` is emitted only while
- * joined and raised.
+ * Presence tags beyond the channel/epoch binding. `hand`, `recording` and
+ * `norecord` are emitted only while joined and set.
  */
 export function presenceTags(
   status: "joined" | "left",
   identity?: string,
   broker?: string,
-  opts?: { hand?: boolean; additionalIdentities?: readonly string[] },
+  opts?: {
+    hand?: boolean;
+    recording?: boolean;
+    noRecord?: boolean;
+    additionalIdentities?: readonly string[];
+  },
 ): string[][] {
   const tags: string[][] = [];
   if (status === "joined" && identity) tags.push(["identity", identity]);
@@ -244,6 +260,8 @@ export function presenceTags(
   }
   if (status === "joined" && broker) tags.push(["broker", broker]);
   if (status === "joined" && opts?.hand) tags.push(["hand", "1"]);
+  if (status === "joined" && opts?.recording) tags.push(["recording", "1"]);
+  if (status === "joined" && opts?.noRecord) tags.push(["norecord", "1"]);
   return tags;
 }
 
@@ -322,7 +340,8 @@ export function parsePresence(opened: OpenedEvent): VoicePresenceEntry | null {
     status === "joined" && typeof rawBroker === "string" && rawBroker.length <= 512
       ? canonicalOrigin(rawBroker) ?? undefined
       : undefined;
-  const hand = status === "joined" && opened.tags.some((t) => t[0] === "hand" && t[1] === "1");
+  const flag = (name: string) =>
+    status === "joined" && opened.tags.some((t) => t[0] === name && t[1] === "1");
   return {
     author: opened.author,
     status,
@@ -330,7 +349,9 @@ export function parsePresence(opened: OpenedEvent): VoicePresenceEntry | null {
     identities: status === "joined" ? identities : undefined,
     screenShareIdentities: status === "joined" ? screenShareIdentities : undefined,
     broker,
-    hand,
+    hand: flag("hand"),
+    recording: flag("recording"),
+    noRecord: flag("norecord"),
     ms: opened.ms,
     rumorId: opened.rumorId,
   };
@@ -345,6 +366,10 @@ export interface VoicePresent {
   screenShareIdentities: string[];
   /** Whether this member's latest presence has their hand raised (client ext). */
   hand: boolean;
+  /** Whether this member announces they are recording the call (client ext). */
+  recording: boolean;
+  /** Whether this member refuses to be recorded (client ext). */
+  noRecord: boolean;
   ms: number;
 }
 
@@ -382,6 +407,8 @@ export function foldVoicePresence(entries: VoicePresenceEntry[], nowMs: number):
       broker: e.broker,
       screenShareIdentities: e.screenShareIdentities ?? [],
       hand: e.hand ?? false,
+      recording: e.recording ?? false,
+      noRecord: e.noRecord ?? false,
       ms: e.ms,
     });
     for (const identity of e.identities?.length ? e.identities : [e.identity]) {

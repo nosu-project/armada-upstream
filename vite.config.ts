@@ -392,8 +392,9 @@ export default defineConfig({
     // replaces the root glob with these literal paths. `e2e/harness.html` is
     // the Playwright harness (dev-server only, in no production build); listing
     // it keeps its deps pre-bundled so the e2e run doesn't pay a cold optimize.
-    // `e2e/screenshotSeed.html` is the same, for the DM screenshot harness.
-    entries: ["index.html", "e2e/harness.html", "e2e/screenshotSeed.html"],
+    // `e2e/screenshotSeed.html` and `e2e/callRecording.html` are the same, for
+    // the DM screenshot and call-recording harnesses.
+    entries: ["index.html", "e2e/harness.html", "e2e/screenshotSeed.html", "e2e/callRecording.html"],
   },
   worker: {
     // The video worker is an ES module (`new Worker(…, { type: "module" })`).

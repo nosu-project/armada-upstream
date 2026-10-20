@@ -43,6 +43,7 @@ import { clearShareShortcuts } from "@/lib/shareTarget";
 import { writePushDisabledFlag } from "@/lib/swPushDisabled";
 import { WEB_PUSH_RETIREMENT_KEY } from "@/lib/webPushEndpoint";
 import { LOCALE_KEY } from "@/i18n/language";
+import { STAGING_DIR as CALL_RECORDING_STAGING_DIR } from "@/lib/callRecording/protocol";
 
 /**
  * localStorage keys that survive a purge. `armada:login` is mutated by
@@ -74,13 +75,18 @@ const RETIRED_DATABASES = [
   "armada-concord-pending",
 ];
 
-/** Remove the retired SQLite-WASM store's OPFS directory, still present on upgraded devices. */
+/**
+ * Remove the retired SQLite-WASM store's OPFS directory, still present on
+ * upgraded devices, and any staged call recording (decrypted call audio).
+ */
 async function purgeOrphanedOpfs(): Promise<void> {
-  try {
-    const root = await navigator.storage?.getDirectory?.();
-    await root?.removeEntry(".armada-sqlite", { recursive: true });
-  } catch {
-    // best-effort — absent (the common case) or held open
+  for (const dir of [".armada-sqlite", CALL_RECORDING_STAGING_DIR]) {
+    try {
+      const root = await navigator.storage?.getDirectory?.();
+      await root?.removeEntry(dir, { recursive: true });
+    } catch {
+      // best-effort — absent (the common case) or held open
+    }
   }
 }
 

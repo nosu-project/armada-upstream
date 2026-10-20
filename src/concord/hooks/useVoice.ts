@@ -111,6 +111,8 @@ export function useVoicePresence(
               p.identity === next.present[i].identity &&
               p.broker === next.present[i].broker &&
               p.hand === next.present[i].hand &&
+              p.recording === next.present[i].recording &&
+              p.noRecord === next.present[i].noRecord &&
               p.screenShareIdentities.join("\0") ===
                 next.present[i].screenShareIdentities.join("\0"),
           ) &&
@@ -162,9 +164,9 @@ export function useVoicePresence(
 /**
  * Announce own call presence (§4): `joined` (SFU identity + broker hint) now and
  * every 30s while `identity` is set, best-effort `left` on teardown.
- * Also carries Armada extensions (see voice.ts): the sticky `hand` state, and
- * `sendReaction` on an off-cycle `joined` — additive tags on the same kind-23313
- * rumor, so no new frozen kind (CORD-02 §6).
+ * Also carries Armada extensions (see voice.ts): the sticky `hand`, `norecord`
+ * and `recording` states, and `sendReaction` on an off-cycle `joined` — additive
+ * tags on the same kind-23313 rumor, so no new frozen kind (CORD-02 §6).
  */
 export function useVoiceHeartbeat(
   community: Community | undefined,
@@ -173,9 +175,11 @@ export function useVoiceHeartbeat(
   broker: string | undefined,
   handRaised = false,
   additionalIdentities: readonly string[] = [],
+  noRecord = false,
 ): {
   sendReaction: (emoji: string) => void;
   announceAdditionalIdentities: (identities: readonly string[]) => Promise<void>;
+  announceRecording: (recording: boolean) => Promise<boolean>;
 } {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
@@ -184,6 +188,10 @@ export function useVoiceHeartbeat(
   // transient `left` would flicker every remote roster).
   const handRef = useRef(handRaised);
   handRef.current = handRaised;
+  const noRecordRef = useRef(noRecord);
+  noRecordRef.current = noRecord;
+  // Set only through `announceRecording`, whose caller must see the delivery.
+  const recordingRef = useRef(false);
   const additionalIdentitiesRef = useRef(additionalIdentities);
   additionalIdentitiesRef.current = additionalIdentities;
   const additionalIdentitiesKey = additionalIdentities.join("\0");
@@ -203,6 +211,8 @@ export function useVoiceHeartbeat(
           ...channelBindingTags(channel.idHex, channel.current.epoch),
           ...presenceTags(status, id, origin, {
             hand: handRef.current,
+            recording: recordingRef.current,
+            noRecord: noRecordRef.current,
             additionalIdentities: additionalIdentitiesRef.current,
           }),
           ...(reaction ? [reactionTag(reaction.emoji, reaction.nonce)] : []),
@@ -249,7 +259,7 @@ export function useVoiceHeartbeat(
     }
     void publish("joined", identity, broker).catch(() => undefined);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [handRaised, identity, broker]);
+  }, [handRaised, noRecord, identity, broker]);
 
   // Separate from the main heartbeat effect, whose teardown would emit a `left`.
   const identitiesMounted = useRef(false);
@@ -289,7 +299,21 @@ export function useVoiceHeartbeat(
     [broker, identity, publish],
   );
 
-  return { sendReaction, announceAdditionalIdentities };
+  /** Resolves whether a relay took the announcement; a recorder captures only after `true`. */
+  const announceRecording = useCallback(
+    async (recording: boolean) => {
+      recordingRef.current = recording;
+      if (!identity || !broker) return false;
+      try {
+        return await publish("joined", identity, broker);
+      } catch {
+        return false;
+      }
+    },
+    [broker, identity, publish],
+  );
+
+  return { sendReaction, announceAdditionalIdentities, announceRecording };
 }
 
 /** How long a received reaction floats before it's aged out. */
