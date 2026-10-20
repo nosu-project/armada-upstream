@@ -475,6 +475,17 @@ export function useNostrPush(): UsePushNotificationsReturn {
     writeCurrentSwConfig,
   ]);
 
+  // An install subscribed before WebKit was refused: drop its endpoint so the
+  // gateway's next delivery is a 410 and the registration goes with it.
+  useEffect(() => {
+    if (unavailableReason !== "webkit" || !("serviceWorker" in navigator)) return;
+    void navigator.serviceWorker.getRegistration().then(async (registration) => {
+      if (registration && await registration.pushManager?.getSubscription()) {
+        await retireWebPushEndpoint(registration);
+      }
+    }).catch(() => undefined);
+  }, [unavailableReason]);
+
   // ── Target ─────────────────────────────────────────────────────────────────
 
   const [identity, setIdentity] = useState<NostrPush2Identity>();
