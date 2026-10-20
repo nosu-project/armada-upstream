@@ -95,7 +95,7 @@ describe("syncControlPlane — batched Concord sweep", () => {
       createdAtSecs: Math.floor(Date.now() / 1000) - 100,
     });
     const seal = await sealRumor(rumor, KIND_SEAL_PLAINTEXT, control, owner);
-    const w = wrapSeal(seal, control);
+    const w = await wrapSeal(seal, control);
     const wrap = finalizeEvent({ kind: w.kind, content: w.content, tags: w.tags, created_at: rumor.created_at }, control.sk);
 
     const relayA = new FakeRelay();
@@ -144,7 +144,7 @@ describe("syncControlPlane — batched Concord sweep", () => {
           createdAtSecs: createdAt,
         });
         const seal = await sealRumor(rumor, KIND_SEAL_PLAINTEXT, control, owner);
-        const w = wrapSeal(seal, control);
+        const w = await wrapSeal(seal, control);
         const wrap = finalizeEvent(
           { kind: w.kind, content: w.content, tags: w.tags, created_at: createdAt },
           control.sk,

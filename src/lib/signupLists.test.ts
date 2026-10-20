@@ -12,7 +12,9 @@ const CONFIG = {
   broadcastRelays: ["wss://broadcast.example"],
 };
 
-function byKind(lists: ReturnType<typeof buildSignupLists>, kind: number) {
+const withoutNonce = (tags: string[][]) => tags.filter(([name]) => name !== "nonce");
+
+function byKind(lists: Awaited<ReturnType<typeof buildSignupLists>>, kind: number) {
   const found = lists.events.find(({ event }) => event.kind === kind);
   if (!found) throw new Error(`no kind ${kind}`);
   return found;
@@ -43,9 +45,9 @@ describe("defaultSignupSetup", () => {
 });
 
 describe("buildSignupLists", () => {
-  it("signs the four list events with the new key", () => {
+  it("signs the four list events with the new key", async () => {
     const sk = generateSecretKey();
-    const lists = buildSignupLists(sk, setup());
+    const lists = await buildSignupLists(sk, setup());
     expect(lists.events.map(({ event }) => event.kind)).toEqual([10002, 10050, 10007, 10063]);
     for (const { event } of lists.events) {
       expect(event.pubkey).toBe(getPublicKey(sk));
@@ -54,20 +56,20 @@ describe("buildSignupLists", () => {
     }
   });
 
-  it("names exactly the lists the user chose", () => {
-    const lists = buildSignupLists(generateSecretKey(), setup({
+  it("names exactly the lists the user chose", async () => {
+    const lists = await buildSignupLists(generateSecretKey(), setup({
       dm: ["wss://dm.example"],
       search: ["wss://find.example"],
       blossom: ["https://media.example"],
     }));
-    expect(byKind(lists, 10002).event.tags).toEqual([["r", HOME[0]]]);
-    expect(byKind(lists, 10050).event.tags).toEqual([["relay", "wss://dm.example"]]);
-    expect(byKind(lists, 10007).event.tags).toEqual([["relay", "wss://find.example"]]);
-    expect(byKind(lists, 10063).event.tags).toEqual([["server", "https://media.example/"]]);
+    expect(withoutNonce(byKind(lists, 10002).event.tags)).toEqual([["r", HOME[0]]]);
+    expect(withoutNonce(byKind(lists, 10050).event.tags)).toEqual([["relay", "wss://dm.example"]]);
+    expect(withoutNonce(byKind(lists, 10007).event.tags)).toEqual([["relay", "wss://find.example"]]);
+    expect(withoutNonce(byKind(lists, 10063).event.tags)).toEqual([["server", "https://media.example/"]]);
   });
 
-  it("publishes the lists other clients look up to the indexers too", () => {
-    const lists = buildSignupLists(generateSecretKey(), setup());
+  it("publishes the lists other clients look up to the indexers too", async () => {
+    const lists = await buildSignupLists(generateSecretKey(), setup());
     const discoverable = [...HOME, ...RELAY_LIST_DISCOVERY_RELAYS];
     expect(byKind(lists, 10002).relays).toEqual(discoverable);
     expect(byKind(lists, 10050).relays).toEqual(discoverable);
@@ -75,9 +77,9 @@ describe("buildSignupLists", () => {
     expect(byKind(lists, 10063).relays).toEqual(HOME);
   });
 
-  it("seeds every list into config", () => {
+  it("seeds every list into config", async () => {
     const chosen = setup();
-    const lists = buildSignupLists(generateSecretKey(), chosen);
+    const lists = await buildSignupLists(generateSecretKey(), chosen);
     const relayList = byKind(lists, 10002).event;
     const blossomList = byKind(lists, 10063).event;
     expect(lists.configSeed).toEqual({
@@ -100,17 +102,17 @@ describe("buildSignupLists", () => {
     });
   });
 
-  it("honours an emptied list by publishing nothing for it", () => {
-    const lists = buildSignupLists(generateSecretKey(), setup({ dm: [], search: [], blossom: [], broadcast: [] }));
+  it("honours an emptied list by publishing nothing for it", async () => {
+    const lists = await buildSignupLists(generateSecretKey(), setup({ dm: [], search: [], blossom: [], broadcast: [] }));
     expect(lists.events.map(({ event }) => event.kind)).toEqual([10002]);
     expect(lists.configSeed.dmRelays).toEqual([]);
     expect(lists.configSeed.broadcastRelays).toEqual([]);
     expect(lists.configSeed.blossomServerMetadata).toBeUndefined();
   });
 
-  it("falls back to the app relays when the home list is emptied", () => {
-    const lists = buildSignupLists(generateSecretKey(), setup({ home: [] }));
+  it("falls back to the app relays when the home list is emptied", async () => {
+    const lists = await buildSignupLists(generateSecretKey(), setup({ home: [] }));
     expect(lists.configSeed.appRelays).toEqual(APP_RELAYS);
-    expect(byKind(lists, 10002).event.tags).toEqual(APP_RELAYS.map((url) => ["r", url]));
+    expect(withoutNonce(byKind(lists, 10002).event.tags)).toEqual(APP_RELAYS.map((url) => ["r", url]));
   });
 });

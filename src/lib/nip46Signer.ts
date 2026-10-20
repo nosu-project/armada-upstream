@@ -26,6 +26,7 @@ import type { NostrConnectRequest, NostrConnectResponse } from "@nostrify/types"
 import { t } from "@/i18n";
 import type { BtcSigner } from "@/lib/bitcoin-signers";
 import type { Nip46Transport } from "@/lib/nip46Transport";
+import { minePow } from "@/lib/pow";
 import { logSync } from "@/lib/syncLog";
 
 export interface Nip46SignerOpts {
@@ -212,12 +213,12 @@ export class Nip46Signer implements NostrSigner, BtcSigner {
     const refreshMs = this.attemptTimeoutMs * MAX_GAP_FACTOR;
     let signed: { at: number; event: Promise<NostrEvent> } | undefined;
     const sign = async (): Promise<NostrEvent> =>
-      this.clientSigner.signEvent({
+      this.clientSigner.signEvent(await minePow({
         kind: NIP46_KIND,
         content: await this.clientSigner.nip44!.encrypt(this.bunkerPubkey, JSON.stringify(request)),
         created_at: Math.floor(Date.now() / 1000),
         tags: [["p", this.bunkerPubkey]],
-      });
+      }, await this.clientSigner.getPublicKey()));
     const publish = async (relay?: string) => {
       copies++;
       if (!signed || Date.now() - signed.at >= refreshMs) {
@@ -245,7 +246,11 @@ export class Nip46Signer implements NostrSigner, BtcSigner {
           lastErr = err;
           logSync("nip46", `✗ ${method} publish failed: ${err instanceof Error ? err.message : String(err)}`);
         }
-        const wait = Math.min(gap, deadline - Date.now());
+        const remaining = deadline - Date.now();
+        const wait = Math.min(gap, remaining);
+        // A timer can fire a millisecond before Date.now() reaches the deadline;
+        // the wait that was clamped to it is the last one regardless.
+        const last = gap >= remaining;
         gap = Math.min(gap * 2, this.attemptTimeoutMs * MAX_GAP_FACTOR);
         const outcome = await Promise.race([
           response,
@@ -264,7 +269,7 @@ export class Nip46Signer implements NostrSigner, BtcSigner {
           logSync("nip46", `← ${method} ok in ${Date.now() - t0}ms (${copies} cop${copies === 1 ? "y" : "ies"})`);
           return result;
         }
-        if (Date.now() >= deadline) {
+        if (last || Date.now() >= deadline) {
           logSync("nip46", `✗ ${method} unanswered after ${Date.now() - t0}ms (${copies} copies)`);
           throw lastErr ?? new Error(`NIP-46 ${method} timed out after ${budgetMs}ms`);
         }

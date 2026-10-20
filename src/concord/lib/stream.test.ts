@@ -40,7 +40,7 @@ describe("stream envelope (CORD-01)", () => {
       ms,
     });
     const seal = await sealRumor(rumor, KIND_SEAL_ENCRYPTED, stream, alice);
-    const wrap = wrapSeal(seal, stream);
+    const wrap = await wrapSeal(seal, stream);
 
     expect(wrap.kind).toBe(KIND_WRAP);
     expect(wrap.pubkey).toBe(stream.pk); // fixed author (NIP-59 reversed)
@@ -62,7 +62,7 @@ describe("stream envelope (CORD-01)", () => {
     const seal = await sealRumor(rumor, KIND_SEAL_PLAINTEXT, stream, alice);
     // The plaintext seal's content IS the rumor JSON, byte-verbatim.
     expect(JSON.parse(seal.content).id).toBe(rumor.id);
-    const opened = openWrap(wrapSeal(seal, stream), stream);
+    const opened = openWrap(await wrapSeal(seal, stream), stream);
     expect(opened.rumorId).toBe(rumor.id);
     expect(opened.sealKind).toBe(KIND_SEAL_PLAINTEXT);
   });
@@ -73,8 +73,8 @@ describe("stream envelope (CORD-01)", () => {
     const e1 = channelGroupKey(secret, channelId, 1);
     const rumor = buildRumor({ kind: 3308, content: "{}", tags: [], pubkey: alice.pubkey, ms: null });
     const seal = await sealRumor(rumor, KIND_SEAL_PLAINTEXT, e0, alice);
-    const opened0 = openWrap(wrapSeal(seal, e0), e0);
-    const rewrapped = rewrapSeal(opened0.seal, e1);
+    const opened0 = openWrap(await wrapSeal(seal, e0), e0);
+    const rewrapped = await rewrapSeal(opened0.seal, e1);
     const opened1 = openWrap(rewrapped, e1);
     expect(opened1.rumorId).toBe(rumor.id);
     expect(opened1.author).toBe(alice.pubkey);
@@ -88,7 +88,7 @@ describe("stream envelope (CORD-01)", () => {
     const seal = await sealRumor(rumor, KIND_SEAL_ENCRYPTED, e0, alice);
     // A keyholder re-wraps the SAME seal at epoch 1: the wrap opens, but the
     // seal's ciphertext was encrypted under e0's conv key → rumor recover fails.
-    const spliced = wrapSeal(seal, e1);
+    const spliced = await wrapSeal(seal, e1);
     expect(() => openWrap(spliced, e1)).toThrow();
   });
 
@@ -97,7 +97,7 @@ describe("stream envelope (CORD-01)", () => {
     const s1 = channelGroupKey(secret, channelId, 0);
     const s2 = guestbookGroupKey(secret, channelId, 0);
     const rumor = buildRumor({ kind: KIND_MESSAGE, content: "x", tags: [], pubkey: alice.pubkey, ms: Date.now() });
-    const wrap = wrapSeal(await sealRumor(rumor, KIND_SEAL_ENCRYPTED, s1, alice), s1);
+    const wrap = await wrapSeal(await sealRumor(rumor, KIND_SEAL_ENCRYPTED, s1, alice), s1);
     expect(() => openWrap(wrap, s2)).toThrow(/stream's address/);
   });
 
@@ -108,7 +108,7 @@ describe("stream envelope (CORD-01)", () => {
     // Mallory (a keyholder) seals a rumor claiming Alice authored it.
     const forged = buildRumor({ kind: KIND_MESSAGE, content: "im alice", tags: [], pubkey: alice.pubkey, ms: Date.now() });
     const seal = await sealRumor(forged, KIND_SEAL_ENCRYPTED, stream, mallory);
-    const wrap = wrapSeal(seal, stream);
+    const wrap = await wrapSeal(seal, stream);
     expect(() => openWrap(wrap, stream)).toThrow(/does not match the seal/);
   });
 
@@ -118,7 +118,7 @@ describe("stream envelope (CORD-01)", () => {
     const rumor = buildRumor({ kind: KIND_MESSAGE, content: "x", tags: [], pubkey: alice.pubkey, ms: Date.now() });
     const lying = { ...rumor, id: "00".repeat(32) };
     const seal = await sealRumor(lying, KIND_SEAL_ENCRYPTED, stream, alice);
-    const wrap = wrapSeal(seal, stream);
+    const wrap = await wrapSeal(seal, stream);
     expect(() => openWrap(wrap, stream)).toThrow(/event hash/);
   });
 
@@ -126,7 +126,7 @@ describe("stream envelope (CORD-01)", () => {
     const alice = testSigner();
     const stream = channelGroupKey(secret, channelId, 0);
     const rumor = buildRumor({ kind: KIND_MESSAGE, content: "x", tags: [["ms", "5000"]], pubkey: alice.pubkey, ms: null });
-    const wrap = wrapSeal(await sealRumor(rumor, KIND_SEAL_ENCRYPTED, stream, alice), stream);
+    const wrap = await wrapSeal(await sealRumor(rumor, KIND_SEAL_ENCRYPTED, stream, alice), stream);
     expect(() => openWrap(wrap, stream)).toThrow(/ms/);
     expect(resolveMs(100, [["ms", "999"]])).toBe(100999);
     expect(resolveMs(100, [])).toBe(100000);
@@ -169,7 +169,7 @@ describe("stream envelope (CORD-01)", () => {
       pubkey: alice.pubkey,
       ms: Date.now(),
     });
-    const wrap = wrapSeal(await sealRumor(rumor, KIND_SEAL_ENCRYPTED, stream, alice), stream);
+    const wrap = await wrapSeal(await sealRumor(rumor, KIND_SEAL_ENCRYPTED, stream, alice), stream);
     const opened = openWrap(wrap, stream);
     expect(() => checkChannelBinding(opened, channelIdHex, 0n)).toThrow(/splice/);
   });
@@ -178,7 +178,7 @@ describe("stream envelope (CORD-01)", () => {
     const alice = testSigner();
     const stream = channelGroupKey(secret, channelId, 0);
     const rumor = buildRumor({ kind: 23311, content: "", tags: [], pubkey: alice.pubkey, ms: Date.now() });
-    const wrap = wrapSeal(await sealRumor(rumor, KIND_SEAL_ENCRYPTED, stream, alice), stream, { ephemeral: true });
+    const wrap = await wrapSeal(await sealRumor(rumor, KIND_SEAL_ENCRYPTED, stream, alice), stream, { ephemeral: true });
     expect(wrap.kind).toBe(KIND_WRAP_EPHEMERAL);
     expect(openWrap(wrap, stream).kind).toBe(23311);
   });
@@ -197,7 +197,7 @@ describe("wrap expiration (CORD-08 §2)", () => {
     });
     const seal = await sealRumor(rumor, KIND_SEAL_ENCRYPTED, stream, alice);
 
-    const wrap = wrapSeal(seal, stream, { expiration: 1735689600.7 });
+    const wrap = await wrapSeal(seal, stream, { expiration: 1735689600.7 });
     // Floored to whole seconds — a fractional deadline is not a NIP-40 value.
     expect(wrap.tags).toContainEqual(["expiration", "1735689600"]);
     // The ephemeral `p` camouflage stays alongside it.
@@ -211,7 +211,7 @@ describe("wrap expiration (CORD-08 §2)", () => {
     const alice = testSigner();
     const stream = channelGroupKey(secret, channelId, 0);
     const rumor = buildRumor({ kind: KIND_MESSAGE, content: "x", tags: channelBindingTags(channelIdHex, 0n), pubkey: alice.pubkey, ms: Date.now() });
-    const wrap = wrapSeal(await sealRumor(rumor, KIND_SEAL_ENCRYPTED, stream, alice), stream);
+    const wrap = await wrapSeal(await sealRumor(rumor, KIND_SEAL_ENCRYPTED, stream, alice), stream);
     expect(wrap.tags.some((t) => t[0] === "expiration")).toBe(false);
   });
 });

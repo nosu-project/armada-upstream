@@ -31,7 +31,7 @@ describe("decode cost breakdown", () => {
     for (let i = 0; i < N; i++) {
       const rumor = buildRumor({ kind: KIND_MESSAGE, content: `message number ${i} with a bit of text to look like chat`, tags: [...channelBindingTags(channel.idHex, 0n)], pubkey: s.pubkey, ms: (now - i) * 1000 });
       const seal = await sealRumor(rumor, KIND_SEAL_ENCRYPTED, group, s);
-      const w = wrapSeal(seal, group);
+      const w = await wrapSeal(seal, group);
       wraps.push(finalizeEvent({ kind: w.kind, content: w.content, tags: w.tags, created_at: now - i }, group.sk));
     }
     const time = (label: string, fn: () => void) => {

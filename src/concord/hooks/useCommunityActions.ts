@@ -9,6 +9,7 @@ import { attemptGuestbookJoin, forgetGuestbookJoin, queueGuestbookJoin } from "@
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useRemoveRailKey } from "@/hooks/useRemoveRailKey";
+import { isBlockedNow, refreshBlocklist } from "@/lib/blocklistStore";
 import { getArmadaDB } from "@/lib/db/armadaDB";
 import { RESCUE_RELAYS } from "@/lib/platform";
 import { verifyEventOnce } from "@/lib/verifyCache";
@@ -108,6 +109,26 @@ export async function assertNotDissolved(
   if (grave !== undefined) throw new DissolvedCommunityError();
 }
 
+export class BlockedCommunityError extends Error {
+  constructor() {
+    super(t({ id: "useCommunityActions.blocked", defaultMessage: "This community is unavailable in Armada." }));
+    this.name = "BlockedCommunityError";
+  }
+}
+
+/**
+ * Refuse a community on the blocklist (`blocklistStore.ts`), before any side
+ * effect. Refreshes first so a block published minutes ago counts; a relay
+ * that can't be reached leaves what is already held.
+ */
+export async function assertNotBlocked(
+  nostr: Parameters<typeof refreshBlocklist>[0],
+  communityId: string,
+): Promise<void> {
+  await refreshBlocklist(nostr);
+  if (isBlockedNow(communityId)) throw new BlockedCommunityError();
+}
+
 /** Thrown when none of a community's relays is usable on this platform. */
 export class UnusableRelaysError extends Error {
   constructor(message: string) {
@@ -124,6 +145,7 @@ export class UnusableRelaysError extends Error {
 export function isJoinRejected(error: unknown): boolean {
   return (
     error instanceof BannedFromCommunityError ||
+    error instanceof BlockedCommunityError ||
     error instanceof DissolvedCommunityError ||
     error instanceof UnusableRelaysError ||
     error instanceof InviteError
@@ -559,6 +581,7 @@ export function useCommunityActions() {
   const preview = useMutation<InvitePreview, Error, { invite: ParsedInviteLink }>({
     mutationFn: async ({ invite }) => {
       const bundle = await resolveBundle(nostr, invite, bootstrapRelays);
+      await assertNotBlocked(nostr, bundle.community_id);
       // Fail loudly if no relay is reachable here, e.g. ws:// under mixed-content blocking.
       const unusable = unusableRelaysReason(bundle.relays);
       if (unusable) throw new Error(unusable);
@@ -582,6 +605,7 @@ export function useCommunityActions() {
   ): Promise<{ communityId: string; name: string }> => {
       if (!user) throw new Error(t({ id: "useCommunityActions.signInToJoin", defaultMessage: "Sign in to join an encrypted community." }));
       const bundle = await resolveBundle(nostr, invite, bootstrapRelays);
+      await assertNotBlocked(nostr, bundle.community_id);
       const unusable = unusableRelaysReason(bundle.relays);
       if (unusable) throw new UnusableRelaysError(unusable);
       // Also here: the optimistic path may join from a pre-grave preview bundle.
@@ -669,6 +693,7 @@ export function useCommunityActions() {
 
       // Optimistic path: record a pending entry on disk and answer NOW; the durable
       // chain (with the ban check before any publish) runs behind it.
+      if (isBlockedNow(resolved.community_id)) throw new BlockedCommunityError();
       const unusable = unusableRelaysReason(resolved.relays);
       if (unusable) throw new UnusableRelaysError(unusable);
       await persistPendingJoin(user.pubkey, bundleToEntry(resolved, { inviteRef: inviteRefOf(invite) }));

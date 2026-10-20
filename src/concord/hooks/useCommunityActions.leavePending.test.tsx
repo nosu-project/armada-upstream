@@ -97,7 +97,7 @@ function wrapper({ children }: { children: ReactNode }) {
   return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
 }
 
-function liveInvite(ownerPubkey: string) {
+async function liveInvite(ownerPubkey: string) {
   const { community } = mintCommunity("Fleet", ownerPubkey, [RELAY]);
   const bundle: InviteBundle = {
     community_id: community.idHex,
@@ -112,7 +112,7 @@ function liveInvite(ownerPubkey: string) {
   } as InviteBundle;
   const token = mintToken();
   const link = mintLinkSigner();
-  const event = buildBundleEvent(bundle, token, link.sk);
+  const event = await buildBundleEvent(bundle, token, link.sk);
   const invite = parseInviteLink(buildInviteUrl("https://armada.test", link.pk, token, [RELAY]))!;
   h.nostr = {
     relay: () => ({
@@ -135,7 +135,7 @@ beforeEach(() => {
 async function joinUntilVaultWrite(leaveMidway: boolean) {
   const me = signer();
   h.user = me;
-  const { invite, bundle } = liveInvite(signer().pubkey);
+  const { invite, bundle } = await liveInvite(signer().pubkey);
   const addStarted = new Promise<void>((resolve) => (h.addStarted = resolve));
 
   const { result } = renderHook(() => useCommunityActions(), { wrapper });
@@ -169,7 +169,7 @@ describe("a pending join resumed after a restart", () => {
   async function resume() {
     const me = signer();
     h.user = me;
-    const { invite, bundle } = liveInvite(signer().pubkey);
+    const { invite, bundle } = await liveInvite(signer().pubkey);
     // The earlier launch recorded the click, then was closed mid-chain.
     await persistPendingJoin(me.pubkey, { ...bundleToEntry(bundle, { inviteRef: inviteRefOf(invite) }), added_at: CLICK });
     const addStarted = new Promise<void>((resolve) => (h.addStarted = resolve));

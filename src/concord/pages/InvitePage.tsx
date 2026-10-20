@@ -7,10 +7,12 @@ import { JoinButton } from "@/components/auth/JoinButton";
 import { Button } from "@/components/ui/button";
 import {
   BannedFromCommunityError,
+  BlockedCommunityError,
   DissolvedCommunityError,
   useCommunityActions,
   type InvitePreview,
 } from "@/concord/hooks/useCommunityActions";
+import { CommunityBlocked } from "@/concord/components/CommunityBlocked";
 import { InviteDetail } from "@/concord/pages/InvitesPage";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { toast } from "@/hooks/useToast";
@@ -43,6 +45,7 @@ export function InvitePage() {
   const [error, setError] = useState<string | null>(null);
   const [banned, setBanned] = useState(false);
   const [dissolved, setDissolved] = useState(false);
+  const [blocked, setBlocked] = useState(false);
   const [resolved, setResolved] = useState<InvitePreview | null>(null);
 
   const fragment = (location.hash || window.location.hash).replace(/^#/, "").trim();
@@ -69,6 +72,7 @@ export function InvitePage() {
       .catch((e) => {
         if (cancelled) return;
         setDissolved(e instanceof DissolvedCommunityError);
+        setBlocked(e instanceof BlockedCommunityError);
         setError(inviteErrorText(e, t({ id: "invitePage.error.loadFailed", defaultMessage: "Couldn't load that invite link." })));
       });
     return () => {
@@ -88,9 +92,21 @@ export function InvitePage() {
     } catch (e) {
       setBanned(e instanceof BannedFromCommunityError);
       setDissolved(e instanceof DissolvedCommunityError);
+      setBlocked(e instanceof BlockedCommunityError);
       setError(inviteErrorText(e, t({ id: "invitePage.error.joinFailed", defaultMessage: "Couldn't join with that invite link." })));
     }
   };
+
+  if (blocked) {
+    return (
+      <>
+        <ServerRail />
+        <main className="flex-1 min-w-0">
+          <CommunityBlocked />
+        </main>
+      </>
+    );
+  }
 
   if (error) {
     return (

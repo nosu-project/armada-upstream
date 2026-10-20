@@ -156,7 +156,7 @@ export function useDmTyping(conversation: string | undefined, enabled = true): D
           pubkey: self!,
         });
         // Peer copy only; a self copy would just echo our own indicator.
-        const wrap = wrapDmSealEphemeral(await sealDmRumor(rumor, publishPeer, signer), publishPeer);
+        const wrap = await wrapDmSealEphemeral(await sealDmRumor(rumor, publishPeer, signer), publishPeer);
         const targets = [...new Set([...peerInboxRelays, ...myRelays])];
         await Promise.allSettled(
           targets.map((url) => nostr.relay(url).event(wrap, { signal: AbortSignal.timeout(6000) })),

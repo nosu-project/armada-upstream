@@ -329,8 +329,10 @@ jobs:
 
       # Stage every desktop installer, here in the job that built them — beside
       # the APK the android job already staged. All seven land in one directory
-      # named exactly as the release event will name them, so the artifact
-      # upload and the event describe the same bytes under the same name.
+      # named exactly as the release event will name them. They are not run
+      # artifacts: ngit-ci caps a run's exported artifacts at 256 MiB in total,
+      # and these are ~1 GB, so the export would fail the run after everything
+      # had published. The release job puts them on Blossom itself.
       # `src/lib/downloads.test.ts` reads those names back and fails if the
       # client can't file one under a platform. The `.flatpak` bundle is staged
       # here with the rest now that it is unsigned — there is no signing gate to
@@ -359,46 +361,6 @@ jobs:
           # The unsigned Flatpak bundle. npkg re-signs on import.
           cp electron/release/Armada-flatpak-*.flatpak "$out/Armada-$TAG.flatpak"
           ls -lh "$out"
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: armada-desktop-linux-${{ github.ref_name }}
-          path: |
-            .release-artifacts/Armada-${{ github.ref_name }}.AppImage
-            .release-artifacts/Armada-${{ github.ref_name }}.deb
-            .release-artifacts/Armada-${{ github.ref_name }}.flatpak
-          if-no-files-found: error
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: armada-desktop-windows-${{ github.ref_name }}
-          path: |
-            .release-artifacts/Armada-${{ github.ref_name }}.exe
-            .release-artifacts/Armada-${{ github.ref_name }}-portable.exe
-          if-no-files-found: error
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: armada-desktop-mac-${{ github.ref_name }}
-          path: |
-            .release-artifacts/Armada-${{ github.ref_name }}-mac-x64.zip
-            .release-artifacts/Armada-${{ github.ref_name }}-mac-arm64.zip
-          if-no-files-found: error
-
-      # Runs after any failure in this job — including one before an installer
-      # exists — so `warn`, not `error`. The raw build output is the same bytes
-      # the staging step copies.
-      - uses: actions/upload-artifact@v4
-        if: failure()
-        with:
-          name: armada-desktop-failed-${{ github.ref_name }}
-          path: |
-            electron/release/*.AppImage
-            electron/release/*.deb
-            electron/release/*.exe
-            electron/release/*.flatpak
-            electron/release/mac/*.zip
-          if-no-files-found: warn
 
   android:
     # Last, and `always()`, so its outcome is nobody else's problem. It shares
@@ -753,11 +715,10 @@ jobs:
           fi
           ls -lh .release-artifacts
 
-          # Most blobs are already on Blossom — ngit-ci uploads run artifacts to
-          # the first of these servers — so this mostly hashes files and
-          # confirms hits. It uploads only what the coordinator dropped, which
-          # is why a 413 or an exhausted upload budget upstream costs a little
-          # time here rather than a missing download.
+          # The APK is usually on Blossom already (ngit-ci uploads run artifacts
+          # to the first of these servers); the desktop installers are uploaded
+          # here, as is anything the coordinator dropped, so a 413 or an
+          # exhausted upload budget upstream costs time rather than a download.
           #
           # All three of the client's servers (.nsite/config.json, the same
           # list every nsite deploy uses), so an artifact that no server holds

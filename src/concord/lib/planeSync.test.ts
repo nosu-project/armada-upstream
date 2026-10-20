@@ -145,7 +145,7 @@ async function wrapAt(
     createdAtSecs: createdAt,
   });
   const seal = await sealRumor(rumor, KIND_SEAL_PLAINTEXT, group, s);
-  const w = wrapSeal(seal, group);
+  const w = await wrapSeal(seal, group);
   const wrap = finalizeEvent({ kind: w.kind, content: w.content, tags: w.tags, created_at: createdAt }, group.sk);
   return { wrap, rumor };
 }

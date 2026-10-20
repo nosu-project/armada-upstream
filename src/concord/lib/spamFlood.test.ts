@@ -97,7 +97,7 @@ async function post(who: Signer, channel: Channel, content: string, ms: number):
   const seal = await sealRumor(rumor, KIND_SEAL_ENCRYPTED, channel.current.group, {
     signEvent: async (t: EventTemplate) => finalizeEvent(t, who.sk),
   });
-  return wrapSeal(seal, channel.current.group);
+  return await wrapSeal(seal, channel.current.group);
 }
 
 // ── The corpus ───────────────────────────────────────────────────────────────

@@ -73,7 +73,7 @@ async function wrapChatAt(
     ms: createdAt * 1000,
   });
   const seal = await m.sealRumor(rumor, KIND_SEAL_ENCRYPTED, channel.current.group, s);
-  const w = m.wrapSeal(seal, channel.current.group);
+  const w = await m.wrapSeal(seal, channel.current.group);
   return finalizeEvent(
     { kind: w.kind, content: w.content, tags: w.tags, created_at: createdAt },
     channel.current.group.sk,

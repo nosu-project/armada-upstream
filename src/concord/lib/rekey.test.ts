@@ -68,7 +68,7 @@ describe("rekey events (CORD-06 §1–2)", () => {
     const rumors = buildRekeyRumors(rotator.pubkey, { scope: { kind: "root" }, newEpoch: 1n, prevEpoch: 0n, prevCommit }, blobs, Date.now());
     expect(rumors.length).toBe(1);
 
-    const wrap = wrapSeal(await sealRumor(rumors[0], KIND_SEAL_ENCRYPTED, address, rotator), address);
+    const wrap = await wrapSeal(await sealRumor(rumors[0], KIND_SEAL_ENCRYPTED, address, rotator), address);
     const parsed = parseRekey(openWrap(wrap, address));
     expect(parsed.rotator).toBe(rotator.pubkey);
     expect(parsed.scopeIdHex).toBe("0".repeat(64));
@@ -106,7 +106,7 @@ describe("rekey events (CORD-06 §1–2)", () => {
 
     const parsed: ParsedRekey[] = [];
     for (const r of rumors) {
-      const wrap = wrapSeal(await sealRumor(r, KIND_SEAL_ENCRYPTED, address, rotator), address);
+      const wrap = await wrapSeal(await sealRumor(r, KIND_SEAL_ENCRYPTED, address, rotator), address);
       parsed.push(parseRekey(openWrap(wrap, address)));
     }
     for (const p of parsed) {
@@ -135,7 +135,7 @@ describe("rekey events (CORD-06 §1–2)", () => {
       Date.now(),
       undefined,
     );
-    const wrap = wrapSeal(await sealRumor(rumors[0], KIND_SEAL_ENCRYPTED, address, rotator), address);
+    const wrap = await wrapSeal(await sealRumor(rumors[0], KIND_SEAL_ENCRYPTED, address, rotator), address);
     expect(parseRekey(openWrap(wrap, address)).authority).toBeUndefined();
   });
 
@@ -435,7 +435,7 @@ describe("rekey chunking (CORD-06 §1)", () => {
         NIP44_MAX_PLAINTEXT,
       );
       // Throws StreamError("oversize") rather than publishing, if it doesn't.
-      expect(openWrap(wrapSeal(seal, address), address).rumorId).toBe(rumor.id);
+      expect(openWrap(await wrapSeal(seal, address), address).rumorId).toBe(rumor.id);
     }
   });
 

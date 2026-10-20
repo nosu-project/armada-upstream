@@ -73,11 +73,11 @@ describe("fragment codec (CORD-05 §3)", () => {
 });
 
 describe("invite bundle (CORD-05 §1–2)", () => {
-  it("round-trips through the addressable event", () => {
+  it("round-trips through the addressable event", async () => {
     const { bundle } = makeBundle();
     const token = mintToken();
     const link = mintLinkSigner();
-    const event = buildBundleEvent(bundle, token, link.sk);
+    const event = await buildBundleEvent(bundle, token, link.sk);
     expect(event.pubkey).toBe(link.pk);
     expect(event.tags).toContainEqual(["d", ""]);
 
@@ -86,63 +86,63 @@ describe("invite bundle (CORD-05 §1–2)", () => {
     expect(parsed.name).toBe("Test community");
   });
 
-  it("refuses a bundle whose owner does not reproduce the community_id", () => {
+  it("refuses a bundle whose owner does not reproduce the community_id", async () => {
     const { bundle } = makeBundle();
     const forged = { ...bundle, owner: bytesToHex(random32()) };
     const token = mintToken();
     const link = mintLinkSigner();
-    const event = buildBundleEvent(forged, token, link.sk);
+    const event = await buildBundleEvent(forged, token, link.sk);
     expect(() => parseBundleEvent(event, link.pk, token, Date.now())).toThrow(/community_id/);
   });
 
-  it("refuses an impostor's event at a different author", () => {
+  it("refuses an impostor's event at a different author", async () => {
     const { bundle } = makeBundle();
     const token = mintToken();
     const link = mintLinkSigner();
     const squatter = mintLinkSigner();
-    const event = buildBundleEvent(bundle, token, squatter.sk);
+    const event = await buildBundleEvent(bundle, token, squatter.sk);
     expect(() => parseBundleEvent(event, link.pk, token, Date.now())).toThrow(/not a valid/);
   });
 
-  it("a revocation tombstone reads as revoked", () => {
+  it("a revocation tombstone reads as revoked", async () => {
     const link = mintLinkSigner();
-    const tomb = buildRevocationEvent(link.sk);
+    const tomb = await buildRevocationEvent(link.sk);
     expect(() => parseBundleEvent(tomb, link.pk, mintToken(), Date.now())).toThrow(/revoked/);
   });
 
-  it("expiry refuses joining but only past expires_at", () => {
+  it("expiry refuses joining but only past expires_at", async () => {
     const { bundle } = makeBundle();
     const token = mintToken();
     const link = mintLinkSigner();
     const withExpiry = { ...bundle, expires_at: 1_000_000 };
-    const event = buildBundleEvent(withExpiry, token, link.sk);
+    const event = await buildBundleEvent(withExpiry, token, link.sk);
     expect(() => parseBundleEvent(event, link.pk, token, 999_999)).not.toThrow();
     expect(() => parseBundleEvent(event, link.pk, token, 1_000_001)).toThrow(/expired/);
   });
 
-  it("carries the description preview, truncated to the byte cap on a code-point boundary", () => {
+  it("carries the description preview, truncated to the byte cap on a code-point boundary", async () => {
     const { bundle } = makeBundle();
     const token = mintToken();
     const link = mintLinkSigner();
     // 3-byte code points, 200 of them = 600 bytes: the 500-byte cap falls
     // mid-code-point (500 / 3), so truncation must back off to a boundary.
     const withDescription = { ...bundle, description: "€".repeat(200) };
-    const event = buildBundleEvent(withDescription, token, link.sk);
+    const event = await buildBundleEvent(withDescription, token, link.sk);
     const parsed = parseBundleEvent(event, link.pk, token, Date.now());
     expect(parsed.description).toBe("€".repeat(166));
   });
 
-  it("drops a non-string description rather than refusing the bundle", () => {
+  it("drops a non-string description rather than refusing the bundle", async () => {
     const { bundle } = makeBundle();
     const token = mintToken();
     const link = mintLinkSigner();
     const hostile = { ...bundle, description: 42 as unknown as string };
-    const event = buildBundleEvent(hostile, token, link.sk);
+    const event = await buildBundleEvent(hostile, token, link.sk);
     const parsed = parseBundleEvent(event, link.pk, token, Date.now());
     expect(parsed.description).toBeUndefined();
   });
 
-  it("bounds a hostile bundle's channel count", () => {
+  it("bounds a hostile bundle's channel count", async () => {
     const { bundle } = makeBundle();
     const token = mintToken();
     const link = mintLinkSigner();
@@ -155,7 +155,7 @@ describe("invite bundle (CORD-05 §1–2)", () => {
         name: "x",
       })),
     };
-    const event = buildBundleEvent(hostile, token, link.sk);
+    const event = await buildBundleEvent(hostile, token, link.sk);
     expect(() => parseBundleEvent(event, link.pk, token, Date.now())).toThrow(/channels/);
   });
 });
@@ -216,7 +216,7 @@ describe("invite links", () => {
 });
 
 describe("bundle refresh after a Refounding (CORD-05 §2)", () => {
-  it("re-posts every live link's bundle at the current keys, preserving per-link expiry/label", () => {
+  it("re-posts every live link's bundle at the current keys, preserving per-link expiry/label", async () => {
     const { bundle } = makeBundle();
     const linkA = mintLinkSigner();
     const linkB = mintLinkSigner();
@@ -231,7 +231,7 @@ describe("bundle refresh after a Refounding (CORD-05 §2)", () => {
       root_epoch: 1,
     };
     const futureSecs = Math.floor(Date.now() / 1000) + 3600;
-    const events = buildRefreshedBundleEvents(fresh, [
+    const events = await buildRefreshedBundleEvents(fresh, [
       { token: bytesToHex(tokenA), signer_sk: bytesToHex(linkA.sk), expires_at: futureSecs, label: "Reddit" },
       { token: bytesToHex(tokenB), signer_sk: bytesToHex(linkB.sk) },
     ]);
@@ -250,11 +250,11 @@ describe("bundle refresh after a Refounding (CORD-05 §2)", () => {
     expect(b.expires_at).toBeUndefined();
   });
 
-  it("skips a malformed entry rather than throwing", () => {
+  it("skips a malformed entry rather than throwing", async () => {
     const { bundle } = makeBundle();
     const link = mintLinkSigner();
     const token = mintToken();
-    const events = buildRefreshedBundleEvents(bundle, [
+    const events = await buildRefreshedBundleEvents(bundle, [
       { token: "not-hex", signer_sk: "also-not-hex" },
       { token: bytesToHex(token), signer_sk: bytesToHex(link.sk) },
     ]);

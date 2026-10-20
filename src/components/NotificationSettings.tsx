@@ -26,7 +26,7 @@ import {
   isIgnoringBatteryOptimizations,
   requestIgnoreBatteryOptimizations,
 } from "@/lib/nativeNotifications";
-import { isIOS, isNativeRuntime, isStandalonePwa } from "@/lib/platform";
+import { isIOS, isNativeRuntime } from "@/lib/platform";
 import { isDesktop } from "@/lib/desktop";
 import { FormattedMessage, getLocale, t, useIntl } from "@/i18n";
 
@@ -443,16 +443,8 @@ function WebPushSettings() {
 
   // Without Web Push (Brave with Google push off, no gateway), offer foreground notifications.
   if (!supported) {
-    // Every iOS browser is WKWebView and Web Push needs a 16.4+ Home-Screen app,
-    // so the foreground fallback's advice doesn't apply.
-    if (isIOS()) {
-      return (
-        <IosNotificationHint
-          standalone={isStandalonePwa()}
-          reason={unavailableReason}
-        />
-      );
-    }
+    // Every iOS browser is WKWebView, so the foreground fallback's advice doesn't apply.
+    if (isIOS()) return <IosNotificationHint reason={unavailableReason} />;
     return <ForegroundOnlySettings />;
   }
 
@@ -499,12 +491,8 @@ function WebPushSettings() {
   );
 }
 
-/**
- * iOS notification guidance when Web Push is unavailable: Service Worker API
- * absent (Lockdown Mode or content blockers), not installed (Add to Home
- * Screen), or installed without push (iOS 16.4+ / re-add).
- */
-function IosNotificationHint(props: { standalone: boolean; reason?: WebPushUnavailableReason }) {
+/** iOS notification guidance when background push is unavailable. */
+function IosNotificationHint(props: { reason?: WebPushUnavailableReason }) {
   return (
     <NoticeGroup>
       <IosNotificationHintText {...props} />
@@ -512,13 +500,7 @@ function IosNotificationHint(props: { standalone: boolean; reason?: WebPushUnava
   );
 }
 
-function IosNotificationHintText({
-  standalone,
-  reason,
-}: {
-  standalone: boolean;
-  reason?: WebPushUnavailableReason;
-}) {
+function IosNotificationHintText({ reason }: { reason?: WebPushUnavailableReason }) {
   // Only pre-push iOS app builds reach this; current ones register APNs tokens (useIosPush).
   if (reason === "native-runtime") {
     return (
@@ -536,61 +518,11 @@ function IosNotificationHintText({
     );
   }
 
-  // No Service Worker API: on iOS, Lockdown Mode (or a content blocker / WebKit flag).
-  if (reason === "service-worker") {
-    return (
-      <div className="space-y-2">
-        <p className="text-sm text-muted-foreground">
-          <FormattedMessage id="notificationSettings.ios.serviceWorker" defaultMessage="Notifications need service workers, which are switched off on this device." />
-        </p>
-        <p className="text-xs text-muted-foreground">
-          <FormattedMessage
-            id="notificationSettings.ios.lockdown"
-            defaultMessage="If <b>Lockdown Mode</b> is on (Settings → Privacy & Security → Lockdown Mode), it disables web notifications. To use them, turn it off or exclude Armada under its “Configure Web Browsing” / Safari exceptions. A content blocker can have the same effect."
-            values={{ b: (chunks) => <strong>{chunks}</strong> }}
-          />
-        </p>
-      </div>
-    );
-  }
-
-  if (!standalone) {
-    return (
-      <div className="space-y-2">
-        <p className="text-sm text-muted-foreground">
-          <FormattedMessage
-            id="notificationSettings.ios.install"
-            defaultMessage="To get notifications on iPhone or iPad, open Armada in Safari, tap Share, choose <b>Add to Home Screen</b>, keep <b>Open as Web App</b> turned on, then launch Armada from the new icon."
-            values={{ b: (chunks) => <strong>{chunks}</strong> }}
-          />
-        </p>
-        <p className="text-xs text-muted-foreground">
-          <FormattedMessage id="notificationSettings.ios.installNote" defaultMessage="iOS only delivers notifications to apps installed on the Home Screen, not to sites open in a browser tab." />
-        </p>
-      </div>
-    );
-  }
-  if (reason === "insecure-context") {
-    return (
-      <p className="text-sm text-muted-foreground">
-        <FormattedMessage id="notificationSettings.ios.insecure" defaultMessage="Background notifications require Armada to be served over HTTPS." />
-      </p>
-    );
-  }
-
+  // Every iOS browser's Web Push is WebKit's (useNostrPush refuses it).
   return (
-    <div className="space-y-2">
-      <p className="text-sm text-muted-foreground">
-        <FormattedMessage
-          id="notificationSettings.ios.reinstall"
-          defaultMessage="Armada is open as a Home Screen app, but iOS has not exposed Web Push to this install. Update iOS, check that Lockdown Mode is not blocking Armada, then remove and add it again with <b>Open as Web App</b> turned on."
-          values={{ b: (chunks) => <strong>{chunks}</strong> }}
-        />
-      </p>
-      <p className="text-xs text-muted-foreground">
-        <FormattedMessage id="notificationSettings.ios.reinstallNote" defaultMessage="Web Push requires iOS 16.4 or later. Reinstalling is only useful for this specific missing API state; it is not a general fix for a broken subscription." />
-      </p>
-    </div>
+    <p className="text-sm text-muted-foreground">
+      <FormattedMessage id="notificationSettings.ios.webkit" defaultMessage="Background notifications aren't available in the iPhone and iPad web app: iOS makes every push show a notification, so Armada would announce each sync. They're available in the Android and desktop apps." />
+    </p>
   );
 }
 

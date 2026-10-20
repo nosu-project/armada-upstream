@@ -1254,7 +1254,7 @@ export function useDm17Thread(
       const outgoing: Array<{ wrap: NostrEvent; targets: string[] }> = [];
       for (const recipient of recipients) {
         const seal = await sealDmRumor(rumor, recipient, signer);
-        const wrap = wrapDmSeal(seal, recipient, {
+        const wrap = await wrapDmSeal(seal, recipient, {
           firstContact: opts?.firstContact,
           expiresAt,
         });
@@ -1265,7 +1265,7 @@ export function useDm17Thread(
         });
       }
       const sealSelf = await sealDmRumor(rumor, self, signer);
-      const wrapSelf = wrapDmSeal(sealSelf, self, { expiresAt });
+      const wrapSelf = await wrapDmSeal(sealSelf, self, { expiresAt });
 
       // Persist our self-wrap BEFORE publishing: on Android the notification service dedupes
       // against this store, and the service worker suppresses this id for web push.

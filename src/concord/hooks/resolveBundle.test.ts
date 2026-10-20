@@ -45,7 +45,7 @@ function makePool(relays: Record<string, FakeRelay>) {
 }
 
 /** A link + two bundle generations at its coordinate (the newer renamed). */
-function setup() {
+async function setup() {
   const owner = getPublicKey(generateSecretKey());
   const { community } = mintCommunity("Fleet", owner, [HOME]);
   const link = mintLinkSigner();
@@ -64,10 +64,10 @@ function setup() {
   // straggler grace runs on real setTimeout).
   vi.useFakeTimers();
   vi.setSystemTime(1_700_000_000_000);
-  const oldEvent = buildBundleEvent(bundle, token, link.sk);
+  const oldEvent = await buildBundleEvent(bundle, token, link.sk);
   vi.setSystemTime(1_700_000_600_000);
-  const freshEvent = buildBundleEvent({ ...bundle, name: "Fresh" }, token, link.sk);
-  const tombstone = buildRevocationEvent(link.sk);
+  const freshEvent = await buildBundleEvent({ ...bundle, name: "Fresh" }, token, link.sk);
+  const tombstone = await buildRevocationEvent(link.sk);
   vi.useRealTimers();
 
   const invite: ParsedInviteLink = {
@@ -85,7 +85,7 @@ afterEach(() => {
 
 describe("resolveBundle", () => {
   it("settles shortly after the first valid copy even when another relay hangs", async () => {
-    const { invite, freshEvent } = setup();
+    const { invite, freshEvent } = await setup();
     const pool = makePool({
       [BOOT]: new FakeRelay([freshEvent]),
       "wss://dead.test": new FakeRelay([], true),
@@ -105,7 +105,7 @@ describe("resolveBundle", () => {
   });
 
   it("blocking mode adopts the newer copy the home relays vend", async () => {
-    const { invite, oldEvent, freshEvent } = setup();
+    const { invite, oldEvent, freshEvent } = await setup();
     const pool = makePool({
       [BOOT]: new FakeRelay([oldEvent]),
       [HOME]: new FakeRelay([freshEvent]),
@@ -116,7 +116,7 @@ describe("resolveBundle", () => {
   });
 
   it("onSecondHop returns the first-hop bundle now and the newer copy via the callback", async () => {
-    const { invite, oldEvent, freshEvent } = setup();
+    const { invite, oldEvent, freshEvent } = await setup();
     const pool = makePool({
       [BOOT]: new FakeRelay([oldEvent]),
       [HOME]: new FakeRelay([freshEvent]),
@@ -131,7 +131,7 @@ describe("resolveBundle", () => {
   });
 
   it("onSecondHop reports a newer revocation tombstone, and the floor makes it stick", async () => {
-    const { invite, oldEvent, tombstone } = setup();
+    const { invite, oldEvent, tombstone } = await setup();
     const pool = makePool({
       [BOOT]: new FakeRelay([oldEvent]),
       [HOME]: new FakeRelay([tombstone]),

@@ -108,7 +108,7 @@ export function useTypingPublisher(community: Community | undefined, channel: Ch
           ms: now,
         });
         const seal = await sealRumor(rumor, KIND_SEAL_ENCRYPTED, channel.current.group, user.signer);
-        const wrap = wrapSeal(seal, channel.current.group, { ephemeral: true });
+        const wrap = await wrapSeal(seal, channel.current.group, { ephemeral: true });
         await Promise.allSettled(
           community.relays.map((url) => nostr.relay(url).event(wrap, { signal: AbortSignal.timeout(6000) })),
         );

@@ -10,7 +10,7 @@
 
 import { hexToBytes } from "@noble/hashes/utils.js";
 import { decrypt as nip44Decrypt, encrypt as nip44Encrypt } from "nostr-tools/nip44";
-import { finalizeEvent, generateSecretKey, getPublicKey, verifyEvent } from "nostr-tools/pure";
+import { generateSecretKey, getPublicKey, verifyEvent } from "nostr-tools/pure";
 import type { NostrEvent } from "nostr-tools/pure";
 import * as nip19 from "nostr-tools/nip19";
 
@@ -18,6 +18,7 @@ import { inviteBundleKey, verifyCommunityId } from "@/concord/lib/derive";
 import { KIND_INVITE_BUNDLE, VSK_INVITE_LIVE, VSK_INVITE_REVOKED } from "@/concord/lib/kinds";
 import { RELAY_DICTIONARY, STOCK_RELAYS } from "@/concord/lib/stockRelays";
 import { MAX_BUNDLE_CHANNELS, capRelays, type ImagePointer } from "@/concord/lib/types";
+import { finalizePowEvent } from "@/lib/pow";
 
 /** The link's unlock token: 16 random bytes (CORD-05 §2). */
 export const TOKEN_BYTES = 16;
@@ -115,10 +116,10 @@ export function validateBundle(bundle: InviteBundle): InviteBundle {
  * Each Invite List entry supplies `token` + `signer_sk`; per-link `expires_at`/
  * `label` are kept. Malformed entries are skipped.
  */
-export function buildRefreshedBundleEvents(
+export async function buildRefreshedBundleEvents(
   bundle: InviteBundle,
   entries: Array<{ token: string; signer_sk: string; expires_at?: number; label?: string }>,
-): NostrEvent[] {
+): Promise<NostrEvent[]> {
   const events: NostrEvent[] = [];
   for (const entry of entries) {
     try {
@@ -127,7 +128,7 @@ export function buildRefreshedBundleEvents(
         ...(entry.expires_at ? { expires_at: entry.expires_at * 1000 } : {}),
         ...(entry.label ? { label: entry.label } : {}),
       };
-      events.push(buildBundleEvent(perLink, hexToBytes(entry.token), hexToBytes(entry.signer_sk)));
+      events.push(await buildBundleEvent(perLink, hexToBytes(entry.token), hexToBytes(entry.signer_sk)));
     } catch {
       // Malformed stored entry; skip it.
     }
@@ -136,9 +137,9 @@ export function buildRefreshedBundleEvents(
 }
 
 /** Build the addressable bundle event: `(33301, link_signer, d="")`, marked live. */
-export function buildBundleEvent(bundle: InviteBundle, token: Uint8Array, linkSignerSk: Uint8Array): NostrEvent {
+export function buildBundleEvent(bundle: InviteBundle, token: Uint8Array, linkSignerSk: Uint8Array): Promise<NostrEvent> {
   const content = nip44Encrypt(JSON.stringify(bundle), inviteBundleKey(token));
-  return finalizeEvent(
+  return finalizePowEvent(
     {
       kind: KIND_INVITE_BUNDLE,
       content,
@@ -153,8 +154,8 @@ export function buildBundleEvent(bundle: InviteBundle, token: Uint8Array, linkSi
 }
 
 /** Re-post the coordinate as a revocation tombstone (creator only — needs the signer). */
-export function buildRevocationEvent(linkSignerSk: Uint8Array): NostrEvent {
-  return finalizeEvent(
+export function buildRevocationEvent(linkSignerSk: Uint8Array): Promise<NostrEvent> {
+  return finalizePowEvent(
     {
       kind: KIND_INVITE_BUNDLE,
       content: "",

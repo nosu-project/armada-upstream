@@ -1,8 +1,7 @@
-import { finalizeEvent } from "nostr-tools";
-
 import { APP_BLOSSOM_SERVERS, normalizeBlossomServerUrl } from "@/lib/blossom";
 import { KIND_RELAY_LIST, uniqueRelayUrls } from "@/lib/nip65";
 import { APP_RELAYS, DM_INBOX_RELAYS, RELAY_LIST_DISCOVERY_RELAYS, SEARCH_RELAYS } from "@/lib/platform";
+import { finalizePowEvent } from "@/lib/pow";
 import { KIND_BLOSSOM_SERVERS, KIND_DM_RELAYS, KIND_SEARCH_RELAYS } from "@/lib/selfSyncKinds";
 
 import type { NostrEvent } from "@nostrify/nostrify";
@@ -71,7 +70,7 @@ function uniqueServers(servers: string[]): string[] {
  * emptied list is honoured (nothing published) except `home`, which falls back
  * to the app relays since an account must live somewhere.
  */
-export function buildSignupLists(sk: Uint8Array, setup: SignupSetup): SignupLists {
+export async function buildSignupLists(sk: Uint8Array, setup: SignupSetup): Promise<SignupLists> {
   const chosenHome = uniqueRelayUrls(setup.home);
   const home = chosenHome.length > 0 ? chosenHome : uniqueRelayUrls(APP_RELAYS);
   const dm = uniqueRelayUrls(setup.dm);
@@ -79,7 +78,7 @@ export function buildSignupLists(sk: Uint8Array, setup: SignupSetup): SignupList
   const blossom = uniqueServers(setup.blossom);
   const created_at = Math.floor(Date.now() / 1000);
   const sign = (kind: number, tags: string[][]) =>
-    finalizeEvent({ kind, created_at, tags, content: "" }, sk);
+    finalizePowEvent({ kind, created_at, tags, content: "" }, sk);
 
   // Indexers too, for the two lists another client must find to reach us.
   const discoverable = uniqueRelayUrls([...home, ...RELAY_LIST_DISCOVERY_RELAYS]);
@@ -94,7 +93,7 @@ export function buildSignupLists(sk: Uint8Array, setup: SignupSetup): SignupList
   };
 
   if (home.length > 0) {
-    const relayList = sign(KIND_RELAY_LIST, home.map((url) => ["r", url]));
+    const relayList = await sign(KIND_RELAY_LIST, home.map((url) => ["r", url]));
     events.push({ event: relayList, relays: discoverable });
     configSeed.relayMetadata = {
       relays: home.map((url) => ({ url, read: true, write: true })),
@@ -104,13 +103,13 @@ export function buildSignupLists(sk: Uint8Array, setup: SignupSetup): SignupList
     };
   }
   if (dm.length > 0) {
-    events.push({ event: sign(KIND_DM_RELAYS, dm.map((url) => ["relay", url])), relays: discoverable });
+    events.push({ event: await sign(KIND_DM_RELAYS, dm.map((url) => ["relay", url])), relays: discoverable });
   }
   if (search.length > 0) {
-    events.push({ event: sign(KIND_SEARCH_RELAYS, search.map((url) => ["relay", url])), relays: home });
+    events.push({ event: await sign(KIND_SEARCH_RELAYS, search.map((url) => ["relay", url])), relays: home });
   }
   if (blossom.length > 0) {
-    const blossomList = sign(KIND_BLOSSOM_SERVERS, blossom.map((url) => ["server", url]));
+    const blossomList = await sign(KIND_BLOSSOM_SERVERS, blossom.map((url) => ["server", url]));
     events.push({ event: blossomList, relays: home });
     configSeed.blossomServerMetadata = {
       servers: blossom,

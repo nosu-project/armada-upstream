@@ -18,7 +18,7 @@
  */
 
 import { decrypt as nip44Decrypt, encrypt as nip44Encrypt } from "nostr-tools/nip44";
-import { finalizeEvent, generateSecretKey, getEventHash, getPublicKey } from "nostr-tools/pure";
+import { generateSecretKey, getEventHash, getPublicKey } from "nostr-tools/pure";
 import type { EventTemplate, NostrEvent, UnsignedEvent } from "nostr-tools/pure";
 
 import type { GroupKey, StreamKeyView } from "@/concord/lib/derive";
@@ -28,6 +28,7 @@ import {
   KIND_WRAP,
   KIND_WRAP_EPHEMERAL,
 } from "@/concord/lib/kinds";
+import { finalizePowEvent } from "@/lib/pow";
 import { verifyEventOnce } from "@/lib/verifyCache";
 import type { NostrRumor } from "@/lib/nostrRumor";
 
@@ -136,12 +137,12 @@ export function wrapSeal(
   seal: NostrEvent,
   stream: GroupKey,
   opts?: { ephemeral?: boolean; ephemeralSk?: Uint8Array; expiration?: number },
-): NostrEvent {
+): Promise<NostrEvent> {
   const ephemeralSk = opts?.ephemeralSk ?? generateSecretKey();
   const ephemeralPk = getPublicKey(ephemeralSk);
   const tags: string[][] = [["p", ephemeralPk]];
   if (opts?.expiration !== undefined) tags.push(["expiration", String(Math.floor(opts.expiration))]);
-  return finalizeEvent(
+  return finalizePowEvent(
     {
       kind: opts?.ephemeral ? KIND_WRAP_EPHEMERAL : KIND_WRAP,
       content: encryptChecked(stream.convKey, JSON.stringify(seal)),
@@ -329,7 +330,7 @@ export function openWrap(wrap: NostrRumor, stream: StreamKeyView): OpenedWireEve
  * Only meaningful for plaintext seals, whose signature survives the re-wrap;
  * the seal object's `content` string is carried forward verbatim.
  */
-export function rewrapSeal(seal: NostrEvent, targetStream: GroupKey): NostrEvent {
+export function rewrapSeal(seal: NostrEvent, targetStream: GroupKey): Promise<NostrEvent> {
   if (seal.kind !== KIND_SEAL_PLAINTEXT) {
     throw new StreamError("bad-seal-kind", "only plaintext seals survive a re-wrap");
   }

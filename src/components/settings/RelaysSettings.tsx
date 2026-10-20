@@ -19,12 +19,16 @@ import { useSearchRelayList } from "@/hooks/useSearchRelayList";
 import { FormattedMessage, useIntl } from "@/i18n";
 import { APP_BLOSSOM_SERVERS, uploadTargets } from "@/lib/blossom";
 import { APP_RELAYS, BROADCAST_RELAYS, COMMUNITY_RELAYS, SEARCH_RELAYS } from "@/lib/platform";
+import { defaultPowDifficulty } from "@/lib/pow";
 import { cn } from "@/lib/utils";
 
 import type { ReactNode } from "react";
 
 /** The lists Settings › Relays shows, in the signup wizard's order and with its names. */
 type RelayRow = "home" | "dm" | "search" | "blossom" | "community" | "broadcast";
+
+/** Bits offered besides the deployment default; at 20 a 1 KB message already takes seconds on a desktop. */
+const POW_CHOICES = [0, 4, 8, 12, 16, 20];
 
 /** Mono URL list for prose: hosts joined by commas. */
 function hostList(urls: string[]): ReactNode {
@@ -131,6 +135,11 @@ export function RelaysSettings() {
     userRelayUrls.every((url) => config.appRelays.includes(url));
   const publishedOpen = searching || publishedListOpen;
   const connectTo = intl.formatMessage({ id: "relaysSettings.connectTo", defaultMessage: "Connect to" });
+  const proofOfWork = intl.formatMessage({ id: "relaysSettings.proofOfWork", defaultMessage: "Proof of work" });
+
+  const setPowChoice = (value: string) => {
+    updateConfig((current) => ({ ...current, powDifficulty: value === "default" ? undefined : Number(value) }));
+  };
 
   return (
     <>
@@ -306,6 +315,32 @@ export function RelaysSettings() {
               <SelectItem value="both" disabled={userRelayUrls.length === 0}>
                 <FormattedMessage id="relaysSettings.both" defaultMessage="Both" />
               </SelectItem>
+            </SelectContent>
+          </Select>
+        </SettingsRow>
+        <SettingsRow
+          label={proofOfWork}
+          info={intl.formatMessage({ id: "relaysSettings.proofOfWorkInfo", defaultMessage: "Work this device does before sending anything, so relays that ask for it accept your posts and messages (NIP-13). Each extra bit doubles how long that takes." })}
+        >
+          <Select value={config.powDifficulty === undefined ? "default" : String(config.powDifficulty)} onValueChange={setPowChoice}>
+            <SelectTrigger className="w-44 sm:w-52" aria-label={proofOfWork}>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="default">
+                <FormattedMessage
+                  id="relaysSettings.proofOfWorkDefault"
+                  defaultMessage="Default ({bits, plural, =0 {off} one {# bit} other {# bits}})"
+                  values={{ bits: defaultPowDifficulty() }}
+                />
+              </SelectItem>
+              {POW_CHOICES.map((bits) => (
+                <SelectItem key={bits} value={String(bits)}>
+                  {bits === 0
+                    ? <FormattedMessage id="relaysSettings.proofOfWorkOff" defaultMessage="Off" />
+                    : <FormattedMessage id="relaysSettings.proofOfWorkBits" defaultMessage="{bits, plural, one {# bit} other {# bits}}" values={{ bits }} />}
+                </SelectItem>
+              ))}
             </SelectContent>
           </Select>
         </SettingsRow>

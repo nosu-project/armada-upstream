@@ -139,10 +139,12 @@ import { useSyncTopicState } from "@/sync/useSyncTopic";
 import { concordChannelMuteKey, useMutes } from "@/hooks/useMutes";
 import { useNotifLevels, concordChannelScopeKey } from "@/hooks/useNotifLevels";
 import { concordThreadReadKey, useReadState } from "@/hooks/useReadState";
+import { useIsBlocked } from "@/lib/blocklistStore";
 import { usePageCovered } from "@/lib/settingsOverlay";
 import { NotifLevelMenu } from "@/components/NotifLevelMenu";
 import { toast } from "@/hooks/useToast";
 import { common, FormattedMessage, t, useIntl } from "@/i18n";
+import { CommunityBlocked } from "@/concord/components/CommunityBlocked";
 import { CommunityNoAccess } from "@/concord/components/CommunityNoAccess";
 import { useCommunity, useCommunityList, useIsExcluded } from "@/concord/hooks/useCommunityList";
 import { channelDecodeDeadEnd } from "@/concord/lib/channelSync";
@@ -998,10 +1000,24 @@ function TimerNotice({ author, seconds, self }: { author: string; seconds: numbe
 }
 
 /**
- * A Concord community (CORD-01..06) at `/c/:communityId`, rehydrated from the
- * Community List and rendered through the same chat components as NIP-29/DMs.
+ * A Concord community (CORD-01..06) at `/c/:communityId`, or
+ * {@link CommunityBlocked} for one on the blocklist, checked before the
+ * community page mounts so none of its hooks read, sync or announce anything.
  */
 export function ConcordPage() {
+  const { pathname } = useLocation();
+  const isBlocked = useIsBlocked();
+  const route = parseChatRoute(pathname);
+  const communityId = route?.kind === "concord" ? route.communityId : undefined;
+  if (communityId && isBlocked(communityId)) return <CommunityBlocked />;
+  return <ConcordCommunityPage />;
+}
+
+/**
+ * A Concord community rehydrated from the Community List and rendered through
+ * the same chat components as NIP-29/DMs.
+ */
+function ConcordCommunityPage() {
   // Parsed via `parseChatRoute` (panes are static segments with no params), the
   // same parse the builder and notifications use.
   const location = useLocation();

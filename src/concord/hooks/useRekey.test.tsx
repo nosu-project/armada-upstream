@@ -216,7 +216,7 @@ async function rotationWraps(
     publishMs,
     authority,
   )) {
-    wraps.push(wrapSeal(await sealRumor(rumor, KIND_SEAL_ENCRYPTED, address, rotator), address));
+    wraps.push(await wrapSeal(await sealRumor(rumor, KIND_SEAL_ENCRYPTED, address, rotator), address));
   }
   return wraps;
 }
@@ -339,7 +339,7 @@ async function channelRotationWraps(
     publishMs,
     authority,
   )) {
-    wraps.push(wrapSeal(await sealRumor(rumor, KIND_SEAL_ENCRYPTED, address, rotator), address));
+    wraps.push(await wrapSeal(await sealRumor(rumor, KIND_SEAL_ENCRYPTED, address, rotator), address));
   }
   return wraps;
 }

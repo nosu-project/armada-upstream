@@ -16,10 +16,10 @@ import { hkdf } from "@noble/hashes/hkdf.js";
 import { hmac } from "@noble/hashes/hmac.js";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
-import { NSecSigner } from "@nostrify/nostrify";
 import { getConversationKey } from "nostr-tools/nip44";
 
 import { DM_CONVERSATION_INDEX_BUCKETS } from "@/lib/dmConversationIndex";
+import { PowNSecSigner } from "@/lib/pow";
 import { SETTINGS_DOC_NAMES, type SettingsDocName } from "@/lib/settingsDocNames";
 
 const SALT = new TextEncoder().encode("armada-nip78/v1");
@@ -36,7 +36,7 @@ export interface DerivedDoc {
   secretKey: Uint8Array;
   pubkey: string;
   d: string;
-  signer: NSecSigner;
+  signer: PowNSecSigner;
 }
 
 export interface SettingsKeyring {
@@ -86,7 +86,7 @@ function deriveDoc(root: Uint8Array, ref: DerivedDocRef): DerivedDoc {
     secretKey,
     pubkey: bytesToHex(schnorr.getPublicKey(secretKey)),
     d: deriveDTag(root, label),
-    signer: new NSecSigner(secretKey),
+    signer: new PowNSecSigner(secretKey),
   };
 }
 

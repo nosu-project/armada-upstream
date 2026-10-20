@@ -113,7 +113,7 @@ describe("control_root split (CORD-02 §2)", () => {
         generateSecretKey(),
       );
     })();
-    const forged = wrapSeal(seal, {
+    const forged = await wrapSeal(seal, {
       sk: mallorySigner.sk,
       pk: community.controlPk!, // claim the split address…
       get convKey() {

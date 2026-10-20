@@ -935,7 +935,7 @@ describe("control plane fold (CORD-04)", () => {
     // Seal a well-formed metadata edition, but with the wrong (encrypted) seal.
     const rumor = buildMetadataEdition(communityId, { name: "Encrypted", relays: [] }, { actorPubkey: owner.pubkey, version: 1n });
     const seal = await sealRumor(rumor, KIND_SEAL_ENCRYPTED, control, owner);
-    const wrap = wrapSeal(seal, control);
+    const wrap = await wrapSeal(seal, control);
 
     const folded = foldControlState(openControlWraps([wrap], [control]), communityId, owner.pubkey);
     expect(folded.metadata).toBeUndefined(); // an encrypted-seal edition never enters the fold
@@ -949,7 +949,7 @@ describe("control plane fold (CORD-04)", () => {
     const tampered = { ...good, content: JSON.stringify({ name: "x".repeat(65), relays: [] }) };
     const rehashed = { ...tampered, id: getEventHash(tampered) };
     const seal = await sealRumor(rehashed, KIND_SEAL_PLAINTEXT, control, owner);
-    const wrap = wrapSeal(seal, control);
+    const wrap = await wrapSeal(seal, control);
 
     const folded = foldControlState(openControlWraps([wrap], [control]), communityId, owner.pubkey);
     expect(folded.metadata).toBeUndefined();
@@ -1451,7 +1451,7 @@ describe("control plane fold (CORD-04)", () => {
 
     // Refounding: re-wrap ONLY the head into epoch 1 (plaintext seal survives).
     const control1 = controlGroupKey(root, communityId, 1); // (test shortcut: same root, new epoch address)
-    const rewrapped = rewrapSeal(p2.opened.seal!, control1);
+    const rewrapped = await rewrapSeal(p2.opened.seal!, control1);
 
     const joinerView = openControlWraps([rewrapped], [control1]);
     const folded = foldControlState(joinerView, communityId, owner.pubkey);
@@ -1523,7 +1523,7 @@ describe("control plane fold (CORD-04)", () => {
 
     // e2 Refounding: compaction re-wraps the head (v3) under the new epoch.
     const control2 = controlGroupKey(root, communityId, 2);
-    const rewrapped = rewrapSeal(p3.opened.seal!, control2);
+    const rewrapped = await rewrapSeal(p3.opened.seal!, control2);
 
     // The rejoiner's readable view: e0 fragment + e2 snapshot; e1 is dark.
     const view = [...openControlWraps([w1], [control]), ...openControlWraps([rewrapped], [control2])];
@@ -1541,7 +1541,7 @@ describe("control plane fold (CORD-04)", () => {
     // A hostile keyholder re-wraps the OLD banning edition into the current
     // epoch to poison the subset. Version anchoring defeats it: a re-wrap
     // can't raise the version inside the signed seal, so v1 loses to v3.
-    const poison = rewrapSeal(p1.opened.seal!, control2);
+    const poison = await rewrapSeal(p1.opened.seal!, control2);
     const poisonedView = [...view, ...openControlWraps([poison], [control2])];
     const poisonedSnap = new Set([bytesToHex(p3.rumorId), bytesToHex(p1.rumorId)]);
     const resistant = foldControlState(poisonedView, communityId, owner.pubkey, undefined, poisonedSnap);
@@ -1565,7 +1565,7 @@ describe("control plane fold (CORD-04)", () => {
     const b3 = buildBanlistEdition(communityId, [], { actorPubkey: owner.pubkey, version: 3n, prevHash: p2.selfHash });
     const p3 = openControlWraps([await sealEdition(b3, control1, owner)], [control1])[0];
     const control2 = controlGroupKey(root, communityId, 2);
-    const rewrapped = rewrapSeal(p3.opened.seal!, control2);
+    const rewrapped = await rewrapSeal(p3.opened.seal!, control2);
 
     // Fold 1: only the old fragment is readable; no current-epoch editions yet.
     const first = foldControlState(
@@ -1595,7 +1595,7 @@ describe("control plane fold (CORD-04)", () => {
     const m2 = buildMetadataEdition(communityId, { name: "Two", relays: [] }, { actorPubkey: owner.pubkey, version: 2n, prevHash: p1.selfHash });
     const w2 = await sealEdition(m2, control, owner);
     const control1 = controlGroupKey(root, communityId, 1);
-    const poison = rewrapSeal(p1.opened.seal!, control1);
+    const poison = await rewrapSeal(p1.opened.seal!, control1);
 
     // View: the store's full e0 chain + the poison; only the poison is
     // current-epoch-attributed.
@@ -1616,14 +1616,14 @@ describe("control plane fold (CORD-04)", () => {
     const m2 = buildMetadataEdition(communityId, { name: "Two", relays: [] }, { actorPubkey: owner.pubkey, version: 2n, prevHash: p1.selfHash });
     const p2 = openControlWraps([await sealEdition(m2, control, owner)], [control])[0];
     const control1 = controlGroupKey(root, communityId, 1);
-    const rewrapV2 = rewrapSeal(p2.opened.seal!, control1);
+    const rewrapV2 = await rewrapSeal(p2.opened.seal!, control1);
     const snapView = openControlWraps([rewrapV2], [control1]);
     const tracked = foldControlState(snapView, communityId, owner.pubkey, undefined, new Set([bytesToHex(p2.rumorId)]));
     expect(tracked.metadata?.name).toBe("Two");
 
     // The relay then serves only a re-wrap of the OLD v1: nothing at/above the
     // floor remains — the entity holds (no downgrade) and flags incomplete.
-    const rewrapV1 = rewrapSeal(p1.opened.seal!, control1);
+    const rewrapV1 = await rewrapSeal(p1.opened.seal!, control1);
     const starved = foldControlState(
       openControlWraps([rewrapV1], [control1]),
       communityId,
@@ -1901,7 +1901,7 @@ describe("dissolution (CORD-02 §9)", () => {
     // anyone from Y's public id, and rewrapSeal is already in the codebase
     // because compaction needs it.
     const openedX = openWrap(tombstoneX, dissolvedGroupKey(x));
-    const replayed = rewrapSeal(openedX.seal, dissolvedGroupKey(y));
+    const replayed = await rewrapSeal(openedX.seal, dissolvedGroupKey(y));
 
     expect(
       isDissolved([replayed], y, owner.pubkey),
@@ -1924,7 +1924,7 @@ describe("dissolution (CORD-02 §9)", () => {
       ms: null,
     });
     const seal = await sealRumor(legacy, KIND_SEAL_PLAINTEXT, group, owner);
-    expect(isDissolved([wrapSeal(seal, group)], communityId, owner.pubkey)).toBe(false);
+    expect(isDissolved([await wrapSeal(seal, group)], communityId, owner.pubkey)).toBe(false);
   });
 });
 

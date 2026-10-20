@@ -96,7 +96,7 @@ function wrapper({ children }: { children: ReactNode }) {
 }
 
 /** A live invite to a freshly minted community, and a pool that vends its bundle. */
-function liveInvite(ownerPubkey: string) {
+async function liveInvite(ownerPubkey: string) {
   const { community } = mintCommunity("Fleet", ownerPubkey, [RELAY]);
   const bundle: InviteBundle = {
     community_id: community.idHex,
@@ -111,7 +111,7 @@ function liveInvite(ownerPubkey: string) {
   } as InviteBundle;
   const token = mintToken();
   const link = mintLinkSigner();
-  const event = buildBundleEvent(bundle, token, link.sk);
+  const event = await buildBundleEvent(bundle, token, link.sk);
   const invite = parseInviteLink(buildInviteUrl("https://armada.test", link.pk, token, [RELAY]))!;
   h.nostr = {
     relay: () => ({
@@ -194,7 +194,7 @@ describe("dissolve — ordering", () => {
 describe("a dissolved community can't be previewed or joined", () => {
   it("preview refuses with DissolvedCommunityError", async () => {
     h.user = signer();
-    const { invite } = liveInvite(signer().pubkey);
+    const { invite } = await liveInvite(signer().pubkey);
     h.graveAt = Date.now();
 
     const { result } = renderHook(() => useCommunityActions(), { wrapper });
@@ -203,7 +203,7 @@ describe("a dissolved community can't be previewed or joined", () => {
 
   it("join refuses with DissolvedCommunityError and records nothing", async () => {
     h.user = signer();
-    const { invite } = liveInvite(signer().pubkey);
+    const { invite } = await liveInvite(signer().pubkey);
     h.graveAt = Date.now();
 
     const { result } = renderHook(() => useCommunityActions(), { wrapper });
@@ -213,7 +213,7 @@ describe("a dissolved community can't be previewed or joined", () => {
 
   it("a live community previews and joins", async () => {
     h.user = signer();
-    const { invite, bundle } = liveInvite(signer().pubkey);
+    const { invite, bundle } = await liveInvite(signer().pubkey);
 
     const { result } = renderHook(() => useCommunityActions(), { wrapper });
     const preview = await result.current.preview({ invite });

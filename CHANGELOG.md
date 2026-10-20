@@ -4,6 +4,56 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.66.5] - 2026-10-20
+
+A blocked community's page now fills the whole pane, and bundled dependencies
+are updated with security fixes.
+
+### Fixed
+- A blocked community's page fills the whole pane instead of a narrow column
+
+### Changed
+- Update bundled dependencies with security fixes
+
+## [0.66.4] - 2026-10-20
+
+Opening a community Armada has blocked, whether from the sidebar or an invite
+link, now shows its ship struck down by a bolt from the heavens and blown to
+pieces.
+
+### Changed
+- A blocked community's page and invite links show an animated scene of its ship struck by lightning and wrecked (the settled wreck when reduced motion is on)
+
+## [0.66.3] - 2026-10-20
+
+Communities that Armada has blocked for violating its content policy can no
+longer be previewed, joined or opened, and they drop out of the sidebar and
+notifications.
+
+### Changed
+- Communities blocked under Armada's content policy can't be opened or joined; their page explains they are unavailable, and they leave the sidebar, badges and notifications until the block is lifted
+
+## [0.66.2] - 2026-10-20
+
+Background notifications in the web app are turned off on iPhone, iPad and
+Safari on macOS, which no longer show "Messages synced" alerts for pushes with
+nothing new in them.
+
+### Changed
+- Background notifications are no longer offered in the web app on iPhone, iPad or Safari on macOS; Safari on macOS still shows notifications while Armada is open, and existing subscriptions on those browsers are removed
+
+## [0.66.1] - 2026-10-20
+
+Relay settings gain an optional proof-of-work setting for relays that ask
+for it, and revoking a role that grants a private channel now locks its
+former holders out of that channel.
+
+### Added
+- An optional proof-of-work difficulty in relay settings, off by default, for relays that require it to accept posts
+
+### Fixed
+- Revoking a role that grants access to a private channel now rotates the channel's key, so former holders can no longer read new messages
+
 ## [0.66.0] - 2026-10-19
 
 Armada now speaks German, Spanish, French, Italian, Dutch and Japanese. The

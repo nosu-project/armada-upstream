@@ -95,7 +95,7 @@ const SignupDialog: React.FC<SignupDialogProps> = ({ isOpen, onClose, onComplete
 
   // Fresh key only: the sanctioned signup list publish, of the default lists.
   const finishOnboarding = () => {
-    signupLists.publish(signupKey.nsec, setup, profileRef.current);
+    void signupLists.publish(signupKey.nsec, setup, profileRef.current);
     setOnboardingActive(false);
     onComplete?.();
     onClose();

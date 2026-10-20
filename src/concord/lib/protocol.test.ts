@@ -97,7 +97,7 @@ describe("Concord end to end", () => {
       name: "Test Fleet",
       creator_npub: owner.pubkey,
     };
-    const bundleEvent = buildBundleEvent(bundle, token, link.sk);
+    const bundleEvent = await buildBundleEvent(bundle, token, link.sk);
     const url = buildInviteUrl("https://armada.example.com", link.pk, token, ownerCommunity.relays);
 
     // ── 3. Alice + Mallory follow the link and join.
@@ -148,7 +148,7 @@ describe("Concord end to end", () => {
         pubkey: who.pubkey,
         ms: Date.now(),
       });
-      wire.push(wrapSeal(await sealRumor(rumor, KIND_SEAL_ENCRYPTED, general.current.group, who), general.current.group));
+      wire.push(await wrapSeal(await sealRumor(rumor, KIND_SEAL_ENCRYPTED, general.current.group, who), general.current.group));
     }
     const ownerChannels = channelsView(ownerCommunity, aliceFold);
     const chatWraps = wire.filter((e) => e.pubkey === general.current.group.pk);
@@ -185,7 +185,7 @@ describe("Concord end to end", () => {
       blobs,
       Date.now(),
     )) {
-      wire.push(wrapSeal(await sealRumor(rumor, KIND_SEAL_ENCRYPTED, rekeyAddress, owner), rekeyAddress));
+      wire.push(await wrapSeal(await sealRumor(rumor, KIND_SEAL_ENCRYPTED, rekeyAddress, owner), rekeyAddress));
     }
 
     // Compaction: re-wrap the control heads (fresh fold first) into epoch 1.
@@ -208,7 +208,7 @@ describe("Concord end to end", () => {
     const control1 = currentControlWriteGroup(rotatedOwner);
     expect(control1.pk).toBe(newControlPk);
     for (const head of ownerFold.headEditions.values()) {
-      wire.push(rewrapSeal(head.opened.seal!, control1));
+      wire.push(await rewrapSeal(head.opened.seal!, control1));
     }
 
     // ── 7. Alice receives the rotation: authorized, continuous, carries her blob.
@@ -293,7 +293,7 @@ describe("Concord end to end", () => {
       ms: Date.now(),
     });
     const e1group = aliceChannels[0].streams.find((s) => s.epoch === 1n)!.group;
-    const e1wrap = wrapSeal(await sealRumor(rumor, KIND_SEAL_ENCRYPTED, e1group, alice), e1group);
+    const e1wrap = await wrapSeal(await sealRumor(rumor, KIND_SEAL_ENCRYPTED, e1group, alice), e1group);
     const malloryChannels = channelsView(
       { ...aliceCommunity, privateChannels: [] }, // Mallory still holds only epoch 0
       foldControlState(
@@ -345,7 +345,7 @@ describe("Concord end to end", () => {
     });
     // The addressable coordinate (33301, link_signer, d=""); the newest event at
     // it wins. A refresh replaces it (CORD-05 §2).
-    const coordinate: NostrEvent[] = [buildBundleEvent(bundleAtEpoch(e0), token, link.sk)];
+    const coordinate: NostrEvent[] = [await buildBundleEvent(bundleAtEpoch(e0), token, link.sk)];
     const url = buildInviteUrl("https://armada.example.com", link.pk, token, e0.relays);
 
     // ── 2. The owner Refounds to epoch 1 (ban/convert): newEpoch = rootEpoch+1,
@@ -381,7 +381,7 @@ describe("Concord end to end", () => {
     // ── 3b. THE FIX: the Refounding re-posts every live bundle at the current
     // keys via the production helper. `created_at` must exceed the stale event so
     // the newest-wins coordinate serves it.
-    const refreshed = buildRefreshedBundleEvents(bundleAtEpoch(rotatedOwner), [inviteEntry]).map((e) => ({
+    const refreshed = (await buildRefreshedBundleEvents(bundleAtEpoch(rotatedOwner), [inviteEntry])).map((e) => ({
       ...e,
       created_at: e.created_at + 10,
     }));

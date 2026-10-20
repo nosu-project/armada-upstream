@@ -16,8 +16,10 @@
  */
 
 import { getConversationKey, encrypt as nip44Encrypt } from "nostr-tools/nip44";
-import { finalizeEvent, generateSecretKey, getEventHash } from "nostr-tools/pure";
+import { generateSecretKey, getEventHash } from "nostr-tools/pure";
 import type { EventTemplate, NostrEvent, UnsignedEvent } from "nostr-tools/pure";
+
+import { finalizePowEvent } from "@/lib/pow";
 
 import type { NostrRumor } from "@/lib/nostrRumor";
 
@@ -309,14 +311,14 @@ export function wrapDmSeal(
   seal: NostrEvent,
   recipientPk: string,
   opts?: { firstContact?: boolean; expiresAt?: number },
-): NostrEvent {
+): Promise<NostrEvent> {
   const wrapSk = generateSecretKey();
   const convKey = getConversationKey(wrapSk, recipientPk);
   const tags: string[][] = [["p", recipientPk]];
   // First-contact hint for k-aware inbox indexing; omitted afterwards to avoid leaking the inner kind.
   if (opts?.firstContact) tags.push(["k", String(KIND_DM_CHAT)]);
   // The outer NIP-40 tag is the only expiry a relay can act on.
-  return finalizeEvent(
+  return finalizePowEvent(
     {
       kind: KIND_DM_WRAP,
       content: nip44Encrypt(JSON.stringify(seal), convKey),
@@ -332,9 +334,9 @@ export function wrapDmSeal(
  * never stored, is stale after {@link TYPING_WINDOW_SECS}, and some relays drop
  * far-past events.
  */
-export function wrapDmSealEphemeral(seal: NostrEvent, recipientPk: string): NostrEvent {
+export function wrapDmSealEphemeral(seal: NostrEvent, recipientPk: string): Promise<NostrEvent> {
   const wrapSk = generateSecretKey();
-  return finalizeEvent(
+  return finalizePowEvent(
     {
       kind: KIND_DM_WRAP_EPHEMERAL,
       content: nip44Encrypt(JSON.stringify(seal), getConversationKey(wrapSk, recipientPk)),

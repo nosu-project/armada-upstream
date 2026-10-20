@@ -7,15 +7,30 @@ export interface WebPushCapabilities {
   secureContext: boolean;
   serviceWorker: boolean;
   pushManager: boolean;
+  /** WebKit's Push API (iOS/iPadOS, Safari on macOS). */
+  webkit: boolean;
 }
 
 export type WebPushUnavailableReason =
   | "native-runtime"
   | "desktop"
   | "gateway"
+  | "webkit"
   | "insecure-context"
   | "service-worker"
   | "push-manager";
+
+/**
+ * Whether this browser's Web Push is WebKit's: every iOS browser, and Safari on
+ * macOS. WebKit revokes a subscription whose pushes show nothing, so each push
+ * that decrypts to no news would still have to post a notification.
+ */
+export function isWebKitPush(userAgent: string, maxTouchPoints = 0): boolean {
+  if (/iPad|iPhone|iPod/.test(userAgent)) return true;
+  if (/Macintosh/.test(userAgent) && maxTouchPoints > 1) return true;
+  return /Version\/[\d.]+.*Safari\//.test(userAgent)
+    && !/Chrome|Chromium|CriOS|Edg|OPR|Firefox|FxiOS/.test(userAgent);
+}
 
 /** Read browser capabilities without throwing in SSR/tests. */
 export function webPushCapabilities(): WebPushCapabilities {
@@ -23,6 +38,8 @@ export function webPushCapabilities(): WebPushCapabilities {
     secureContext: typeof isSecureContext === "undefined" || isSecureContext,
     serviceWorker: typeof navigator !== "undefined" && "serviceWorker" in navigator,
     pushManager: typeof window !== "undefined" && "PushManager" in window,
+    webkit: typeof navigator !== "undefined"
+      && isWebKitPush(navigator.userAgent, navigator.maxTouchPoints),
   };
 }
 
@@ -31,6 +48,7 @@ export function webPushUnavailableReason(
   gatewayConfigured: boolean,
   capabilities: WebPushCapabilities = webPushCapabilities(),
 ): WebPushUnavailableReason | undefined {
+  if (capabilities.webkit) return "webkit";
   if (!gatewayConfigured) return "gateway";
   if (!capabilities.secureContext) return "insecure-context";
   if (!capabilities.serviceWorker) return "service-worker";

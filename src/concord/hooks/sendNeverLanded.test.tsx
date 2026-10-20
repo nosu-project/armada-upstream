@@ -167,7 +167,7 @@ async function publishInvite() {
   const bundle = { ...jm, channels: [], relays: community.relays, name: "Developer's Quarters" };
   const link = mintLinkSigner();
   const token = mintToken();
-  relayAt(BOOTSTRAP).stored.push(buildBundleEvent(bundle, token, link.sk));
+  relayAt(BOOTSTRAP).stored.push(await buildBundleEvent(bundle, token, link.sk));
   const invite = { linkSigner: link.pk, token, bootstrapRelays: [BOOTSTRAP], naddr: bundleNaddr(link.pk) };
   return { community, invite };
 }

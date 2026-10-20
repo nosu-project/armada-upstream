@@ -265,7 +265,7 @@ export function DmCallProvider({ children }: { children: React.ReactNode }) {
         const floor = inbox === null ? [] : inviteDeliveryRelays(inbox);
         const targets = [...new Set([...floor, ...myRelaysRef.current])];
         if (targets.length === 0) return false;
-        const wrap = wrapDmSealEphemeral(await sealDmRumor(rumor, peer, signer), peer);
+        const wrap = await wrapDmSealEphemeral(await sealDmRumor(rumor, peer, signer), peer);
         const results = await Promise.allSettled(
           targets.map((url) => nostr.relay(url).event(wrap, { signal: AbortSignal.timeout(8000) })),
         );
@@ -276,7 +276,7 @@ export function DmCallProvider({ children }: { children: React.ReactNode }) {
       // a few times verbatim (siblings dedupe by rumor id).
       if (selfCopy) void (async () => {
         try {
-          const selfWrap = wrapDmSealEphemeral(
+          const selfWrap = await wrapDmSealEphemeral(
             await sealDmRumor(rumor, user.pubkey, signer),
             user.pubkey,
           );

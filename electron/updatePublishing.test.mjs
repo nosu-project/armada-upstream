@@ -87,23 +87,13 @@ describe("desktop update publication", () => {
     );
   });
 
-  it("uploads the built installers as run artifacts, the Flatpak among the Linux set", () => {
-    const uploads = desktopSteps.filter(
-      (step) => step.uses === "actions/upload-artifact@v4",
+  // ngit-ci caps a run's exported artifacts at 256 MiB in total; the desktop
+  // installers are ~1 GB, so uploading them fails the run after it published.
+  it("does not upload the desktop installers as run artifacts", () => {
+    const uploads = desktopSteps.filter((step) =>
+      String(step.uses || "").startsWith("actions/upload-artifact"),
     );
-    // Three platform sets plus the failure fallback.
-    expect(uploads.length).toBe(4);
-
-    const linux = uploads.find((step) =>
-      String(step.with?.name || "").includes("linux"),
-    );
-    expect(linux.with.path).toContain(".flatpak");
-    expect(linux.with["if-no-files-found"]).toBe("error");
-
-    const failure = uploads.find((step) => step.if === "failure()");
-    expect(failure).toBeDefined();
-    expect(failure.with["if-no-files-found"]).toBe("warn");
-    expect(failure.with.path).toContain("electron/release/");
+    expect(uploads).toEqual([]);
   });
 
   // One writer of the release event, after every build. Kind 30622 is

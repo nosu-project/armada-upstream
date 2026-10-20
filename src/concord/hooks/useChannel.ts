@@ -923,7 +923,7 @@ export function useSendMessage(community: Community | undefined, channel: Channe
         throw err; // reactions/edits/deletes: callers own the rollback
       }
       logSync("send", `sealed ${rumor.id.slice(0, 8)} in ${sinceMs(sealStarted)} — wrapping + broadcasting to ${community.relays.length} relay(s)`);
-      const wrap = wrapSeal(seal, channel.current.group, expiresAt !== undefined ? { expiration: expiresAt } : undefined);
+      const wrap = await wrapSeal(seal, channel.current.group, expiresAt !== undefined ? { expiration: expiresAt } : undefined);
 
       // The wrap is authored by the stream key, so mark it ours before its push arrives.
       await markOwnWebPushEvent(wrap.id);
@@ -996,7 +996,7 @@ export function useMessageActions(community: Community | undefined, channel: Cha
             // Mirror the rumor's NIP-40 onto the re-wrap (CORD-08 §2).
             const expTag = record.tags.find((t) => t[0] === "expiration")?.[1];
             const expiration = expTag !== undefined && /^[0-9]+$/.test(expTag) ? Number(expTag) : undefined;
-            wrap = wrapSeal(seal, channel.current.group, expiration !== undefined ? { expiration } : undefined);
+            wrap = await wrapSeal(seal, channel.current.group, expiration !== undefined ? { expiration } : undefined);
             await markOwnWebPushEvent(wrap.id);
             // Persist so a mid-flight refresh keeps it.
             writeRumors(community.idHex, [{ ...msg, seal, wrapId: wrap.id, streamPk: wrap.pubkey }], { local: true });

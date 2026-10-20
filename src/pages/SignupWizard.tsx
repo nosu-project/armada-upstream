@@ -74,7 +74,7 @@ export function SignupWizard({ onExit }: SignupWizardProps) {
   // provably no existing list to overwrite. Closing the profile step finishes
   // too. Then exit onto Discover: browsing live communities beats a blank form.
   const finishOnboarding = () => {
-    signupLists.publish(signupKey.nsec, setup, profileRef.current);
+    void signupLists.publish(signupKey.nsec, setup, profileRef.current);
     navigate("/discover");
   };
 

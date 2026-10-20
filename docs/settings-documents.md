@@ -30,7 +30,9 @@ read/write hook is `src/hooks/useSettingsDoc.ts`. The root is
 
 `d = ${APP_ID}`, and **no other tag** — no `client`, `title` or `published_at`,
 which is why it is signed directly with the user's signer rather than through
-`useNostrPublish`. Content is NIP-44 to self over a plaintext that is always
+`useNostrPublish`. The one addition is the NIP-13 `nonce` every published
+event gets from the signer (`src/lib/pow.ts`); its target is the device's
+proof-of-work setting, which the derived documents carry too. Content is NIP-44 to self over a plaintext that is always
 exactly `ROOT_PLAINTEXT_BYTES` (512):
 
 ```json
