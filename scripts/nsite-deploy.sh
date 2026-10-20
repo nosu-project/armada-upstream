@@ -24,7 +24,9 @@
 #              Each run is bounded by `timeout`, and a failed run is retried
 #              WITHOUT the servers its log names as failing, so a server that
 #              passed the probe and then rejected or stalled uploads is dropped
-#              on the retry rather than allowed to fail it again.
+#              on the retry rather than allowed to fail it again. A server that
+#              stalled without the log naming it is found by asking each
+#              server which of the site's blobs it holds.
 #   mirroring  Every run is `--sync`: nsyte HEAD-checks every file of the site
 #              on every server it was given and uploads the ones missing. That
 #              is what backfills a server that was dropped, or down, during an
@@ -116,6 +118,29 @@ blamed_servers() {
   printf '%s' "$out"
 }
 
+# Servers holding fewer of the site's blobs than the best one. A server can
+# stall uploads without nsyte logging a single failure (blossom.dreamith.to
+# behind Cloudflare: HEADs answer, PUTs hang to a 524), so when the log blames
+# nobody, ask every server which of the files it now has.
+lagging_servers() {
+  local dir="$1" list="$2" hashes s n best=0 out=""
+  hashes="$(mktemp)"
+  find "$dir" -type f -print0 | xargs -0 sha256sum | cut -d' ' -f1 | sort -u >"$hashes"
+  declare -A held
+  IFS=, read -r -a arr <<<"$list"
+  for s in "${arr[@]}"; do
+    n="$(xargs -P 16 -I{} curl -s -o /dev/null -w '%{http_code}\n' --connect-timeout 5 --max-time 10 -I "${s%/}/{}" <"$hashes" | grep -c '^200$' || true)"
+    held["$s"]="$n"
+    echo "nsite-deploy: $s holds $n/$(wc -l <"$hashes") of the site's blobs" >&2
+    [ "$n" -gt "$best" ] && best="$n"
+  done
+  rm -f "$hashes"
+  for s in "${arr[@]}"; do
+    [ "${held[$s]}" -lt "$best" ] && out="${out:+$out,}$s"
+  done
+  printf '%s' "$out"
+}
+
 without() {
   local list="$1" drop="$2" out="" s
   IFS=, read -r -a arr <<<"$list"
@@ -183,6 +208,7 @@ for attempt in $(seq 1 "$attempts"); do
 
   if [ "$attempt" -lt "$attempts" ]; then
     blamed="$(blamed_servers "$log" "$servers_now")"
+    [ -n "$blamed" ] || blamed="$(lagging_servers "$dir" "$servers_now")"
     if [ -n "$blamed" ]; then
       narrowed="$(without "$servers_now" "$blamed")"
       if [ -n "$narrowed" ]; then
