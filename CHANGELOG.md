@@ -4,6 +4,15 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.66.2] - 2026-10-20
+
+Background notifications in the web app are turned off on iPhone, iPad and
+Safari on macOS, which no longer show "Messages synced" alerts for pushes with
+nothing new in them.
+
+### Changed
+- Background notifications are no longer offered in the web app on iPhone, iPad or Safari on macOS; Safari on macOS still shows notifications while Armada is open, and existing subscriptions on those browsers are removed
+
 ## [0.66.1] - 2026-10-20
 
 Relay settings gain an optional proof-of-work setting for relays that ask
