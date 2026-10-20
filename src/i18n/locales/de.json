@@ -2010,7 +2010,6 @@
   "inviteEmbed.signInToJoinDescription": "Erstelle ein Konto oder melde dich an, um diese Einladung anzunehmen.",
   "invitePage.backToBase": "Zurück zur Basis",
   "invitePage.bannedTitle": "Du bist gesperrt",
-  "invitePage.blockedTitle": "Community nicht verfügbar",
   "invitePage.dissolvedTitle": "Community aufgelöst",
   "invitePage.error.expired": "dieser Einladungslink ist abgelaufen",
   "invitePage.error.joinFailed": "Mit diesem Einladungslink konnte nicht beigetreten werden.",

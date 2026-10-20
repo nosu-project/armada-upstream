@@ -2010,7 +2010,6 @@
   "inviteEmbed.signInToJoinDescription": "Crea una cuenta o inicia sesión para aceptar esta invitación.",
   "invitePage.backToBase": "Volver a la base",
   "invitePage.bannedTitle": "Te han baneado",
-  "invitePage.blockedTitle": "Comunidad no disponible",
   "invitePage.dissolvedTitle": "Comunidad disuelta",
   "invitePage.error.expired": "este enlace de invitación ha caducado",
   "invitePage.error.joinFailed": "No se pudo unir con ese enlace de invitación.",

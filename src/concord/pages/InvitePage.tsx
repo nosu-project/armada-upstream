@@ -12,6 +12,7 @@ import {
   useCommunityActions,
   type InvitePreview,
 } from "@/concord/hooks/useCommunityActions";
+import { CommunityBlocked } from "@/concord/components/CommunityBlocked";
 import { InviteDetail } from "@/concord/pages/InvitesPage";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { toast } from "@/hooks/useToast";
@@ -96,6 +97,17 @@ export function InvitePage() {
     }
   };
 
+  if (blocked) {
+    return (
+      <>
+        <ServerRail />
+        <main className="flex-1 min-w-0">
+          <CommunityBlocked />
+        </main>
+      </>
+    );
+  }
+
   if (error) {
     return (
       <>
@@ -111,8 +123,6 @@ export function InvitePage() {
               <FormattedMessage id="invitePage.bannedTitle" defaultMessage="You’re banned" />
             ) : dissolved ? (
               <FormattedMessage id="invitePage.dissolvedTitle" defaultMessage="Community dissolved" />
-            ) : blocked ? (
-              <FormattedMessage id="invitePage.blockedTitle" defaultMessage="Community unavailable" />
             ) : (
               <FormattedMessage id="invitePage.failedTitle" defaultMessage="Invite link didn’t work" />
             )}

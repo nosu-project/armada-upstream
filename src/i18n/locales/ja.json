@@ -2010,7 +2010,6 @@
   "inviteEmbed.signInToJoinDescription": "この招待を承諾するには、アカウントを作成するかログインしてください。",
   "invitePage.backToBase": "ベースに戻る",
   "invitePage.bannedTitle": "BAN されています",
-  "invitePage.blockedTitle": "コミュニティは利用できません",
   "invitePage.dissolvedTitle": "コミュニティは解散しました",
   "invitePage.error.expired": "この招待リンクは期限切れです",
   "invitePage.error.joinFailed": "その招待リンクでは参加できませんでした。",
