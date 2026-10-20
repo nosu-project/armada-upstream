@@ -1,7 +1,7 @@
 /**
  * "GAME OVER" as 8-bit gothic pixel art, after Deltarune's: tall thin letters
  * barbed with thorns and split by a crack: the theme's primary colour above
- * it, a lighter tint of it below.
+ * it, the same colour nudged toward purple and lifted slightly below.
  */
 
 /** Rows above the crack (row 8) take the primary colour. */
@@ -202,7 +202,9 @@ export function GameOverTitle({ className = "" }: { className?: string }) {
   return (
     <svg
       viewBox={LAYOUT.viewBox}
+      // The attribute is the fallback where relative colour syntax isn't supported.
       fill="color-mix(in srgb, hsl(var(--primary)) 70%, white)"
+      style={{ fill: "hsl(from hsl(var(--primary)) calc(h - 10) s calc(l + 8))" }}
       shapeRendering="crispEdges"
       aria-hidden="true"
       className={className}
