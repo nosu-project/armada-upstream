@@ -4,6 +4,15 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.66.3] - 2026-10-20
+
+Communities that Armada has blocked for violating its content policy can no
+longer be previewed, joined or opened, and they drop out of the sidebar and
+notifications.
+
+### Changed
+- Communities blocked under Armada's content policy can't be opened or joined; their page explains they are unavailable, and they leave the sidebar, badges and notifications until the block is lifted
+
 ## [0.66.2] - 2026-10-20
 
 Background notifications in the web app are turned off on iPhone, iPad and
