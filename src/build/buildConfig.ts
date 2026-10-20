@@ -39,6 +39,8 @@ export const CONFIG_NAMES = [
   "RELEASE_APP_ID",
   // Comma-separated hex pubkeys whose NIP-82 releases are trusted. Unset = Armada's release signer.
   "RELEASE_AUTHORS",
+  // Comma-separated hex pubkeys whose kind-37307 blocklist entries are honoured. Unset = Soapbox's moderation key; empty = no blocklist.
+  "BLOCKLIST_AUTHORS",
   // NIP-13 proof-of-work bits on published events until the user picks their own. Unset = 0 (off).
   "POW_DIFFICULTY",
 ] as const;
