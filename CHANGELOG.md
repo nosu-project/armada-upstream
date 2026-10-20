@@ -4,6 +4,18 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.66.1] - 2026-10-20
+
+Relay settings gain an optional proof-of-work setting for relays that ask
+for it, and revoking a role that grants a private channel now locks its
+former holders out of that channel.
+
+### Added
+- An optional proof-of-work difficulty in relay settings, off by default, for relays that require it to accept posts
+
+### Fixed
+- Revoking a role that grants access to a private channel now rotates the channel's key, so former holders can no longer read new messages
+
 ## [0.66.0] - 2026-10-19
 
 Armada now speaks German, Spanish, French, Italian, Dutch and Japanese. The
