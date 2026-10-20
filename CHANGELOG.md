@@ -4,6 +4,17 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.66.5] - 2026-10-20
+
+A blocked community's page now fills the whole pane, and bundled dependencies
+are updated with security fixes.
+
+### Fixed
+- A blocked community's page fills the whole pane instead of a narrow column
+
+### Changed
+- Update bundled dependencies with security fixes
+
 ## [0.66.4] - 2026-10-20
 
 Opening a community Armada has blocked, whether from the sidebar or an invite
