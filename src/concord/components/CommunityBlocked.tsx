@@ -8,6 +8,7 @@ import {
   wreckQuake,
   wreckRise,
 } from "@/components/brand/ArmadaWreck";
+import { useWreckMusic } from "@/components/brand/useWreckMusic";
 import { Button } from "@/components/ui/button";
 import { FormattedMessage } from "@/i18n";
 
@@ -17,6 +18,8 @@ import { FormattedMessage } from "@/i18n";
  * it is read, synced or announced. Shows nothing about the community.
  */
 export function CommunityBlocked() {
+  useWreckMusic();
+
   return (
     <div
       className={`${WRECK_SCOPE} relative flex h-full min-w-0 flex-1 flex-col items-center justify-center gap-4 overflow-hidden p-8 text-center`}

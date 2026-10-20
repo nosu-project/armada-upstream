@@ -23,7 +23,7 @@ export function CommunityNoAccess() {
     metadata.name || metadata.display_name || intl.formatMessage({ id: "communityNoAccess.anonymous", defaultMessage: "Anonymous" });
 
   return (
-    <div className="flex h-full flex-col items-center justify-center gap-4 p-8 text-center">
+    <div className="flex h-full min-w-0 flex-1 flex-col items-center justify-center gap-4 p-8 text-center">
       <Lock className="size-12 text-muted-foreground/50" />
       <h1 className="text-2xl font-bold">
         <FormattedMessage id="communityNoAccess.title" defaultMessage="You don't have access to this community" />
