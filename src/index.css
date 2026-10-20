@@ -919,14 +919,6 @@ html.theme-bg #root .theme-scope .bg-background {
 .rt-overlay .rt-bold {
   -webkit-text-stroke: 0.03em currentColor;
 }
-.rt-overlay .rt-word {
-  display: inline-block;
-  white-space: pre;
-}
-.rt-overlay .rt-italic {
-  display: inline-block;
-  transform: skewX(-12deg);
-}
 /* The pill's padding is a shadow: real padding would widen the mention. */
 .rt-overlay .rt-mention {
   border-radius: 0.25rem;
@@ -942,9 +934,6 @@ html.theme-bg #root .theme-scope .bg-background {
   box-shadow: 0 0 0 2px hsl(var(--foreground) / 0.12);
   -webkit-box-decoration-break: clone;
   box-decoration-break: clone;
-}
-.rt-overlay .rt-emoji {
-  position: relative;
 }
 .rt-overlay .rt-emoji-img {
   position: absolute;
@@ -964,4 +953,25 @@ html.theme-bg #root .theme-scope .bg-background {
 }
 .rt-overlay .rt-u.rt-s {
   text-decoration-line: underline line-through;
+}
+/* The overlay's text is laid out exactly as the textarea's and never painted;
+ * each line's styled runs are drawn over it as .rt-piece, in their own order. */
+.rt-overlay .rt-inner {
+  -webkit-text-fill-color: transparent;
+  /* The scrollbar gutter that keeps the overlay's text as narrow as the textarea's. */
+  scrollbar-color: transparent transparent;
+}
+.rt-overlay .rt-piece {
+  position: absolute;
+  white-space: pre;
+  text-indent: 0;
+  unicode-bidi: bidi-override;
+  -webkit-text-fill-color: currentColor;
+}
+.rt-overlay .rt-italic {
+  transform: skewX(-12deg);
+}
+.rt-overlay .rt-inner::-webkit-scrollbar-thumb,
+.rt-overlay .rt-inner::-webkit-scrollbar-track {
+  background: transparent;
 }

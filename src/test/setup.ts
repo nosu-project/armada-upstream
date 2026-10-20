@@ -45,6 +45,12 @@ if (typeof window !== 'undefined') {
     writable: true,
     value: vi.fn(),
   });
+
+  // jsdom does no layout: a Range has no boxes, as an element has none.
+  if (!Range.prototype.getClientRects) {
+    Range.prototype.getClientRects = () => [] as unknown as DOMRectList;
+    Range.prototype.getBoundingClientRect = () => new DOMRect();
+  }
 }
 
 // IntersectionObserver/ResizeObserver mocks must be real constructors:
