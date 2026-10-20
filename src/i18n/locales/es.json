@@ -764,8 +764,6 @@
   "common.skip": "Omitir",
   "common.tryAgain": "Intentar de nuevo",
   "common.yes": "Sí",
-  "communityBlocked.backToBase": "Volver a la base",
-  "communityBlocked.description": "Armada la ha bloqueado por infringir su política de contenido. No se puede abrir ni unirse a ella aquí.",
   "communityBlocked.title": "Esta comunidad no está disponible en Armada",
   "communityListLocked.decryptFailed": "Se encontró tu lista de comunidades cifradas, pero tu firmante no la descifró. Comprueba que esté conectado y permita descifrar, y vuelve a intentarlo.",
   "communityListLocked.noNip44": "Tu firmante no puede descifrar (NIP-44), así que no se pueden mostrar ni unirse a comunidades cifradas. Inicia sesión con un firmante compatible para usarlas.",

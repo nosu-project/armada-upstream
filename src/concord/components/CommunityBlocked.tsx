@@ -1,5 +1,3 @@
-import { Link } from "react-router-dom";
-
 import {
   ArmadaWreck,
   ArmadaWreckKeyframes,
@@ -8,8 +6,8 @@ import {
   wreckQuake,
   wreckRise,
 } from "@/components/brand/ArmadaWreck";
+import { GameOverTitle } from "@/components/brand/GameOverTitle";
 import { useWreckMusic } from "@/components/brand/useWreckMusic";
-import { Button } from "@/components/ui/button";
 import { FormattedMessage } from "@/i18n";
 
 /**
@@ -29,18 +27,12 @@ export function CommunityBlocked() {
       <div className="relative" style={wreckQuake}>
         <ArmadaWreck className="h-auto w-[min(20rem,80vw)]" />
       </div>
-      <h1 className="relative text-2xl font-bold" style={wreckRise(0)}>
-        <FormattedMessage id="communityBlocked.title" defaultMessage="This community is unavailable in Armada" />
+      <h1 className="relative" style={wreckRise(0)}>
+        <GameOverTitle className="h-auto w-[min(24rem,80vw)]" />
+        <span className="sr-only">
+          <FormattedMessage id="communityBlocked.title" defaultMessage="This community is unavailable in Armada" />
+        </span>
       </h1>
-      <p className="relative max-w-md text-sm text-muted-foreground" style={wreckRise(0.15)}>
-        <FormattedMessage
-          id="communityBlocked.description"
-          defaultMessage="Armada has blocked it for a violation of its content policy. It can't be opened or joined here."
-        />
-      </p>
-      <Button asChild variant="secondary" className="relative" style={wreckRise(0.3)}>
-        <Link to="/"><FormattedMessage id="communityBlocked.backToBase" defaultMessage="Back to base" /></Link>
-      </Button>
     </div>
   );
 }

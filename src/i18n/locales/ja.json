@@ -764,8 +764,6 @@
   "common.skip": "スキップ",
   "common.tryAgain": "もう一度試す",
   "common.yes": "はい",
-  "communityBlocked.backToBase": "ホームに戻る",
-  "communityBlocked.description": "コンテンツポリシー違反のため、Armadaはこのコミュニティをブロックしました。ここで開いたり参加したりすることはできません。",
   "communityBlocked.title": "このコミュニティはArmadaでは利用できません",
   "communityListLocked.decryptFailed": "暗号化コミュニティのリストは見つかりましたが、署名アプリが復号しませんでした。接続されていて復号を許可しているか確認してから、もう一度お試しください。",
   "communityListLocked.noNip44": "署名アプリが復号 (NIP-44) に対応していないため、暗号化コミュニティを表示したり参加したりできません。利用するには、対応している署名アプリでログインしてください。",

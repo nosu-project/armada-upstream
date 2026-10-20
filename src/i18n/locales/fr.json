@@ -764,8 +764,6 @@
   "common.skip": "Passer",
   "common.tryAgain": "Réessayer",
   "common.yes": "Oui",
-  "communityBlocked.backToBase": "Retour à la base",
-  "communityBlocked.description": "Armada l’a bloquée pour violation de sa politique de contenu. Elle ne peut être ni ouverte ni rejointe ici.",
   "communityBlocked.title": "Cette communauté n’est pas disponible dans Armada",
   "communityListLocked.decryptFailed": "Votre liste de communautés chiffrées a été trouvée, mais votre signataire ne l’a pas déchiffrée. Vérifiez qu’il est connecté et autorise le déchiffrement, puis réessayez.",
   "communityListLocked.noNip44": "Votre signataire ne peut pas déchiffrer (NIP-44), les communautés chiffrées ne peuvent donc être ni affichées ni rejointes. Connectez-vous avec un signataire compatible pour les utiliser.",

@@ -764,8 +764,6 @@
   "common.skip": "Skip",
   "common.tryAgain": "Try again",
   "common.yes": "Yes",
-  "communityBlocked.backToBase": "Back to base",
-  "communityBlocked.description": "Armada has blocked it for a violation of its content policy. It can't be opened or joined here.",
   "communityBlocked.title": "This community is unavailable in Armada",
   "communityListLocked.decryptFailed": "Your list of encrypted communities was found, but your signer didn't decrypt it. Check that it's connected and allows decryption, then try again.",
   "communityListLocked.noNip44": "Your signer can't decrypt (NIP-44), so encrypted communities can't be shown or joined. Sign in with a signer that supports it to use them.",
