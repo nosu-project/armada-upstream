@@ -26,6 +26,7 @@ import type { NostrConnectRequest, NostrConnectResponse } from "@nostrify/types"
 import { t } from "@/i18n";
 import type { BtcSigner } from "@/lib/bitcoin-signers";
 import type { Nip46Transport } from "@/lib/nip46Transport";
+import { minePow } from "@/lib/pow";
 import { logSync } from "@/lib/syncLog";
 
 export interface Nip46SignerOpts {
@@ -212,12 +213,12 @@ export class Nip46Signer implements NostrSigner, BtcSigner {
     const refreshMs = this.attemptTimeoutMs * MAX_GAP_FACTOR;
     let signed: { at: number; event: Promise<NostrEvent> } | undefined;
     const sign = async (): Promise<NostrEvent> =>
-      this.clientSigner.signEvent({
+      this.clientSigner.signEvent(await minePow({
         kind: NIP46_KIND,
         content: await this.clientSigner.nip44!.encrypt(this.bunkerPubkey, JSON.stringify(request)),
         created_at: Math.floor(Date.now() / 1000),
         tags: [["p", this.bunkerPubkey]],
-      });
+      }, await this.clientSigner.getPublicKey()));
     const publish = async (relay?: string) => {
       copies++;
       if (!signed || Date.now() - signed.at >= refreshMs) {

@@ -174,7 +174,7 @@ export function useConcordAppSync(
         channel.current.group,
         user.signer,
       );
-      const wrap = wrapSeal(
+      const wrap = await wrapSeal(
         seal,
         channel.current.group,
         expiresAt !== undefined ? { expiration: expiresAt } : undefined,

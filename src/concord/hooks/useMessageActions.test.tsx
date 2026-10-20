@@ -112,7 +112,7 @@ async function failedRow(
   const tags = [...channelBindingTags(idHex, 0n)];
   const rumor = buildRumor({ kind: KIND_MESSAGE, content, tags, pubkey: s.pubkey, ms });
   const seal = await sealRumor(rumor, KIND_SEAL_ENCRYPTED, channel.current.group, s);
-  const wrap = wrapSeal(seal, channel.current.group);
+  const wrap = await wrapSeal(seal, channel.current.group);
   return {
     rumorId: rumor.id,
     author: s.pubkey,

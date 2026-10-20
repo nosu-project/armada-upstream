@@ -195,7 +195,7 @@ export function useDmAppSync(
       await Promise.allSettled(
         recipients.map(async (recipient) => {
           const seal = await sealDmRumor(rumor, recipient, signer);
-          const wrap = wrapDmSeal(seal, recipient);
+          const wrap = await wrapDmSeal(seal, recipient);
           const targets = [
             ...new Set([...(inboxRelays.get(recipient) ?? []), ...myRelays]),
           ];

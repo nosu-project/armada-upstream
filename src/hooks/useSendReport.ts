@@ -44,7 +44,7 @@ export function useSendReport(): UseMutationResult<void, Error, SendReportArgs> 
           await publishToAnyRelay(
             nostr,
             destination.relays,
-            wrapReport(seal, destination.controlPk),
+            await wrapReport(seal, destination.controlPk),
             t({ id: "useSendReport.unreachable", defaultMessage: "Couldn't reach this community's relays." }),
           );
           return;

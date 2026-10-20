@@ -211,7 +211,7 @@ export function useVoiceHeartbeat(
         ms: Date.now(),
       });
       const seal = await sealRumor(rumor, KIND_SEAL_ENCRYPTED, channel.current.group, user.signer);
-      const wrap = wrapSeal(seal, channel.current.group, { ephemeral: true });
+      const wrap = await wrapSeal(seal, channel.current.group, { ephemeral: true });
       const results = await Promise.allSettled(
         community.relays.map((url) => nostr.relay(url).event(wrap, { signal: AbortSignal.timeout(6000) })),
       );

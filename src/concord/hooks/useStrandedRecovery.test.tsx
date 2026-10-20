@@ -108,7 +108,7 @@ function makeWrapper() {
 }
 
 /** A community held at epoch 1, plus its live link whose bundle vends `bundleEpoch`. */
-function setup(bundleEpoch: number) {
+async function setup(bundleEpoch: number) {
   const ownerSk = generateSecretKey();
   const owner = getPublicKey(ownerSk);
   const { community: minted } = mintCommunity("Fleet", owner, [RELAY]);
@@ -130,7 +130,7 @@ function setup(bundleEpoch: number) {
   const inviteRef = `${bundleNaddr(link.pk)}#${encodeFragment(token, [RELAY])}`;
 
   const relay = new FakeRelay();
-  relay.events = [buildBundleEvent(bundle, token, link.sk)];
+  relay.events = [await buildBundleEvent(bundle, token, link.sk)];
   h.pool = { relay: () => relay };
   h.user = makeUser();
   h.updateList = vi.fn(async () => {});
@@ -148,7 +148,7 @@ function setup(bundleEpoch: number) {
 
 describe("useStrandedRecovery (stranded self-heal, CORD-05 §2)", () => {
   it("a refreshed bundle at a HIGHER epoch merges forward and keeps the link ref", async () => {
-    const { held, relay, inviteRef } = setup(2);
+    const { held, relay, inviteRef } = await setup(2);
 
     const { wrapper } = makeWrapper();
     const { result } = renderHook(() => useStrandedRecovery(held, true), { wrapper });
@@ -173,7 +173,7 @@ describe("useStrandedRecovery (stranded self-heal, CORD-05 §2)", () => {
   });
 
   it("a bundle still vending my epoch (or older) is a no-op", async () => {
-    const { held } = setup(1); // equal to what I hold — creator hasn't refreshed
+    const { held } = await setup(1); // equal to what I hold — creator hasn't refreshed
 
     const { wrapper } = makeWrapper();
     const { result } = renderHook(() => useStrandedRecovery(held, true), { wrapper });
@@ -183,8 +183,8 @@ describe("useStrandedRecovery (stranded self-heal, CORD-05 §2)", () => {
     expect(h.updateList).not.toHaveBeenCalled();
   });
 
-  it("is inert without a stored link ref (direct-invite joins, legacy entries)", () => {
-    const { held } = setup(2);
+  it("is inert without a stored link ref (direct-invite joins, legacy entries)", async () => {
+    const { held } = await setup(2);
     h.entry = { ...(h.entry as Record<string, unknown>), invite_ref: undefined };
 
     const { wrapper } = makeWrapper();

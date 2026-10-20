@@ -144,7 +144,7 @@ export async function publishTimerNotices(
     const tags = [...channelBindingTags(channel.idHex, channel.current.epoch), ["timer", timer]];
     const rumor = buildRumor({ kind: KIND_TIMER_NOTICE, content: "", tags, pubkey: actorPubkey, ms });
     const seal = await sealRumor(rumor, KIND_SEAL_ENCRYPTED, channel.current.group, signer);
-    const wrap = wrapSeal(seal, channel.current.group);
+    const wrap = await wrapSeal(seal, channel.current.group);
     wraps.push(wrap);
     opened.push({
       rumorId: rumor.id,

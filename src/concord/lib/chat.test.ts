@@ -44,7 +44,7 @@ function signer(sk = generateSecretKey()) {
 }
 
 async function wrapChat(rumor: NostrRumor, channel: Channel, s: ReturnType<typeof signer>): Promise<NostrEvent> {
-  return wrapSeal(await sealRumor(rumor, KIND_SEAL_ENCRYPTED, channel.current.group, s), channel.current.group);
+  return await wrapSeal(await sealRumor(rumor, KIND_SEAL_ENCRYPTED, channel.current.group, s), channel.current.group);
 }
 
 function chatRumor(s: ReturnType<typeof signer>, kind: number, content: string, ms: number, extra: string[][] = []): NostrRumor {
@@ -355,8 +355,8 @@ describe("chat plane (CORD-03)", () => {
     // created_at 10 > 5: minted after the community moved on — refused.
     const after = mk("injected", 10_000);
     const wraps = await Promise.all([
-      wrapSeal(await sealRumor(before, KIND_SEAL_ENCRYPTED, oldGroup, alice), oldGroup),
-      wrapSeal(await sealRumor(after, KIND_SEAL_ENCRYPTED, oldGroup, alice), oldGroup),
+      await wrapSeal(await sealRumor(before, KIND_SEAL_ENCRYPTED, oldGroup, alice), oldGroup),
+      await wrapSeal(await sealRumor(after, KIND_SEAL_ENCRYPTED, oldGroup, alice), oldGroup),
     ]);
 
     const opened = await openChatBatch(wraps, channel);
@@ -441,7 +441,7 @@ describe("chat plane (CORD-03)", () => {
       pubkey: alice.pubkey,
       ms: 1000,
     });
-    const wrap = wrapSeal(await sealRumor(rumor, KIND_SEAL_ENCRYPTED, otherEpoch, alice), otherEpoch);
+    const wrap = await wrapSeal(await sealRumor(rumor, KIND_SEAL_ENCRYPTED, otherEpoch, alice), otherEpoch);
     const opened = await openChatBatch([wrap], channel);
     expect(opened.length).toBe(0);
   });
@@ -944,8 +944,8 @@ describe("openChatBatch seal verification (the batched, off-thread phase)", () =
     // from the honest copy.
     const rumor = chatRumor(alice, KIND_MESSAGE, "im alice", 1000);
     const seal = await sealRumor(rumor, KIND_SEAL_ENCRYPTED, group, alice);
-    const mangled = wrapSeal({ ...seal, sig: "00".repeat(64) }, group);
-    const honest = wrapSeal(seal, group);
+    const mangled = await wrapSeal({ ...seal, sig: "00".repeat(64) }, group);
+    const honest = await wrapSeal(seal, group);
     const other = await wrapChat(chatRumor(bob, KIND_MESSAGE, "hi", 1100), channel, bob);
 
     vi.mocked(ecVerifyBatch).mockClear();

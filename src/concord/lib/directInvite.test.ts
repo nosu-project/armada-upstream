@@ -82,7 +82,7 @@ describe("direct invites (CORD-05 §6)", () => {
     expect(seal.kind).toBe(13);
     expect(seal.pubkey).toBe(inviterPk);
 
-    const wrap = wrapDirectInvite(seal, recipientPk);
+    const wrap = await wrapDirectInvite(seal, recipientPk);
     expect(wrap.kind).toBe(KIND_WRAP);
     // Classic NIP-59: ephemeral author, fixed recipient — plus the k index hint.
     expect(wrap.pubkey).not.toBe(inviterPk);
@@ -107,7 +107,7 @@ describe("direct invites (CORD-05 §6)", () => {
     const expiresAtMs = Date.now() + 86_400_000;
     const rumor = buildDirectInviteRumor(makeBundle({ expires_at: expiresAtMs }), getPublicKey(inviterSk));
     const seal = await sealDirectInvite(rumor, recipientPk, rawSigner(inviterSk));
-    const wrap = wrapDirectInvite(seal, recipientPk, { expiresAtMs });
+    const wrap = await wrapDirectInvite(seal, recipientPk, { expiresAtMs });
     expect(wrap.tags).toContainEqual(["expiration", String(Math.floor(expiresAtMs / 1000))]);
   });
 
@@ -120,7 +120,7 @@ describe("direct invites (CORD-05 §6)", () => {
     // The rumor claims someone else sent it; the seal is signed by the inviter.
     const rumor = buildDirectInviteRumor(makeBundle(), impostorPk);
     const seal = await sealDirectInvite(rumor, recipientPk, rawSigner(inviterSk));
-    const wrap = wrapDirectInvite(seal, recipientPk);
+    const wrap = await wrapDirectInvite(seal, recipientPk);
     expect(await unwrapDirectInvite(wrap, rawSigner(recipientSk))).toBeUndefined();
   });
 
@@ -150,7 +150,7 @@ describe("direct-invite inbox store", () => {
     const bundle = makeBundle();
     const rumor = buildDirectInviteRumor(bundle, getPublicKey(inviterSk));
     const seal = await sealDirectInvite(rumor, recipientPk, rawSigner(inviterSk));
-    const wrap = wrapDirectInvite(seal, recipientPk);
+    const wrap = await wrapDirectInvite(seal, recipientPk);
     const unwrapped = (await unwrapDirectInvite(wrap, rawSigner(recipientSk)))!;
     return { wrap, unwrapped, bundle, recipientPk, inviterPk: getPublicKey(inviterSk) };
   }

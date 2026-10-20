@@ -230,7 +230,7 @@ describe("DM index relay-set publication base", () => {
     expect(relays).toEqual([OLD_RELAY]);
     expect(event).toMatchObject({
       pubkey: KEYS.keyring.dmConversations[bucket]!.pubkey,
-      tags: [["d", KEYS.keyring.dmConversations[bucket]!.d]],
+      tags: [["d", KEYS.keyring.dmConversations[bucket]!.d], ["nonce", expect.any(String), expect.any(String)]],
     });
     view.unmount();
   });

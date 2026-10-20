@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import { defaultConfig } from "@/contexts/AppContext";
 import { PAYMENT_METHOD_LIST, type PaymentTargetType } from "@/lib/paymentTargets";
+import { MAX_POW_DIFFICULTY } from "@/lib/pow";
 
 import type { RailLayoutNode } from "@/lib/railLayout";
 
@@ -102,6 +103,9 @@ const SendOnEnterSchema = z.object({
   desktop: z.boolean().optional(),
 });
 
+/** NIP-13 difficulty in bits (see `lib/pow.ts`). */
+const PowDifficultySchema = z.number().int().min(0).max(MAX_POW_DIFFICULTY);
+
 /** Persisted AppConfig, validated field-by-field so one corrupt key never wipes the config. */
 export const AppConfigSchema = z.object({
   theme: z.enum(["light", "dark", "system", "custom"]).catch("dark"),
@@ -150,6 +154,7 @@ export const AppConfigSchema = z.object({
   defaultZapMethod: z.enum(PAYMENT_METHOD_TYPES).catch(defaultConfig.defaultZapMethod),
   zapsEnabled: z.boolean().catch(defaultConfig.zapsEnabled),
   accountStandingSeen: z.boolean().catch(defaultConfig.accountStandingSeen),
+  powDifficulty: PowDifficultySchema.optional().catch(undefined),
   meshIncognito: z.boolean().catch(defaultConfig.meshIncognito),
   meshEnabled: z.boolean().catch(defaultConfig.meshEnabled),
   androidBackLeavesApp: z.boolean().catch(defaultConfig.androidBackLeavesApp),

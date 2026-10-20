@@ -203,6 +203,24 @@ keeps the desktop updater's trusted `RELEASE_AUTHORS` out of a host's reach.
 A new setting goes into `CONFIG_NAMES`. `VITE_PROFILE` is not a setting — it
 gates code out of the build, so it stays `import.meta.env`.
 
+### Proof of work (NIP-13) on every published event
+
+Every event Armada hands a relay as an EVENT carries a NIP-13 `nonce`
+(`src/lib/pow.ts`). The difficulty is the device's choice in Settings › Relays
+(`AppConfig.powDifficulty`, per-device), else `POW_DIFFICULTY`, else 8 bits. Only
+the OUTER event is mined: seals, rumors, NIP-42 AUTH, NIP-98/Blossom tokens and
+zap requests are not. A new signing path must keep that true:
+
+- **The user's signer mines** (`AppSigner.signEvent`), skipping the exempt kinds
+  above. A new inner or credential kind signed by the user goes into
+  `POW_EXEMPT_KINDS`.
+- **A key held here** (wraps, invite links, signup lists) signs with
+  `finalizePowEvent`, never a bare `finalizeEvent` — which is why `wrapSeal`,
+  `wrapDmSeal` and friends are async. A long-lived key is a `PowNSecSigner`.
+- Mining is on the UI thread, time-sliced, and costs time proportional to the
+  content length per attempt (~60k attempts/s for a 1.5 KB wrap on a desktop),
+  so each extra bit doubles a send's latency.
+
 ## Voice / LiveKit (client side)
 
 The LiveKit JS SDK **always appends `/rtc`** to the server URL it's given, so a

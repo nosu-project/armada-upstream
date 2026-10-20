@@ -29,7 +29,7 @@ function fakeService(handle: (method: string, params: unknown, client: string) =
     relay: () => ({
       async event(event) {
         expect(event.kind).toBe(KIND_NOSTR_PUSH2_RPC);
-        expect(event.tags).toEqual([["p", servicePubkey]]);
+        expect(event.tags.filter(([name]) => name !== "nonce")).toEqual([["p", servicePubkey]]);
         const request = JSON.parse(await service.nip44.decrypt(event.pubkey, event.content));
         requests.push({ method: request.method, params: request.params, pubkey: event.pubkey });
         let body: Record<string, unknown>;

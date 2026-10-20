@@ -586,7 +586,7 @@ export function useInviteActions(community: Community | undefined) {
       // A link's audience holds no Role, so it gets no Private Channel (CORD-05 §2);
       // those keys are vended by Direct Invite on role grant.
       const bundle = buildBundle({ kind: "link" }, { expiresAtMs, label });
-      const bundleEvent = buildBundleEvent(bundle, token, link.sk);
+      const bundleEvent = await buildBundleEvent(bundle, token, link.sk);
       // The URL is decided LOCALLY, so the writes below can run concurrently. Store
       // the re-basable base (a sentinel on native/desktop) and hand out the URL
       // re-based onto today's share origin, as `myLinks` does for synced entries.
@@ -647,7 +647,7 @@ export function useInviteActions(community: Community | undefined) {
       );
       if (!entry) throw new Error(t({ id: "useInvites.noSigningSecret", defaultMessage: "This device doesn't hold that link's signing secret." }));
 
-      const tomb = buildRevocationEvent(hexToBytes(entry.signer_sk));
+      const tomb = await buildRevocationEvent(hexToBytes(entry.signer_sk));
       await publishToAnyRelay(nostr, community.relays, tomb, t({ id: "useInvites.noRelayAcceptedRevocation", defaultMessage: "No relay accepted the revocation." }));
 
       await updateInviteList({
@@ -685,11 +685,11 @@ export function useInviteActions(community: Community | undefined) {
       );
 
       const results = await Promise.allSettled(
-        entries.map((entry) =>
+        entries.map(async (entry) =>
           publishToAnyRelay(
             nostr,
             community.relays,
-            buildRevocationEvent(hexToBytes(entry.signer_sk)),
+            await buildRevocationEvent(hexToBytes(entry.signer_sk)),
             t({ id: "useInvites.noRelayAcceptedRevocation", defaultMessage: "No relay accepted the revocation." }),
           ),
         ),
@@ -764,7 +764,7 @@ export function useInviteActions(community: Community | undefined) {
       );
       const rumor = buildDirectInviteRumor(bundle, user.pubkey);
       const seal = await sealDirectInvite(rumor, recipientPubkey, user.signer);
-      const wrap = wrapDirectInvite(seal, recipientPubkey, { expiresAtMs });
+      const wrap = await wrapDirectInvite(seal, recipientPubkey, { expiresAtMs });
 
       // Their 10050 DM relays, else NIP-65 reads, else stock — the set their own
       // scanner resolves (CORD-05 §6).
@@ -816,7 +816,7 @@ export function useInviteActions(community: Community | undefined) {
         } catch (e) {
           if (e instanceof InviteError && e.code === "revoked") return;
         }
-        const [event] = buildRefreshedBundleEvents(bundle, [entry]);
+        const [event] = await buildRefreshedBundleEvents(bundle, [entry]);
         if (!event) return;
         attempted++;
         const targets = new Set<string>([...community.relays, ...parsed.bootstrapRelays]);
@@ -944,8 +944,8 @@ export function useRetireCommunityLinks(community: Community | undefined) {
           ? async () => {
               const [revocations, unlistAgain] = await Promise.all([
                 Promise.allSettled(
-                  sks.map((sk) =>
-                    publishToAnyRelay(nostr, relays, buildRevocationEvent(hexToBytes(sk)), t({ id: "useInvites.noRelayAcceptedRevocation", defaultMessage: "No relay accepted the revocation." })),
+                  sks.map(async (sk) =>
+                    publishToAnyRelay(nostr, relays, await buildRevocationEvent(hexToBytes(sk)), t({ id: "useInvites.noRelayAcceptedRevocation", defaultMessage: "No relay accepted the revocation." })),
                   ),
                 ),
                 unlistOwed.length > 0 ? unlistLinks(unlistOwed).then((n) => n, () => undefined) : Promise.resolve(0),

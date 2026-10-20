@@ -279,6 +279,11 @@ export interface AppConfig {
   zapsEnabled: boolean;
   /** Whether Account Standing has been opened (clears the nag dot). Synced. */
   accountStandingSeen: boolean;
+  /**
+   * NIP-13 proof-of-work bits on every published event (`lib/pow.ts`). Unset =
+   * the deployment's `POW_DIFFICULTY`. Per-device: what a phone can mine is not what a desktop can.
+   */
+  powDifficulty?: number;
 }
 
 /** Cap on message-less DM rows in {@link AppConfig.startedDms} (they ride in synced settings). */
@@ -377,6 +382,7 @@ export const PER_DEVICE_CONFIG_KEYS = [
   "meshIncognito",
   "meshEnabled",
   "androidBackLeavesApp",
+  "powDifficulty",
 ] as const satisfies ReadonlyArray<keyof AppConfig>;
 
 export const defaultConfig: AppConfig = {

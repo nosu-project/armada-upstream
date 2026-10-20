@@ -201,7 +201,7 @@ describe("favorite GIF self-state relay cohort", () => {
     expect(relays).toEqual([OLD_RELAY]);
     expect(event).toMatchObject({
       pubkey: KEYS.keyring.gifFavorites.pubkey,
-      tags: [["d", KEYS.keyring.gifFavorites.d]],
+      tags: [["d", KEYS.keyring.gifFavorites.d], ["nonce", expect.any(String), expect.any(String)]],
     });
     view.unmount();
   });

@@ -17,9 +17,10 @@
  * caller's job (`carryForwardWatches`).
  */
 
-import { NSecSigner } from "@nostrify/nostrify";
 import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
 import { generateSecretKey } from "nostr-tools";
+
+import { PowNSecSigner } from "@/lib/pow";
 
 import type { NostrEvent, NostrFilter } from "@nostrify/types";
 import type { NappSubscription } from "@/lib/nappPush";
@@ -95,7 +96,7 @@ function requestId(): string {
 export class NostrPush2Client {
   readonly #service: string;
   readonly #relays: string[];
-  readonly #signer: NSecSigner;
+  readonly #signer: PowNSecSigner;
   readonly #pool: PushRelayPool;
   readonly #now: () => number;
   readonly #timeoutMs: number;
@@ -103,7 +104,7 @@ export class NostrPush2Client {
   constructor(opts: NostrPush2ClientOptions) {
     this.#service = opts.servicePubkey;
     this.#relays = opts.relays;
-    this.#signer = new NSecSigner(opts.secretKey);
+    this.#signer = new PowNSecSigner(opts.secretKey);
     this.#pool = opts.pool;
     this.#now = opts.now ?? (() => Date.now());
     this.#timeoutMs = opts.timeoutMs ?? RPC_TIMEOUT_MS;

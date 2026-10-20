@@ -62,7 +62,7 @@ async function pinnable(
     pubkey: author.pubkey,
   });
   const seal = await sealRumor(rumor, KIND_SEAL_ENCRYPTED, group, author);
-  const wrap = wrapSeal(seal, group);
+  const wrap = await wrapSeal(seal, group);
   return { opened: openWrap(wrap, group), author, group };
 }
 
@@ -104,7 +104,7 @@ describe("the proof bundle", () => {
     const author = signer();
     const rumor = buildRumor({ kind: KIND_MESSAGE, content: "unbound", tags: [], pubkey: author.pubkey });
     const seal = await sealRumor(rumor, KIND_SEAL_ENCRYPTED, chanA, author);
-    const entry = buildPinEntry(openWrap(wrapSeal(seal, chanA), chanA), chanA.convKey);
+    const entry = buildPinEntry(openWrap(await wrapSeal(seal, chanA), chanA), chanA.convKey);
     expect(entry, "build refuses it").toBeUndefined();
   });
 
@@ -126,7 +126,8 @@ describe("the proof bundle", () => {
     const handBuilt = overWire({ seal, keys: encodeMessageKeys(keys) });
     expect(verifyPinEntry(handBuilt, bytesToHex(CHANNEL_A)), "author equality is the only guard here").toBeUndefined();
     // The ingest path refuses it too, from the other direction.
-    expect(() => openWrap(wrapSeal(seal, chanA), chanA)).toThrow(/author/);
+    const wrap = await wrapSeal(seal, chanA);
+    expect(() => openWrap(wrap, chanA)).toThrow(/author/);
   });
 
   it("refuses a tampered seal signature and tampered ciphertext", async () => {
@@ -158,7 +159,7 @@ describe("the proof bundle", () => {
     const author = signer();
     const reaction = buildRumor({ kind: 7, content: "+", tags: [["channel", bytesToHex(CHANNEL_A)]], pubkey: author.pubkey });
     const seal = await sealRumor(reaction, KIND_SEAL_ENCRYPTED, chanA, author);
-    expect(buildPinEntry(openWrap(wrapSeal(seal, chanA), chanA), chanA.convKey)).toBeUndefined();
+    expect(buildPinEntry(openWrap(await wrapSeal(seal, chanA), chanA), chanA.convKey)).toBeUndefined();
   });
 
   it("names a still-sending message as PENDING, never as a key problem", async () => {
@@ -343,7 +344,7 @@ describe("edits (§7)", () => {
       pubkey: author.pubkey,
     });
     const seal = await sealRumor(rumor, KIND_SEAL_ENCRYPTED, group, author);
-    return openWrap(wrapSeal(seal, group), group);
+    return openWrap(await wrapSeal(seal, group), group);
   }
 
   it("a proven edit supersedes the original's words, for a reader with no keys", async () => {

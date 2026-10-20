@@ -1,6 +1,7 @@
 /**
  * The NIP-78 settings root: the ONE kind-30078 event the user's own key signs
- * for Armada's private state (`d = ${APP_ID}`, nothing else in the tags). Its
+ * for Armada's private state (`d = ${APP_ID}`, nothing else in the tags but the
+ * signer's NIP-13 `nonce`, `pow.ts`). Its
  * plaintext holds the secret every other settings document's key and `d` are
  * derived from (`settingsKeys.ts`); see `docs/settings-documents.md`.
  *
@@ -63,7 +64,7 @@ export function decodeSettingsRoot(plaintext: string): SettingsRootPayload | nul
   }
 }
 
-/** Exactly the tags a root carries. No `client`, `title` or `published_at`: they would vary. */
+/** Exactly the tags a root is built with (signing adds the `nonce`). No `client`, `title` or `published_at`: they would vary. */
 export function settingsRootTags(): string[][] {
   return [["d", settingsRootDTag()]];
 }

@@ -1,5 +1,6 @@
 import { getArmadaDB } from "@/lib/db/armadaDB";
 import { perfCount } from "@/lib/perf";
+import { minePowFor } from "@/lib/pow";
 
 import type { NostrSigner } from "@nostrify/nostrify";
 import type { BtcSigner } from "@/lib/bitcoin-signers";
@@ -8,6 +9,7 @@ import type { BtcSigner } from "@/lib/bitcoin-signers";
 // persistent content-addressed decrypt cache, since extension/bunker decrypts
 // are slow round-trips and the append-only store re-decrypts on every load.
 // Only `decrypt` is memoized. Never wrap the NIP-46 transport key or AUTH signer.
+// Also where the user's published events get their NIP-13 proof of work.
 //
 // Trust: persists DECRYPTED plaintext at rest (deliberate, like the fold
 // cache); wiped on final logout by `purgeClientStorage`.
@@ -48,8 +50,9 @@ export class AppSigner implements NostrSigner {
     return this.#upstream.getPublicKey();
   }
 
-  signEvent(event: Parameters<NostrSigner["signEvent"]>[0]): ReturnType<NostrSigner["signEvent"]> {
-    return this.#upstream.signEvent(event);
+  /** Mined here rather than by the upstream, so a bunker or extension is asked to sign the final event. */
+  async signEvent(event: Parameters<NostrSigner["signEvent"]>[0]): ReturnType<NostrSigner["signEvent"]> {
+    return this.#upstream.signEvent(await minePowFor(event, this.#pubkey));
   }
 
   getRelays(): Promise<Record<string, { read: boolean; write: boolean }>> {

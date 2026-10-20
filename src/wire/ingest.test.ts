@@ -70,7 +70,7 @@ async function wrapChat(channel: Channel, s: ReturnType<typeof signer>, content:
     ms: Date.now(),
   });
   const seal = await sealRumor(rumor, KIND_SEAL_ENCRYPTED, channel.current.group, s);
-  return wrapSeal(seal, channel.current.group) as NostrEvent;
+  return await wrapSeal(seal, channel.current.group) as NostrEvent;
 }
 
 class FakeStore implements WireEventStore {
@@ -281,7 +281,7 @@ describe("ingestWireEvents", () => {
       pubkey: owner.pubkey,
       ms: Date.now(),
     });
-    const wrap = wrapSeal(await sealRumor(rumor, KIND_SEAL_PLAINTEXT, control, owner), control) as NostrEvent;
+    const wrap = await wrapSeal(await sealRumor(rumor, KIND_SEAL_PLAINTEXT, control, owner), control) as NostrEvent;
     const { store, sinks } = makeSinks({
       concordCtlByPk: new Map([[wrap.pubkey, { idHex, groups: [control], refounded: false }]]),
     });
@@ -310,7 +310,7 @@ describe("ingestWireEvents", () => {
       pubkey: admin.pubkey,
       ms: Date.now(),
     });
-    const wrap = wrapSeal(await sealRumor(rumor, KIND_SEAL_ENCRYPTED, guestbook, admin), guestbook) as NostrEvent;
+    const wrap = await wrapSeal(await sealRumor(rumor, KIND_SEAL_ENCRYPTED, guestbook, admin), guestbook) as NostrEvent;
     const { store, sinks } = makeSinks({
       concordGbByPk: new Map([[wrap.pubkey, { idHex, groups: [guestbook] }]]),
     });

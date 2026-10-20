@@ -95,7 +95,7 @@ describe("a report giftwrapped to the Control Plane", () => {
       "posting invite links on repeat",
       reporter.pubkey,
     );
-    const wrap = wrapReport(await sealReport(rumor, alice.controlPk!, reporter), alice.controlPk!);
+    const wrap = await wrapReport(await sealReport(rumor, alice.controlPk!, reporter), alice.controlPk!);
 
     expect(wrap.kind).toBe(KIND_WRAP);
     // Ephemeral author, recipient in the `p` tag — the mirror image of a
@@ -122,7 +122,7 @@ describe("a report giftwrapped to the Control Plane", () => {
     const alice = memberView(community);
 
     const rumor = buildReportRumor({ pubkey: ACCUSED }, "profanity", "", reporter.pubkey);
-    const wrap = wrapReport(await sealReport(rumor, alice.controlPk!, reporter), alice.controlPk!);
+    const wrap = await wrapReport(await sealReport(rumor, alice.controlPk!, reporter), alice.controlPk!);
 
     // The best a member can do is the Control Plane READ key, which every
     // member holds — and which is not the signer secret the wrap is addressed
@@ -140,7 +140,7 @@ describe("a report giftwrapped to the Control Plane", () => {
     // The outer `k` tag is a relay-visible hint anyone can spell; the rumor's
     // own kind is the authority.
     const notAReport = { ...buildReportRumor({ pubkey: ACCUSED }, "spam", "", reporter.pubkey), kind: 9 };
-    const wrap = wrapReport(await sealReport(notAReport, controlPk, reporter), controlPk);
+    const wrap = await wrapReport(await sealReport(notAReport, controlPk, reporter), controlPk);
     expect(unwrapReport(wrap, reportInboxSecret(community)!)).toBeUndefined();
   });
 
@@ -153,7 +153,7 @@ describe("a report giftwrapped to the Control Plane", () => {
     // Standard NIP-59 anti-spoofing: without it, "who reported this" would be
     // whatever the sender typed.
     const lying = buildReportRumor({ pubkey: ACCUSED }, "spam", "", owner.pubkey);
-    const wrap = wrapReport(await sealReport(lying, controlPk, reporter), controlPk);
+    const wrap = await wrapReport(await sealReport(lying, controlPk, reporter), controlPk);
     expect(unwrapReport(wrap, reportInboxSecret(community)!)).toBeUndefined();
   });
 

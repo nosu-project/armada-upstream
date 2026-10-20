@@ -16,13 +16,14 @@
  */
 
 import { getConversationKey, decrypt as nip44Decrypt, encrypt as nip44Encrypt } from "nostr-tools/nip44";
-import { finalizeEvent, generateSecretKey } from "nostr-tools/pure";
+import { generateSecretKey } from "nostr-tools/pure";
 import type { EventTemplate, NostrEvent } from "nostr-tools/pure";
 
 import { controlSignerGroupKey } from "@/concord/lib/derive";
 import { KIND_WRAP } from "@/concord/lib/kinds";
 import { KIND_NIP59_SEAL } from "@/concord/lib/directInvite";
 import type { Community } from "@/concord/lib/types";
+import { finalizePowEvent } from "@/lib/pow";
 import { buildReportTags, KIND_REPORT, type ReportReason, type ReportTarget } from "@/lib/report";
 import { t } from "@/i18n/intl";
 
@@ -88,9 +89,9 @@ export async function sealReport(
  * Wrap a signed seal for the Control Plane under a single-use ephemeral key. The
  * outer `k` tag is an index hint, never authority.
  */
-export function wrapReport(seal: NostrEvent, controlPk: string): NostrEvent {
+export function wrapReport(seal: NostrEvent, controlPk: string): Promise<NostrEvent> {
   const ephemeralSk = generateSecretKey();
-  return finalizeEvent(
+  return finalizePowEvent(
     {
       kind: KIND_WRAP,
       content: nip44Encrypt(JSON.stringify(seal), getConversationKey(ephemeralSk, controlPk)),

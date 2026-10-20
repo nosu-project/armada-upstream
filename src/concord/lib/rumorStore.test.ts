@@ -75,7 +75,7 @@ function signer(sk = generateSecretKey()) {
 }
 
 async function wrapChat(rumor: NostrRumor, channel: Channel, s: ReturnType<typeof signer>): Promise<NostrEvent> {
-  return wrapSeal(await sealRumor(rumor, KIND_SEAL_ENCRYPTED, channel.current.group, s), channel.current.group);
+  return await wrapSeal(await sealRumor(rumor, KIND_SEAL_ENCRYPTED, channel.current.group, s), channel.current.group);
 }
 
 function chatRumor(
@@ -279,7 +279,7 @@ describe("concord rumor store", () => {
         pubkey: alice.pubkey,
         ms: null,
       });
-      return openWrap(wrapSeal(await sealRumor(rumor, KIND_SEAL_PLAINTEXT, control, alice), control), control);
+      return openWrap(await wrapSeal(await sealRumor(rumor, KIND_SEAL_PLAINTEXT, control, alice), control), control);
     };
     await writeOpened(cid, [await edition("01".repeat(32))], "control");
 
@@ -315,7 +315,7 @@ describe("concord rumor store", () => {
       ms: null,
     });
     const seal = await sealRumor(rumor, KIND_SEAL_PLAINTEXT, control, alice);
-    const wrap = wrapSeal(seal, control);
+    const wrap = await wrapSeal(seal, control);
     const opened = openWrap(wrap, control);
 
     // The rumor is stored as its author wrote it: no seal folded into its tags.
@@ -338,7 +338,7 @@ describe("concord rumor store", () => {
     // The seal read back out of KV is byte-identical and re-wrappable.
     const stored = await eventually(() => readStoredSeal(CID, opened.rumorId), (s) => !!s);
     expect(stored).toEqual(plain(seal));
-    const rewrapped = rewrapSeal(stored!, control);
+    const rewrapped = await rewrapSeal(stored!, control);
     expect(openWrap(rewrapped, control).rumorId).toBe(opened.rumorId);
   });
 
@@ -400,7 +400,7 @@ describe("concord rumor store", () => {
     const alice = signer();
     const control = channelGroupKey(new Uint8Array(32).fill(7), new Uint8Array(32).fill(2), 0);
     const rumor = buildRumor({ kind: 3308, content: "{}", tags: [["vsk", "0"], ["eid", "cd".repeat(32)], ["ev", "1"]], pubkey: alice.pubkey, ms: null });
-    const wrap = wrapSeal(await sealRumor(rumor, KIND_SEAL_PLAINTEXT, control, alice), control);
+    const wrap = await wrapSeal(await sealRumor(rumor, KIND_SEAL_PLAINTEXT, control, alice), control);
 
     parkPendingWraps([wrap]);
     const peeked = await eventually(() => peekPendingWraps([control.pk]), (r) => r.length === 1);
@@ -428,7 +428,7 @@ describe("concord rumor store", () => {
     const alice = signer();
     const control = channelGroupKey(new Uint8Array(32).fill(8), new Uint8Array(32).fill(4), 0);
     const rumor = buildRumor({ kind: 3308, content: "{}", tags: [["vsk", "0"], ["eid", "ef".repeat(32)], ["ev", "1"]], pubkey: alice.pubkey, ms: null });
-    const wrap = wrapSeal(await sealRumor(rumor, KIND_SEAL_PLAINTEXT, control, alice), control);
+    const wrap = await wrapSeal(await sealRumor(rumor, KIND_SEAL_PLAINTEXT, control, alice), control);
 
     // Session 1: the wrap arrives for a stream we hold no key for and is
     // parked. The app is then killed before the key ever resolves.
@@ -533,7 +533,7 @@ describe("concord rumor store", () => {
       pubkey: mallory.pubkey,
       ms: 9000,
     });
-    const wrap = wrapSeal(await sealRumor(spliced, KIND_SEAL_PLAINTEXT, plane, mallory), plane);
+    const wrap = await wrapSeal(await sealRumor(spliced, KIND_SEAL_PLAINTEXT, plane, mallory), plane);
     await writeOpened(CID, [openWrap(wrap, plane)], "control");
 
     const got = await eventually(() => queryChannelRumors(CID, idHex, { limit: 100 }), (r) => r.length > 1);
@@ -559,7 +559,7 @@ describe("concord rumor store", () => {
     });
     await writeOpened(
       CID,
-      [openWrap(wrapSeal(await sealRumor(forged, KIND_SEAL_PLAINTEXT, guestbook, mallory), guestbook), guestbook)],
+      [openWrap(await wrapSeal(await sealRumor(forged, KIND_SEAL_PLAINTEXT, guestbook, mallory), guestbook), guestbook)],
       "guestbook",
     );
 
@@ -574,7 +574,7 @@ describe("concord rumor store", () => {
     });
     await writeOpened(
       CID,
-      [openWrap(wrapSeal(await sealRumor(honest, KIND_SEAL_PLAINTEXT, control, alice), control), control)],
+      [openWrap(await wrapSeal(await sealRumor(honest, KIND_SEAL_PLAINTEXT, control, alice), control), control)],
       "control",
     );
 
@@ -616,7 +616,7 @@ describe("concord rumor store", () => {
     });
     await writeOpened(
       CID,
-      [openWrap(wrapSeal(await sealRumor(honest, KIND_SEAL_PLAINTEXT, control, alice), control), control)],
+      [openWrap(await wrapSeal(await sealRumor(honest, KIND_SEAL_PLAINTEXT, control, alice), control), control)],
       "control",
     );
 
@@ -780,7 +780,7 @@ describe("concord rumor store", () => {
     });
     await writeOpened(
       CID,
-      [openWrap(wrapSeal(await sealRumor(sealedWrong, KIND_SEAL_ENCRYPTED, control, mallory), control), control)],
+      [openWrap(await wrapSeal(await sealRumor(sealedWrong, KIND_SEAL_ENCRYPTED, control, mallory), control), control)],
       "control",
     );
 
@@ -793,7 +793,7 @@ describe("concord rumor store", () => {
     });
     await writeOpened(
       CID,
-      [openWrap(wrapSeal(await sealRumor(honest, KIND_SEAL_PLAINTEXT, control, alice), control), control)],
+      [openWrap(await wrapSeal(await sealRumor(honest, KIND_SEAL_PLAINTEXT, control, alice), control), control)],
       "control",
     );
 
@@ -820,7 +820,7 @@ describe("concord rumor store", () => {
       ms: null,
     });
     const plainSeal = await sealRumor(rumor, KIND_SEAL_PLAINTEXT, oldEpoch, alice);
-    await writeOpened(CID, [openWrap(wrapSeal(plainSeal, oldEpoch), oldEpoch)], "control");
+    await writeOpened(CID, [openWrap(await wrapSeal(plainSeal, oldEpoch), oldEpoch)], "control");
 
     const beforeRewrap = await eventually(
       () => readControlSnapshot(CID, oldEpoch.pk),
@@ -829,7 +829,7 @@ describe("concord rumor store", () => {
     expect(beforeRewrap?.has(rumor.id)).toBe(true);
     expect(await readControlSnapshot(CID, newEpoch.pk)).toBeUndefined();
 
-    await writeOpened(CID, [openWrap(rewrapSeal(plain(plainSeal), newEpoch), newEpoch)], "control");
+    await writeOpened(CID, [openWrap(await rewrapSeal(plain(plainSeal), newEpoch), newEpoch)], "control");
     const afterRewrap = await eventually(
       () => readControlSnapshot(CID, newEpoch.pk),
       (s) => Boolean(s?.has(rumor.id)),
@@ -851,7 +851,7 @@ describe("concord rumor store", () => {
       ms: null,
     });
     const opened = openWrap(
-      wrapSeal(await sealRumor(rumor, KIND_SEAL_PLAINTEXT, control, alice), control),
+      await wrapSeal(await sealRumor(rumor, KIND_SEAL_PLAINTEXT, control, alice), control),
       control,
     );
 

@@ -24,10 +24,10 @@ export function useSignupLists() {
     seedAccountConfig(APP_CONFIG_STORAGE_KEY, pubkey, { appRelays: homeRelays });
   }, []);
 
-  const publish = useCallback((nsec: string, setup: SignupSetup, profile?: NostrEvent) => {
-    let built: ReturnType<typeof buildSignupLists>;
+  const publish = useCallback(async (nsec: string, setup: SignupSetup, profile?: NostrEvent) => {
+    let built: Awaited<ReturnType<typeof buildSignupLists>>;
     try {
-      built = buildSignupLists(nip19.decode(nsec).data as Uint8Array, setup);
+      built = await buildSignupLists(nip19.decode(nsec).data as Uint8Array, setup);
     } catch {
       return; // best effort; the account still works on its home relays
     }

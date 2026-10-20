@@ -10,6 +10,7 @@ import {
 } from "@/lib/activeAccount";
 import { useLocalStorage } from "@/hooks/useLocalStorage";
 import { useMediaSrc } from "@/hooks/useMediaPolicy";
+import { setPowDifficulty } from "@/lib/pow";
 import { useThemePreview } from "@/lib/themePreview";
 import { hslStringToHex, isDarkTheme } from "@/lib/colorUtils";
 import { syncNativeStatusBar } from "@/lib/statusBar";
@@ -127,6 +128,11 @@ export function AppProvider({ storageKey, children }: AppProviderProps) {
     [config, preview],
   );
   useApplyTheme(paintedConfig);
+
+  // A layout effect runs ahead of every passive one, where publishes start.
+  useLayoutEffect(() => {
+    setPowDifficulty(config.powDifficulty);
+  }, [config.powDifficulty]);
 
   // public/theme.js handles the very first paint.
   useEffect(() => {

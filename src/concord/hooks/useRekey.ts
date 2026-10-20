@@ -95,7 +95,7 @@ export async function refreshInviteBundlesFor(
   };
 
   const targets = publishRelays ?? rotated.relays;
-  for (const bundleEvent of buildRefreshedBundleEvents(bundle, live)) {
+  for (const bundleEvent of await buildRefreshedBundleEvents(bundle, live)) {
     await Promise.allSettled(
       targets.map((url) => nostr.relay(url).event(bundleEvent, { signal: AbortSignal.timeout(8000) })),
     );
@@ -781,7 +781,7 @@ export function useChannelRekey(community: Community | undefined) {
         citationFor(community, folded, user.pubkey),
       );
       for (const rumor of chRumors) {
-        const wrap = wrapSeal(await sealRumor(rumor, KIND_SEAL_ENCRYPTED, chAddress, user.signer), chAddress);
+        const wrap = await wrapSeal(await sealRumor(rumor, KIND_SEAL_ENCRYPTED, chAddress, user.signer), chAddress);
         const results = await Promise.allSettled(
           community.relays.map((url) => nostr.relay(url).event(wrap, { signal: AbortSignal.timeout(8000) })),
         );
@@ -975,7 +975,7 @@ export function useRefound(community: Community | undefined) {
         citationFor(community, folded, user.pubkey),
       );
       for (const rumor of rumors) {
-        const wrap = wrapSeal(await sealRumor(rumor, KIND_SEAL_ENCRYPTED, address, user.signer), address);
+        const wrap = await wrapSeal(await sealRumor(rumor, KIND_SEAL_ENCRYPTED, address, user.signer), address);
         const results = await Promise.allSettled(
           community.relays.map((url) => nostr.relay(url).event(wrap, { signal: AbortSignal.timeout(8000) })),
         );
@@ -1035,7 +1035,7 @@ export function useRefound(community: Community | undefined) {
         }
         let rewrapped: NostrEvent;
         try {
-          rewrapped = rewrapSeal(seal, newControl);
+          rewrapped = await rewrapSeal(seal, newControl);
         } catch {
           // Defensive only: control heads are plaintext by construction.
           continue;
@@ -1089,7 +1089,7 @@ export function useRefound(community: Community | undefined) {
           citationFor(community, folded, user.pubkey),
         );
         for (const rumor of chRumors) {
-          const wrap = wrapSeal(await sealRumor(rumor, KIND_SEAL_ENCRYPTED, chAddress, user.signer), chAddress);
+          const wrap = await wrapSeal(await sealRumor(rumor, KIND_SEAL_ENCRYPTED, chAddress, user.signer), chAddress);
           const results = await Promise.allSettled(
             community.relays.map((url) => nostr.relay(url).event(wrap, { signal: AbortSignal.timeout(8000) })),
           );

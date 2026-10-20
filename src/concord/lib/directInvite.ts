@@ -16,12 +16,13 @@
  */
 
 import { getConversationKey, encrypt as nip44Encrypt } from "nostr-tools/nip44";
-import { finalizeEvent, generateSecretKey } from "nostr-tools/pure";
+import { generateSecretKey } from "nostr-tools/pure";
 import type { EventTemplate, NostrEvent } from "nostr-tools/pure";
 
 import { validateBundle, type InviteBundle } from "@/concord/lib/invite";
 import { KIND_DIRECT_INVITE, KIND_WRAP } from "@/concord/lib/kinds";
 import { t } from "@/i18n/intl";
+import { finalizePowEvent } from "@/lib/pow";
 
 /** The standard NIP-59 seal kind (classic giftwrap — not a CORD-01 seal). */
 export const KIND_NIP59_SEAL = 13;
@@ -90,7 +91,7 @@ export function wrapDirectInvite(
   seal: NostrEvent,
   recipientPubkey: string,
   opts?: { expiresAtMs?: number },
-): NostrEvent {
+): Promise<NostrEvent> {
   const ephemeralSk = generateSecretKey();
   const convKey = getConversationKey(ephemeralSk, recipientPubkey);
   const tags: string[][] = [
@@ -98,7 +99,7 @@ export function wrapDirectInvite(
     ["k", String(KIND_DIRECT_INVITE)],
   ];
   if (opts?.expiresAtMs) tags.push(["expiration", String(Math.floor(opts.expiresAtMs / 1000))]);
-  return finalizeEvent(
+  return finalizePowEvent(
     {
       kind: KIND_WRAP,
       content: nip44Encrypt(JSON.stringify(seal), convKey),

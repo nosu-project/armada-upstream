@@ -58,7 +58,7 @@ describe("NIP-17 seal + wrap round trip", () => {
       pubkey: senderPk,
     });
     const seal = await sealDmRumor(rumor, recipientPk, rawSigner(senderSk));
-    const wrap = wrapDmSeal(seal, recipientPk);
+    const wrap = await wrapDmSeal(seal, recipientPk);
 
     expect(wrap.kind).toBe(KIND_DM_WRAP);
     expect(wrap.tags).toContainEqual(["p", recipientPk]);
@@ -83,7 +83,7 @@ describe("NIP-17 seal + wrap round trip", () => {
       pubkey: senderPk,
     });
     const selfSeal = await sealDmRumor(rumor, senderPk, rawSigner(senderSk));
-    const selfWrap = wrapDmSeal(selfSeal, senderPk);
+    const selfWrap = await wrapDmSeal(selfSeal, senderPk);
 
     const opened = await openDmWrap(selfWrap, rawSigner(senderSk), senderPk);
     expect(opened?.author).toBe(senderPk);
@@ -94,7 +94,7 @@ describe("NIP-17 seal + wrap round trip", () => {
     const now = Math.floor(Date.now() / 1000);
     const rumor = buildDmRumor({ kind: KIND_DM_CHAT, content: "x", tags: dmChatTags([recipientPk]), pubkey: senderPk });
     const seal = await sealDmRumor(rumor, recipientPk, rawSigner(senderSk));
-    const wrap = wrapDmSeal(seal, recipientPk);
+    const wrap = await wrapDmSeal(seal, recipientPk);
     for (const ts of [seal.created_at, wrap.created_at]) {
       expect(ts).toBeLessThanOrEqual(now + 1);
       expect(ts).toBeGreaterThanOrEqual(now - MAX_WRAP_BACKDATE_SECS - 1);
@@ -106,8 +106,8 @@ describe("NIP-17 seal + wrap round trip", () => {
   it("adds the first-contact k hint only when asked", async () => {
     const rumor = buildDmRumor({ kind: KIND_DM_CHAT, content: "hi", tags: dmChatTags([recipientPk]), pubkey: senderPk });
     const seal = await sealDmRumor(rumor, recipientPk, rawSigner(senderSk));
-    const first = wrapDmSeal(seal, recipientPk, { firstContact: true });
-    const later = wrapDmSeal(seal, recipientPk);
+    const first = await wrapDmSeal(seal, recipientPk, { firstContact: true });
+    const later = await wrapDmSeal(seal, recipientPk);
     expect(first.tags).toContainEqual(["k", "14"]);
     expect(later.tags.some(([n]) => n === "k")).toBe(false);
   });
@@ -121,7 +121,7 @@ describe("NIP-17 seal + wrap round trip", () => {
       pubkey: impostorPk, // claims someone else
     });
     const seal = await sealDmRumor(rumor, recipientPk, rawSigner(senderSk)); // sealed by sender
-    const wrap = wrapDmSeal(seal, recipientPk);
+    const wrap = await wrapDmSeal(seal, recipientPk);
     expect(await openDmWrap(wrap, rawSigner(recipientSk), recipientPk)).toBeUndefined();
   });
 
@@ -135,14 +135,14 @@ describe("NIP-17 seal + wrap round trip", () => {
       tags: [],
       created_at: Math.floor(Date.now() / 1000),
     });
-    const wrap = wrapDmSeal(seal, recipientPk);
+    const wrap = await wrapDmSeal(seal, recipientPk);
     expect(await openDmWrap(wrap, rawSigner(recipientSk), recipientPk)).toBeUndefined();
   });
 
   it("yields undefined for a wrap addressed to someone else", async () => {
     const rumor = buildDmRumor({ kind: KIND_DM_CHAT, content: "not yours", tags: dmChatTags([recipientPk]), pubkey: senderPk });
     const seal = await sealDmRumor(rumor, recipientPk, rawSigner(senderSk));
-    const wrap = wrapDmSeal(seal, recipientPk);
+    const wrap = await wrapDmSeal(seal, recipientPk);
     const strangerSk = generateSecretKey();
     expect(await openDmWrap(wrap, rawSigner(strangerSk), getPublicKey(strangerSk))).toBeUndefined();
   });
@@ -156,7 +156,7 @@ describe("NIP-17 seal + wrap round trip", () => {
       createdAt: Math.floor(Date.now() / 1000) + 7 * 24 * 3600,
     });
     const seal = await sealDmRumor(rumor, recipientPk, rawSigner(senderSk));
-    const wrap = wrapDmSeal(seal, recipientPk);
+    const wrap = await wrapDmSeal(seal, recipientPk);
     expect(await openDmWrap(wrap, rawSigner(recipientSk), recipientPk)).toBeUndefined();
   });
 });
@@ -279,7 +279,7 @@ describe("disappearing messages (NIP-40)", () => {
     expect(deadline).toBeLessThanOrEqual(now() + 600);
 
     const seal = await sealDmRumor(rumor, recipientPk, rawSigner(senderSk));
-    const wrap = wrapDmSeal(seal, recipientPk);
+    const wrap = await wrapDmSeal(seal, recipientPk);
 
     // The outer tag is the only one a relay can act on; the inner two are what
     // this client enforces after decryption.
@@ -289,7 +289,7 @@ describe("disappearing messages (NIP-40)", () => {
 
   it("round-trips an unexpired disappearing message", async () => {
     const rumor = expiringRumor(600);
-    const wrap = wrapDmSeal(await sealDmRumor(rumor, recipientPk, rawSigner(senderSk)), recipientPk);
+    const wrap = await wrapDmSeal(await sealDmRumor(rumor, recipientPk, rawSigner(senderSk)), recipientPk);
 
     const opened = await openDmWrap(wrap, rawSigner(recipientSk), recipientPk);
     expect(opened).toBeDefined();
@@ -300,7 +300,7 @@ describe("disappearing messages (NIP-40)", () => {
 
   it("rejects an envelope whose deadline has passed", async () => {
     const rumor = expiringRumor(-1);
-    const wrap = wrapDmSeal(await sealDmRumor(rumor, recipientPk, rawSigner(senderSk)), recipientPk);
+    const wrap = await wrapDmSeal(await sealDmRumor(rumor, recipientPk, rawSigner(senderSk)), recipientPk);
 
     expect(await openDmWrap(wrap, rawSigner(recipientSk), recipientPk)).toBeUndefined();
   });
@@ -311,7 +311,7 @@ describe("disappearing messages (NIP-40)", () => {
     const rumor = expiringRumor(-1);
     const seal = await sealDmRumor(rumor, recipientPk, rawSigner(senderSk));
     const bare = { ...seal, tags: [] };
-    const wrap = wrapDmSeal(bare, recipientPk);
+    const wrap = await wrapDmSeal(bare, recipientPk);
     expect(wrap.tags.some(([n]) => n === "expiration")).toBe(false);
 
     expect(await openDmWrap(wrap, rawSigner(recipientSk), recipientPk)).toBeUndefined();
@@ -331,7 +331,7 @@ describe("disappearing messages (NIP-40)", () => {
       },
     };
 
-    const expiring = wrapDmSeal(
+    const expiring = await wrapDmSeal(
       await sealDmRumor(expiringRumor(600), recipientPk, rawSigner(senderSk)),
       recipientPk,
     );
@@ -347,7 +347,7 @@ describe("disappearing messages (NIP-40)", () => {
       tags: dmChatTags([recipientPk]),
       pubkey: senderPk,
     });
-    const ordinary = wrapDmSeal(await sealDmRumor(plain, recipientPk, rawSigner(senderSk)), recipientPk);
+    const ordinary = await wrapDmSeal(await sealDmRumor(plain, recipientPk, rawSigner(senderSk)), recipientPk);
     expect(await openDmWrap(ordinary, spy, recipientPk)).toBeDefined();
     expect(seen).toEqual([true, true]);
   });
@@ -394,10 +394,10 @@ describe("typing indicators (ephemeral plane)", () => {
 
   it("wraps a typing rumor in a kind-21059 ephemeral wrap and round-trips it", async () => {
     const { rumor, seal } = typingWrap();
-    const wrap = wrapDmSealEphemeral(await seal, recipientPk);
+    const wrap = await wrapDmSealEphemeral(await seal, recipientPk);
 
     expect(wrap.kind).toBe(KIND_DM_WRAP_EPHEMERAL);
-    expect(wrap.tags).toEqual([["p", recipientPk]]);
+    expect(wrap.tags).toEqual([["p", recipientPk], ["nonce", expect.any(String), expect.any(String)]]);
     // Same NIP-59 anonymity as a durable wrap: a throwaway author.
     expect(wrap.pubkey).not.toBe(senderPk);
 
@@ -414,7 +414,7 @@ describe("typing indicators (ephemeral plane)", () => {
 
   it("is NOT backdated — a stale signal must be detectable as stale", async () => {
     const { seal } = typingWrap();
-    const wrap = wrapDmSealEphemeral(await seal, recipientPk);
+    const wrap = await wrapDmSealEphemeral(await seal, recipientPk);
     // wrapDmSeal randomizes up to 2 days into the past; this one is now.
     expect(Math.abs(wrap.created_at - now())).toBeLessThanOrEqual(2);
   });
@@ -422,7 +422,7 @@ describe("typing indicators (ephemeral plane)", () => {
   it("carries no expiration tag on any layer", async () => {
     const { seal } = typingWrap();
     const resolved = await seal;
-    const wrap = wrapDmSealEphemeral(resolved, recipientPk);
+    const wrap = await wrapDmSealEphemeral(resolved, recipientPk);
     expect(dmTypingTags([recipientPk]).some(([n]) => n === "expiration")).toBe(false);
     expect(expirationOf(resolved.tags)).toBeUndefined();
     expect(expirationOf(wrap.tags)).toBeUndefined();
@@ -430,7 +430,7 @@ describe("typing indicators (ephemeral plane)", () => {
 
   it("does not open an ephemeral wrap through the durable (default) path", async () => {
     const { seal } = typingWrap();
-    const wrap = wrapDmSealEphemeral(await seal, recipientPk);
+    const wrap = await wrapDmSealEphemeral(await seal, recipientPk);
     // The inbox sync opens with the default wrapKind, so a typing signal can
     // never be mistaken for a message and land in the rumor store.
     expect(await openDmWrap(wrap, rawSigner(recipientSk), recipientPk)).toBeUndefined();
@@ -438,7 +438,7 @@ describe("typing indicators (ephemeral plane)", () => {
 
   it("does not open a durable wrap through the ephemeral path", async () => {
     const { seal } = typingWrap();
-    const wrap = wrapDmSeal(await seal, recipientPk);
+    const wrap = await wrapDmSeal(await seal, recipientPk);
     expect(
       await openDmWrap(wrap, rawSigner(recipientSk), recipientPk, {
         wrapKind: KIND_DM_WRAP_EPHEMERAL,
