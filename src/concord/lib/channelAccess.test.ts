@@ -10,7 +10,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { channelRoleIds, channelsHingingOn, isEntitled, vendableChannels } from "./channelAccess";
+import { channelRoleIds, channelsHingingOn, isEntitled, roleRevokeCut, vendableChannels } from "./channelAccess";
 import { bytesToHex } from "./derive";
 import { Permissions, type CommunityRoles, type Role } from "./roles";
 
@@ -201,6 +201,62 @@ describe("channelsHingingOn (which channels a role toggle moves)", () => {
 
   it("never reports the owner, who is entitled with or without any role", () => {
     expect(channelsHingingOn(roster, OWNER, OWNER, ROLE_TESTER, channels)).toEqual({ held: [], unheld: [] });
+  });
+});
+
+describe("roleRevokeCut (the rekey a bulk role revoke owes)", () => {
+  const SECOND = "3".repeat(64);
+  const AUDITOR = "4".repeat(64);
+  const UNRANKED = "5".repeat(64);
+  const BANNED = "6".repeat(64);
+  const channels = [
+    { idHex: CH_SECRET, heldByMe: true },
+    { idHex: CH_OTHER, heldByMe: false },
+  ];
+  const tester = roster.roles.find((r) => r.roleId === ROLE_TESTER)!;
+  const held: CommunityRoles = {
+    roles: roster.roles,
+    grants: [
+      { member: HOLDER, roleIds: [ROLE_TESTER] },
+      { member: SECOND, roleIds: [ROLE_TESTER, ROLE_AUDIT] },
+      { member: AUDITOR, roleIds: [ROLE_AUDIT] },
+      { member: UNRANKED, roleIds: [ROLE_TESTER] },
+      { member: BANNED, roleIds: [ROLE_AUDIT] },
+    ],
+  };
+
+  it("cuts the stripped holders and keeps everyone still entitled", () => {
+    // UNRANKED wasn't stripped (not outranked), so keeps the role and the key.
+    const cut = roleRevokeCut(held, OWNER, tester, [HOLDER, SECOND], channels, new Set([BANNED]));
+    expect(cut).not.toBeNull();
+    expect(cut!.channelIdHex).toBe(CH_SECRET);
+    expect(cut!.heldByMe).toBe(true);
+    expect(cut!.removed).toEqual([HOLDER]);
+    expect(cut!.keep.sort()).toEqual([OWNER, SECOND, AUDITOR, UNRANKED].sort());
+    expect(cut!.keep).not.toContain(HOLDER);
+    expect(cut!.keep).not.toContain(BANNED);
+  });
+
+  it("reports a channel whose key I don't hold, so the caller can say so", () => {
+    const elsewhere = roster.roles.find((r) => r.roleId === ROLE_ELSEWHERE)!;
+    const grants: CommunityRoles = { ...roster, grants: [{ member: HOLDER, roleIds: [ROLE_ELSEWHERE] }] };
+    expect(roleRevokeCut(grants, OWNER, elsewhere, [HOLDER], channels)).toMatchObject({
+      channelIdHex: CH_OTHER,
+      heldByMe: false,
+      removed: [HOLDER],
+    });
+  });
+
+  it("is null when nobody is cut", () => {
+    expect(roleRevokeCut(held, OWNER, tester, [], channels)).toBeNull();
+    // SECOND keeps the channel through Auditor.
+    expect(roleRevokeCut(held, OWNER, tester, [SECOND], channels)).toBeNull();
+  });
+
+  it("is null for a server-scope role or a channel that isn't private", () => {
+    const mods = roster.roles.find((r) => r.roleId === ROLE_MODS)!;
+    expect(roleRevokeCut(held, OWNER, mods, [HOLDER], channels)).toBeNull();
+    expect(roleRevokeCut(held, OWNER, tester, [HOLDER], [{ idHex: CH_OTHER, heldByMe: true }])).toBeNull();
   });
 });
 

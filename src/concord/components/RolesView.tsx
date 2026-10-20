@@ -9,7 +9,10 @@ import { ColorPicker } from "@/components/ui/color-picker";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { useChannelRekey } from "@/concord/hooks/useRekey";
 import { useRoles } from "@/concord/hooks/useRoles";
+import { roleRevokeCut } from "@/concord/lib/channelAccess";
+import { bytesToHex } from "@/concord/lib/derive";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { toast } from "@/hooks/useToast";
@@ -73,6 +76,7 @@ export function RolesView({ community }: { community: Community }) {
 
 function RolesBody({ community }: { community: Community }) {
   const { folded, saveRole, isSavingRole, setMemberRoles, isSettingRoles, newRoleId } = useRoles(community);
+  const { rekeyChannel, isRekeyingChannel, canRekeyChannel } = useChannelRekey(community);
   const { user } = useCurrentUser();
   const intl = useIntl();
   const [editing, setEditing] = useState<Role | null>(null);
@@ -86,7 +90,7 @@ function RolesBody({ community }: { community: Community }) {
 
   const roster = folded?.roster ?? emptyRoles();
   const actor = user?.pubkey;
-  const busy = isSavingRole || isSettingRoles;
+  const busy = isSavingRole || isSettingRoles || isRekeyingChannel;
 
   const roles = useMemo(
     () => [...(folded?.roster.roles ?? [])].sort(byDisplayOrder),
@@ -98,6 +102,11 @@ function RolesBody({ community }: { community: Community }) {
     () => [...(folded?.channels.values() ?? [])].filter((c) => !c.deleted),
     [folded],
   );
+  // Every live Private Channel, flagged by whether I hold its key (see roleRevokeCut).
+  const privateChannels = useMemo(() => {
+    const heldIds = new Set(community.privateChannels.map((ch) => bytesToHex(ch.id)));
+    return channels.filter((c) => c.isPrivate).map((c) => ({ idHex: c.channelIdHex, heldByMe: heldIds.has(c.channelIdHex) }));
+  }, [community, channels]);
   const liveChannel = (channelId: string) => {
     const c = folded?.channels.get(channelId);
     return c && !c.deleted ? c : undefined;
@@ -325,6 +334,42 @@ function RolesBody({ community }: { community: Community }) {
     void commitOrder(next);
   };
 
+  /** Rotate a revoked role's channel key away from the members it cut; the reason it couldn't, else null. */
+  const rotateAway = async (cut: NonNullable<ReturnType<typeof roleRevokeCut>>): Promise<string | null> => {
+    const channel = `#${liveChannel(cut.channelIdHex)?.name ?? cut.channelIdHex.slice(0, 8)}`;
+    if (!cut.heldByMe) {
+      return t(
+        {
+          id: "rolesView.keyNotHeld",
+          defaultMessage: "You don't hold the key to {channel}, so its former holders keep reading until a member who does rotates it.",
+        },
+        { channel },
+      );
+    }
+    if (!canRekeyChannel) {
+      return t(
+        {
+          id: "rolesView.keyNeedsPermission",
+          defaultMessage:
+            "Its former holders still have the key to {channel}, and rotating it needs the Manage channels permission. Ask an admin to rotate it.",
+        },
+        { channel },
+      );
+    }
+    try {
+      await rekeyChannel({ channelIdHex: cut.channelIdHex, keepRecipients: cut.keep, removedTargets: cut.removed });
+      return null;
+    } catch (e) {
+      return t(
+        {
+          id: "rolesView.keyRotationFailed",
+          defaultMessage: "Rotating the key to {channel} failed, so its former holders can still read it: {error} Rotate it from the channel's access settings.",
+        },
+        { channel, error: e instanceof Error ? e.message : String(e) },
+      );
+    }
+  };
+
   /**
    * Revoke a role: strip it from every Grant, then publish it with no
    * permissions. NOT deletion: CORD-04 has no Role tombstone, so it keeps a
@@ -334,12 +379,16 @@ function RolesBody({ community }: { community: Community }) {
     setError(null);
     setEvenOut(null);
     const { strippable, skippedOwner, skippedRank } = holdersOf(role);
+    // Judged on the pre-strip roster: once the Grants land, nobody holds the role to cut.
+    const cut = roleRevokeCut(roster, ownerHex, role, strippable.map((g) => g.member), privateChannels, folded?.banned);
     let stripped = 0;
     try {
       for (const g of strippable) {
         await setMemberRoles({ member: g.member, roleIds: g.roleIds.filter((r) => r !== role.roleId) });
         stripped++;
       }
+      // The stripped members still hold the channel key; only a rotation cuts them (CORD-06).
+      const keyLeft = cut ? await rotateAway(cut) : null;
       // Clear `display` too: un-outranked holders keep the role, so a hoisted section would linger.
       await saveRole({ role: { ...role, permissions: 0n, display: undefined } });
       // Owner is separated: `canActOnMember` refuses them as a target outright.
@@ -372,6 +421,10 @@ function RolesBody({ community }: { community: Community }) {
         title: t({ id: "rolesView.roleRevoked", defaultMessage: "Role revoked" }),
         description,
       });
+      if (keyLeft) {
+        setError(keyLeft);
+        return;
+      }
       setConfirmRevoke(null);
     } catch (e) {
       const why = e instanceof Error ? e.message : t({ id: "rolesView.revokeFailed", defaultMessage: "Couldn't revoke the role." });
