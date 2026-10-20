@@ -1,3 +1,5 @@
+import { useNavigate } from "react-router-dom";
+
 import {
   ArmadaWreck,
   ArmadaWreckKeyframes,
@@ -6,9 +8,14 @@ import {
   wreckQuake,
   wreckRise,
 } from "@/components/brand/ArmadaWreck";
+import { GameOverMenu } from "@/components/brand/GameOverMenu";
 import { GameOverTitle } from "@/components/brand/GameOverTitle";
 import { useWreckMusic } from "@/components/brand/useWreckMusic";
+import { DOVE_LANDED, WreckDove } from "@/components/brand/WreckDove";
+import { common } from "@/i18n/common";
 import { FormattedMessage } from "@/i18n";
+
+const SELF_HOST_GUIDE = "https://soapbox.pub/blog/how-to-self-host-armada";
 
 /**
  * Shown at `/c/:communityId` when the community is on the blocklist
@@ -17,6 +24,7 @@ import { FormattedMessage } from "@/i18n";
  */
 export function CommunityBlocked() {
   useWreckMusic();
+  const navigate = useNavigate();
 
   return (
     <div
@@ -25,7 +33,8 @@ export function CommunityBlocked() {
       <ArmadaWreckKeyframes />
       <WreckSky />
       <div className="relative" style={wreckQuake}>
-        <ArmadaWreck className="h-auto w-[min(20rem,80vw)]" />
+        <ArmadaWreck className="block h-auto w-[min(20rem,80vw)]" />
+        <WreckDove />
       </div>
       <h1 className="relative" style={wreckRise(0)}>
         <GameOverTitle className="h-auto w-[min(24rem,80vw)]" />
@@ -33,6 +42,16 @@ export function CommunityBlocked() {
           <FormattedMessage id="communityBlocked.title" defaultMessage="This community is unavailable in Armada" />
         </span>
       </h1>
+      <GameOverMenu
+        delay={DOVE_LANDED + 0.5}
+        items={[
+          { label: <FormattedMessage {...common.continue} />, href: SELF_HOST_GUIDE },
+          {
+            label: <FormattedMessage id="communityBlocked.quit" defaultMessage="Quit" />,
+            onSelect: () => navigate("/"),
+          },
+        ]}
+      />
     </div>
   );
 }

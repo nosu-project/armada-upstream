@@ -464,6 +464,8 @@ const DUSK_LIFT = (((WRECK_IMPACT + 0.1) / DUSK_DUR) * 100).toFixed(1);
 /** Seconds from mount until an undelayed {@link wreckRise} starts: a beat after the debris settles. */
 export const WRECK_RISE = WRECK_SETTLED + 2;
 const RISE_DUR = 1.2;
+/** Seconds from mount until an undelayed {@link wreckRise} has finished. */
+export const WRECK_RISEN = WRECK_RISE + RISE_DUR;
 
 /** Fades an element in from below, moments after the strike. */
 export const wreckRise = (delay: number): CSSProperties => ({

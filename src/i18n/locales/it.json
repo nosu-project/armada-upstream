@@ -764,6 +764,7 @@
   "common.skip": "Salta",
   "common.tryAgain": "Riprova",
   "common.yes": "Sì",
+  "communityBlocked.quit": "Esci",
   "communityBlocked.title": "Questa community non è disponibile in Armada",
   "communityListLocked.decryptFailed": "Il tuo elenco di community crittografate è stato trovato, ma il tuo firmatario non l’ha decrittografato. Controlla che sia connesso e consenta la decrittografia, poi riprova.",
   "communityListLocked.noNip44": "Il tuo firmatario non può decrittografare (NIP-44), quindi le community crittografate non possono essere mostrate né raggiunte. Accedi con un firmatario che lo supporti per usarle.",

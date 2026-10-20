@@ -764,6 +764,7 @@
   "common.skip": "Overslaan",
   "common.tryAgain": "Opnieuw proberen",
   "common.yes": "Ja",
+  "communityBlocked.quit": "Afsluiten",
   "communityBlocked.title": "Deze community is niet beschikbaar in Armada",
   "communityListLocked.decryptFailed": "Je lijst met versleutelde community’s is gevonden, maar je signer heeft hem niet ontsleuteld. Controleer of hij verbonden is en ontsleutelen toestaat, en probeer het dan opnieuw.",
   "communityListLocked.noNip44": "Je signer kan niet ontsleutelen (NIP-44), dus versleutelde community’s kunnen niet worden getoond of betreden. Log in met een signer die dit ondersteunt om ze te gebruiken.",

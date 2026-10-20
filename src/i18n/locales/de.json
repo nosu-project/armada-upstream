@@ -764,6 +764,7 @@
   "common.skip": "Überspringen",
   "common.tryAgain": "Erneut versuchen",
   "common.yes": "Ja",
+  "communityBlocked.quit": "Beenden",
   "communityBlocked.title": "Diese Community ist in Armada nicht verfügbar",
   "communityListLocked.decryptFailed": "Deine Liste verschlüsselter Communitys wurde gefunden, aber dein Signer hat sie nicht entschlüsselt. Prüfe, ob er verbunden ist und Entschlüsselung erlaubt, und versuche es dann erneut.",
   "communityListLocked.noNip44": "Dein Signer kann nicht entschlüsseln (NIP-44), daher können verschlüsselte Communitys weder angezeigt noch betreten werden. Melde dich mit einem Signer an, der das unterstützt, um sie zu nutzen.",
