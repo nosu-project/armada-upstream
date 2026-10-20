@@ -330,7 +330,7 @@ export function RelaysSettings() {
               <SelectItem value="default">
                 <FormattedMessage
                   id="relaysSettings.proofOfWorkDefault"
-                  defaultMessage="Default ({bits, plural, one {# bit} other {# bits}})"
+                  defaultMessage="Default ({bits, plural, =0 {off} one {# bit} other {# bits}})"
                   values={{ bits: defaultPowDifficulty() }}
                 />
               </SelectItem>

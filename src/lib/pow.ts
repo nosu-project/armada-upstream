@@ -13,7 +13,7 @@ import { config } from "@/lib/env";
 
 import type { EventTemplate, NostrEvent } from "nostr-tools/pure";
 
-export const DEFAULT_POW_DIFFICULTY = 8;
+export const DEFAULT_POW_DIFFICULTY = 0;
 export const MAX_POW_DIFFICULTY = 32;
 
 /** Mining runs on the UI thread, so it yields this often; matches `verifyPool`'s inline slice. */

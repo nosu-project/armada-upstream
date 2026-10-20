@@ -3249,7 +3249,7 @@
   "relaysSettings.notPublished": "公開されていないため、他の Nostr アプリからあなたを見つけることはできません。",
   "relaysSettings.proofOfWork": "プルーフ・オブ・ワーク",
   "relaysSettings.proofOfWorkBits": "{bits, plural, other {#ビット}}",
-  "relaysSettings.proofOfWorkDefault": "デフォルト（{bits, plural, other {#ビット}}）",
+  "relaysSettings.proofOfWorkDefault": "デフォルト（{bits, plural, =0 {オフ} other {#ビット}}）",
   "relaysSettings.proofOfWorkInfo": "送信前にこの端末が行う計算です。これを求めるリレーにも投稿やメッセージが受け付けられます（NIP-13）。1ビット増えるごとに所要時間は2倍になります。",
   "relaysSettings.proofOfWorkOff": "オフ",
   "relaysSettings.publishedDiffers": "他の Nostr アプリがあなたを見つける方法です。ホームとは異なり、{hosts} を指定しています。",

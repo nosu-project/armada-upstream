@@ -390,7 +390,7 @@ describe("useSettingsDoc", () => {
 
     // The derived key and opaque `d`, and nothing else that would name the document.
     expect(published[0]!.pubkey).toBe(KEYRING.settings.rail.pubkey);
-    expect(published[0]!.tags).toEqual([["d", KEYRING.settings.rail.d], ["nonce", expect.any(String), expect.any(String)]]);
+    expect(published[0]!.tags).toEqual([["d", KEYRING.settings.rail.d]]);
     expect(await publishedDoc()).toEqual({ railLayout: [{ type: "item", key: "wss://a" }] });
   });
 

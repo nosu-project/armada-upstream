@@ -205,9 +205,9 @@ gates code out of the build, so it stays `import.meta.env`.
 
 ### Proof of work (NIP-13) on every published event
 
-Every event Armada hands a relay as an EVENT carries a NIP-13 `nonce`
+Every event Armada hands a relay as an EVENT can carry a NIP-13 `nonce`
 (`src/lib/pow.ts`). The difficulty is the device's choice in Settings › Relays
-(`AppConfig.powDifficulty`, per-device), else `POW_DIFFICULTY`, else 8 bits. Only
+(`AppConfig.powDifficulty`, per-device), else `POW_DIFFICULTY`, else 0 (off). Only
 the OUTER event is mined: seals, rumors, NIP-42 AUTH, NIP-98/Blossom tokens and
 zap requests are not. A new signing path must keep that true:
 

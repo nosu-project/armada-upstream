@@ -82,7 +82,7 @@ describe("explicit favorite GIF consolidation", () => {
 
     expect(signed).toHaveLength(1);
     expect(signed[0]!.pubkey).toBe(KEYRING.gifFavorites.pubkey);
-    expect(signed[0]!.tags).toEqual([["d", KEYRING.gifFavorites.d], ["nonce", expect.any(String), expect.any(String)]]);
+    expect(signed[0]!.tags).toEqual([["d", KEYRING.gifFavorites.d]]);
     const doc = await decrypt(signed[0]!);
     expect(doc.version).toBe(2);
     expect(doc.records.map((entry) => entry.gif.id).sort()).toEqual(["first", "second", "third"]);

@@ -397,7 +397,7 @@ describe("typing indicators (ephemeral plane)", () => {
     const wrap = await wrapDmSealEphemeral(await seal, recipientPk);
 
     expect(wrap.kind).toBe(KIND_DM_WRAP_EPHEMERAL);
-    expect(wrap.tags).toEqual([["p", recipientPk], ["nonce", expect.any(String), expect.any(String)]]);
+    expect(wrap.tags).toEqual([["p", recipientPk]]);
     // Same NIP-59 anonymity as a durable wrap: a throwaway author.
     expect(wrap.pubkey).not.toBe(senderPk);
 

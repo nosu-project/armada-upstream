@@ -123,7 +123,7 @@ describe("DM conversation index decoding", () => {
     expect(signed[0]).toMatchObject({
       pubkey: KEYRING.dmConversations[bucket]!.pubkey,
       kind: 30078,
-      tags: [["d", KEYRING.dmConversations[bucket]!.d], ["nonce", expect.any(String), expect.any(String)]],
+      tags: [["d", KEYRING.dmConversations[bucket]!.d]],
     });
     expect(await decryptDerived(signed[0]!)).toEqual({ version: 2, bucket, records: [entry] });
   });

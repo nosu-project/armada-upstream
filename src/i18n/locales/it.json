@@ -3249,7 +3249,7 @@
   "relaysSettings.notPublished": "Non pubblicato, quindi le altre app Nostr non possono trovarti.",
   "relaysSettings.proofOfWork": "Proof of work",
   "relaysSettings.proofOfWorkBits": "{bits, plural, one {# bit} other {# bit}}",
-  "relaysSettings.proofOfWorkDefault": "Predefinito ({bits, plural, one {# bit} other {# bit}})",
+  "relaysSettings.proofOfWorkDefault": "Predefinito ({bits, plural, =0 {disattivato} one {# bit} other {# bit}})",
   "relaysSettings.proofOfWorkInfo": "Lavoro che questo dispositivo svolge prima di ogni invio, così i relay che lo richiedono accettano i tuoi post e messaggi (NIP-13). Ogni bit in più raddoppia il tempo necessario.",
   "relaysSettings.proofOfWorkOff": "Disattivato",
   "relaysSettings.publishedDiffers": "Come ti trovano le altre app Nostr. Indica {hosts}, a differenza di Principale.",

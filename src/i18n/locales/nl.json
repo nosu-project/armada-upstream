@@ -3249,7 +3249,7 @@
   "relaysSettings.notPublished": "Niet gepubliceerd, dus andere Nostr-apps kunnen je niet vinden.",
   "relaysSettings.proofOfWork": "Proof of work",
   "relaysSettings.proofOfWorkBits": "{bits, plural, one {# bit} other {# bits}}",
-  "relaysSettings.proofOfWorkDefault": "Standaard ({bits, plural, one {# bit} other {# bits}})",
+  "relaysSettings.proofOfWorkDefault": "Standaard ({bits, plural, =0 {uit} one {# bit} other {# bits}})",
   "relaysSettings.proofOfWorkInfo": "Werk dat dit apparaat doet voordat het iets verstuurt, zodat relays die erom vragen je berichten accepteren (NIP-13). Elke extra bit verdubbelt hoe lang dat duurt.",
   "relaysSettings.proofOfWorkOff": "Uit",
   "relaysSettings.publishedDiffers": "Hoe andere Nostr-apps je vinden. Noemt {hosts}, anders dan Hoofd.",
