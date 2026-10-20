@@ -4,6 +4,15 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.66.4] - 2026-10-20
+
+Opening a community Armada has blocked, whether from the sidebar or an invite
+link, now shows its ship struck down by a bolt from the heavens and blown to
+pieces.
+
+### Changed
+- A blocked community's page and invite links show an animated scene of its ship struck by lightning and wrecked (the settled wreck when reduced motion is on)
+
 ## [0.66.3] - 2026-10-20
 
 Communities that Armada has blocked for violating its content policy can no
