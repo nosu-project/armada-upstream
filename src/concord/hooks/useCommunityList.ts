@@ -7,6 +7,7 @@ import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useRemoveRailKey } from "@/hooks/useRemoveRailKey";
 import { useEventStore } from "@/hooks/useEventStore";
 import { selfStateRelays } from "@/contexts/AppContext";
+import { useIsBlocked } from "@/lib/blocklistStore";
 import { readFolded, writeFolded } from "@/lib/foldedCache";
 import {
   addToList,
@@ -1293,16 +1294,21 @@ function usePendingJoins(): CommunityListEntry[] {
   return useSyncExternalStore(subscribePendingJoins, snapshot, snapshot);
 }
 
-/** The LIVE Concord membership entries (tombstoned ones stay in the doc but not here). */
+/**
+ * The LIVE Concord membership entries (tombstoned ones stay in the doc but not
+ * here), less any on the blocklist. A blocked membership stays in the doc too,
+ * so lifting the block brings it back.
+ */
 export function useLiveCommunities(): CommunityListEntry[] {
   const { data } = useCommunityList();
   const pending = usePendingJoins();
+  const isBlocked = useIsBlocked();
   return useMemo(() => {
     const live = data ? liveEntries(data.list) : [];
-    if (pending.length === 0) return live;
     const held = new Set(live.map((e) => e.community_id));
-    return [...live, ...pending.filter((e) => !held.has(e.community_id))];
-  }, [data, pending]);
+    return [...live, ...pending.filter((e) => !held.has(e.community_id))]
+      .filter((e) => !isBlocked(e.community_id));
+  }, [data, pending, isBlocked]);
 }
 
 /**

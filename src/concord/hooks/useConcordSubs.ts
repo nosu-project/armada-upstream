@@ -4,6 +4,7 @@ import { bytesToHex } from "@noble/hashes/utils.js";
 import { useEffect, useMemo, useRef } from "react";
 
 import { useCommunityList } from "@/concord/hooks/useCommunityList";
+import { useIsBlocked } from "@/lib/blocklistStore";
 import { readLivePause } from "@/concord/hooks/useControlPlane";
 import { canonicalJson, rehydrateCommunity, liveEntries, removedCommunityIds } from "@/concord/lib/communityList";
 import { buildConcordSubs, type ConcordSub } from "@/concord/lib/concordNotifications";
@@ -53,8 +54,13 @@ export function useConcordSubsState(): ConcordSubsState {
   const { data } = communityList;
   const queryClient = useQueryClient();
 
-  // Keyed on membership identity + epoch, so unrelated list churn is free.
-  const entries = useMemo(() => (data ? liveEntries(data.list) : []), [data]);
+  // Keyed on membership identity + epoch, so unrelated list churn is free. A
+  // blocked community gets no subscription, and no native notifications.
+  const isBlocked = useIsBlocked();
+  const entries = useMemo(
+    () => (data ? liveEntries(data.list).filter((e) => !isBlocked(e.community_id)) : []),
+    [data, isBlocked],
+  );
   // Keyed on ids, so a refetch that leaves nobody new doesn't hand the native
   // controller a fresh array.
   const leftSig = data && !data.decryptFailed
