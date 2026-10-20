@@ -15,7 +15,9 @@ import { CARET, SAIL, WAVES } from "./ArmadaCrest";
 export const WRECK_SCOPE = "armada-wreck";
 
 /** Seconds from mount to the strike. */
-export const WRECK_IMPACT = 0.9;
+export const WRECK_IMPACT = 1;
+/** Seconds the rays take to gather; they then hold until the strike. */
+const GATHER = 1.1;
 /** Seconds from mount until the debris has settled. */
 export const WRECK_SETTLED = WRECK_IMPACT + 1.9;
 
@@ -213,7 +215,7 @@ export function ArmadaWreck({ className = "" }: { className?: string }) {
           transformBox: "fill-box",
           transformOrigin: "50% 0%",
           animation: [
-            anim("armada-wreck-rays", WRECK_IMPACT + 0.6, 0, "ease-in"),
+            anim("armada-wreck-rays", GATHER, 0, "ease-out"),
             anim("armada-wreck-sway", 9, WRECK_IMPACT + 0.6, "ease-in-out", "infinite"),
           ].join(", "),
         }}
@@ -441,7 +443,7 @@ export function WreckSky() {
     <div aria-hidden="true" className="pointer-events-none absolute inset-0 overflow-hidden">
       <div
         className="absolute inset-0 bg-black"
-        style={{ opacity: 0, animation: anim("armada-wreck-dusk", WRECK_IMPACT + 1.6, 0, "linear") }}
+        style={{ opacity: 0, animation: anim("armada-wreck-dusk", DUSK_DUR, 0, "linear") }}
       />
       <div
         className="absolute inset-0 bg-[radial-gradient(ellipse_at_50%_0%,rgba(255,215,106,0.16),transparent_65%)]"
@@ -455,9 +457,17 @@ export function WreckSky() {
   );
 }
 
-/** Animations for {@link ArmadaWreck}'s entrance onto the page, after the strike. */
+const DUSK_DUR = WRECK_IMPACT + 1.6;
+const DUSK_PEAK = ((WRECK_IMPACT / DUSK_DUR) * 100).toFixed(1);
+const DUSK_LIFT = (((WRECK_IMPACT + 0.1) / DUSK_DUR) * 100).toFixed(1);
+
+/** Seconds from mount until an undelayed {@link wreckRise} starts: a beat after the debris settles. */
+export const WRECK_RISE = WRECK_SETTLED + 2;
+const RISE_DUR = 1.2;
+
+/** Fades an element in from below, moments after the strike. */
 export const wreckRise = (delay: number): CSSProperties => ({
-  animation: anim("armada-wreck-rise", 0.7, WRECK_IMPACT + 1 + delay),
+  animation: anim("armada-wreck-rise", RISE_DUR, WRECK_RISE + delay),
 });
 
 /** Scoped keyframes for the wreck. Render once per screen. */
@@ -578,8 +588,8 @@ export function ArmadaWreckKeyframes() {
       /* The sky darkens as the heavens gather, and the strike lifts it. */
       @keyframes armada-wreck-dusk {
         0%   { opacity: 0; }
-        36%  { opacity: 0.5; }
-        40%  { opacity: 0; }
+        ${DUSK_PEAK}%  { opacity: 0.5; }
+        ${DUSK_LIFT}%  { opacity: 0; }
         100% { opacity: 0; }
       }
       @keyframes armada-wreck-whiteout {
@@ -588,7 +598,7 @@ export function ArmadaWreckKeyframes() {
         100% { opacity: 0; }
       }
       @keyframes armada-wreck-rise {
-        from { opacity: 0; transform: translateY(6px); }
+        from { opacity: 0; transform: translateY(24px); }
         to   { opacity: 1; transform: translateY(0); }
       }
       @media (prefers-reduced-motion: reduce) {

@@ -1,11 +1,13 @@
 import { useEffect } from "react";
 
+import { WRECK_RISE } from "./ArmadaWreck";
 import { SAMPLE_RATE } from "./quietResolve";
 import type { QuietResolveResponse } from "./quietResolve.worker";
 
 const VOLUME = 0.35;
-const FADE_IN_S = 2;
 const FADE_S = 0.3;
+/** Seconds from mount: as the title starts to rise. */
+const START_S = WRECK_RISE;
 
 /**
  * Loops the wreck page's theme ("Quiet Resolve", synthesized in a worker)
@@ -25,6 +27,7 @@ export function useWreckMusic(): void {
     } catch {
       return;
     }
+    const mountedAt = performance.now();
     let cancelled = false;
     const gain = ac.createGain();
     gain.gain.value = 0;
@@ -49,10 +52,10 @@ export function useWreckMusic(): void {
         source.buffer = buffer;
         source.loop = true;
         source.connect(gain);
-        source.start();
-        const now = ac.currentTime;
-        gain.gain.setValueAtTime(0, now);
-        gain.gain.linearRampToValueAtTime(VOLUME, now + FADE_IN_S);
+        const wait = Math.max(0, START_S - (performance.now() - mountedAt) / 1000);
+        const at = ac.currentTime + wait;
+        source.start(at);
+        gain.gain.setValueAtTime(VOLUME, at);
         resume();
       } catch {
         // No usable output: the page works silently.
