@@ -246,7 +246,11 @@ export class Nip46Signer implements NostrSigner, BtcSigner {
           lastErr = err;
           logSync("nip46", `✗ ${method} publish failed: ${err instanceof Error ? err.message : String(err)}`);
         }
-        const wait = Math.min(gap, deadline - Date.now());
+        const remaining = deadline - Date.now();
+        const wait = Math.min(gap, remaining);
+        // A timer can fire a millisecond before Date.now() reaches the deadline;
+        // the wait that was clamped to it is the last one regardless.
+        const last = gap >= remaining;
         gap = Math.min(gap * 2, this.attemptTimeoutMs * MAX_GAP_FACTOR);
         const outcome = await Promise.race([
           response,
@@ -265,7 +269,7 @@ export class Nip46Signer implements NostrSigner, BtcSigner {
           logSync("nip46", `← ${method} ok in ${Date.now() - t0}ms (${copies} cop${copies === 1 ? "y" : "ies"})`);
           return result;
         }
-        if (Date.now() >= deadline) {
+        if (last || Date.now() >= deadline) {
           logSync("nip46", `✗ ${method} unanswered after ${Date.now() - t0}ms (${copies} copies)`);
           throw lastErr ?? new Error(`NIP-46 ${method} timed out after ${budgetMs}ms`);
         }
