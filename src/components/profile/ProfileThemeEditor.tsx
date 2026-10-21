@@ -3,39 +3,15 @@ import { useState } from "react";
 
 import { ThemeBackgroundField } from "@/components/ThemeBackgroundField";
 import { ThemeBuilderFields } from "@/components/ThemeBuilderFields";
+import { ThemeFontFields } from "@/components/ThemeFontFields";
 import { Button } from "@/components/ui/button";
 import { ChromeDialogContent, Dialog } from "@/components/ui/dialog";
-import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectLabel,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { usePublishProfileTheme } from "@/hooks/usePublishProfileTheme";
-import { defineMessages, FormattedMessage, t, useIntl, type MessageDescriptor } from "@/i18n";
+import { FormattedMessage, t, useIntl } from "@/i18n";
 import { toast } from "@/hooks/useToast";
-import { loadThemeFont } from "@/lib/fontLoader";
-import { themeFontOptions, type ThemeFontCategory } from "@/lib/themeFonts";
 
 import { builderStarterColors, type CoreThemeColors } from "@/themes";
 import type { DittoTheme, ThemeBackground } from "@/lib/themeEvent";
-
-const CATEGORY_LABELS: Record<ThemeFontCategory, MessageDescriptor> = defineMessages({
-  sans: { id: "profileThemeEditor.category.sans", defaultMessage: "Sans serif" },
-  serif: { id: "profileThemeEditor.category.serif", defaultMessage: "Serif" },
-  mono: { id: "profileThemeEditor.category.mono", defaultMessage: "Monospace" },
-  display: { id: "profileThemeEditor.category.display", defaultMessage: "Display" },
-  handwriting: { id: "profileThemeEditor.category.handwriting", defaultMessage: "Handwriting" },
-});
-
-const FONT_CATEGORIES: ThemeFontCategory[] = ["sans", "serif", "mono", "display", "handwriting"];
-
-/** Radix Select forbids an empty-string value. */
-const DEFAULT_FONT = "__default__";
 
 /** Edit and publish the profile theme (kind 16767, Ditto-compatible). Save and Remove are the only publishes. */
 export function ProfileThemeEditor({
@@ -57,58 +33,9 @@ export function ProfileThemeEditor({
   );
 }
 
-function FontSelect({
-  id,
-  label,
-  value,
-  onChange,
-  placeholder,
-}: {
-  id: string;
-  label: string;
-  value: string;
-  onChange: (family: string) => void;
-  placeholder: string;
-}) {
-  return (
-    <div className="flex-1 space-y-1.5 min-w-0">
-      <Label htmlFor={id} className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-        {label}
-      </Label>
-      <Select value={value || DEFAULT_FONT} onValueChange={(v) => onChange(v === DEFAULT_FONT ? "" : v)}>
-        <SelectTrigger id={id}>
-          <SelectValue placeholder={placeholder} />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value={DEFAULT_FONT}>{placeholder}</SelectItem>
-          {FONT_CATEGORIES.map((cat) => (
-            <SelectGroup key={cat}>
-              <SelectLabel>
-                <FormattedMessage {...CATEGORY_LABELS[cat]} />
-              </SelectLabel>
-              {themeFontOptions
-                .filter((f) => f.category === cat)
-                .map((f) => (
-                  <SelectItem
-                    key={f.family}
-                    value={f.family}
-                    style={{ fontFamily: loadThemeFont({ family: f.family }) }}
-                  >
-                    {f.family}
-                  </SelectItem>
-                ))}
-            </SelectGroup>
-          ))}
-        </SelectContent>
-      </Select>
-    </div>
-  );
-}
-
 function ThemeEditorForm({ current, onDone }: { current?: DittoTheme; onDone: () => void }) {
   const intl = useIntl();
   const { save, remove, isPending } = usePublishProfileTheme();
-  const defaultFont = intl.formatMessage({ id: "profileThemeEditor.defaultFont", defaultMessage: "Default" });
   const [uploading, setUploading] = useState(false);
 
   const [colors, setColors] = useState<CoreThemeColors>(current?.colors ?? builderStarterColors);
@@ -176,22 +103,12 @@ function ThemeEditorForm({ current, onDone }: { current?: DittoTheme; onDone: ()
         placeholder={intl.formatMessage({ id: "profileThemeEditor.titlePlaceholder", defaultMessage: "My theme" })}
       />
 
-      <div className="flex gap-3">
-        <FontSelect
-          id="profile-theme-font"
-          label={intl.formatMessage({ id: "profileThemeEditor.font", defaultMessage: "Font" })}
-          value={fontFamily}
-          onChange={setFontFamily}
-          placeholder={defaultFont}
-        />
-        <FontSelect
-          id="profile-theme-title-font"
-          label={intl.formatMessage({ id: "profileThemeEditor.nameFont", defaultMessage: "Name font" })}
-          value={titleFontFamily}
-          onChange={setTitleFontFamily}
-          placeholder={fontFamily || defaultFont}
-        />
-      </div>
+      <ThemeFontFields
+        font={fontFamily}
+        onFontChange={setFontFamily}
+        titleFont={titleFontFamily}
+        onTitleFontChange={setTitleFontFamily}
+      />
 
       <ThemeBackgroundField value={background} onChange={setBackground} onUploadingChange={setUploading} />
 

@@ -3,6 +3,7 @@ import { useState } from "react";
 
 import { ThemeBackgroundField } from "@/components/ThemeBackgroundField";
 import { ThemeBuilderFields } from "@/components/ThemeBuilderFields";
+import { ThemeFontFields } from "@/components/ThemeFontFields";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -24,21 +25,24 @@ import { useThemeLibrary } from "@/hooks/useThemeLibrary";
 import { toast } from "@/hooks/useToast";
 import { common, FormattedMessage, t, useIntl } from "@/i18n";
 
-import { builderStarterColors, type CoreThemeColors, type ThemeBackground } from "@/themes";
+import { builderStarterColors, type CoreThemeColors, type ThemeBackground, type ThemeConfig } from "@/themes";
 import type { UserTheme } from "@/hooks/useUserThemes";
 
 /**
- * Create, edit or delete a shareable theme (kind 36767). Never touches the
- * active profile theme (kind 16767). `editing` is one of the user's own themes.
+ * Create, edit or delete a theme in the user's library (kind 36767). Never
+ * touches the active profile theme (kind 16767). `editing` is one of the
+ * user's own themes; `initial` seeds a new one (e.g. the theme in use).
  */
 export function ThemeCreatorDialog({
   open,
   onOpenChange,
   editing,
+  initial,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   editing?: UserTheme;
+  initial?: ThemeConfig;
 }) {
   const intl = useIntl();
   return (
@@ -46,20 +50,23 @@ export function ThemeCreatorDialog({
       <ChromeDialogContent
         title={editing ? intl.formatMessage({ id: "themeCreatorDialog.editTitle", defaultMessage: "Edit theme" }) : intl.formatMessage({ id: "themeCreatorDialog.createTitle", defaultMessage: "Create theme" })}
       >
-        <ThemeCreatorForm editing={editing} onDone={() => onOpenChange(false)} />
+        <ThemeCreatorForm editing={editing} initial={initial} onDone={() => onOpenChange(false)} />
       </ChromeDialogContent>
     </Dialog>
   );
 }
 
-function ThemeCreatorForm({ editing, onDone }: { editing?: UserTheme; onDone: () => void }) {
+function ThemeCreatorForm({ editing, initial, onDone }: { editing?: UserTheme; initial?: ThemeConfig; onDone: () => void }) {
   const intl = useIntl();
   const { publishTheme, deleteTheme, isPending: publishing } = useThemeLibrary();
   const { applyCustomTheme } = useTheme();
   const copyLinkFor = useCopyNaddrLink();
-  const [colors, setColors] = useState<CoreThemeColors>(editing?.colors ?? builderStarterColors);
-  const [name, setName] = useState(editing?.title ?? "");
-  const [background, setBackground] = useState<ThemeBackground | undefined>(editing?.background);
+  const seed = editing ?? initial;
+  const [colors, setColors] = useState<CoreThemeColors>(seed?.colors ?? builderStarterColors);
+  const [name, setName] = useState(seed?.title ?? "");
+  const [fontFamily, setFontFamily] = useState(seed?.font?.family ?? "");
+  const [titleFontFamily, setTitleFontFamily] = useState(seed?.titleFont?.family ?? "");
+  const [background, setBackground] = useState<ThemeBackground | undefined>(seed?.background);
   const [uploading, setUploading] = useState(false);
   const [applyToMine, setApplyToMine] = useState(!editing);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -81,8 +88,10 @@ function ThemeCreatorForm({ editing, onDone }: { editing?: UserTheme; onDone: ()
     if (!canPublish) return;
     const title = name.trim();
     // A credited copy stays credited only while it is still the creator's work.
-    const unchanged = !!editing
-      && JSON.stringify([colors, background]) === JSON.stringify([editing.colors, editing.background]);
+    const font = fontFamily ? { family: fontFamily } : undefined;
+    const titleFont = titleFontFamily ? { family: titleFontFamily } : undefined;
+    const unchanged = !!seed && JSON.stringify([colors, background, fontFamily, titleFontFamily])
+      === JSON.stringify([seed.colors, seed.background, seed.font?.family ?? "", seed.titleFont?.family ?? ""]);
 
     let result: Awaited<ReturnType<typeof publishTheme>>;
     try {
@@ -90,10 +99,10 @@ function ThemeCreatorForm({ editing, onDone }: { editing?: UserTheme; onDone: ()
         title,
         colors,
         background,
-        font: editing?.font,
-        titleFont: editing?.titleFont,
+        font,
+        titleFont,
         description: editing?.description,
-        source: unchanged ? editing?.source : undefined,
+        source: unchanged ? seed?.source : undefined,
         editing,
       });
     } catch (e) {
@@ -107,7 +116,16 @@ function ThemeCreatorForm({ editing, onDone }: { editing?: UserTheme; onDone: ()
       return;
     }
 
-    if (applyToMine) applyCustomTheme({ title, colors, background });
+    if (applyToMine) {
+      applyCustomTheme({
+        title,
+        colors,
+        ...(font && { font }),
+        ...(titleFont && { titleFont }),
+        ...(background && { background }),
+        ...(unchanged && seed?.source && { source: seed.source }),
+      });
+    }
 
     const copyLink = copyLinkFor(result.event);
     toast({
@@ -159,7 +177,7 @@ function ThemeCreatorForm({ editing, onDone }: { editing?: UserTheme; onDone: ()
           {editing ? <FormattedMessage id="themeCreatorDialog.editHeading" defaultMessage="edit theme" /> : <FormattedMessage id="themeCreatorDialog.newHeading" defaultMessage="new theme" />}
         </h2>
         <p className="text-sm text-muted-foreground">
-          <FormattedMessage id="themeCreatorDialog.intro" defaultMessage="Pick three colors. Every other shade is derived from them." />
+          <FormattedMessage id="themeCreatorDialog.intro" defaultMessage="Pick three colors, a font and a background. Every other shade is derived from the colors." />
         </p>
       </div>
 
@@ -169,6 +187,13 @@ function ThemeCreatorForm({ editing, onDone }: { editing?: UserTheme; onDone: ()
         title={name}
         onTitleChange={setName}
         placeholder={intl.formatMessage({ id: "themeCreatorDialog.namePlaceholder", defaultMessage: "My theme" })}
+      />
+
+      <ThemeFontFields
+        font={fontFamily}
+        onFontChange={setFontFamily}
+        titleFont={titleFontFamily}
+        onTitleFontChange={setTitleFontFamily}
       />
 
       <ThemeBackgroundField value={background} onChange={setBackground} onUploadingChange={setUploading} />

@@ -49,7 +49,7 @@ import {
 } from "@/lib/selfSyncKinds";
 import { derivedDocOf } from "@/lib/settingsKeys";
 import type { CachingReqOpts } from "@/lib/NostrBatcher";
-import { ACTIVE_THEME_KIND, parseDittoTheme } from "@/lib/themeEvent";
+import { ACTIVE_THEME_KIND, parseDittoTheme, themeToConfig } from "@/lib/themeEvent";
 import { savePushPrefs } from "@/lib/pushPrefs";
 import { KeyedThrottle } from "@/lib/keyedThrottle";
 import { loadSelfReadMarks, noteSelfRead, sinceSelfRead } from "@/lib/selfReadMarks";
@@ -488,12 +488,7 @@ function NostrSyncInner() {
         if (!event || cancelled) return;
         const theme = parseDittoTheme(event);
         if (theme && !cancelled) {
-          applyCustomTheme({
-            title: theme.title,
-            colors: theme.colors,
-            ...(theme.background && { background: theme.background }),
-            ...(theme.source && { source: theme.source }),
-          });
+          applyCustomTheme(themeToConfig(theme));
         }
       } catch { /* ignore */ }
     })();

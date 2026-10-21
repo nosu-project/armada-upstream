@@ -1,20 +1,19 @@
-import { Check, Loader2, Palette, Pencil, Share2 } from "lucide-react";
-import { useState } from "react";
+import { BookmarkPlus, Check, Palette, Pencil, Plus } from "lucide-react";
+import { useMemo, useState, type ReactNode } from "react";
 
 import { ThemeCreatorDialog } from "@/components/discover/ThemeCreatorDialog";
 import { ThemeBackgroundField } from "@/components/ThemeBackgroundField";
 import { ThemeBuilderFields } from "@/components/ThemeBuilderFields";
+import { ThemeFontFields } from "@/components/ThemeFontFields";
 import { Button } from "@/components/ui/button";
 import { ChromeDialogContent, Dialog } from "@/components/ui/dialog";
-import { ToastAction } from "@/components/ui/toast";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
-import { useCopyNaddrLink } from "@/hooks/useNaddrLink";
-import { useNostrPublish } from "@/hooks/useNostrPublish";
+import { useMediaSrc } from "@/hooks/useMediaPolicy";
 import { useTheme } from "@/hooks/useTheme";
 import { useUserThemes, type UserTheme } from "@/hooks/useUserThemes";
-import { toast } from "@/hooks/useToast";
-import { common, FormattedMessage, t, useIntl } from "@/i18n";
-import { buildThemeDefinitionEvent } from "@/lib/themeEvent";
+import { common, FormattedMessage, useIntl } from "@/i18n";
+import { loadThemeFont } from "@/lib/fontLoader";
+import { themeToConfig } from "@/lib/themeEvent";
 import { cn } from "@/lib/utils";
 import {
   builderStarterColors,
@@ -24,36 +23,77 @@ import {
   type CoreThemeColors,
   type ThemeBackground,
   type ThemeConfig,
+  type ThemeFont,
+  type ThemeTokens,
 } from "@/themes";
 
 import type { Theme } from "@/contexts/AppContext";
 
-function Swatch({ colors }: { colors: CoreThemeColors }) {
-  const tokens = coreToTokens(colors);
+/** What makes two themes look the same: colors, background image and body font. */
+function lookKey(t: { colors: CoreThemeColors; background?: ThemeBackground; font?: ThemeFont }): string {
+  return JSON.stringify([t.colors, t.background?.url ?? "", t.font?.family ?? ""]);
+}
+
+function MiniPage({ tokens, font, className }: { tokens: ThemeTokens; font?: string; className?: string }) {
   return (
-    <div
-      className="size-full rounded-[inherit] flex items-end p-1.5 gap-1"
-      style={{ backgroundColor: `hsl(${tokens.background})` }}
-    >
-      <span className="size-3 rounded-full" style={{ backgroundColor: `hsl(${tokens.primary})` }} />
-      <span className="size-3 rounded-full" style={{ backgroundColor: `hsl(${tokens.secondary})` }} />
-      <span className="flex-1 h-1.5 rounded-full" style={{ backgroundColor: `hsl(${tokens.muted})` }} />
+    <div className={cn("relative space-y-1 p-1.5 pt-2.5", className)}>
+      <div className="flex items-center gap-1">
+        <span className="h-1 w-3/5 rounded-full opacity-70" style={{ backgroundColor: `hsl(${tokens.foreground})` }} />
+        {font && (
+          <span className="ml-auto text-2xs leading-none" style={{ fontFamily: font, color: `hsl(${tokens.foreground})` }}>
+            Aa
+          </span>
+        )}
+      </div>
+      <span className="block h-1 w-2/5 rounded-full opacity-50" style={{ backgroundColor: `hsl(${tokens.mutedForeground})` }} />
+      <span className="block h-2 w-8 rounded-sm" style={{ backgroundColor: `hsl(${tokens.primary})` }} />
+    </div>
+  );
+}
+
+function Swatch({ colors, background, font }: { colors: CoreThemeColors; background?: ThemeBackground; font?: ThemeFont }) {
+  const tokens = useMemo(() => coreToTokens(colors), [colors]);
+  const backgroundSrc = useMediaSrc(background?.url);
+  return (
+    <div className="relative size-full" style={{ backgroundColor: `hsl(${tokens.background})` }}>
+      {backgroundSrc && (
+        <img
+          src={backgroundSrc}
+          alt=""
+          aria-hidden
+          className="absolute inset-0 size-full object-cover opacity-50"
+          decoding="async"
+          loading="lazy"
+        />
+      )}
+      <MiniPage tokens={tokens} font={loadThemeFont(font)} />
+    </div>
+  );
+}
+
+function SystemSwatch() {
+  const light = useMemo(() => coreToTokens(builtinThemes.light), []);
+  const dark = useMemo(() => coreToTokens(builtinThemes.dark), []);
+  return (
+    <div className="grid size-full grid-cols-2">
+      <div style={{ backgroundColor: `hsl(${light.background})` }}><MiniPage tokens={light} /></div>
+      <div style={{ backgroundColor: `hsl(${dark.background})` }}><MiniPage tokens={dark} /></div>
     </div>
   );
 }
 
 interface TileProps {
   label: string;
-  emoji?: string;
-  colors: CoreThemeColors;
   active: boolean;
   onClick: () => void;
-  /** Shows an edit control on the tile (the user's own library themes). */
-  onEdit?: () => void;
+  preview: ReactNode;
+  /** A small caption under the label (e.g. "Not saved"). */
+  note?: string;
+  /** A corner action on the tile: edit or save. */
+  action?: { icon: ReactNode; label: string; onClick: () => void };
 }
 
-function ThemeTile({ label, emoji, colors, active, onClick, onEdit }: TileProps) {
-  const intl = useIntl();
+function ThemeTile({ label, active, onClick, preview, note, action }: TileProps) {
   return (
     <div className="group relative">
       <button
@@ -73,148 +113,168 @@ function ThemeTile({ label, emoji, colors, active, onClick, onEdit }: TileProps)
           )}
         />
         <div className="relative aspect-[4/3] w-full overflow-hidden clip-corner">
-          <Swatch colors={colors} />
+          {preview}
           {active && (
             <span className="absolute right-1 top-1 flex size-4 items-center justify-center rounded-full bg-primary text-primary-foreground">
               <Check className="size-3" />
             </span>
           )}
         </div>
-        <span className={cn("px-0.5 text-xs font-medium truncate", onEdit && "pr-7")}>
-          {emoji ? `${emoji} ` : ""}{label}
+        <span className={cn("min-w-0 px-0.5", action && "pr-7")}>
+          <span className="block truncate text-xs font-medium">{label}</span>
+          {note && <span className="block truncate text-3xs text-muted-foreground">{note}</span>}
         </span>
       </button>
-      {onEdit && (
+      {action && (
         <Button
           variant="ghost"
           size="icon"
           className="absolute bottom-0.5 right-0.5 size-7 touch:size-11 text-muted-foreground hover:text-foreground"
-          onClick={onEdit}
-          aria-label={intl.formatMessage({ id: "themeSelector.editLabel", defaultMessage: "Edit {label}" }, { label })}
-          title={intl.formatMessage({ id: "themeSelector.editTheme", defaultMessage: "Edit theme" })}
+          onClick={action.onClick}
+          aria-label={action.label}
+          title={action.label}
         >
-          <Pencil className="size-3.5" />
+          {action.icon}
         </Button>
       )}
     </div>
   );
 }
 
-/** Theme picker, adapted from Ditto's ThemeSelector. */
+function NewThemeTile({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="group/tile flex w-full flex-col items-stretch gap-1.5 clip-corner-lg p-1.5 text-left transition-colors hover:bg-secondary/60"
+    >
+      <div className="flex aspect-[4/3] w-full items-center justify-center clip-corner bg-secondary/60 text-muted-foreground transition-colors group-hover/tile:text-primary">
+        <Plus className="size-6" />
+      </div>
+      <span className="truncate px-0.5 text-xs font-medium">
+        <FormattedMessage id="themeSelector.newTheme" defaultMessage="New theme" />
+      </span>
+    </button>
+  );
+}
+
+const GRID = "grid grid-cols-3 gap-2 sm:grid-cols-4";
+
+function SectionTitle({ children }: { children: ReactNode }) {
+  return <h3 className="mb-2 text-sm font-semibold text-muted-foreground uppercase tracking-wide">{children}</h3>;
+}
+
+/**
+ * Theme picker, after Ditto's: the user's own themes first, then presets.
+ * Creating a theme saves it to the library (kind 36767) and wears it.
+ */
 export function ThemeSelector() {
   const intl = useIntl();
   const { theme, customTheme, setTheme, applyCustomTheme } = useTheme();
   const { data: userThemes, isLoading: userThemesLoading } = useUserThemes();
   const { user } = useCurrentUser();
-  const { mutateAsync: publishEvent, isPending: sharing } = useNostrPublish();
-  const copyLinkFor = useCopyNaddrLink();
+  const [creator, setCreator] = useState<{ editing?: UserTheme; initial?: ThemeConfig } | undefined>();
   const [builderOpen, setBuilderOpen] = useState(false);
-  const [editingTheme, setEditingTheme] = useState<UserTheme | undefined>();
 
   const presetKeys = Object.keys(themePresets);
-  const activeColorsJson = theme === "custom" && customTheme
-    ? JSON.stringify(customTheme.colors)
+  const activeKey = theme === "custom" && customTheme ? lookKey(customTheme) : undefined;
+  const activePresetKey = activeKey
+    ? presetKeys.find((k) => lookKey(themePresets[k]) === activeKey)
     : undefined;
-  const activePresetKey = activeColorsJson
-    ? presetKeys.find((k) => JSON.stringify(themePresets[k].colors) === activeColorsJson)
+  const activeUserTheme = activeKey && !activePresetKey
+    ? userThemes?.find((t) => lookKey(t) === activeKey)
     : undefined;
-  const activeUserThemeId = activeColorsJson && !activePresetKey
-    ? userThemes?.find((t) => JSON.stringify(t.colors) === activeColorsJson)?.identifier
+  // A custom theme in use that is neither a preset nor in the library: shown so it can be saved.
+  const unsaved = theme === "custom" && customTheme && !activePresetKey && !activeUserTheme && !userThemesLoading
+    ? customTheme
     : undefined;
-  const isCustomBuild = theme === "custom" && !activePresetKey && !activeUserThemeId;
 
   const selectMode = (mode: Theme) => setTheme(mode);
+  const startNew = () => (user ? setCreator({}) : setBuilderOpen(true));
 
-  // Someone else's theme is already on Discover under their name.
-  const canShare = theme === "custom" && !!customTheme && !customTheme.source;
-  const shareTheme = async () => {
-    if (!customTheme) return;
-    const title = customTheme.title || "My theme";
-    // Re-sharing updates the library theme of the same name instead of adding another.
-    const existing = userThemes?.find((t) => t.title === title && !t.source);
-    const sameAsExisting = !!existing
-      && JSON.stringify([existing.colors, existing.background]) === JSON.stringify([customTheme.colors, customTheme.background]);
-    try {
-      const event = sameAsExisting
-        ? existing.event
-        : await publishEvent({
-          ...buildThemeDefinitionEvent(title, customTheme.colors, existing?.identifier, {
-            background: customTheme.background,
-            font: existing?.font,
-            titleFont: existing?.titleFont,
-            description: existing?.description,
-          }),
-          prev: existing?.event,
-        });
-      const copyLink = copyLinkFor(event);
-      toast({
-        title: sameAsExisting
-          ? t({ id: "themeSelector.alreadyShared", defaultMessage: "Already shared" })
-          : t({ id: "themeSelector.shared", defaultMessage: "Theme shared" }),
-        description: t({ id: "themeSelector.sharedDescription", defaultMessage: "It's now discoverable by others." }),
-        ...(copyLink && {
-          action: (
-            <ToastAction altText={t({ id: "themeSelector.copyLinkAlt", defaultMessage: "Copy theme link" })} onClick={copyLink}>
-              {t(common.copyLink)}
-            </ToastAction>
-          ),
-        }),
-      });
-    } catch (e) {
-      toast({
-        title: t({ id: "themeSelector.shareFailed.title", defaultMessage: "Couldn't share theme" }),
-        description: e instanceof Error
-          ? e.message
-          : t({ id: "themeSelector.shareFailed.description", defaultMessage: "Publishing failed." }),
-        variant: "destructive",
-      });
-    }
-  };
+  const editLabel = (label: string) =>
+    intl.formatMessage({ id: "themeSelector.editLabel", defaultMessage: "Edit {label}" }, { label });
 
   return (
     <div className="space-y-5">
       <div>
-        <h3 className="mb-2 text-sm font-semibold text-muted-foreground uppercase tracking-wide">
-          <FormattedMessage id="themeSelector.base" defaultMessage="Base" />
-        </h3>
-        <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
+        <SectionTitle>
+          <FormattedMessage id="themeSelector.myThemes" defaultMessage="My themes" />
+        </SectionTitle>
+        <div className={GRID}>
+          {unsaved && (
+            <ThemeTile
+              label={unsaved.title || intl.formatMessage({ id: "themeSelector.customLabel", defaultMessage: "Custom" })}
+              note={user ? intl.formatMessage({ id: "themeSelector.notSaved", defaultMessage: "Not saved" }) : undefined}
+              preview={<Swatch colors={unsaved.colors} background={unsaved.background} font={unsaved.font} />}
+              active
+              onClick={() => applyCustomTheme(unsaved)}
+              action={user
+                ? {
+                  icon: <BookmarkPlus className="size-3.5" />,
+                  label: intl.formatMessage({ id: "themeSelector.saveToMyThemes", defaultMessage: "Save to my themes" }),
+                  onClick: () => setCreator({ initial: unsaved }),
+                }
+                : {
+                  icon: <Pencil className="size-3.5" />,
+                  label: editLabel(unsaved.title || "Custom"),
+                  onClick: () => setBuilderOpen(true),
+                }}
+            />
+          )}
+          {userThemes?.map((t) => (
+            <ThemeTile
+              key={t.identifier || t.title}
+              label={t.title}
+              preview={<Swatch colors={t.colors} background={t.background} font={t.font} />}
+              active={activeUserTheme?.identifier === t.identifier}
+              onClick={() => applyCustomTheme(themeToConfig(t))}
+              action={{
+                icon: <Pencil className="size-3.5" />,
+                label: editLabel(t.title),
+                onClick: () => setCreator({ editing: t }),
+              }}
+            />
+          ))}
+          <NewThemeTile onClick={startNew} />
+        </div>
+        {userThemesLoading && (
+          <p className="mt-2 text-xs text-muted-foreground">
+            <FormattedMessage id="themeSelector.loadingThemes" defaultMessage="Loading your themes…" />
+          </p>
+        )}
+      </div>
+
+      <div>
+        <SectionTitle>
+          <FormattedMessage id="themeSelector.presets" defaultMessage="Presets" />
+        </SectionTitle>
+        <div className={GRID}>
           <ThemeTile
             label={intl.formatMessage({ id: "themeSelector.system", defaultMessage: "System" })}
-            emoji="💻"
-            colors={builtinThemes.dark}
+            preview={<SystemSwatch />}
             active={theme === "system"}
             onClick={() => selectMode("system")}
           />
           <ThemeTile
             label={intl.formatMessage({ id: "themeSelector.light", defaultMessage: "Light" })}
-            emoji="☀️"
-            colors={builtinThemes.light}
+            preview={<Swatch colors={builtinThemes.light} />}
             active={theme === "light"}
             onClick={() => selectMode("light")}
           />
           <ThemeTile
             label={intl.formatMessage({ id: "themeSelector.dark", defaultMessage: "Dark" })}
-            emoji="🌙"
-            colors={builtinThemes.dark}
+            preview={<Swatch colors={builtinThemes.dark} />}
             active={theme === "dark"}
             onClick={() => selectMode("dark")}
           />
-        </div>
-      </div>
-
-      <div>
-        <h3 className="mb-2 text-sm font-semibold text-muted-foreground uppercase tracking-wide">
-          <FormattedMessage id="themeSelector.presets" defaultMessage="Presets" />
-        </h3>
-        <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
           {presetKeys.map((key) => {
             const preset = themePresets[key];
             return (
               <ThemeTile
                 key={key}
-                label={preset.label}
-                emoji={preset.emoji}
-                colors={preset.colors}
+                label={`${preset.emoji} ${preset.label}`}
+                preview={<Swatch colors={preset.colors} />}
                 active={activePresetKey === key}
                 onClick={() => applyCustomTheme({ title: preset.label, colors: preset.colors })}
               />
@@ -223,92 +283,46 @@ export function ThemeSelector() {
         </div>
       </div>
 
-      {(userThemesLoading || (userThemes && userThemes.length > 0)) && (
-        <div>
-          <h3 className="mb-2 text-sm font-semibold text-muted-foreground uppercase tracking-wide">
-            <FormattedMessage id="themeSelector.myThemes" defaultMessage="My themes" />
-          </h3>
-          {userThemesLoading ? (
-            <p className="text-xs text-muted-foreground">
-              <FormattedMessage id="themeSelector.loadingThemes" defaultMessage="Loading your themes…" />
-            </p>
-          ) : (
-            <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
-              {userThemes!.map((t) => (
-                <ThemeTile
-                  key={t.identifier || t.title}
-                  label={t.title}
-                  colors={t.colors}
-                  active={activeUserThemeId === t.identifier}
-                  onClick={() => applyCustomTheme({
-                    title: t.title,
-                    colors: t.colors,
-                    ...(t.background && { background: t.background }),
-                    ...(t.source && { source: t.source }),
-                  })}
-                  onEdit={() => setEditingTheme(t)}
-                />
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
-      <Button className="w-full clip-corner-lg" onClick={() => setBuilderOpen(true)}>
-        <Palette className="size-4 mr-2" />
-        {isCustomBuild ? (
-          <FormattedMessage id="themeSelector.editCustom" defaultMessage="Edit custom theme" />
-        ) : (
-          <FormattedMessage id="themeSelector.createCustom" defaultMessage="Create a custom theme" />
-        )}
-      </Button>
-
-      {user && canShare && (
-        <Button
-          variant="secondary"
-          className="w-full clip-corner-lg"
-          onClick={shareTheme}
-          disabled={sharing}
-        >
-          {sharing ? <Loader2 className="size-4 mr-2 animate-spin" /> : <Share2 className="size-4 mr-2" />}
-          <FormattedMessage id="themeSelector.shareToDiscover" defaultMessage="Share to Discover" />
-        </Button>
-      )}
-
-      <ThemeBuilderDialog
-        open={builderOpen}
-        onOpenChange={setBuilderOpen}
-        initial={isCustomBuild ? customTheme : undefined}
-        onApply={applyCustomTheme}
-      />
-
-      {editingTheme && (
+      {creator && (
         <ThemeCreatorDialog
           open
-          onOpenChange={(open) => { if (!open) setEditingTheme(undefined); }}
-          editing={editingTheme}
+          onOpenChange={(open) => { if (!open) setCreator(undefined); }}
+          editing={creator.editing}
+          initial={creator.initial}
+        />
+      )}
+
+      {builderOpen && (
+        <LocalThemeBuilderDialog
+          onOpenChange={setBuilderOpen}
+          initial={unsaved}
+          onApply={applyCustomTheme}
         />
       )}
     </div>
   );
 }
 
-interface BuilderProps {
-  open: boolean;
+/** Signed out there is no library: build a theme on this device only. */
+function LocalThemeBuilderDialog({
+  onOpenChange,
+  initial,
+  onApply,
+}: {
   onOpenChange: (open: boolean) => void;
   initial?: ThemeConfig;
   onApply: (config: ThemeConfig) => void;
-}
-
-function ThemeBuilderDialog({ open, onOpenChange, initial, onApply }: BuilderProps) {
+}) {
   const intl = useIntl();
   const [colors, setColors] = useState<CoreThemeColors>(initial?.colors ?? builderStarterColors);
-  const [title, setTitle] = useState(initial?.title ?? "My theme");
+  const [title, setTitle] = useState(initial?.title ?? "");
+  const [fontFamily, setFontFamily] = useState(initial?.font?.family ?? "");
+  const [titleFontFamily, setTitleFontFamily] = useState(initial?.titleFont?.family ?? "");
   const [background, setBackground] = useState<ThemeBackground | undefined>(initial?.background);
   const [uploading, setUploading] = useState(false);
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open onOpenChange={onOpenChange}>
       <ChromeDialogContent title={intl.formatMessage({ id: "themeSelector.builder.dialogTitle", defaultMessage: "Custom theme" })}>
         <div className="flex flex-col items-center gap-2 text-center">
           <div className="flex size-12 items-center justify-center clip-corner-lg bg-primary/15 text-primary">
@@ -319,8 +333,8 @@ function ThemeBuilderDialog({ open, onOpenChange, initial, onApply }: BuilderPro
           </h2>
           <p className="text-sm text-muted-foreground">
             <FormattedMessage
-              id="themeSelector.builder.description"
-              defaultMessage="Pick three colors. Every other shade is derived from them."
+              id="themeSelector.builder.localDescription"
+              defaultMessage="Kept on this device. Log in to save themes to your library and share them."
             />
           </p>
         </div>
@@ -331,6 +345,14 @@ function ThemeBuilderDialog({ open, onOpenChange, initial, onApply }: BuilderPro
             onColorsChange={setColors}
             title={title}
             onTitleChange={setTitle}
+            placeholder={intl.formatMessage({ id: "themeSelector.builder.namePlaceholder", defaultMessage: "My theme" })}
+          />
+
+          <ThemeFontFields
+            font={fontFamily}
+            onFontChange={setFontFamily}
+            titleFont={titleFontFamily}
+            onTitleFontChange={setTitleFontFamily}
           />
 
           <ThemeBackgroundField value={background} onChange={setBackground} onUploadingChange={setUploading} />
@@ -344,7 +366,13 @@ function ThemeBuilderDialog({ open, onOpenChange, initial, onApply }: BuilderPro
               disabled={uploading}
               onClick={() => {
                 // Built here, so no creator credit carries over.
-                onApply({ title: title.trim() || "Custom", colors, ...(background && { background }) });
+                onApply({
+                  title: title.trim() || "Custom",
+                  colors,
+                  ...(fontFamily && { font: { family: fontFamily } }),
+                  ...(titleFontFamily && { titleFont: { family: titleFontFamily } }),
+                  ...(background && { background }),
+                });
                 onOpenChange(false);
               }}
             >
