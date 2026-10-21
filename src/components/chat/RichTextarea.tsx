@@ -15,6 +15,7 @@ const LAYOUT_PROPS = [
   "borderTopWidth", "borderRightWidth", "borderBottomWidth", "borderLeftWidth",
   "direction", "unicodeBidi", "wordBreak", "overflowWrap",
 ] as const;
+const PX_PROPS = ["fontSize", "lineHeight", "letterSpacing", "wordSpacing"] as const;
 
 /** A format's own markers stay plain: dimmed, never slanted, struck or underlined. */
 const content = (flags: number, format: number) => (flags & format) !== 0 && (flags & HL.MARKER) === 0;
@@ -335,6 +336,14 @@ export function RichTextarea({ rich, ref, className, onKeyDown, onCopy, onCut, f
       overlay.style.height = style.height;
       for (const prop of LAYOUT_PROPS) inner.style[prop] = style[prop];
       inner.style.width = style.width;
+      // Android WebView scales text by the system font size, and a computed size
+      // already carries it, so a copied size would be scaled twice. Divide it back out.
+      const copied = getComputedStyle(inner);
+      for (const prop of PX_PROPS) {
+        const want = parseFloat(style[prop]);
+        const got = parseFloat(copied[prop]);
+        if (want > 0 && got > 0 && Math.abs(got - want) > 0.001) inner.style[prop] = `${(want * want) / got}px`;
+      }
       syncText();
     };
     sync();
