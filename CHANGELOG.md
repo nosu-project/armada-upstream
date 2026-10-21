@@ -4,6 +4,15 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.66.7] - 2026-10-21
+
+Formatted text in the message box now stays lined up with what you type on
+Android with a larger system font size, and while the window is being resized.
+
+### Fixed
+- Formatted text in the message box no longer drifts from the typed text on Android when the system font size is enlarged
+- Formatted text in the message box keeps up with the typed text while the window is resized
+
 ## [0.66.6] - 2026-10-20
 
 Community calls can now be recorded, with every participant told and anyone
