@@ -90,6 +90,84 @@ describe("usePressDrag", () => {
     expect(result.current.shouldSuppressClick()).toBe(false); // click navigates
   });
 
+  describe("heldTouchOpensMenu", () => {
+    function setupMenu() {
+      const calls = { onPickup: vi.fn(), onAim: vi.fn(), onDrop: vi.fn(), onAbort: vi.fn() };
+      const containerRef = { current: null as HTMLElement | null };
+      const view = renderHook(() =>
+        usePressDrag<string>({ containerRef, heldTouchOpensMenu: true, ...calls }),
+      );
+      const entry = document.createElement("a");
+      // Stands in for the Radix menu the trigger opens: it prevents the contextmenu it opens on.
+      const menu = document.createElement("div");
+      menu.setAttribute("role", "menu");
+      document.body.append(entry, menu);
+      const menus = vi.fn((ev: Event) => {
+        ev.preventDefault();
+        menu.dataset.state = "open";
+      });
+      const escapes = vi.fn();
+      const cancels = vi.fn();
+      entry.addEventListener("contextmenu", menus);
+      menu.addEventListener("keydown", (ev) => {
+        if (ev.key === "Escape") escapes();
+      });
+      entry.addEventListener("pointercancel", cancels);
+      entry.addEventListener("pointerdown", view.result.current.begin("row-a"));
+      const touch = { pointerType: "touch" } as const;
+      act(() => {
+        entry.dispatchEvent(pointer("pointerdown", { ...touch, clientY: 50 }));
+        vi.advanceTimersByTime(300);
+      });
+      const cleanup = () => {
+        entry.remove();
+        menu.remove();
+      };
+      return { ...view, calls, menus, escapes, cancels, touch, cleanup };
+    }
+
+    it("opens the menu on a still hold without picking up, and a still release does not click", () => {
+      const { result, calls, menus, escapes, cancels, touch, cleanup } = setupMenu();
+      expect(menus).toHaveBeenCalledTimes(1);
+      expect(calls.onPickup).not.toHaveBeenCalled();
+      expect(result.current.dragging).toBe(false);
+      // Radix's own long-press timer is cleared at pickup, so it cannot open a second time.
+      expect(cancels).toHaveBeenCalledTimes(1);
+      act(() => void window.dispatchEvent(pointer("pointerup", { ...touch, clientY: 52 })));
+      expect(escapes).not.toHaveBeenCalled();
+      expect(calls.onPickup).not.toHaveBeenCalled();
+      expect(calls.onDrop).not.toHaveBeenCalled();
+      expect(result.current.shouldSuppressClick()).toBe(true);
+      cleanup();
+    });
+
+    it("closes the menu and picks up once the touch travels", () => {
+      const { result, calls, escapes, touch, cleanup } = setupMenu();
+      act(() => void window.dispatchEvent(pointer("pointermove", { ...touch, clientY: 55 })));
+      expect(escapes).not.toHaveBeenCalled();
+      expect(calls.onPickup).not.toHaveBeenCalled();
+      act(() => void window.dispatchEvent(pointer("pointermove", { ...touch, clientY: 120 })));
+      expect(escapes).toHaveBeenCalledTimes(1);
+      expect(calls.onPickup).toHaveBeenCalledWith("row-a", 0, 120);
+      expect(result.current.dragging).toBe(true);
+      act(() => {
+        window.dispatchEvent(pointer("pointermove", { ...touch, clientY: 140 }));
+        window.dispatchEvent(pointer("pointerup", { ...touch, clientY: 140 }));
+      });
+      expect(escapes).toHaveBeenCalledTimes(1);
+      expect(calls.onDrop).toHaveBeenCalledWith("row-a");
+      cleanup();
+    });
+
+    it("still swallows the browser's own long-press contextmenu mid-hold", () => {
+      const { menus, cleanup } = setupMenu();
+      const entry = document.querySelector("a")!;
+      act(() => void entry.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true })));
+      expect(menus).toHaveBeenCalledTimes(1);
+      cleanup();
+    });
+  });
+
   it("aborts without dropping when the browser reclaims the pointer", () => {
     const { result, calls } = setup();
     act(() => {
