@@ -34,6 +34,8 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { CameraButton, LeaveButton, MicButton, ScreenShareButton } from "@/components/chat/CallControls";
+import { RecordingMenuItems } from "@/components/chat/CallRecorder";
+import { RecordingIndicator } from "@/components/chat/CallRecordingIndicators";
 import { VolumeSliderRow } from "@/components/VoiceUserContextMenu";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useCall } from "@/hooks/useCall";
@@ -278,6 +280,7 @@ export function DeviceMenu({ className }: { className?: string }) {
             />
           </label>
         ))}
+        <RecordingMenuItems />
         <ParticipantVolumeGroup />
       </DropdownMenuContent>
     </DropdownMenu>
@@ -424,6 +427,7 @@ export function InCallView({ label, onLabelClick, stacked, compact }: InCallView
           <FormattedMessage id="voiceBar.connected" defaultMessage="Voice connected" />
         </span>
       )}
+      <RecordingIndicator />
       {/* The w-60 channel column fits only five controls, so desktop toggles the stage here. */}
       {!compact && (
         <button

@@ -22,7 +22,7 @@ import {
 import { Capacitor, type PluginListenerHandle } from "@capacitor/core";
 import { useQuery } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 
@@ -75,7 +75,9 @@ import {
   useVoicePresence,
   useVoiceReactions,
 } from "@/concord/hooks/useVoice";
-import { CallSignalsContext, type CallSignals } from "@/contexts/CallSignalsContext";
+import { CallSignalsContext, type CallRecordingSignals, type CallSignals } from "@/contexts/CallSignalsContext";
+import { CallRecorderProvider, RecordingNotices } from "@/components/chat/CallRecorder";
+import { getNoRecord, setNoRecord, subscribeNoRecord } from "@/lib/callRecording/prefs";
 import { VoiceRejoiningContext } from "@/contexts/VoiceRejoiningContext";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { relayToRouteParam } from "@/lib/platform";
@@ -783,6 +785,8 @@ function VoiceRoomShell({
       <PlaybackVolumeApplier />
       <DetectedSpeakersProvider>
       <SpeakingReporter />
+      <CallRecorderProvider>
+      <RecordingNotices />
       <VoiceRejoiningContext.Provider value={rejoining}>
         {placeStage(
           <ServerScopeProvider relayUrl={scopeRelayUrl}>
@@ -791,6 +795,7 @@ function VoiceRoomShell({
         )}
         {placeBar(mobileBar, desktopBar, true)}
       </VoiceRejoiningContext.Provider>
+      </CallRecorderProvider>
       </DetectedSpeakersProvider>
       </ScreenShareWatchProvider>
     </LiveKitRoom>
@@ -1052,15 +1057,59 @@ function ConcordVoiceRoom({
   // Heartbeat (§4) announces the broker that actually minted the token, not the
   // nominated one, so others aren't steered to an unreachable origin.
   const [hevcIdentities, setHevcIdentities] = useState<string[]>([]);
-  const { sendReaction, announceAdditionalIdentities } = useVoiceHeartbeat(
+  const noRecord = useSyncExternalStore(subscribeNoRecord, getNoRecord);
+  const { sendReaction, announceAdditionalIdentities, announceRecording } = useVoiceHeartbeat(
     community,
     channel,
     tokenData?.identity,
     tokenData?.origin,
     handRaised,
     hevcIdentities,
+    noRecord,
   );
   const reactions = useVoiceReactions(community, channel);
+
+  // Our own flags count before the heartbeat echoes back, like the raised hand.
+  const [recordingSelf, setRecordingSelf] = useState(false);
+  const recorders = useMemo(() => {
+    const set = new Set(fold.present.filter((p) => p.recording).map((p) => p.author));
+    if (user) {
+      if (recordingSelf) set.add(user.pubkey);
+      else set.delete(user.pubkey);
+    }
+    return set;
+  }, [fold, recordingSelf, user]);
+  const refusing = useMemo(() => {
+    const set = new Set(fold.present.filter((p) => p.noRecord).map((p) => p.author));
+    if (user) {
+      if (noRecord) set.add(user.pubkey);
+      else set.delete(user.pubkey);
+    }
+    return set;
+  }, [fold, noRecord, user]);
+  const announce = useCallback(
+    async (recording: boolean) => {
+      setRecordingSelf(recording);
+      const delivered = await announceRecording(recording);
+      if (recording && !delivered) {
+        setRecordingSelf(false);
+        void announceRecording(false);
+      }
+      return delivered;
+    },
+    [announceRecording],
+  );
+  const recordingSignals = useMemo<CallRecordingSignals>(
+    () => ({
+      recorders,
+      refusing,
+      noRecord,
+      setNoRecord,
+      announce,
+      names: { host: community.name, channel: channel.name },
+    }),
+    [recorders, refusing, noRecord, announce, community.name, channel.name],
+  );
 
   // Includes our own raised hand before the heartbeat echoes back.
   const raisedHands = useMemo(() => {
@@ -1541,8 +1590,9 @@ function ConcordVoiceRoom({
       sendReaction,
       reactions,
       hevcScreenShare,
+      recording: recordingSignals,
     }),
-    [tokenData, handRaised, sendReaction, reactions, hevcScreenShare],
+    [tokenData, handRaised, sendReaction, reactions, hevcScreenShare, recordingSignals],
   );
 
   // No automatic split healing: presence broker hints are untrusted, and one

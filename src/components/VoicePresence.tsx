@@ -2,6 +2,7 @@ import { Hand, Headphones, MicOff, ScreenShare } from "lucide-react";
 import type { CSSProperties } from "react";
 
 import { DisplayName } from "@/components/DisplayName";
+import { RecordingFlagIcons } from "@/components/RecordingFlagIcons";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { VoiceUserContextMenu, VoiceUserMenuButton } from "@/components/VoiceUserContextMenu";
@@ -88,6 +89,8 @@ export function VoiceParticipantList({
   muted,
   streaming,
   raised,
+  recording,
+  refusing,
   className,
 }: {
   participants: readonly string[];
@@ -97,6 +100,9 @@ export function VoiceParticipantList({
   streaming?: ReadonlySet<string>;
   /** Pubkeys with a raised hand (Armada client feature; Concord calls only). */
   raised?: ReadonlySet<string>;
+  /** Pubkeys recording the call, and refusing to be recorded (Concord calls only). */
+  recording?: ReadonlySet<string>;
+  refusing?: ReadonlySet<string>;
   className?: string;
 }) {
   const intl = useIntl();
@@ -113,6 +119,8 @@ export function VoiceParticipantList({
           isMuted={muted?.has(pk) ?? false}
           isStreaming={streaming?.has(pk) ?? false}
           isRaised={raised?.has(pk) ?? false}
+          isRecording={recording?.has(pk) ?? false}
+          isRefusing={refusing?.has(pk) ?? false}
         />
       ))}
     </div>
@@ -126,12 +134,16 @@ function VoiceParticipantRow({
   isMuted,
   isStreaming,
   isRaised,
+  isRecording = false,
+  isRefusing = false,
 }: {
   pubkey: string;
   isSpeaking?: boolean;
   isMuted?: boolean;
   isStreaming?: boolean;
   isRaised?: boolean;
+  isRecording?: boolean;
+  isRefusing?: boolean;
 }) {
   const intl = useIntl();
   const author = useAuthor(pubkey);
@@ -166,6 +178,7 @@ function VoiceParticipantRow({
           <DisplayName pubkey={pubkey} name={name} />
         </span>
         {isStreaming && (isSelf ? <LiveBadge /> : <WatchableLiveBadge pubkey={pubkey} />)}
+        <RecordingFlagIcons recording={isRecording} refusing={isRefusing} className="size-3.5" />
         {isRaised && (
           <Hand
             className="size-3.5 shrink-0 text-warning"

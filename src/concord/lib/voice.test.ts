@@ -207,9 +207,22 @@ describe("parsePresence (§4)", () => {
       screenShareIdentities: [],
       broker: "https://b.example",
       hand: false,
+      recording: false,
+      noRecord: false,
       ms: 1_000_000,
       rumorId: "r".repeat(64),
     });
+  });
+
+  it("reads the recording and norecord tags (client extensions) only while joined", () => {
+    const flagged = openedPresence({
+      tags: [["identity", "id-1"], ["recording", "1"], ["norecord", "1"]],
+    });
+    expect(parsePresence(flagged)).toMatchObject({ recording: true, noRecord: true });
+    expect(parsePresence(openedPresence({ tags: [["identity", "id-1"], ["recording", "yes"]] }))?.recording).toBe(false);
+    expect(
+      parsePresence(openedPresence({ content: "left", tags: [["recording", "1"], ["norecord", "1"]] })),
+    ).toMatchObject({ recording: false, noRecord: false });
   });
 
   it("reads the raised-hand tag (client extension) only while joined", () => {
@@ -258,6 +271,14 @@ describe("presence tags (client extensions)", () => {
     expect(presenceTags("joined", "id-1", "https://b.example", { hand: false })).not.toContainEqual(["hand", "1"]);
     // A `left` never advertises a hand.
     expect(presenceTags("left", undefined, undefined, { hand: true })).not.toContainEqual(["hand", "1"]);
+  });
+
+  it("emits the recording and norecord tags only while joined", () => {
+    const joined = presenceTags("joined", "id-1", "https://b.example", { recording: true, noRecord: true });
+    expect(joined).toContainEqual(["recording", "1"]);
+    expect(joined).toContainEqual(["norecord", "1"]);
+    expect(presenceTags("joined", "id-1", "https://b.example", {})).not.toContainEqual(["recording", "1"]);
+    expect(presenceTags("left", undefined, undefined, { recording: true, noRecord: true })).toEqual([]);
   });
 
   it("emits each additional sidecar identity once while joined", () => {

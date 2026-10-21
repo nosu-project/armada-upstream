@@ -20,6 +20,24 @@ export interface HevcScreenShareController {
 }
 
 /**
+ * Call recording's signals (Concord only): who records, who refuses, and the
+ * local user's side of both. Both ride the encrypted presence (`voice.ts`).
+ */
+export interface CallRecordingSignals {
+  /** Members announcing they record, ourselves included the moment we start. */
+  recorders: ReadonlySet<string>;
+  /** Members refusing to be recorded, ourselves included. */
+  refusing: ReadonlySet<string>;
+  /** This device refuses to be recorded (a sticky preference). */
+  noRecord: boolean;
+  setNoRecord: (noRecord: boolean) => void;
+  /** Announce our recording state; resolves whether a relay accepted it. */
+  announce: (recording: boolean) => Promise<boolean>;
+  /** `%host` and `%channel` for file names. */
+  names: { host: string; channel: string };
+}
+
+/**
  * In-call raise-hand + emoji reactions — an Armada extension riding additive tags
  * on the encrypted CORD-07 presence rumor (`voice.ts`), so Concord calls only.
  * Provided by `ConcordVoiceRoom`; portaled controls still read it via the React tree.
@@ -36,6 +54,8 @@ export interface CallSignals {
   reactions: readonly VoiceReactionEntry[];
   /** Custom Linux H.265 publishing; null outside an encrypted Concord call. */
   hevcScreenShare: HevcScreenShareController | null;
+  /** Null outside a Concord call: there is no signed channel to announce recording on. */
+  recording: CallRecordingSignals | null;
 }
 
 const DISABLED: CallSignals = {
@@ -45,6 +65,7 @@ const DISABLED: CallSignals = {
   sendReaction: () => {},
   reactions: [],
   hevcScreenShare: null,
+  recording: null,
 };
 
 export const CallSignalsContext = createContext<CallSignals>(DISABLED);

@@ -230,6 +230,37 @@ LiveKit **server image** must be bumped to a matching/newer release in
 `armada-av` (signaling protocol skew makes clients full-reconnect every
 ~16s). Full voice/LiveKit hosting guidance lives in `armada-av`'s `AGENTS.md`.
 
+## Call recording (Concord)
+
+Mumble's recorder, ported (`src/lib/callRecording/`, `src/components/chat/CallRecorder.tsx`):
+one file per voice or a mixdown, in FLAC/WAV/Opus/AU, named by a `%user`
+`%date` `%time` `%host` `%channel` template. Every voice runs through an
+AudioWorklet tap in one AudioContext of the recorder's own, so all files share
+one sample clock; the worker pads gaps with silence (Mumble's
+`lastWrittenAbsoluteSample`) and stages into OPFS through sync access handles,
+so a crash costs seconds, not the take. The files are copied to a picked folder
+or downloaded on stop. `e2e/call-recording.spec.ts` runs the real pipeline.
+
+Its privacy rules are the point of it, so keep all three:
+
+- **Announce, then capture.** `["recording","1"]` rides the encrypted CORD-07
+  presence (an additive tag, like `hand`), and capture starts only after a
+  relay ACCEPTED it. A failed announcement records nothing.
+- **Default deny.** Only VERIFIED members are recorded (`policy.ts`), because
+  verification is the fresh signed presence that would carry their
+  `["norecord","1"]`. Unverified, contested and screen-share identities are
+  never captured, and a refusal disconnects that voice at the next sync.
+- **Visible both ways.** Recorders and refusers are flagged on tiles, in the
+  sidebar roster (read straight off the presence fold, so before joining too)
+  and in the call bar's REC pill, and a recording start is toasted with a
+  "Don't record me" action.
+
+This binds honest clients only — a modified client can always record what it
+hears, as in Mumble. Concord calls only: NIP-29 and DM calls have no signed,
+encrypted channel to announce on, so `CallSignals.recording` is null there and
+no recording UI renders. Staged takes hold decrypted audio, so logout removes
+`STAGING_DIR`.
+
 ## Android App Links (deep linking)
 
 The Android app registers a verified `https` intent filter for **armada.buzz**
@@ -806,8 +837,9 @@ to fail a run:
 
 ## Translations (i18n)
 
-The web UI ships in English, German, Spanish, French, Italian, Dutch and
-Japanese through FormatJS (`react-intl`), the same arrangement as Ditto. English
+The web UI ships in English, German, Spanish, French, Italian, Dutch, Brazilian
+Portuguese and Japanese through FormatJS (`react-intl`), the same arrangement as
+Ditto. English
 is never a catalog the app loads: it is the inline `defaultMessage` at each call
 site. `src/i18n/locales/<lang>.json` are flat `{ id: ICU message }` files, one
 lazily-loaded chunk each; `en.json` is GENERATED (`npm run i18n:extract`) and

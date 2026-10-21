@@ -47,6 +47,8 @@ import {
 } from "@/components/chat/CallControls";
 import { ScreenShareDiagnosticsDialog } from "@/components/chat/ScreenShareDiagnosticsDialog";
 import { DeviceMenu } from "@/components/chat/VoiceBar";
+import { ParticipantRecordingFlags, RecordingIndicator } from "@/components/chat/CallRecordingIndicators";
+import { RecordingFlagIcons } from "@/components/RecordingFlagIcons";
 import { VoiceRejoiningContext } from "@/contexts/VoiceRejoiningContext";
 import { streamOwnerKey, useScreenShareWatch } from "@/contexts/ScreenShareWatchContext";
 import { LiveBadge } from "@/components/VoicePresence";
@@ -684,6 +686,7 @@ function VideoTile({
       ) : !participant.isMicrophoneEnabled ? (
         <MicOff className="size-3 shrink-0 text-destructive" />
       ) : null}
+      {!isScreenShare && verified && <ParticipantRecordingFlags pubkey={pubkey} />}
       <span className="truncate">
         <DisplayName pubkey={verified ? pubkey : undefined} name={displayName} />
         {isScreenShare && "'s screen"}
@@ -1051,6 +1054,7 @@ function AvatarTile({
   const nameplate = (
     <>
       {muted && <MicOff className="size-3 shrink-0 text-destructive" />}
+      {verified && <ParticipantRecordingFlags pubkey={pubkey} />}
       <span className="truncate">
         <DisplayName pubkey={verified ? pubkey : undefined} name={displayName} />
         {isLocal && " (you)"}
@@ -1293,6 +1297,8 @@ function HeroAvatarView({
   speaking,
   muted,
   handRaised,
+  recording,
+  refusing,
   streaming,
   onWatch,
   pending,
@@ -1305,6 +1311,8 @@ function HeroAvatarView({
   speaking: boolean;
   muted: boolean;
   handRaised?: boolean;
+  recording?: boolean;
+  refusing?: boolean;
   streaming?: boolean;
   /** Tunes into their stream; absent for our own. */
   onWatch?: () => void;
@@ -1359,6 +1367,16 @@ function HeroAvatarView({
             <Hand className={s.icon} />
           </span>
         )}
+        {(recording || refusing) && (
+          <span
+            className={cn(
+              "absolute top-0 left-0 flex items-center justify-center gap-0.5 rounded-full bg-background shadow",
+              s.badge,
+            )}
+          >
+            <RecordingFlagIcons recording={Boolean(recording)} refusing={Boolean(refusing)} className={s.icon} />
+          </span>
+        )}
         {streaming && (
           <LiveBadge className="absolute -bottom-1.5 left-1/2 -translate-x-1/2 shadow" onWatch={onWatch} />
         )}
@@ -1385,6 +1403,7 @@ function HeroParticipant({
   const intl = useIntl();
   const { raisedHands, streamingPubkeys } = useVoiceActivity();
   const { watch } = useScreenShareWatch();
+  const recordingSignals = useCallSignals().recording;
   const streaming = verified && streamingPubkeys.has(pubkey);
   const view = (
     <div>
@@ -1395,6 +1414,8 @@ function HeroParticipant({
         speaking={speaking}
         muted={!participant.isMicrophoneEnabled}
         handRaised={raisedHands.has(pubkey)}
+        recording={verified && Boolean(recordingSignals?.recorders.has(pubkey))}
+        refusing={verified && Boolean(recordingSignals?.refusing.has(pubkey))}
         streaming={streaming}
         onWatch={participant.isLocal ? undefined : () => watch(pubkey)}
         size={size}
@@ -1540,8 +1561,14 @@ function CallHero({
   const title = (
     <div className="text-center min-w-0 max-w-full">
       <div className={cn("font-semibold truncate", theater ? "text-2xl" : "text-base")}>{callLabel}</div>
-      <div className={cn("text-muted-foreground", theater ? "text-sm mt-1" : "text-xs")}>
+      <div
+        className={cn(
+          "flex items-center justify-center gap-2 text-muted-foreground",
+          theater ? "text-sm mt-1" : "text-xs",
+        )}
+      >
         <CallStatus calling={calling} since={since} />
+        <RecordingIndicator />
       </div>
     </div>
   );
@@ -2051,6 +2078,7 @@ export function CallStage({
       }
     >
       <span className="text-sm font-medium truncate min-w-0 flex-1">{callLabel}</span>
+      <RecordingIndicator />
       <span className="text-xs text-muted-foreground shrink-0">
         <CallStatus calling={calling} since={clockSince} />
       </span>
