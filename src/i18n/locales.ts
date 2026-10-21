@@ -8,6 +8,7 @@ export const LANGUAGE_OPTIONS = [
   { code: "fr", nativeName: "Français" },
   { code: "it", nativeName: "Italiano" },
   { code: "nl", nativeName: "Nederlands" },
+  { code: "pt", nativeName: "Português (Brasil)" },
   { code: "ja", nativeName: "日本語" },
 ] as const;
 
@@ -27,6 +28,7 @@ const CATALOGS: Record<string, () => Promise<{ default: Catalog }>> = {
   fr: () => import("./locales/fr.json"),
   it: () => import("./locales/it.json"),
   nl: () => import("./locales/nl.json"),
+  pt: () => import("./locales/pt.json"),
   ja: () => import("./locales/ja.json"),
 };
 

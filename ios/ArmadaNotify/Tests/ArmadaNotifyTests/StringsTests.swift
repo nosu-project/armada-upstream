@@ -5,7 +5,7 @@ import XCTest
 /// The extension's own copy of the `notification.*` catalog.
 final class StringsTests: XCTestCase {
 
-    private let languages = ["en", "de", "es", "fr", "it", "nl", "ja"]
+    private let languages = ["en", "de", "es", "fr", "it", "nl", "pt", "ja"]
 
     func testEveryLanguageHasEveryKey() {
         XCTAssertEqual(Set(Strings.tables.keys), Set(languages))

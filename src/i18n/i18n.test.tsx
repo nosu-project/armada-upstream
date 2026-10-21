@@ -27,12 +27,13 @@ afterEach(() => {
 
 describe("detectLocale", () => {
   it("takes the first supported base language", () => {
-    expect(detectLocale(["pt-BR", "de-AT", "fr"])).toBe("de");
+    expect(detectLocale(["zh-TW", "de-AT", "fr"])).toBe("de");
+    expect(detectLocale(["pt-BR"])).toBe("pt");
     expect(detectLocale(["ja-JP"])).toBe("ja");
   });
 
   it("falls back to English", () => {
-    expect(detectLocale(["pt-BR", "zh"])).toBe("en");
+    expect(detectLocale(["ko-KR", "zh"])).toBe("en");
     expect(detectLocale([])).toBe("en");
   });
 });

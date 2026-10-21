@@ -27,7 +27,7 @@ import { parse, TYPE } from "@formatjs/icu-messageformat-parser";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const localesDir = join(root, "src/i18n/locales");
-const TRANSLATED = ["de", "es", "fr", "it", "nl", "ja"];
+const TRANSLATED = ["de", "es", "fr", "it", "nl", "pt", "ja"];
 
 function extract() {
   const dir = mkdtempSync(join(tmpdir(), "armada-i18n-"));

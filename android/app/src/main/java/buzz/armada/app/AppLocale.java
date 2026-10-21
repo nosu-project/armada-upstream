@@ -21,7 +21,7 @@ final class AppLocale {
     private static final String KEY = "locale";
     /** The catalogs that ship, matching src/i18n/locales.ts and res/values-*. */
     private static final Set<String> SUPPORTED =
-            new HashSet<>(Arrays.asList("en", "de", "es", "fr", "it", "nl", "ja"));
+            new HashSet<>(Arrays.asList("en", "de", "es", "fr", "it", "nl", "pt", "ja"));
 
     private static String cachedTag;
     private static Context cachedContext;
