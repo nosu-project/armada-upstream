@@ -3996,6 +3996,7 @@
   "themeSelector.builder.localDescription": "Bewaard op dit apparaat. Log in om thema's in je bibliotheek op te slaan en te delen.",
   "themeSelector.builder.namePlaceholder": "Mijn thema",
   "themeSelector.builder.title": "aangepast thema",
+  "themeSelector.credit": "{unsaved, select, true {Niet opgeslagen · door {name}} other {door {name}}}",
   "themeSelector.customLabel": "Aangepast",
   "themeSelector.dark": "Donker",
   "themeSelector.editLabel": "{label} bewerken",

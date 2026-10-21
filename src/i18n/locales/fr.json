@@ -3996,6 +3996,7 @@
   "themeSelector.builder.localDescription": "Conservé sur cet appareil. Connectez-vous pour enregistrer des thèmes dans votre bibliothèque et les partager.",
   "themeSelector.builder.namePlaceholder": "Mon thème",
   "themeSelector.builder.title": "thème personnalisé",
+  "themeSelector.credit": "{unsaved, select, true {Non enregistré · par {name}} other {par {name}}}",
   "themeSelector.customLabel": "Personnalisé",
   "themeSelector.dark": "Sombre",
   "themeSelector.editLabel": "Modifier {label}",

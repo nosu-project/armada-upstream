@@ -3996,6 +3996,7 @@
   "themeSelector.builder.localDescription": "このデバイスに保存されます。ログインするとテーマをライブラリに保存して共有できます。",
   "themeSelector.builder.namePlaceholder": "マイテーマ",
   "themeSelector.builder.title": "カスタムテーマ",
+  "themeSelector.credit": "{unsaved, select, true {未保存 · 作成: {name}} other {作成: {name}}}",
   "themeSelector.customLabel": "カスタム",
   "themeSelector.dark": "ダーク",
   "themeSelector.editLabel": "{label} を編集",

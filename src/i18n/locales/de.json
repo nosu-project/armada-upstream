@@ -3996,6 +3996,7 @@
   "themeSelector.builder.localDescription": "Wird auf diesem Gerät gespeichert. Melde dich an, um Themes in deiner Bibliothek zu speichern und zu teilen.",
   "themeSelector.builder.namePlaceholder": "Mein Theme",
   "themeSelector.builder.title": "eigenes theme",
+  "themeSelector.credit": "{unsaved, select, true {Nicht gespeichert · von {name}} other {von {name}}}",
   "themeSelector.customLabel": "Eigenes",
   "themeSelector.dark": "Dunkel",
   "themeSelector.editLabel": "{label} bearbeiten",

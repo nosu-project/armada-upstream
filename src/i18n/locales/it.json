@@ -3996,6 +3996,7 @@
   "themeSelector.builder.localDescription": "Salvato su questo dispositivo. Accedi per salvare i temi nella tua libreria e condividerli.",
   "themeSelector.builder.namePlaceholder": "Il mio tema",
   "themeSelector.builder.title": "tema personalizzato",
+  "themeSelector.credit": "{unsaved, select, true {Non salvato · di {name}} other {di {name}}}",
   "themeSelector.customLabel": "Personalizzato",
   "themeSelector.dark": "Scuro",
   "themeSelector.editLabel": "Modifica {label}",

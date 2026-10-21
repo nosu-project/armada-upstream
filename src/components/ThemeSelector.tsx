@@ -7,12 +7,14 @@ import { ThemeBuilderFields } from "@/components/ThemeBuilderFields";
 import { ThemeFontFields } from "@/components/ThemeFontFields";
 import { Button } from "@/components/ui/button";
 import { ChromeDialogContent, Dialog } from "@/components/ui/dialog";
+import { useAuthor } from "@/hooks/useAuthor";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useMediaSrc } from "@/hooks/useMediaPolicy";
 import { useTheme } from "@/hooks/useTheme";
 import { useUserThemes, type UserTheme } from "@/hooks/useUserThemes";
 import { common, FormattedMessage, useIntl } from "@/i18n";
 import { loadThemeFont } from "@/lib/fontLoader";
+import { getDisplayName } from "@/lib/getDisplayName";
 import { themeToConfig } from "@/lib/themeEvent";
 import { cn } from "@/lib/utils";
 import {
@@ -24,6 +26,7 @@ import {
   type ThemeBackground,
   type ThemeConfig,
   type ThemeFont,
+  type ThemeSource,
   type ThemeTokens,
 } from "@/themes";
 
@@ -32,6 +35,26 @@ import type { Theme } from "@/contexts/AppContext";
 /** What makes two themes look the same: colors, background image and body font. */
 function lookKey(t: { colors: CoreThemeColors; background?: ThemeBackground; font?: ThemeFont }): string {
   return JSON.stringify([t.colors, t.background?.url ?? "", t.font?.family ?? ""]);
+}
+
+/** Same creator's same theme. Adopting can rehost the background, so the look alone can't tell. */
+function sameSource(a: ThemeSource | undefined, b: ThemeSource | undefined): boolean {
+  return !!a && !!b && a.pubkey === b.pubkey && (a.identifier ?? "") === (b.identifier ?? "");
+}
+
+/** "by {creator}" for a theme adopted from someone else, optionally marked unsaved. */
+function ThemeCredit({ source, unsaved }: { source?: ThemeSource; unsaved: boolean }) {
+  const author = useAuthor(source?.pubkey);
+  if (!source) {
+    return unsaved ? <FormattedMessage id="themeSelector.notSaved" defaultMessage="Not saved" /> : null;
+  }
+  return (
+    <FormattedMessage
+      id="themeSelector.credit"
+      defaultMessage="{unsaved, select, true {Not saved · by {name}} other {by {name}}}"
+      values={{ unsaved: unsaved ? "true" : "false", name: getDisplayName(author.data?.metadata, source.pubkey) }}
+    />
+  );
 }
 
 function MiniPage({ tokens, font, className }: { tokens: ThemeTokens; font?: string; className?: string }) {
@@ -87,8 +110,8 @@ interface TileProps {
   active: boolean;
   onClick: () => void;
   preview: ReactNode;
-  /** A small caption under the label (e.g. "Not saved"). */
-  note?: string;
+  /** A small caption under the label (e.g. "Not saved", the creator). */
+  note?: ReactNode;
   /** A corner action on the tile: edit or save. */
   action?: { icon: ReactNode; label: string; onClick: () => void };
 }
@@ -183,6 +206,8 @@ export function ThemeSelector() {
     : undefined;
   const activeUserTheme = activeKey && !activePresetKey
     ? userThemes?.find((t) => lookKey(t) === activeKey)
+      ?? userThemes?.find((t) => sameSource(t.source, customTheme?.source)
+        && JSON.stringify(t.colors) === JSON.stringify(customTheme?.colors))
     : undefined;
   // A custom theme in use that is neither a preset nor in the library: shown so it can be saved.
   const unsaved = theme === "custom" && customTheme && !activePresetKey && !activeUserTheme && !userThemesLoading
@@ -205,7 +230,7 @@ export function ThemeSelector() {
           {unsaved && (
             <ThemeTile
               label={unsaved.title || intl.formatMessage({ id: "themeSelector.customLabel", defaultMessage: "Custom" })}
-              note={user ? intl.formatMessage({ id: "themeSelector.notSaved", defaultMessage: "Not saved" }) : undefined}
+              note={<ThemeCredit source={unsaved.source} unsaved={!!user} />}
               preview={<Swatch colors={unsaved.colors} background={unsaved.background} font={unsaved.font} />}
               active
               onClick={() => applyCustomTheme(unsaved)}
@@ -226,6 +251,7 @@ export function ThemeSelector() {
             <ThemeTile
               key={t.identifier || t.title}
               label={t.title}
+              note={t.source && <ThemeCredit source={t.source} unsaved={false} />}
               preview={<Swatch colors={t.colors} background={t.background} font={t.font} />}
               active={activeUserTheme?.identifier === t.identifier}
               onClick={() => applyCustomTheme(themeToConfig(t))}
@@ -365,13 +391,16 @@ function LocalThemeBuilderDialog({
               className="flex-1 clip-corner-lg"
               disabled={uploading}
               onClick={() => {
-                // Built here, so no creator credit carries over.
+                // The creator stays credited only while the theme is still their work.
+                const unchanged = !!initial && JSON.stringify([colors, background, fontFamily, titleFontFamily])
+                  === JSON.stringify([initial.colors, initial.background, initial.font?.family ?? "", initial.titleFont?.family ?? ""]);
                 onApply({
                   title: title.trim() || "Custom",
                   colors,
                   ...(fontFamily && { font: { family: fontFamily } }),
                   ...(titleFontFamily && { titleFont: { family: titleFontFamily } }),
                   ...(background && { background }),
+                  ...(unchanged && initial?.source && { source: initial.source }),
                 });
                 onOpenChange(false);
               }}

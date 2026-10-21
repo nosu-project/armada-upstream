@@ -3996,6 +3996,7 @@
   "themeSelector.builder.localDescription": "Kept on this device. Log in to save themes to your library and share them.",
   "themeSelector.builder.namePlaceholder": "My theme",
   "themeSelector.builder.title": "custom theme",
+  "themeSelector.credit": "{unsaved, select, true {Not saved · by {name}} other {by {name}}}",
   "themeSelector.customLabel": "Custom",
   "themeSelector.dark": "Dark",
   "themeSelector.editLabel": "Edit {label}",
