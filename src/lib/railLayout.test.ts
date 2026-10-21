@@ -5,6 +5,7 @@ import {
   applyDrop,
   dissolveFolder,
   dmRailKey,
+  firstRailRoute,
   flattenLayout,
   folderAnchor,
   itemAnchor,
@@ -198,6 +199,28 @@ describe("railKeyToRoute", () => {
 
   it("has no route for a DM key that isn't a pubkey", () => {
     expect(railKeyToRoute("dm:not-a-pubkey")).toBeNull();
+  });
+});
+
+describe("firstRailRoute", () => {
+  const none = () => false;
+  const blocked = (id: string) => id === "banned";
+
+  it("lands on the first community or live server in rail order", () => {
+    expect(firstRailRoute([item("c2:one"), item("wss://relay.example.com")], ["wss://relay.example.com"], none))
+      .toBe("/c/one");
+  });
+
+  it("skips servers the user no longer has, and DMs", () => {
+    expect(firstRailRoute([item("wss://gone"), item(dmRailKey(PEER)), item("c2:one")], [], none)).toBe("/c/one");
+  });
+
+  it("skips a blocked community at the top of the rail", () => {
+    expect(firstRailRoute([folder("f", ["c2:banned", "c2:next"]), item("c2:last")], [], blocked)).toBe("/c/next");
+  });
+
+  it("has no route when a blocked community is the only one", () => {
+    expect(firstRailRoute([item("c2:banned")], [], blocked)).toBeNull();
   });
 });
 

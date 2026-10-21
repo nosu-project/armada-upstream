@@ -98,6 +98,31 @@ export function railKeyToRoute(key: string): string | null {
   return `/s/${relayToRouteParam(key)}`;
 }
 
+/**
+ * The route `/` lands a signed-in user on: the first rail item that is a live
+ * NIP-29 server or a Concord community that isn't blocklisted, else `null`.
+ * A blocked community stays in the layout, so landing on it would bounce
+ * every trip home straight back to its blocked page.
+ */
+export function firstRailRoute(
+  stored: RailLayoutNode[],
+  liveServers: string[],
+  isBlocked: (communityId: string) => boolean,
+): string | null {
+  const servers = new Set(liveServers);
+  for (const key of flattenLayout(mergeLayout(stored, liveServers))) {
+    if (key.startsWith("c2:")) {
+      if (isBlocked(key.slice("c2:".length))) continue;
+    } else if (!servers.has(key)) {
+      // A NIP-29 server the user no longer has (or not yet loaded), or a DM.
+      continue;
+    }
+    const route = railKeyToRoute(key);
+    if (route) return route;
+  }
+  return null;
+}
+
 /** Canonicalize: dedupe keys (first wins), drop empty folders, dissolve single-item folders (Discord behavior). */
 export function normalizeLayout(nodes: RailLayoutNode[]): RailLayoutNode[] {
   const seenKeys = new Set<string>();

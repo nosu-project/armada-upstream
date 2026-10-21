@@ -26,7 +26,8 @@ import { useOnboardingActive } from "@/hooks/useOnboarding";
 import { useMeshTransport } from "@/hooks/useMeshTransport";
 import { useOnlineStatus } from "@/hooks/useOnlineStatus";
 import { useNip29Servers } from "@/hooks/useNip29Servers";
-import { flattenLayout, mergeLayout, railKeyToRoute } from "@/lib/railLayout";
+import { useIsBlocked } from "@/lib/blocklistStore";
+import { firstRailRoute } from "@/lib/railLayout";
 import { parseJoinLink, setPendingJoin } from "@/lib/joinLink";
 import { CONCORD2_PANES } from "@/lib/routes";
 import { lazyWithReload } from "@/lib/chunkReload";
@@ -140,17 +141,11 @@ function HomeRedirect() {
   // Land on the first item of the arranged rail. `railLayout` is in app config and
   // available synchronously, so this doesn't race the lists' async load.
   const liveServers = useNip29Servers();
-  const firstRoute = useMemo(() => {
-    const servers = new Set(liveServers);
-    const ordered = flattenLayout(mergeLayout(config.railLayout, liveServers));
-    for (const key of ordered) {
-      // Skip layout keys for NIP-29 servers the user no longer has (or not yet loaded).
-      if (!key.startsWith("c2:") && !servers.has(key)) continue;
-      const route = railKeyToRoute(key);
-      if (route) return route;
-    }
-    return null;
-  }, [config.railLayout, liveServers]);
+  const isBlocked = useIsBlocked();
+  const firstRoute = useMemo(
+    () => firstRailRoute(config.railLayout, liveServers, isBlocked),
+    [config.railLayout, liveServers, isBlocked],
+  );
 
   if (!state.ready) {
     // Launch URL not yet known: hold the redirect (can reach the 1.5s bridge timeout).
