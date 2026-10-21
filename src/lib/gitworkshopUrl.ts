@@ -53,3 +53,30 @@ export function gitworkshopTicketUrl(ticket: GitTicket): string | undefined {
     return undefined;
   }
 }
+
+/** GitWorkshop page for a repository announcement. */
+export function gitworkshopRepositoryUrl(owner: string, identifier: string, relayHint?: string): string | undefined {
+  try {
+    return `${GITWORKSHOP_ORIGIN}${gitworkshopRepositoryPath(nip19.npubEncode(owner), identifier, relayHint)}`;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * ngit's `nostr://<npub>[/<relay>]/<identifier>` remote. Only a bare wss host
+ * becomes the relay segment; anything else is left out rather than mis-spelled,
+ * since the remote resolves without one.
+ */
+export function ngitCloneUrl(owner: string, identifier: string, relayHint?: string): string | undefined {
+  let npub: string;
+  try {
+    npub = nip19.npubEncode(owner);
+  } catch {
+    return undefined;
+  }
+  const relay = relayHint ? normalizeRelayUrl(relayHint) : undefined;
+  const host = relay?.startsWith("wss://") ? relay.slice("wss://".length).replace(/\/$/, "") : undefined;
+  const relaySegment = host && /^[a-z0-9.-]+(:\d+)?$/i.test(host) ? `${host}/` : "";
+  return `nostr://${npub}/${relaySegment}${encodeURIComponent(identifier)}`;
+}

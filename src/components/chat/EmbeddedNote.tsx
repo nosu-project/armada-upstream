@@ -1,6 +1,6 @@
 import {
-  Award, Brain, CalendarDays, Check, Eye, EyeOff, ExternalLink, FileDigit,
-  FileQuestion, FileText, Film, Gem, Highlighter, Image as ImageIcon, Layers, List, MapPin,
+  Award, Brain, CalendarDays, Check, Copy, Eye, EyeOff, ExternalLink, FileDigit,
+  FileQuestion, FileText, Film, FolderGit2, Gem, Highlighter, Image as ImageIcon, Layers, List, MapPin,
   Mic, Mountain, Music, Package, Palette, RotateCw, Server, Shield, Sparkles, Swords,
   Tag, User, Users, Zap,
 } from "lucide-react";
@@ -32,6 +32,8 @@ import { toast } from "@/hooks/useToast";
 import { getAvatarShape } from "@/lib/avatarShape";
 import { parseCalendarEvent, type RsvpTally } from "@/lib/calendar";
 import { writeClipboardText } from "@/lib/clipboard";
+import { GIT_REPOSITORY_ANNOUNCEMENT_KIND, parseGitRepositoryAnnouncement } from "@/lib/gitActivity";
+import { gitworkshopRepositoryUrl, ngitCloneUrl } from "@/lib/gitworkshopUrl";
 import { getCustomEmojiUrl, isCustomEmoji, isRenderableReactionKey } from "@/lib/customEmoji";
 import { dittoEventUrl, dittoHashtagUrl, dittoNip19Url } from "@/lib/dittoUrl";
 import { faviconUrl } from "@/lib/faviconUrl";
@@ -47,6 +49,7 @@ import { cn } from "@/lib/utils";
 import { formatSats, receiptAmountSats, receiptZapRequest } from "@/lib/zaps";
 import { FormattedMessage, common, defineMessages, t, useIntl, type MessageDescriptor } from "@/i18n";
 
+import type { GitRepositoryAnnouncement } from "@/lib/gitActivity";
 import type { NostrRumor } from "@/lib/nostrRumor";
 import type { PollTally } from "@/lib/polls";
 
@@ -100,6 +103,7 @@ const KIND_LABELS = defineMessages({
   music: { id: "embeddedNote.kind.music", defaultMessage: "Music" },
   magicDeck: { id: "embeddedNote.kind.magicDeck", defaultMessage: "Magic deck" },
   treasure: { id: "embeddedNote.kind.treasure", defaultMessage: "Treasure" },
+  repository: { id: "embeddedNote.kind.repository", defaultMessage: "Repository" },
 });
 
 const KIND_META: Record<number, KindMeta> = {
@@ -124,6 +128,7 @@ const KIND_META: Record<number, KindMeta> = {
   30054: { label: KIND_LABELS.podcast, Icon: Mic },
   30055: { label: KIND_LABELS.podcastTrailer, Icon: Mic },
   30402: { label: KIND_LABELS.listing, Icon: Tag },
+  30617: { label: KIND_LABELS.repository, Icon: FolderGit2 },
   31922: { label: KIND_LABELS.calendarEvent, Icon: CalendarDays },
   31923: { label: KIND_LABELS.calendarEvent, Icon: CalendarDays },
   34139: { label: KIND_LABELS.playlist, Icon: Music },
@@ -240,11 +245,17 @@ function GenericEventCard({ event, sourceUrl, className }: { event: NostrRumor; 
     ? (event.content === "+" || event.content === "" ? "👍" : event.content === "-" ? "👎" : event.content)
     : null;
 
+  const repository = useMemo(
+    () => (event.kind === GIT_REPOSITORY_ANNOUNCEMENT_KIND ? parseGitRepositoryAnnouncement(event) : undefined),
+    [event],
+  );
   const dittoHref = dittoEventUrl(event);
   const nostrUri = eventNostrUri(event);
   // A source from another host takes the footer's lead slot; ditto.pub doesn't
-  // count (it's the DittoLink off-ramp already).
-  const safeSource = externalUrl(sourceUrl);
+  // count (it's the DittoLink off-ramp already). A repository's is GitWorkshop.
+  const safeSource = externalUrl(
+    sourceUrl ?? (repository && gitworkshopRepositoryUrl(repository.owner, repository.identifier, repository.relays[0])),
+  );
   const externalSource = safeSource && displayHost(safeSource) !== "ditto.pub" ? safeSource : undefined;
 
   return (
@@ -319,6 +330,8 @@ function GenericEventCard({ event, sourceUrl, className }: { event: NostrRumor; 
           <EmbeddedTreasureCard event={event} />
         ) : event.kind === 9802 ? (
           <EmbeddedHighlightCard event={event} />
+        ) : repository ? (
+          <EmbeddedRepositoryCard repository={repository} />
         ) : meta ? (
           <TagPreviewCard event={event} meta={meta} />
         ) : (
@@ -1020,6 +1033,73 @@ function EmbeddedHighlightCard({ event }: { event: NostrRumor }) {
         {source && <SourceLink url={source} />}
       </div>
     </EmbedTruncatedBody>
+  );
+}
+
+/**
+ * NIP-34 repository announcement: name, description, topics, and ngit's
+ * `nostr://` remote to copy. The page itself is the footer's GitWorkshop link.
+ */
+function EmbeddedRepositoryCard({ repository }: { repository: GitRepositoryAnnouncement }) {
+  const intl = useIntl();
+  const [copied, setCopied] = useState(false);
+  const cloneUrl = ngitCloneUrl(repository.owner, repository.identifier, repository.relays[0]);
+  const topics = useMemo(
+    () => [...new Set(repository.event.tags.filter(([n, v]) => n === "t" && v?.trim() && v !== "personal-fork").map(([, v]) => v.trim()))].slice(0, 6),
+    [repository.event.tags],
+  );
+  const copyLabel = intl.formatMessage({ id: "embeddedNote.repository.copyCloneUrl", defaultMessage: "Copy clone URL" });
+
+  const copy = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!cloneUrl) return;
+    writeClipboardText(cloneUrl).then(
+      () => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+        toast({ title: t({ id: "embeddedNote.repository.cloneUrlCopied", defaultMessage: "Clone URL copied" }) });
+      },
+      () => toast({
+        title: t({ id: "embeddedNote.repository.copyCloneUrlFailed", defaultMessage: "Couldn't copy clone URL" }),
+        variant: "destructive",
+      }),
+    );
+  };
+
+  return (
+    <div className="space-y-1.5 min-w-0">
+      <div className="flex items-start gap-2 min-w-0">
+        <FolderGit2 className="size-4 text-primary mt-0.5 shrink-0" />
+        <span className="text-chat font-semibold leading-snug break-words min-w-0">{repository.name}</span>
+      </div>
+
+      {repository.description && (
+        <p className="text-sm leading-relaxed text-foreground/90 line-clamp-3 break-words">{repository.description}</p>
+      )}
+
+      {topics.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {topics.map((topic) => (
+            <Badge key={topic} variant="secondary" className="text-2xs font-medium">{topic}</Badge>
+          ))}
+        </div>
+      )}
+
+      {cloneUrl && (
+        <div className="flex items-center gap-1 min-w-0 rounded-md bg-secondary/50 pl-2">
+          <code className="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground" title={cloneUrl}>{cloneUrl}</code>
+          <button
+            type="button"
+            onClick={copy}
+            title={copyLabel}
+            aria-label={copyLabel}
+            className="shrink-0 grid place-items-center size-7 touch:size-11 clip-corner-lg text-muted-foreground hover:text-primary hover:bg-secondary transition-colors"
+          >
+            {copied ? <Check className="size-3.5 shrink-0" /> : <Copy className="size-3.5 shrink-0" />}
+          </button>
+        </div>
+      )}
+    </div>
   );
 }
 

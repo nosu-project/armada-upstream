@@ -11,6 +11,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useDiscoverRelays } from "@/hooks/useDiscover";
 import { KIND_EMOJI_SET, emojiPackName } from "@/hooks/useEmojiPacks";
 import { publicRelayHints, useAddrEvent } from "@/hooks/useEvent";
+import { GIT_REPOSITORY_ANNOUNCEMENT_KIND, parseGitRepositoryAnnouncement } from "@/lib/gitActivity";
 import { parseNaddr } from "@/lib/naddrLink";
 import { THEME_DEFINITION_KIND, parseDittoTheme } from "@/lib/themeEvent";
 import { FormattedMessage, common, useIntl } from "@/i18n";
@@ -116,7 +117,8 @@ function NaddrView({ event, icon }: { event: NostrRumor; icon: ReactNode }) {
     );
   }
 
-  const title = event.tags.find(([n]) => n === "title")?.[1];
+  const title = event.tags.find(([n]) => n === "title")?.[1]
+    ?? (event.kind === GIT_REPOSITORY_ANNOUNCEMENT_KIND ? parseGitRepositoryAnnouncement(event)?.name : undefined);
   return (
     <DetailPage title={title || intl.formatMessage({ id: "naddrPage.sharedEvent", defaultMessage: "Shared event" })} icon={icon}>
       <EmbeddedEventCard event={event} />

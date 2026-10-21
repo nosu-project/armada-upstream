@@ -9,7 +9,9 @@ import {
 import {
   gitworkshopRelaySegment,
   gitworkshopRepositoryPath,
+  gitworkshopRepositoryUrl,
   gitworkshopTicketUrl,
+  ngitCloneUrl,
 } from "@/lib/gitworkshopUrl";
 import { routeParamToRelay } from "@/lib/platform";
 
@@ -81,5 +83,24 @@ describe("GitWorkshop repository routes", () => {
     expect(gitworkshopTicketUrl(parsed)).toBe(
       `https://gitworkshop.dev/${nip19.npubEncode(OWNER)}/gleasonator.dev%2Frelay/armada/${collection}/${nevent}`,
     );
+  });
+});
+
+describe("repository links", () => {
+  const npub = nip19.npubEncode(OWNER);
+
+  it("builds the GitWorkshop repository page", () => {
+    expect(gitworkshopRepositoryUrl(OWNER, "armada", "wss://relay.ngit.dev")).toBe(
+      `https://gitworkshop.dev/${npub}/relay.ngit.dev/armada/`,
+    );
+    expect(gitworkshopRepositoryUrl("not-a-pubkey", "armada")).toBeUndefined();
+  });
+
+  it("builds ngit's nostr:// remote, keeping only a bare wss host as the relay", () => {
+    expect(ngitCloneUrl(OWNER, "armada", "wss://relay.ngit.dev/")).toBe(`nostr://${npub}/relay.ngit.dev/armada`);
+    expect(ngitCloneUrl(OWNER, "armada", "wss://relay.example:7447")).toBe(`nostr://${npub}/relay.example:7447/armada`);
+    expect(ngitCloneUrl(OWNER, "armada", "wss://gleasonator.dev/relay")).toBe(`nostr://${npub}/armada`);
+    expect(ngitCloneUrl(OWNER, "armada", "ws://localhost:7777")).toBe(`nostr://${npub}/armada`);
+    expect(ngitCloneUrl(OWNER, "team armada")).toBe(`nostr://${npub}/team%20armada`);
   });
 });
