@@ -14,6 +14,8 @@ const SCROLL_SLOP_PX = 10;
  * must still navigate.
  */
 const DRAG_MOVE_SLOP_PX = 10;
+/** Travel that turns a menu hold into a drag; the finger is already settled, so less is needed. */
+const HOLD_DRAG_SLOP_PX = 6;
 /** Edge auto-scroll zone while dragging; speed ramps up to {@link EDGE_SCROLL_MAX_PX} at the edge. */
 const EDGE_SCROLL_ZONE_PX = 56;
 const EDGE_SCROLL_MAX_PX = 14;
@@ -66,6 +68,12 @@ export interface PressDragOptions<T> {
    * only an entry {@link arm}ed first (its menu's "Move"). Armed entries need `touch-action: none`.
    */
   touchHold?: "drag" | "menu";
+  /**
+    * Under `touchHold: "drag"`, a touch hold opens the entry's context menu (a `contextmenu` at
+    * the finger) instead of picking up; travelling then closes it and picks up, as Discord's
+    * server list does. Released still, the menu stays open and the press does not click.
+    */
+  heldTouchOpensMenu?: boolean;
 }
 
 /**
@@ -88,6 +96,7 @@ export function usePressDrag<T>({
   onContainerScroll,
   pickupOnMove = "mouse",
   touchHold = "drag",
+  heldTouchOpensMenu = false,
 }: PressDragOptions<T>) {
   const [source, setSource] = useState<T | null>(null);
   /** The entry a touch may drag under `touchHold: "menu"`; ref for listeners. */
@@ -123,6 +132,14 @@ export function usePressDrag<T>({
   // under `touch-action: none`, and drops the next tap as its cancel.
   const onTouchMove = useCallback((ev: TouchEvent) => {
     if ((active.current !== null || panning.current) && ev.cancelable) ev.preventDefault();
+  }, []);
+
+  /** Swallow the click the browser synthesizes after this pointerup. */
+  const suppressClick = useCallback(() => {
+    didDrag.current = true;
+    setTimeout(() => {
+      didDrag.current = false;
+    }, 300);
   }, []);
 
   const flingVelocity = useRef(0);
@@ -250,6 +267,14 @@ export function usePressDrag<T>({
       let scrollSamples: { t: number; y: number }[] = [];
       // Across the whole gesture, including the hold; a pickup that never moved far is a held tap.
       let everMovedFar = false;
+      /**
+       * A touch hold showing the entry's menu ({@link PressDragOptions.heldTouchOpensMenu}):
+       * nothing is picked up until the finger travels.
+       */
+      let held = false;
+      let menuOpen = false;
+      let openingMenu = false;
+      let pressCancelled = false;
       let autoScrollRaf: number | null = null;
 
       const stopAutoScroll = () => {
@@ -301,7 +326,7 @@ export function usePressDrag<T>({
 
       // Swallow the touch long-press context menu mid-drag (it would open an entry's Radix menu).
       const onContextMenu = (ev: Event) => {
-        if (active.current !== null) {
+        if ((active.current !== null || held) && !openingMenu) {
           ev.preventDefault();
           ev.stopPropagation();
         }
@@ -315,6 +340,17 @@ export function usePressDrag<T>({
         if (active.current === null) {
           lastX = ev.clientX;
           lastY = ev.clientY;
+          if (held) {
+            if (ev.cancelable) ev.preventDefault();
+            if (Math.hypot(ev.clientX - startX, ev.clientY - startY) <= HOLD_DRAG_SLOP_PX) return;
+            everMovedFar = true;
+            // Travelling turns the menu hold into a drag.
+            held = false;
+            if (menuOpen) closeOpenMenu();
+            menuOpen = false;
+            pickup();
+            return;
+          }
           // Entries are `touch-action: none`, so pan the container by hand.
           if (manualScroll) {
             const el = containerRef.current;
@@ -371,6 +407,11 @@ export function usePressDrag<T>({
             fling(-(last.y - first.y) / (last.t - first.t));
           }
         }
+        // The menu the hold opened stays up and replaces the click.
+        if (held) {
+          if (menuOpen) suppressClick();
+          return;
+        }
         if (dragged === null) return;
         // A held tap, not a reorder: abort and let the click navigate.
         if (!everMovedFar) {
@@ -383,11 +424,7 @@ export function usePressDrag<T>({
           // A failed drop must never wedge drag state or leave listeners attached.
           console.error("Failed to apply drop:", err);
         }
-        didDrag.current = true;
-        // Swallow the synthesized click after pointerup, then clear.
-        setTimeout(() => {
-          didDrag.current = false;
-        }, 300);
+        suppressClick();
       };
 
       // The browser reclaimed the pointer: abort without applying.
@@ -412,19 +449,43 @@ export function usePressDrag<T>({
         if (active.current !== null || from === null) return;
         active.current = from;
         handScrolling.add(pointerId);
-        // The drag prevents the moves the entry's long-press menu clears on.
-        if (!isMouse) cancelPressUnder(pressTarget, null, pointerId, e.pointerType);
+        cancelEntryPress();
         handlers.current.onPickup(from, lastX, lastY);
         setSource(from);
-        impact("medium");
+        if (isMouse || !heldTouchOpensMenu) impact("medium");
         autoScrollTick();
+      }
+
+      // The drag (or menu hold) prevents the moves the entry's long-press menu clears on.
+      function cancelEntryPress() {
+        if (isMouse || pressCancelled) return;
+        pressCancelled = true;
+        cancelPressUnder(pressTarget, null, pointerId, e.pointerType);
+      }
+
+      /** Show the entry's menu, holding the touch still claimed so travelling can still drag. */
+      function holdForMenu() {
+        timer.current = null;
+        held = true;
+        panning.current = true;
+        handScrolling.add(pointerId);
+        cancelEntryPress();
+        openingMenu = true;
+        try {
+          menuOpen = openMenuAt(pressTarget, lastX, lastY);
+        } finally {
+          openingMenu = false;
+        }
+        impact("medium");
       }
 
       // A touch that became a scroll cleared the timer. An armed entry moves to pick up,
       // leaving a still hold to its menu.
-      if (from !== null && !armedHere) timer.current = setTimeout(pickup, PICKUP_MS);
+      if (from !== null && !armedHere) {
+        timer.current = setTimeout(heldTouchOpensMenu && !isMouse ? holdForMenu : pickup, PICKUP_MS);
+      }
     },
-    [containerRef, fling, stopFling, pickupOnMove, touchHold, disarm],
+    [containerRef, fling, stopFling, pickupOnMove, touchHold, heldTouchOpensMenu, disarm, suppressClick],
   );
 
   const begin = useCallback((from: T) => (e: PointerEvent) => press(from, e), [press]);
@@ -464,6 +525,21 @@ export function usePressDrag<T>({
   }, [stopFling]);
 
   return { attachContainer, attachPanSurface, begin, panFrom, source, dragging, shouldSuppressClick, armed, arm, disarm };
+}
+
+/** Open the context menu (Radix's `ContextMenuTrigger`) of the entry under `target`. */
+function openMenuAt(target: EventTarget | null, clientX: number, clientY: number): boolean {
+  if (!(target instanceof Element) || !target.isConnected) return false;
+  const ev = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX, clientY });
+  target.dispatchEvent(ev);
+  // Radix's trigger prevents the event it opens on.
+  return ev.defaultPrevented;
+}
+
+/** Dismiss the open Radix menu the way its Escape does; it prevents the key, so page-level Escape handlers skip it. */
+function closeOpenMenu() {
+  const menu = document.querySelector("[role='menu'][data-state='open']");
+  menu?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
 }
 
 /** Radix `asChild` Slots don't reliably forward React pointer props. */

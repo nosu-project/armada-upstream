@@ -37,10 +37,17 @@ export const ThemeSourceSchema = z.object({
   identifier: z.string().optional(),
 });
 
+export const ThemeFontSchema = z.object({
+  family: z.string().min(1).max(100),
+  url: z.url().optional(),
+});
+
 export const ThemeConfigSchema = z.object({
   title: z.string().optional(),
   colors: CoreThemeColorsSchema,
   // `.catch` so a bad optional field drops alone instead of the whole theme.
+  font: ThemeFontSchema.optional().catch(undefined),
+  titleFont: ThemeFontSchema.optional().catch(undefined),
   background: ThemeBackgroundSchema.optional().catch(undefined),
   source: ThemeSourceSchema.optional().catch(undefined),
 });

@@ -242,6 +242,32 @@ describe("ThemeCreatorDialog", () => {
     expect(queryClient.getQueryData<NostrRumor[]>(BROWSE_KEY)).toEqual([{ id: "existing-theme" }]);
   });
 
+  describe("saving an adopted theme", () => {
+    const CREATOR = "c".repeat(64);
+    const ADOPTED = {
+      title: "Dusk",
+      colors: { background: "275 31% 6%", text: "0 0% 100%", primary: "24 100% 50%" },
+      source: { pubkey: CREATOR, identifier: "dusk" },
+    };
+
+    it("credits the creator on the published copy and the applied theme", async () => {
+      render(
+        <QueryClientProvider client={new QueryClient()}>
+          <ThemeCreatorDialog open onOpenChange={vi.fn()} initial={ADOPTED} />
+        </QueryClientProvider>,
+      );
+      fireEvent.click(publishButton());
+
+      await waitFor(() => expect(h.publishEvent).toHaveBeenCalledTimes(1));
+      const { tags } = h.publishEvent.mock.calls[0][0];
+      expect(tags).toContainEqual(["a", `${THEME_DEFINITION_KIND}:${CREATOR}:dusk`]);
+      expect(tags).toContainEqual(["p", CREATOR]);
+      await waitFor(() =>
+        expect(h.applyCustomTheme).toHaveBeenCalledWith(expect.objectContaining({ source: ADOPTED.source })),
+      );
+    });
+  });
+
   describe("editing one of the user's themes", () => {
     const OWN = {
       id: "own-theme-event",

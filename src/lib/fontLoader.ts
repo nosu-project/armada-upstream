@@ -1,13 +1,13 @@
 /**
- * Theme fonts are loaded by URL via injected `@font-face` rules, and applied
- * scoped (inline on the themed container) rather than globally, so nothing
- * needs restoring on unmount.
+ * Theme fonts are loaded by URL via injected `@font-face` rules. A profile's
+ * font is applied scoped (inline on the themed container); the app's own goes
+ * through `--theme-font`, read by Tailwind's `font-sans`.
  */
 
 import { sanitizeUrl } from "@/lib/sanitizeUrl";
 import { findThemeFont } from "@/lib/themeFonts";
 
-import type { ThemeFont } from "@/lib/themeEvent";
+import type { ThemeFont } from "@/themes";
 
 /**
  * Sanitize an event-sourced string for a double-quoted CSS context (prevents
@@ -42,6 +42,18 @@ function injectFontFace(family: string, url: string): void {
   font-display: swap;
 }`;
   injectedUrls.add(url);
+}
+
+/**
+ * `--theme-font` value for the app-wide theme font. Catalog families only: a
+ * theme adopted from someone else may name any URL, and the app font loads on
+ * every launch.
+ */
+export function appThemeFont(font: ThemeFont | undefined): string | undefined {
+  const option = font?.family ? findThemeFont(font.family) : undefined;
+  if (!option) return undefined;
+  injectFontFace(option.family, option.cdnUrl);
+  return `"${sanitizeCssString(option.family)}"`;
 }
 
 /** CSS `font-family` value for a theme font, or undefined when it can't resolve to a loadable URL. */

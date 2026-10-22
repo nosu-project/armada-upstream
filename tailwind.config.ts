@@ -60,7 +60,8 @@ export default {
 				'monogram': '9px',
 			},
 			fontFamily: {
-				sans: ['Inter Variable', 'Inter', 'system-ui', 'var(--emoji-fonts)', 'sans-serif'],
+				// `--theme-font` is the active theme's font (AppProvider's ThemeFontSync).
+				sans: ['var(--theme-font, "Inter Variable")', 'Inter Variable', 'Inter', 'system-ui', 'var(--emoji-fonts)', 'sans-serif'],
 				emoji: ['var(--emoji-fonts)', 'EmojiSymbols', 'sans-serif'],
 			},
 			colors: {

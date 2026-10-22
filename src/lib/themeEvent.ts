@@ -3,10 +3,10 @@ import { isNostrId } from "@/lib/nostrId";
 import { sanitizeUrl } from "@/lib/sanitizeUrl";
 
 import type { EventTemplate } from "@/hooks/useNostrPublish";
-import type { CoreThemeColors, ThemeBackground, ThemeConfig, ThemeSource } from "@/themes";
+import type { CoreThemeColors, ThemeBackground, ThemeConfig, ThemeFont, ThemeSource } from "@/themes";
 import type { NostrRumor } from "@/lib/nostrRumor";
 
-export type { ThemeBackground, ThemeSource } from "@/themes";
+export type { ThemeBackground, ThemeFont, ThemeSource } from "@/themes";
 
 /**
  * Ditto theme events (interop): core colors plus optional fonts and background
@@ -17,12 +17,6 @@ export type { ThemeBackground, ThemeSource } from "@/themes";
 export const THEME_DEFINITION_KIND = 36767;
 /** Replaceable: the user's currently active profile theme. One per user. */
 export const ACTIVE_THEME_KIND = 16767;
-
-/** A theme font: a CSS family name plus an optional remote .woff2/.css URL. */
-export interface ThemeFont {
-  family: string;
-  url?: string;
-}
 
 /** Parse the `c` color tags (hex, role-tagged) into CoreThemeColors. */
 function parseColorTags(tags: string[][]): CoreThemeColors | null {
@@ -179,11 +173,18 @@ export function themeEventToConfig(event: NostrRumor): ThemeConfig | null {
       ? { pubkey: event.pubkey, identifier: theme.identifier }
       : { pubkey: event.pubkey }
   );
+  return themeToConfig(theme, source);
+}
+
+/** The ThemeConfig that wears a parsed theme, crediting `source` (default: the theme's own credit). */
+export function themeToConfig(theme: DittoTheme, source: ThemeSource | undefined = theme.source): ThemeConfig {
   return {
     title: theme.title,
     colors: theme.colors,
+    ...(theme.font && { font: theme.font }),
+    ...(theme.titleFont && { titleFont: theme.titleFont }),
     ...(theme.background && { background: theme.background }),
-    source,
+    ...(source && { source }),
   };
 }
 
