@@ -65,6 +65,13 @@ describe("preflightRefusal", () => {
     expect(all).toEqual({ status: 413, reason: "Max 50 MB" });
   });
 
+  it("doesn't wait on an unresponsive server once another has answered", async () => {
+    const result = await preflightRefusal(["https://hung.example", "https://b.example"], { size: 1 }, {
+      fetch: (input) => new URL(String(input)).host === "hung.example" ? new Promise<Response>(() => {}) : Promise.resolve(respond(200)),
+    });
+    expect(result).toBeUndefined();
+  });
+
   it("has nothing to say with no servers", async () => {
     expect(await preflightRefusal([], { size: 1 })).toBeUndefined();
   });

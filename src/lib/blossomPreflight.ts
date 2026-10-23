@@ -61,10 +61,19 @@ export async function preflightRefusal(
   opts: { signal?: AbortSignal; fetch?: typeof globalThis.fetch } = {},
 ): Promise<{ status: number; reason?: string } | undefined> {
   if (servers.length === 0) return undefined;
-  const verdicts = await Promise.all(servers.map((s) => preflightUpload(s, req, opts)));
-  const refusals = verdicts.filter((v): v is Extract<PreflightVerdict, { kind: "refused" }> => v.kind === "refused");
-  if (refusals.length !== servers.length) return undefined;
-  return { status: refusals[0].status, reason: refusals.find((r) => r.reason)?.reason };
+  // Settles on the first non-refusal, so one unresponsive server doesn't hold every attachment for the timeout.
+  const refusals: Extract<PreflightVerdict, { kind: "refused" }>[] = [];
+  return new Promise((resolve) => {
+    for (const server of servers) {
+      void preflightUpload(server, req, opts).then((verdict) => {
+        if (verdict.kind !== "refused") return resolve(undefined);
+        refusals.push(verdict);
+        if (refusals.length === servers.length) {
+          resolve({ status: refusals[0].status, reason: refusals.find((r) => r.reason)?.reason });
+        }
+      });
+    }
+  });
 }
 
 /** Human wording for a refusal whose server gave no reason. */

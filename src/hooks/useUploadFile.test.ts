@@ -176,6 +176,25 @@ describe("uploadToServers", () => {
     expect(tags).toContainEqual(["fallback", `https://other.example/${HASH}.txt`]);
   });
 
+  it("stops waiting for a hung preferred server once another holds the blob", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const calls = stubServers({ "https://pref.example": [{ delay: 10 * 60_000 }] });
+      let done = false;
+      const upload = uploadToServers(file(), ["https://pref.example/", "https://other.example/"], signer, {
+        preferred: "https://pref.example/",
+      }).finally(() => { done = true; });
+      while (!done && calls.length < 2) await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(4_000);
+      expect(done).toBe(false);
+      await vi.advanceTimersByTimeAsync(1_500);
+      const tags = await upload;
+      expect(tags[0]).toEqual(["url", `https://other.example/${HASH}.txt`]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("signs one token for every server", async () => {
     stubServers({});
     vi.mocked(signer.signEvent).mockClear();
