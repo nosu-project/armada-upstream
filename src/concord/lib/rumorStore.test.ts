@@ -243,6 +243,19 @@ describe("concord rumor store", () => {
     expect(over).toEqual({ events: [], complete: false });
   });
 
+  it("reads a single second whole however many rows it holds", async () => {
+    const { channel, idHex } = makeChannel();
+    const alice = signer();
+    const burst = ["s1", "s2", "s3"].map((c) => chatRumor(idHex, alice, KIND_MESSAGE, c, 4_000_000));
+    writeRumors(CID, await openChatBatch(await Promise.all(burst.map((r) => wrapChat(r, channel, alice))), channel));
+    await eventually(() => queryChannelRumors(CID, idHex, { limit: 100 }), (r) => r.length === burst.length);
+
+    const at = burst[0].created_at;
+    const second = await queryChannelWindow(CID, idHex, { since: at, until: at, limit: 1 });
+    expect(second.complete).toBe(true);
+    expect(second.events.map((e) => e.content).sort()).toEqual(["s1", "s2", "s3"]);
+  });
+
   it("reads reply parents by id with the edits that fold over them", async () => {
     const { channel, idHex } = makeChannel();
     const alice = signer();

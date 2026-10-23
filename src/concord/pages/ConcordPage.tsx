@@ -1492,7 +1492,7 @@ function ConcordCommunityPage() {
     [canManageRoles, canKickAny, canBanAny, canCreateInvite, canReadReports, dissolved],
   );
 
-  const { transport: baseTransport, reactionsFor, allMessages, calendar, timerEntries, openedById, trustedAuthors } = useTransport(
+  const { transport: baseTransport, span: timelineSpan, reactionsFor, allMessages, calendar, timerEntries, openedById, trustedAuthors } = useTransport(
     community,
     channel,
     canWrite,
@@ -1543,11 +1543,12 @@ function ConcordCommunityPage() {
   const gitActivity = useChannelGitActivity(channel?.idHex, gitAttachments);
   const mixedEntries = useMemo(() => {
     const merged = mergeChannelTimeline(baseTransport.messages, gitActivity.activities, timerEntries);
-    if (!baseTransport.hasNewer) return merged;
-    // A detached run ends where its chat does; later activity belongs past the gap.
-    const last = baseTransport.messages[baseTransport.messages.length - 1]?.created_at ?? -Infinity;
-    return merged.filter((entry) => entry.type === "chat" || entry.createdAt <= last);
-  }, [baseTransport.messages, baseTransport.hasNewer, gitActivity.activities, timerEntries]);
+    const to = timelineSpan?.to;
+    if (!timelineSpan || to === undefined) return merged;
+    // A detached run shows only its own span; activity either side sits past a gap.
+    const { from } = timelineSpan;
+    return merged.filter((entry) => entry.type === "chat" || (entry.createdAt >= from && entry.createdAt <= to));
+  }, [baseTransport.messages, timelineSpan, gitActivity.activities, timerEntries]);
   // Memoized: rebuilding it allocates the full timeline.
   const dividerEntries = useMemo(
     () =>

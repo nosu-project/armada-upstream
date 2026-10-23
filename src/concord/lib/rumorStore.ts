@@ -280,7 +280,8 @@ export async function queryChannelPageBefore(
 /**
  * Every chat row in `[since, until]` plus their side-events, or `complete: false`
  * when the window holds more than `limit` rows — a limited read is newest-first,
- * so a truncated one says nothing about the window's oldest rows.
+ * so a truncated one says nothing about the window's oldest rows. A single
+ * second cannot be split further, so it is read whole whatever its size.
  */
 export async function queryChannelWindow(
   communityIdHex: string,
@@ -288,11 +289,10 @@ export async function queryChannelWindow(
   opts: { since: number; until: number; limit: number; signal?: AbortSignal },
 ): Promise<{ events: OpenedChat[]; complete: boolean }> {
   const store = rumorStore(communityIdHex);
-  const fetched = await store.query(
-    [{ kinds: CHAT_ROW_KINDS, "#channel": [channelIdHex], since: opts.since, until: opts.until, limit: opts.limit + 1 }],
-    { signal: opts.signal },
-  );
-  if (fetched.length > opts.limit) return { events: [], complete: false };
+  const filter: NostrFilter = { kinds: CHAT_ROW_KINDS, "#channel": [channelIdHex], since: opts.since, until: opts.until };
+  if (opts.since < opts.until) filter.limit = opts.limit + 1;
+  const fetched = await store.query([filter], { signal: opts.signal });
+  if (filter.limit !== undefined && fetched.length > opts.limit) return { events: [], complete: false };
   return { events: await withSideEvents(store, channelIdHex, fetched, opts.signal), complete: true };
 }
 

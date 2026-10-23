@@ -17,7 +17,7 @@ import { markReactionDeleted, type OpenedChat } from "@/concord/lib/chat";
 import { expirationOf, timerNoticeSeconds } from "@/concord/lib/disappearing";
 import { sendRefusal } from "@/concord/lib/sendRateLimit";
 import { hasEveryoneMention } from "@/concord/lib/everyoneMention";
-import { channelKey } from "@/concord/hooks/useChannel";
+import { channelKey, type TimelineSpan } from "@/concord/hooks/useChannel";
 import type { DmTimerTimelineEntry } from "@/components/chat/channelTimeline";
 import { buildCalendarTags, type CalendarEvent, type CalendarEventInput, type CalendarTransport, parseCalendarEvents, type RsvpStatus, type RsvpTally, tallyRsvps } from "@/lib/calendar";
 import { buildPollTags, parsePoll, tallyPollVotes, type PollTally, type PollVote } from "@/lib/polls";
@@ -70,6 +70,8 @@ export function useTransport(
   focus?: ChannelTimelineFocus,
 ): {
   transport: ChatTransport;
+  /** The `created_at` range the timeline shows; `to` is set while a detached run is shown. */
+  span: TimelineSpan | undefined;
   reactionsFor: (id: string) => MessageReactions;
   /** The full decoded message list (member enumeration, reply resolution). */
   allMessages: ChatMsg[];
@@ -598,5 +600,5 @@ export function useTransport(
     return map;
   }, [raw]);
 
-  return { transport, reactionsFor, allMessages: messages, calendar, timerEntries, openedById, trustedAuthors: folded.trusted };
+  return { transport, span, reactionsFor, allMessages: messages, calendar, timerEntries, openedById, trustedAuthors: folded.trusted };
 }

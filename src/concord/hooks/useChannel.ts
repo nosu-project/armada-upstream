@@ -299,14 +299,25 @@ export function useChannelTimeline(
   // Keeps a live re-read from turning `hasMore` back on.
   const endReachedRef = useRef(false);
   const [hasMore, setHasMore] = useState(true);
+  // Older pages in flight, the present's and a run's alike: the flag clears with the last.
+  const olderLoadsRef = useRef(new Set<symbol>());
   const [isLoadingOlder, setIsLoadingOlder] = useState(false);
+  const beginOlderLoad = useCallback(() => {
+    const token = Symbol();
+    olderLoadsRef.current.add(token);
+    setIsLoadingOlder(true);
+    return () => {
+      if (olderLoadsRef.current.delete(token)) setIsLoadingOlder(olderLoadsRef.current.size > 0);
+    };
+  }, []);
   // Wakes the fold (reads Date.now()) when a held future-dated message's time arrives.
   const [revealTick, setRevealTick] = useState(0);
   // The relay backfills in flight; aborted when the channel changes or unmounts.
-  const olderAbortRef = useRef<AbortController | null>(null);
+  const olderAbortsRef = useRef(new Set<AbortController>());
   const newerAbortRef = useRef<AbortController | null>(null);
   useEffect(() => () => {
-    olderAbortRef.current?.abort();
+    for (const controller of olderAbortsRef.current) controller.abort();
+    olderAbortsRef.current.clear();
     newerAbortRef.current?.abort();
   }, [channelIdHex]);
   // Which run each in-flight page belongs to (0 = the present's), so a jump can
@@ -336,6 +347,7 @@ export function useChannelTimeline(
   useEffect(() => {
     endReachedRef.current = false;
     setHasMore(true);
+    olderLoadsRef.current.clear();
     setIsLoadingOlder(false);
     setIsLoadingNewer(false);
     setRun(null);
@@ -500,7 +512,8 @@ export function useChannelTimeline(
     if (!hasMore || isLoadingOlder) return 0;
     const before = raw.filter((m) => m.kind === KIND_MESSAGE || m.kind === KIND_POLL).length;
     const cursorKeyId = channelIdHex ?? "";
-    setIsLoadingOlder(true);
+    const endLoad = beginOlderLoad();
+    let controller: AbortController | undefined;
     try {
       // One bounded store read below the cursor; relays only when the store runs short.
       const cached = queryClient.getQueryData<OpenedChat[]>(queryKey) ?? [];
@@ -532,11 +545,12 @@ export function useChannelTimeline(
         if (!exhausted) {
           // Paint what the store had before waiting on relays.
           mergeIntoView(added);
-          const controller = new AbortController();
-          olderAbortRef.current = controller;
+          const relayRead = new AbortController();
+          controller = relayRead;
+          olderAbortsRef.current.add(relayRead);
           let writeFailed = false;
           const pendingWrites: Promise<boolean>[] = [];
-          const older = await backfillStore(nostr, historyRelays(community!), channel!, controller.signal, {
+          const older = await backfillStore(nostr, historyRelays(community!), channel!, relayRead.signal, {
             until: saved?.oldest,
             maxPages: LOAD_OLDER_MAX_PAGES,
             emptyOk: true,
@@ -545,9 +559,9 @@ export function useChannelTimeline(
             // Each page joins the timeline as it lands, so a reader at the top isn't
             // held until every page of the run has been read.
             onPage: async (events) => {
-              if (controller.signal.aborted) return;
+              if (relayRead.signal.aborted) return;
               const opened = await openChatBatch(events, channel!);
-              if (opened.length === 0 || controller.signal.aborted) return;
+              if (opened.length === 0 || relayRead.signal.aborted) return;
               // Painted before the write lands; only the cursor waits on it.
               const stored = writeRumors(community!.idHex, opened);
               void stored.then((ok) => {
@@ -559,7 +573,7 @@ export function useChannelTimeline(
             },
           });
           // The view that asked is gone; its query key is no longer read.
-          if (controller.signal.aborted) return 0;
+          if (relayRead.signal.aborted) return 0;
           // A clean empty answer below held history ends paging for this view only;
           // it isn't persisted, since an all-empty run can't seal the cursor.
           exhausted = older.exhausted || (!older.failed && older.count === 0 && !!saved?.oldest);
@@ -590,9 +604,10 @@ export function useChannelTimeline(
       const after = merged.filter((m) => m.kind === KIND_MESSAGE || m.kind === KIND_POLL).length;
       return Math.max(0, after - before);
     } finally {
-      setIsLoadingOlder(false);
+      if (controller) olderAbortsRef.current.delete(controller);
+      endLoad();
     }
-  }, [hasMore, isLoadingOlder, raw, nostr, community, channel, channelIdHex, queryClient, queryKey, mergeRows, noteCursor]);
+  }, [hasMore, isLoadingOlder, raw, nostr, community, channel, channelIdHex, queryClient, queryKey, mergeRows, noteCursor, beginOlderLoad]);
 
   const authGate = useCallback(
     (url: string) => whenAuthSettled(url, () => channel!.streams.map((s) => s.group)),
@@ -603,7 +618,8 @@ export function useChannelTimeline(
   const loadOlderRun = useCallback(async (r: DetachedRun): Promise<number> => {
     if (r.exhausted || olderBusyRef.current.has(r.id)) return 0;
     olderBusyRef.current.add(r.id);
-    setIsLoadingOlder(true);
+    const endLoad = beginOlderLoad();
+    let controller: AbortController | undefined;
     const cursorKeyId = channelIdHex ?? "";
     let bottom = copyCursor(r.bottom)!;
     const lower = (rows: OpenedChat[]) => {
@@ -626,19 +642,20 @@ export function useChannelTimeline(
         const inSynced = Boolean(saved?.oldest && bottom.until >= saved.oldest);
         if (inSynced && saved!.exhausted) exhausted = true;
         else {
-          const controller = new AbortController();
-          olderAbortRef.current = controller;
+          const relayRead = new AbortController();
+          controller = relayRead;
+          olderAbortsRef.current.add(relayRead);
           let writeFailed = false;
           const pendingWrites: Promise<boolean>[] = [];
-          const older = await backfillStore(nostr, historyRelays(community!), channel!, controller.signal, {
+          const older = await backfillStore(nostr, historyRelays(community!), channel!, relayRead.signal, {
             until: inSynced ? saved!.oldest : bottom.until,
             maxPages: LOAD_OLDER_MAX_PAGES,
             emptyOk: true,
             beforeRelay: authGate,
             onPage: async (events) => {
-              if (controller.signal.aborted) return;
+              if (relayRead.signal.aborted) return;
               const opened = await openChatBatch(events, channel!);
-              if (opened.length === 0 || controller.signal.aborted) return;
+              if (opened.length === 0 || relayRead.signal.aborted) return;
               const stored = writeRumors(community!.idHex, opened);
               void stored.then((ok) => {
                 if (!ok) writeFailed = true;
@@ -648,7 +665,7 @@ export function useChannelTimeline(
               lower(opened);
             },
           });
-          if (controller.signal.aborted) return 0;
+          if (relayRead.signal.aborted) return 0;
           exhausted = older.exhausted || (!older.failed && older.count === 0);
           // Only a read continuing the synced region down may extend it; below it, a
           // detached read would claim the unread gap above it as covered.
@@ -667,9 +684,10 @@ export function useChannelTimeline(
       return countRows(added);
     } finally {
       olderBusyRef.current.delete(r.id);
-      setIsLoadingOlder(false);
+      if (controller) olderAbortsRef.current.delete(controller);
+      endLoad();
     }
-  }, [nostr, community, channel, channelIdHex, mergeRows, setRun, authGate]);
+  }, [nostr, community, channel, channelIdHex, mergeRows, setRun, authGate, beginOlderLoad]);
 
   /**
    * One window `[since, until]` above a detached run: the store where the sync
