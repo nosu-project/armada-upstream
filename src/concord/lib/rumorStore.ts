@@ -21,7 +21,7 @@
  * the folded cache; wiped on logout (purgeClientStorage).
  */
 
-import type { NostrEvent } from "@nostrify/nostrify";
+import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
 
 import { readFoldedShared, writeFolded } from "@/lib/foldedCache";
 import {
@@ -259,22 +259,53 @@ export async function queryChannelRumors(
 /**
  * Read the page of chat rows OLDER than a cursor, plus their side-events, so each
  * scroll-back page costs the same. `until` is inclusive and `skip` names rows at
- * `until` already loaded. Side-events are selected by `e`-reference (not time)
- * under the per-row budget, plus one hop of deletes that retract them. `full` =
- * the store may hold more.
+ * `until` already loaded; `since` keeps the read inside the region the store is
+ * known to hold whole. `full` = the store may hold more.
  */
 export async function queryChannelPageBefore(
   communityIdHex: string,
   channelIdHex: string,
-  opts: { until: number; skip: ReadonlySet<string>; limit: number; signal?: AbortSignal },
+  opts: { until: number; skip: ReadonlySet<string>; limit: number; since?: number; signal?: AbortSignal },
 ): Promise<{ events: OpenedChat[]; full: boolean }> {
   const store = rumorStore(communityIdHex);
   const want = opts.limit + opts.skip.size;
+  const filter: NostrFilter = { kinds: CHAT_ROW_KINDS, "#channel": [channelIdHex], until: opts.until, limit: want };
+  if (opts.since !== undefined) filter.since = opts.since;
+  const fetched = await store.query([filter], { signal: opts.signal });
+  const rows = fetched.filter((ev) => !opts.skip.has(ev.id));
+  const events = await withSideEvents(store, channelIdHex, rows, opts.signal);
+  return { events, full: fetched.length >= want };
+}
+
+/**
+ * Every chat row in `[since, until]` plus their side-events, or `complete: false`
+ * when the window holds more than `limit` rows — a limited read is newest-first,
+ * so a truncated one says nothing about the window's oldest rows.
+ */
+export async function queryChannelWindow(
+  communityIdHex: string,
+  channelIdHex: string,
+  opts: { since: number; until: number; limit: number; signal?: AbortSignal },
+): Promise<{ events: OpenedChat[]; complete: boolean }> {
+  const store = rumorStore(communityIdHex);
   const fetched = await store.query(
-    [{ kinds: CHAT_ROW_KINDS, "#channel": [channelIdHex], until: opts.until, limit: want }],
+    [{ kinds: CHAT_ROW_KINDS, "#channel": [channelIdHex], since: opts.since, until: opts.until, limit: opts.limit + 1 }],
     { signal: opts.signal },
   );
-  const rows = fetched.filter((ev) => !opts.skip.has(ev.id));
+  if (fetched.length > opts.limit) return { events: [], complete: false };
+  return { events: await withSideEvents(store, channelIdHex, fetched, opts.signal), complete: true };
+}
+
+/**
+ * A page of rows with their side-events, selected by `e`-reference (not time)
+ * under the per-row budget, plus one hop of deletes that retract them.
+ */
+async function withSideEvents(
+  store: NRumorStore,
+  channelIdHex: string,
+  rows: NostrRumor[],
+  signal: AbortSignal | undefined,
+): Promise<OpenedChat[]> {
   const rowIds = rows.map((ev) => ev.id);
   // Keyed by `#e` alone, channel checked here: with `#channel` beside it the
   // IndexedDB planner walks the one-value tag, i.e. the whole channel, per page.
@@ -282,18 +313,17 @@ export async function queryChannelPageBefore(
   const side = rowIds.length
     ? (await store.query(
         [{ kinds: CHAT_SIDE_KINDS, "#e": rowIds, limit: rowIds.length * SIDE_EVENT_FACTOR }],
-        { signal: opts.signal },
+        { signal },
       )).filter(inChannel)
     : [];
   const retractable = side.filter((ev) => ev.kind !== KIND_DELETE).map((ev) => ev.id);
   const retractions = retractable.length
     ? (await store.query(
         [{ kinds: [KIND_DELETE], "#e": retractable, limit: retractable.length }],
-        { signal: opts.signal },
+        { signal },
       )).filter(inChannel)
     : [];
-  const events = notExpired([...rows, ...side, ...retractions]).map((ev) => storedToOpenedChat(ev, channelIdHex));
-  return { events, full: fetched.length >= want };
+  return notExpired([...rows, ...side, ...retractions]).map((ev) => storedToOpenedChat(ev, channelIdHex));
 }
 
 /**

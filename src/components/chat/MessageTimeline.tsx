@@ -398,8 +398,20 @@ export function MessageTimeline({
   className,
 }: MessageTimelineProps) {
   const intl = useIntl();
-  const { messages, isLoading, loadOlder, hasMore, isLoadingOlder, rotationDividerIds, quarantinedIds, pausedIds } =
-    transport;
+  const {
+    messages,
+    isLoading,
+    loadOlder,
+    hasMore,
+    isLoadingOlder,
+    hasNewer = false,
+    loadNewer,
+    isLoadingNewer,
+    returnToPresent: leaveDetachedRun,
+    rotationDividerIds,
+    quarantinedIds,
+    pausedIds,
+  } = transport;
 
   // Opened flood rows, keyed by the run's first message id (so they don't leak
   // across channels). `floodRunOfRef` lets a jump open the run hiding its target.
@@ -470,19 +482,24 @@ export function MessageTimeline({
   entriesRef.current = timelineEntries;
   const quarantinedIdsRef = useRef(quarantinedIds);
   quarantinedIdsRef.current = quarantinedIds;
+  const hasNewerRef = useRef(hasNewer);
+  hasNewerRef.current = hasNewer;
 
   // Distance from the newest message; the single input to stick-to-bottom.
   const distanceRef = useRef(0);
   // A window extension is committed but not yet laid out — don't stack another.
   const extendLockRef = useRef(false);
-  // Independent of the transport's possibly lagging `isLoadingOlder`.
+  // Independent of the transport's possibly lagging `isLoadingOlder`/`isLoadingNewer`.
   const loadingOlderRef = useRef(false);
+  const loadingNewerRef = useRef(false);
   // Consecutive underfill loads that added nothing, per oldest row.
   const underfillDryRef = useRef<{ oldestId: string | undefined; count: number }>({ oldestId: undefined, count: 0 });
   // A scroll-triggered page landed above the first row: reveal a step
   // automatically, since a reader at scrollTop=0 has no further upward scroll.
   const backfillRevealRef = useRef<{ boundaryId: string; count: number } | null>(null);
   const [backfillPulse, setBackfillPulse] = useState(0);
+  // A forward read settled; its rows may need revealing with no scroll to do it.
+  const [newerPulse, setNewerPulse] = useState(0);
   const pinBottomRef = useRef(true);
   const pendingJumpRef = useRef<{ id: string; focus: boolean } | null>(null);
   // Persistent so it survives React 19 interrupted renders and async row resizes.
@@ -549,10 +566,11 @@ export function MessageTimeline({
     [],
   );
 
-  /** Distance from the newest message: the scroller's bottom, unless rows are unrendered below it. */
+  /** Distance from the newest message: the scroller's bottom, unless rows are unrendered or unread below it. */
   const readerDistance = useCallback(
     (el: HTMLElement) =>
-      distanceFromBottom(el) + (endIndexRef.current < entriesRef.current.length ? UNRENDERED_BELOW_PX : 0),
+      distanceFromBottom(el) +
+      (endIndexRef.current < entriesRef.current.length || hasNewerRef.current ? UNRENDERED_BELOW_PX : 0),
     [],
   );
 
@@ -716,6 +734,7 @@ export function MessageTimeline({
       flashRow(row, focus);
       distanceRef.current = readerDistance(el);
       lastScrollTopRef.current = clampedScrollTop(el);
+      setShowJumpPill(distanceRef.current > JUMP_PILL_PX);
       captureReadingAnchor();
     };
     if (contentRef.current?.querySelector(`[data-event-id="${id}"]`)) {
@@ -872,6 +891,19 @@ export function MessageTimeline({
     if (!el || paused || extendLockRef.current) return;
     const all = entriesRef.current;
     const end = endIndexRef.current;
+    // A detached run reads forward while few loaded rows remain below the window.
+    if (
+      hasNewer && loadNewer && !isLoadingNewer && !loadingNewerRef.current &&
+      all.length - end < PREFETCH_ROWS && distanceFromBottom(el) < BACKFILL_TRIGGER_PX
+    ) {
+      loadingNewerRef.current = true;
+      void loadNewer()
+        .catch(() => 0)
+        .finally(() => {
+          loadingNewerRef.current = false;
+          setNewerPulse((pulse) => pulse + 1);
+        });
+    }
     if (end >= all.length) return;
     if (distanceFromBottom(el) >= REVEAL_TRIGGER_PX) return;
     const nextEnd = stepForwardRows(all, end, WINDOW_STEP, isFolded);
@@ -881,9 +913,24 @@ export function MessageTimeline({
       setWindowStart(all[stepBackRows(all, nextEnd, MAX_WINDOW, isFolded)].id);
     }
     setWindowEndId(nextEnd >= all.length ? null : all[nextEnd - 1].id);
-  }, [paused, captureReadingAnchor, isFolded, setWindowStart]);
+  }, [paused, captureReadingAnchor, isFolded, setWindowStart, hasNewer, loadNewer, isLoadingNewer]);
   // Called via ref from the earlier-declared layout effect. Cancel on unmount.
   maybeExtendRef.current = maybeExtend;
+
+  // Rows read forward land below the window, where a reader already at the
+  // bottom has no further scroll to reveal them: check after every change.
+  useEffect(() => {
+    if (!listVisible || !loadNewer) return;
+    const frame = requestAnimationFrame(() => maybeExtendDown());
+    return () => cancelAnimationFrame(frame);
+  }, [listVisible, loadNewer, timelineEntries, endIndex, hasNewer, newerPulse, maybeExtendDown]);
+
+  // While detached, the window ends at its last row so rows read forward are
+  // revealed a step at a time rather than mounted in one commit.
+  useEffect(() => {
+    if (!hasNewer || windowEndId !== null || timelineEntries.length === 0) return;
+    setWindowEndId(timelineEntries[timelineEntries.length - 1].id);
+  }, [hasNewer, windowEndId, timelineEntries]);
   useEffect(
     () => () => {
       if (continueRafRef.current != null) cancelAnimationFrame(continueRafRef.current);
@@ -937,6 +984,11 @@ export function MessageTimeline({
     const task = beginSyncTask("older messages");
     return () => task.end();
   }, [isLoadingOlder]);
+  useEffect(() => {
+    if (!isLoadingNewer) return;
+    const task = beginSyncTask("newer messages");
+    return () => task.end();
+  }, [isLoadingNewer]);
 
   const handleScroll = useCallback(() => {
     const el = scrollRef.current;
@@ -1015,7 +1067,8 @@ export function MessageTimeline({
   /** Back to the newest message; a window ending above it is re-anchored there first. */
   const returnToPresent = useCallback(() => {
     distanceRef.current = 0;
-    if (endIndexRef.current >= entriesRef.current.length) {
+    if (hasNewerRef.current) leaveDetachedRun?.();
+    if (endIndexRef.current >= entriesRef.current.length && !hasNewerRef.current) {
       pinToBottomNow();
       return;
     }
@@ -1024,7 +1077,7 @@ export function MessageTimeline({
     setShowJumpPill(false);
     setWindowStart(null);
     setWindowEndId(null);
-  }, [pinToBottomNow, setWindowStart]);
+  }, [pinToBottomNow, setWindowStart, leaveDetachedRun]);
 
   useImperativeHandle(
     handleRef,

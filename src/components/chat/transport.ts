@@ -194,6 +194,18 @@ export interface ChatTransport {
   hasMore?: boolean;
   isLoadingOlder?: boolean;
 
+  /**
+   * The messages are a run of older history detached from the present (a jump to
+   * an old message): `loadNewer` reads forward toward the present, and the
+   * timeline treats its bottom as history rather than the newest message.
+   */
+  hasNewer?: boolean;
+  /** Resolves to the number of messages appended. */
+  loadNewer?: () => Promise<number>;
+  isLoadingNewer?: boolean;
+  /** Drop a detached run and show the present again. */
+  returnToPresent?: () => void;
+
   sendStatusFor?: (id: string) => SendStatus | undefined;
   retry?: (event: ChatMsg) => void;
   discard?: (id: string) => void;
