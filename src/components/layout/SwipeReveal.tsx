@@ -40,16 +40,13 @@ interface SwipeRevealProps {
 }
 
 /**
- * Discord-style swipe-to-reveal for mobile chat screens; plain side-by-side on
- * desktop. Drag writes go straight to `style` in a rAF (see `applyDrag`), and a
- * committed gesture settles optimistically (`pendingOpen`) with navigation
- * deferred until the settle is on the compositor (`deferCommit`), so release doesn't hitch.
+ * Whether `SwipeReveal` drills down (list over pane) rather than laying out side
+ * by side. Narrow AND touch, so a small desktop window keeps side-by-side panes.
  */
-export function SwipeReveal({ underlay, children, open, onReveal, onClose, canClose = true }: SwipeRevealProps) {
+export function useSwipeLayout(): boolean {
   const isTouch = useIsTouch();
-  // Narrow AND touch, so a small desktop window keeps side-by-side panes.
   const [narrow, setNarrow] = useState(
-    () => window.matchMedia("(max-width: 899px)").matches,
+    () => typeof window !== "undefined" && window.matchMedia("(max-width: 899px)").matches,
   );
   useEffect(() => {
     const mql = window.matchMedia("(max-width: 899px)");
@@ -58,8 +55,17 @@ export function SwipeReveal({ underlay, children, open, onReveal, onClose, canCl
     setNarrow(mql.matches);
     return () => mql.removeEventListener("change", onChange);
   }, []);
+  return isTouch && narrow;
+}
 
-  const swipeEnabled = isTouch && narrow;
+/**
+ * Discord-style swipe-to-reveal for mobile chat screens; plain side-by-side on
+ * desktop. Drag writes go straight to `style` in a rAF (see `applyDrag`), and a
+ * committed gesture settles optimistically (`pendingOpen`) with navigation
+ * deferred until the settle is on the compositor (`deferCommit`), so release doesn't hitch.
+ */
+export function SwipeReveal({ underlay, children, open, onReveal, onClose, canClose = true }: SwipeRevealProps) {
+  const swipeEnabled = useSwipeLayout();
 
   // Optimistic resting state; `null` whenever the `open` prop is authoritative.
   const [pendingOpen, setPendingOpen] = useState<boolean | null>(null);
@@ -236,9 +242,12 @@ export function SwipeReveal({ underlay, children, open, onReveal, onClose, canCl
     if (prevOpen.current !== open) {
       setSnap(!gestureCommit.current);
       prevOpen.current = open;
-      // Navigation is authoritative: abandon any in-flight drag.
-      cancelOpenSwipe();
-      cancelCloseSwipe();
+      // Navigation is authoritative: abandon any in-flight drag. Not when it only
+      // lands the last gesture's commit, which may trail a swipe already started.
+      if (!gestureCommit.current) {
+        cancelOpenSwipe();
+        cancelCloseSwipe();
+      }
       setPendingOpen(null);
     }
     gestureCommit.current = false;

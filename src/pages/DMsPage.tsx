@@ -1,6 +1,6 @@
 import { AtSign, Bell, BellOff, CheckCheck, ChevronLeft, ChevronRight, Copy, Flag, Headphones, Inbox, Loader2, Lock, MessageSquare, MoreVertical, PanelLeft, PanelLeftDashed, PenSquare, Phone, PhoneOff, Pin, PinOff, Plus, Search, ShieldCheck, Sparkles, Timer, User, UserCheck, Users, UserX, X } from "lucide-react";
 import { nip19 } from "nostr-tools";
-import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode, type UIEvent } from "react";
+import { Fragment, memo, useCallback, useContext, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode, type UIEvent } from "react";
 import { useLocation, useNavigate, useParams, Navigate } from "react-router-dom";
 
 import { AppStageSlot } from "@/components/chat/AppStage";
@@ -11,6 +11,7 @@ import { ChatComposer } from "@/components/chat/ChatComposer";
 import { ChatMessage } from "@/components/chat/ChatMessage";
 import { ChatSearchBar } from "@/components/chat/ChatSearchBar";
 import { ChatShell } from "@/components/chat/ChatShell";
+import { useSwipeLayout } from "@/components/layout/SwipeReveal";
 import type { ChatMsg } from "@/components/chat/transport";
 import { useChatEditing } from "@/components/chat/useChatEditing";
 import { getQuoteReplyToId } from "@/components/chat/messageHelpers";
@@ -69,7 +70,7 @@ import { ChromeDialogContent, Dialog } from "@/components/ui/dialog";
 import { MountWhenOpened } from "@/components/MountWhenOpened";
 import { useAndroidBack } from "@/hooks/useAndroidBack";
 import { useIsDesktop } from "@/hooks/useIsDesktop";
-import { useListShowing } from "@/contexts/PaneCoveredContext";
+import { PaneCoveredContext, useListShowing } from "@/contexts/PaneCoveredContext";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useCall } from "@/hooks/useCall";
@@ -685,8 +686,10 @@ const Conversation = memo(function Conversation({
     [botCommandEntries],
   );
   const { markRead } = useReadState();
-  // Covered by Settings: mounted but not being read.
-  const covered = usePageCovered();
+  // Covered by Settings or by the mobile list: mounted but not being read.
+  const settingsCovered = usePageCovered();
+  const listCovered = useContext(PaneCoveredContext);
+  const covered = settingsCovered || listCovered;
   const { dmLevel, setLevel: setNotifLevel } = useNotifLevels();
   const { toast } = useToast();
   const { activeCall } = useCall();
@@ -2390,7 +2393,8 @@ export function ConversationList({
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto px-3 py-2 sidebar:pt-2.5" onScroll={handleListScroll}>
+      {/* pan-y: a scroller re-allows every pan, letting the browser claim the close swipe. */}
+      <div className="flex-1 overflow-y-auto touch-pan-y px-3 py-2 sidebar:pt-2.5" onScroll={handleListScroll}>
         {dmSupported && !requesting && <DmInboxNotice dismissible className="mb-2" />}
         {!dmSupported ? (
           <p className="text-sm text-muted-foreground p-3">
@@ -2586,10 +2590,17 @@ export function DMsPage() {
   if (activePeer && returnPeer !== activePeer) setReturnPeer(activePeer);
 
   // Lags `activePeer` so the thread stays mounted while sliding out on mobile.
+  // Under the revealed mobile list it stays on `returnPeer`, so a swipe back
+  // drags in the thread itself rather than the empty state.
+  const swipeLayout = useSwipeLayout();
   const [renderedPeer, setRenderedPeer] = useState(activePeer);
   useEffect(() => {
     if (activePeer) {
       setRenderedPeer(activePeer);
+      return;
+    }
+    if (swipeLayout && !composing) {
+      setRenderedPeer(returnPeer);
       return;
     }
     // Drop the slid-out thread at IDLE (bounded by a timeout): its unmount is a
@@ -2606,7 +2617,7 @@ export function DMsPage() {
       clearTimeout(timer);
       if (idleId !== undefined) cancelIdleCallback(idleId);
     };
-  }, [activePeer]);
+  }, [activePeer, swipeLayout, composing, returnPeer]);
 
   // Composing takes over the thread column; drop any lingering thread.
   useEffect(() => {
@@ -2871,12 +2882,13 @@ export function DMsPage() {
   const closePeer = useCallback(
     (conversation: string, latest: DmLatestMarker | undefined) => {
       closeDm(conversation, latest);
+      if (returnPeer === conversation) setReturnPeer(undefined);
       if (activePeer === conversation) {
         setRenderedPeer(undefined);
         navigate("/dm");
       }
     },
-    [closeDm, activePeer, navigate],
+    [closeDm, activePeer, returnPeer, navigate],
   );
 
   // Mark conversations read where the peer sent the latest (both planes; stamps are monotonic).
