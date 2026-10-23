@@ -51,6 +51,9 @@ export type UploadTags = [["url", string], ...string[][]];
 /** Another try for the preferred server after a failure that wasn't a refusal. */
 const PREFERRED_RETRY_DELAY_MS = 1_000;
 
+/** The least the preferred server is waited for once another server holds the blob. */
+const PREFERRED_GRACE_MS = 5_000;
+
 /** A Blossom error response, as Nostrify words it, so `uploadFailureReason` still reads it. */
 class BlossomRequestError extends Error {
   constructor(readonly status: number, reason: string) {
@@ -61,7 +64,8 @@ class BlossomRequestError extends Error {
 /**
  * PUT a file to every server at once (BUD-02) and pick the URL to embed: the
  * preferred server's when it takes the blob — retried once if it failed for a
- * reason other than a refusal — else the first other server's to succeed.
+ * reason other than a refusal — within `PREFERRED_GRACE_MS` (or half the time
+ * taken) of another server succeeding, else the first other server's.
  * Every other server already holding the blob by then is listed as a NIP-94
  * `fallback`; any whose PUT fails is sent a `PUT /mirror` (BUD-04) instead.
  * With `expiration`, each request asks the server to drop the blob after it
@@ -105,6 +109,7 @@ export async function uploadToServers(
   };
 
   const preferred = opts.preferred && servers.includes(opts.preferred) ? opts.preferred : undefined;
+  const started = Date.now();
   const held = new Map<string, UploadTags>();
   const attempts = new Map<string, Promise<UploadTags>>(
     servers.map((server) => {
@@ -127,14 +132,29 @@ export async function uploadToServers(
   let tags: UploadTags;
   try {
     [winner, tags] = await (async (): Promise<[string, UploadTags]> => {
-      if (preferred) {
-        try {
-          return [preferred, await attempts.get(preferred)!];
-        } catch (error) {
-          if (others.length === 0 || signal?.aborted) throw new AggregateError([error]);
-        }
-      }
-      return Promise.any(others.map(async (server) => [server, await attempts.get(server)!] as [string, UploadTags]));
+      const fromOthers = () =>
+        Promise.any(others.map(async (server) => [server, await attempts.get(server)!] as [string, UploadTags]));
+      if (!preferred) return fromOthers();
+      const fromPreferred = attempts.get(preferred)!.then((result): [string, UploadTags] => [preferred, result]);
+      if (others.length === 0) return fromPreferred.catch((error: unknown) => { throw new AggregateError([error]); });
+
+      // A slow or hung preferred server must not hold the upload: once another server has
+      // the blob, it gets a grace period scaled to how long that took, then loses.
+      const othersResult = fromOthers();
+      const graceOver = othersResult.then(
+        async (result) => {
+          await new Promise((resolve) => setTimeout(resolve, Math.max(PREFERRED_GRACE_MS, (Date.now() - started) / 2)));
+          return { result };
+        },
+        () => new Promise<never>(() => {}), // every other server failed: the preferred one decides
+      );
+      const first = await Promise.race([
+        fromPreferred.then((result) => ({ result }), (error: unknown) => ({ error })),
+        graceOver,
+      ]);
+      if ("result" in first) return first.result;
+      if (signal?.aborted) throw new AggregateError([first.error]);
+      return othersResult;
     })();
   } catch (error) {
     // Every server's reason, the preferred one's included, for `uploadFailureReason`.
