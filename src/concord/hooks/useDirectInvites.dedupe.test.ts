@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { dedupeParkedInvites, type ParkedInvite } from "./useDirectInvites";
+import { dedupeParkedInvites, splitInviteInbox, type ParkedInvite } from "./useDirectInvites";
 import type { InviteBundle } from "@/concord/lib/invite";
 
 /** A minimal ParkedInvite for the dedup logic (only the read fields matter). */
@@ -75,5 +75,51 @@ describe("dedupeParkedInvites", () => {
     ]);
     expect(out).toHaveLength(1);
     expect(out[0].wrapId).toBe("up");
+  });
+});
+
+describe("splitInviteInbox", () => {
+  const known = (pubkey: string) => pubkey === "friend";
+
+  it("puts known senders in the inbox and strangers in requests, newest first", () => {
+    const out = splitInviteInbox(
+      [
+        inv({ communityId: "A", wrapId: "a", receivedAt: 100, sender: "friend" }),
+        inv({ communityId: "B", wrapId: "b", receivedAt: 300, sender: "stranger" }),
+        inv({ communityId: "C", wrapId: "c", receivedAt: 200, sender: "stranger" }),
+      ],
+      0,
+      known,
+      new Set(),
+    );
+    expect(out.items.map((i) => i.invite.wrapId)).toEqual(["a"]);
+    expect(out.requests.map((i) => i.invite.wrapId)).toEqual(["b", "c"]);
+  });
+
+  it("counts only inbox invites as unread", () => {
+    const out = splitInviteInbox(
+      [
+        inv({ communityId: "A", wrapId: "a", receivedAt: 200, sender: "friend" }),
+        inv({ communityId: "B", wrapId: "b", receivedAt: 200, sender: "stranger" }),
+      ],
+      100,
+      known,
+      new Set(),
+    );
+    expect(out.unreadCount).toBe(1);
+  });
+
+  it("drops muted senders and keeps catch-ups in the inbox", () => {
+    const out = splitInviteInbox(
+      [
+        inv({ communityId: "A", wrapId: "muted", receivedAt: 100, sender: "troll" }),
+        inv({ communityId: "B", wrapId: "keys", receivedAt: 100, sender: "admin", catchUp: true }),
+      ],
+      0,
+      known,
+      new Set(["troll"]),
+    );
+    expect(out.items.map((i) => i.invite.wrapId)).toEqual(["keys"]);
+    expect(out.requests).toHaveLength(0);
   });
 });

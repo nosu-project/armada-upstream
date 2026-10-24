@@ -1303,7 +1303,8 @@ function ServerRailInner({
   const hasUnreadDMs = useHasUnreadDMs();
   const { items: dmActivity } = useDmActivity();
   // Received Concord invites (CORD-05 §6); shown only while some are pending.
-  const { items: inviteItems, unreadCount: inviteUnread } = useInviteInbox();
+  const { items: inviteItems, requests: inviteRequests, unreadCount: inviteUnread } = useInviteInbox();
+  const pendingInvites = inviteItems.length + inviteRequests.length;
   const { mutateAsync: updateList } = useUpdateUserGroupList();
   const concord = useLiveCommunities();
   const [addOpen, setAddOpen] = useState(false);
@@ -1586,7 +1587,7 @@ function ServerRailInner({
       nav.removeEventListener("scroll", measure);
       ro.disconnect();
     };
-  }, [renderNodes, user, mesh.available, inviteItems.length, recentDms.length]);
+  }, [renderNodes, user, mesh.available, pendingInvites, recentDms.length]);
 
   const draggedItem =
     dragSource?.kind === "item" ? (liveByKey.get(dragSource.key) ?? null) : null;
@@ -1875,7 +1876,7 @@ function ServerRailInner({
           </Tooltip>
         )}
 
-        {user && inviteItems.length > 0 && (
+        {user && pendingInvites > 0 && (
           <Tooltip>
             <TooltipTrigger asChild>
               <NavLink
