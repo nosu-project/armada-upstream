@@ -68,6 +68,9 @@ const JUMP_PILL_PX = 300;
 
 const JUMP_CONTEXT = 15;
 
+/** How long a jumped-to row is held centered while rows around it settle, absent a gesture. */
+const JUMP_HOLD_MS = 5000;
+
 /**
  * Added to the measured distance while newer loaded rows are unrendered below
  * the window: the scroller's bottom is then not the newest message, so nothing
@@ -502,6 +505,8 @@ export function MessageTimeline({
   const [newerPulse, setNewerPulse] = useState(0);
   const pinBottomRef = useRef(true);
   const pendingJumpRef = useRef<{ id: string; focus: boolean } | null>(null);
+  // A landed jump: re-centered instead of anchor-restored until the reader's next gesture.
+  const jumpHoldRef = useRef<{ id: string; until: number } | null>(null);
   // Persistent so it survives React 19 interrupted renders and async row resizes.
   const readingAnchorRef = useRef<ScrollAnchor | null>(null);
   // Distinguishes the reader moving up from our own downward scrolls.
@@ -682,6 +687,33 @@ export function MessageTimeline({
   }, [readerDistance]);
 
   /**
+   * Re-center a held jump target. Rows above it settle from their intrinsic-size
+   * estimate, media resolves and reveals land after the jump, so the reading
+   * anchor (the viewport's top row) would let the target drift. False when no hold.
+   */
+  const holdJumpTarget = useCallback(() => {
+    const hold = jumpHoldRef.current;
+    const el = scrollRef.current;
+    if (!hold || !el) return false;
+    const row = performance.now() < hold.until
+      ? contentRef.current?.querySelector<HTMLElement>(`[data-event-id="${hold.id}"]`)
+      : null;
+    if (!row) {
+      jumpHoldRef.current = null;
+      return false;
+    }
+    const rowBox = row.getBoundingClientRect();
+    const delta = rowBox.top - el.getBoundingClientRect().top - (el.clientHeight - rowBox.height) / 2;
+    // Sub-pixel writes are skipped: they cancel iOS momentum.
+    if (Math.abs(delta) >= 0.5) el.scrollTop = clampedScrollTop(el) + delta;
+    distanceRef.current = readerDistance(el);
+    lastScrollTopRef.current = clampedScrollTop(el);
+    setShowJumpPill(distanceRef.current > JUMP_PILL_PX);
+    captureReadingAnchor();
+    return true;
+  }, [captureReadingAnchor, readerDistance]);
+
+  /**
    * Reveal older rows from `index`. Past {@link MAX_WINDOW} the newest edge is
    * dropped too — only while the reader is in the reveal band, so the dropped
    * rows are well below the viewport.
@@ -712,6 +744,7 @@ export function MessageTimeline({
     distanceRef.current = 0;
     lastScrollTopRef.current = clampedScrollTop(el);
     readingAnchorRef.current = null;
+    jumpHoldRef.current = null;
     setShowJumpPill(false);
   }, []);
 
@@ -732,10 +765,8 @@ export function MessageTimeline({
       const row = contentRef.current?.querySelector<HTMLElement>(`[data-event-id="${id}"]`);
       if (!row) return;
       flashRow(row, focus);
-      distanceRef.current = readerDistance(el);
-      lastScrollTopRef.current = clampedScrollTop(el);
-      setShowJumpPill(distanceRef.current > JUMP_PILL_PX);
-      captureReadingAnchor();
+      jumpHoldRef.current = { id, until: performance.now() + JUMP_HOLD_MS };
+      holdJumpTarget();
     };
     if (contentRef.current?.querySelector(`[data-event-id="${id}"]`)) {
       settle();
@@ -746,7 +777,7 @@ export function MessageTimeline({
     if (!runKey) return;
     setExpandedFloods((prev) => (prev.has(runKey) ? prev : new Set(prev).add(runKey)));
     requestAnimationFrame(settle);
-  }, [captureReadingAnchor, readerDistance]);
+  }, [holdJumpTarget]);
 
   // The one place scroll is adjusted for a rendered-slice change; exactly one
   // branch applies, in priority order.
@@ -758,6 +789,7 @@ export function MessageTimeline({
       // The anchor message is gone (different conversation): fall back to the
       // newest, pinned. Before paint, so no flash.
       readingAnchorRef.current = null;
+      jumpHoldRef.current = null;
       pinBottomRef.current = true;
       setRampStep(0);
       setWindowStart(null);
@@ -781,7 +813,7 @@ export function MessageTimeline({
         found >= 0 ? found : timelineEntries.length > backfill.count ? startIndexRef.current : -1;
       if (boundaryIndex > 0) {
         // Restore the old viewport first, then capture afresh for the exposing commit.
-        if (distanceRef.current > AT_BOTTOM_PX) restoreReadingAnchor();
+        if (distanceRef.current > AT_BOTTOM_PX && !holdJumpTarget()) restoreReadingAnchor();
         captureReadingAnchor();
         const nextIndex = stepBackRows(timelineEntries, boundaryIndex, WINDOW_STEP, isFolded);
         backfillRevealRef.current = null;
@@ -797,7 +829,7 @@ export function MessageTimeline({
       pinToBottomNow();
       return;
     }
-    if (distanceRef.current > AT_BOTTOM_PX && restoreReadingAnchor()) {
+    if (distanceRef.current > AT_BOTTOM_PX && (holdJumpTarget() || restoreReadingAnchor())) {
       // Scrolled up near the top with no gesture coming: re-check next frame.
       // Self-limiting (no-op outside the trigger band).
       if (continueRafRef.current == null) {
@@ -814,7 +846,7 @@ export function MessageTimeline({
     }
     stickToBottom();
     // `listVisible`: the scroller this effect moves may only just have mounted.
-  }, [items, listVisible, anchorLost, timelineEntries, backfillPulse, captureReadingAnchor, setWindowStart, isFolded, revealUp, jumpToRow, pinToBottomNow, restoreReadingAnchor, stickToBottom]);
+  }, [items, listVisible, anchorLost, timelineEntries, backfillPulse, captureReadingAnchor, setWindowStart, isFolded, revealUp, jumpToRow, pinToBottomNow, holdJumpTarget, restoreReadingAnchor, stickToBottom]);
 
   // Content growth and container reflows (thread panel, composer swap) land here.
   useLayoutEffect(() => {
@@ -826,7 +858,9 @@ export function MessageTimeline({
       if (pinBottomRef.current || pendingJumpRef.current) return;
       const resized = el.clientHeight !== viewportHeight;
       viewportHeight = el.clientHeight;
-      if (distanceRef.current > AT_BOTTOM_PX) restoreReadingAnchor();
+      if (distanceRef.current > AT_BOTTOM_PX) {
+        if (!holdJumpTarget()) restoreReadingAnchor();
+      }
       else if (resized && distanceRef.current > 1) {
         // The pane resized under a reader just short of the bottom (the composer
         // grew a line): keep what they're reading still rather than shifting it.
@@ -839,7 +873,21 @@ export function MessageTimeline({
     ro.observe(content);
     ro.observe(el);
     return () => ro.disconnect();
-  }, [listVisible, captureReadingAnchor, readerDistance, restoreReadingAnchor, stickToBottom]);
+  }, [listVisible, captureReadingAnchor, readerDistance, holdJumpTarget, restoreReadingAnchor, stickToBottom]);
+
+  // Any reader input ends a jump hold; our own scroll writes emit only `scroll`.
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const release = () => {
+      jumpHoldRef.current = null;
+    };
+    const events = ["wheel", "touchstart", "pointerdown", "keydown"] as const;
+    for (const type of events) el.addEventListener(type, release, { passive: true });
+    return () => {
+      for (const type of events) el.removeEventListener(type, release);
+    };
+  }, [listVisible]);
 
   /**
    * Near the top: reveal loaded messages, else request an older page. Only when

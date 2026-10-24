@@ -1,10 +1,11 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { useCallback, useRef, useState } from "react";
+import { createRef, useCallback, useRef, useState } from "react";
 
-import { MessageTimeline } from "@/components/chat/MessageTimeline";
+import { MessageTimeline, type MessageTimelineHandle } from "@/components/chat/MessageTimeline";
 
 import type { ChatMsg, ChatTransport } from "@/components/chat/transport";
+import type { RefObject } from "react";
 
 const resizeCallbacks: ResizeObserverCallback[] = [];
 const originalGetBoundingClientRect = HTMLElement.prototype.getBoundingClientRect;
@@ -29,6 +30,10 @@ beforeAll(() => {
     value: function getBoundingClientRect(this: HTMLElement) {
       const scroller = this.closest<HTMLElement>(".scrollbar-stable");
       if (this.classList.contains("scrollbar-stable")) return domRect(0, this.clientHeight);
+      // A message row fills its timeline row.
+      if (this.hasAttribute("data-event-id")) {
+        return this.closest<HTMLElement>("[data-scroll-anchor]")?.getBoundingClientRect() ?? domRect(0, 0);
+      }
       if (!this.hasAttribute("data-scroll-anchor") || !scroller) return domRect(0, 0);
       const rows = [...(this.parentElement?.querySelectorAll<HTMLElement>("[data-scroll-anchor]") ?? [])];
       const index = rows.indexOf(this);
@@ -81,11 +86,12 @@ function transportOf(messages: ChatMsg[]): ChatTransport {
   return { messages, isLoading: false, canWrite: true, canModerate: false };
 }
 
-async function mountedTimeline(count: number) {
+async function mountedTimeline(count: number, handleRef?: RefObject<MessageTimelineHandle | null>) {
   const messages = Array.from({ length: count }, (_, index) => message(index));
   const rendered = render(
     <MessageTimeline
       transport={transportOf(messages)}
+      handleRef={handleRef}
       renderMessage={(msg) => <span data-event-id={msg.id}>chat:{msg.id}</span>}
     />,
   );
@@ -170,6 +176,32 @@ describe("MessageTimeline reading anchor", () => {
 
     expect(scroller.scrollTop).toBe(1_240);
     expect(rowViewportOffset(content, scroller, "m10")).toBe(0);
+  });
+
+  it("holds a jumped-to message centered while rows around it settle, until the reader scrolls", async () => {
+    const handle = createRef<MessageTimelineHandle>();
+    const { scroller, content } = await mountedTimeline(30, handle);
+    scroll(scroller, 2_500);
+    scroll(scroller, 1_500);
+
+    act(() => {
+      expect(handle.current?.scrollToMessage("m10")).toBe(true);
+    });
+    expect(rowViewportOffset(content, scroller, "m10")).toBe(200);
+
+    // Growth between the viewport's top row and the target: the reading anchor
+    // alone would stay still and let the target slide down.
+    growthAfterRow = 9;
+    growthPx = 240;
+    act(() => resizeCallbacks.at(-1)?.([], {} as ResizeObserver));
+    expect(rowViewportOffset(content, scroller, "m10")).toBe(200);
+
+    // The reader's own gesture ends the hold; later growth keeps their row instead.
+    fireEvent.wheel(scroller);
+    scroll(scroller, 500);
+    growthPx = 480;
+    act(() => resizeCallbacks.at(-1)?.([], {} as ResizeObserver));
+    expect(scroller.scrollTop).toBe(500);
   });
 
   it("keeps the rows still when the pane shrinks under a reader just short of the bottom", async () => {
