@@ -11,6 +11,7 @@ import { useChannels, useControlFold } from "@/concord/hooks/useControlPlane";
 import { useDecryptedImage } from "@/concord/hooks/useDecryptedImage";
 import { openedToStored, queryRumorsByIds } from "@/concord/lib/rumorStore";
 import { useAuthor } from "@/hooks/useAuthor";
+import { useIsBlocked } from "@/lib/blocklistStore";
 import { shortTimeAgo } from "@/lib/formatTime";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { useLocalGroupMeta } from "@/hooks/useLocalGroupMeta";
@@ -221,7 +222,11 @@ function ConcordRouteCard({
   className?: string;
 }) {
   const intl = useIntl();
-  const community = useCommunity(route.communityId);
+  const isBlocked = useIsBlocked();
+  const blocked = isBlocked(route.communityId);
+  // A blocked community's stored name, icon and messages are never shown.
+  const held = useCommunity(route.communityId);
+  const community = blocked ? undefined : held;
   const { data: listData, isLoading: listLoading } = useCommunityList();
   const membershipResolved = Boolean(listData && !listData.decryptFailed && !listLoading);
 
@@ -256,7 +261,11 @@ function ConcordRouteCard({
     return (
       <RouteCardShell url={url} path={path} className={className}>
         <CardLabel Icon={MessagesSquare} label={encryptedCommunity} />
-        {membershipResolved ? (
+        {blocked ? (
+          <p className="text-sm text-muted-foreground">
+            <FormattedMessage id="communityBlocked.title" defaultMessage="This community is unavailable in Armada" />
+          </p>
+        ) : membershipResolved ? (
           <div className="flex items-start gap-2 min-w-0 text-muted-foreground">
             <Lock className="mt-0.5 size-4 shrink-0" />
             <p className="text-sm">

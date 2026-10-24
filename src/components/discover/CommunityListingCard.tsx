@@ -39,6 +39,7 @@ import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { toast } from "@/hooks/useToast";
 import { defineMessage, FormattedMessage, t, useIntl } from "@/i18n";
 import { getAvatarShape } from "@/lib/avatarShape";
+import { useIsBlocked } from "@/lib/blocklistStore";
 import { writeClipboardText } from "@/lib/clipboard";
 import { shortTimeAgoPhrase } from "@/lib/formatTime";
 import { getDisplayName } from "@/lib/getDisplayName";
@@ -158,11 +159,14 @@ export function CommunityListingCard({
   const metadata = author.data?.metadata;
   const displayName = getDisplayName(metadata, attributedPubkey);
 
+  const isBlocked = useIsBlocked();
+  const blocked = !!bundle?.community_id && isBlocked(bundle.community_id);
+
   // Dissolved communities' links keep resolving, so check the dissolved address
   // (derived from community_id, so non-members can check it too).
   const { data: dissolvedAtMs, isPending: dissolvedPending } = useQuery({
     queryKey: ["discover", "dissolved", bundle?.community_id],
-    enabled: !!bundle?.community_id && !!bundle.owner,
+    enabled: !!bundle?.community_id && !!bundle.owner && !blocked,
     staleTime: 10 * 60_000,
     retry: false,
     queryFn: async () =>
@@ -174,7 +178,7 @@ export function CommunityListingCard({
   });
   const dissolved = dissolvedAtMs != null;
   // Hold the skeleton until answered so a dissolved card never paints then vanishes.
-  const dissolvedChecking = !!bundle?.community_id && !!bundle.owner && dissolvedPending;
+  const dissolvedChecking = !!bundle?.community_id && !!bundle.owner && !blocked && dissolvedPending;
 
   // NIP-09 deletes only count from the event's author.
   const { user } = useCurrentUser();
@@ -198,7 +202,7 @@ export function CommunityListingCard({
   const controlPeekKey = ["discover", "control-peek", bundle?.community_id] as const;
   const { data: controlPeek } = useQuery({
     queryKey: controlPeekKey,
-    enabled: !!bundle && !isMember && !!bundle.community_id && onScreen,
+    enabled: !!bundle && !isMember && !!bundle.community_id && onScreen && !blocked,
     staleTime: 10 * 60_000,
     retry: false,
     queryFn: ({ signal }) =>
@@ -281,6 +285,7 @@ export function CommunityListingCard({
     && !!bundle
     && !dissolvedChecking
     && !dissolved
+    && !blocked
     && (!needle || name.toLowerCase().includes(needle));
   // A dissolved community stays visible to its listing author as a remove-only husk.
   const husk =
@@ -345,7 +350,7 @@ export function CommunityListingCard({
 
   // Unresolvable links (revoked, expired, dead relays) are hidden; this is what
   // makes revoking a shared link an un-listing.
-  if ((!listed && !husk) || !bundle) return null;
+  if ((!listed && !husk) || !bundle || blocked) return null;
 
   return (
     <div

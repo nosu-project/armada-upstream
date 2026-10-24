@@ -7,14 +7,14 @@ import { isBackgroundQuiet, onBackgroundQuiet } from "@/lib/backgroundQuiet";
 import { isRelayUnreachable, onRelayHealthChange, relayHealthVersion } from "@/lib/relayHealth";
 import { useBootGateOpen } from "@/lib/bootGate";
 
-import { useCommunityList } from "@/concord/hooks/useCommunityList";
+import { useJoinedCommunities } from "@/concord/hooks/useCommunityList";
 import { dissolvedAt, readLivePause } from "@/concord/hooks/useControlPlane";
 import { openChatBatch } from "@/concord/lib/chat";
 import { channelsView } from "@/concord/lib/community";
 import { concordScope, isScopeActivated, markScopeLive, nip29Scope, onActivation } from "@/wire/activation";
 import { readControlFold } from "@/concord/lib/control";
 import { channelGitRepositoryAttachments } from "@/concord/lib/types";
-import { heldChannelKeys, liveEntries, rehydrateCommunity, type CommunityListEntry } from "@/concord/lib/communityList";
+import { heldChannelKeys, rehydrateCommunity, type CommunityListEntry } from "@/concord/lib/communityList";
 import { controlGroups } from "@/concord/lib/control";
 import { guestbookGroups } from "@/concord/lib/guestbook";
 import { isTitledPost } from "@/concord/lib/forum";
@@ -193,8 +193,7 @@ function useWireConcordChannels(): Array<{ relays: string[]; channel: Channel; c
   const { readState } = useReadState();
   const { isConcordChannelMuted } = useMutes();
   const { concordChannelLevel } = useNotifLevels();
-  const { data } = useCommunityList();
-  const entries = useMemo(() => (data ? liveEntries(data.list) : []), [data]);
+  const entries = useJoinedCommunities();
   const listSig = useMemo(
     () =>
       entries
@@ -526,8 +525,7 @@ function useWireConcordControl(): Array<{
   groups: StreamKeyView[];
   refounded: boolean;
 }> {
-  const { data } = useCommunityList();
-  const entries = useMemo(() => (data ? liveEntries(data.list) : []), [data]);
+  const entries = useJoinedCommunities();
 
   return useMemo(() => {
     const out: Array<{
@@ -564,8 +562,7 @@ function useWireConcordGuestbook(): Array<{
   idHex: string;
   groups: StreamKeyView[];
 }> {
-  const { data } = useCommunityList();
-  const entries = useMemo(() => (data ? liveEntries(data.list) : []), [data]);
+  const entries = useJoinedCommunities();
 
   return useMemo(() => {
     const out: Array<{ relays: string[]; idHex: string; groups: StreamKeyView[] }> = [];

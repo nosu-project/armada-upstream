@@ -204,6 +204,27 @@ describe("decideCallSync", () => {
     expect(decision).toEqual<CallSyncDecision>({ action: "leave", reason: "banned" });
   });
 
+  it("hangs up when the community is blocklisted, dissolved or not", () => {
+    const { community, channel } = fixture();
+    const folded = foldedWith([
+      { channelIdHex: channel.idHex, name: "general", isPrivate: false, deleted: false, metadata: { name: "general", private: false } },
+    ]);
+    for (const dissolved of [false, true]) {
+      const decision = decideCallSync({
+        snapshot: snapOf(channel),
+        listLoaded: true,
+        community,
+        folded,
+        channels: [channel],
+        selfBanned: false,
+        selfKicked: false,
+        dissolved,
+        blocked: true,
+      });
+      expect(decision).toEqual<CallSyncDecision>({ action: "leave", reason: "blocked" });
+    }
+  });
+
   it("hangs up when the channel is gone from the live view", () => {
     const { community, channel } = fixture();
     // The fold is live (deleted flag set) but the channel is dropped from view.

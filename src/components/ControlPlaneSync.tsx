@@ -4,9 +4,9 @@ import { useEffect, useMemo } from "react";
 
 import { useBootGateOpen } from "@/lib/bootGate";
 
-import { useCommunityList } from "@/concord/hooks/useCommunityList";
+import { useJoinedCommunities } from "@/concord/hooks/useCommunityList";
 import { activeScopeId } from "@/wire/activation";
-import { liveEntries, rehydrateCommunity } from "@/concord/lib/communityList";
+import { rehydrateCommunity } from "@/concord/lib/communityList";
 import { onStreamKeysAdded } from "@/concord/lib/streamAuth";
 import type { Community } from "@/concord/lib/types";
 import { syncControlPlane } from "@/lib/controlPlaneSync";
@@ -17,19 +17,18 @@ function useControlPlaneSync(): void {
   const { nostr } = useNostr();
   const queryClient = useQueryClient();
 
-  const { data: communityListData } = useCommunityList();
+  const entries = useJoinedCommunities();
 
   const communities: Community[] = useMemo(() => {
-    if (!communityListData) return [];
     const out: Community[] = [];
-    for (const entry of liveEntries(communityListData.list)) {
+    for (const entry of entries) {
       // Planes live ONLY on the community's own relays. Never add app/platform
       // relays: their instant empty answers can starve the real relays (issue #19).
       const community = rehydrateCommunity(entry);
       if (community) out.push(community);
     }
     return out;
-  }, [communityListData]);
+  }, [entries]);
 
   // Changes only when the community set or held epochs (which derive control addresses) change.
   const sig = useMemo(
