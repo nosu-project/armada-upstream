@@ -335,8 +335,10 @@ export function RichTextarea({ rich, ref, className, onKeyDown, onCopy, onCut, f
     const overlay = overlayRef.current;
     const inner = innerRef.current;
     if (!el || !overlay || !inner) return;
+    let box = "";
     const sync = (now = true) => {
       const style = getComputedStyle(el);
+      box = `${style.width}|${style.height}`;
       overlay.style.top = `${el.offsetTop}px`;
       overlay.style.left = `${el.offsetLeft}px`;
       // Computed sizes, not offset/client ones: those are whole pixels, and at a
@@ -361,7 +363,14 @@ export function RichTextarea({ rich, ref, className, onKeyDown, onCopy, onCut, f
     el.addEventListener("scroll", syncScroll);
     window.addEventListener("resize", onEvent);
     document.fonts?.addEventListener("loadingdone", onEvent);
-    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(onEvent);
+    // The observer reports once on observe() with the box sync(false) just
+    // measured; its flushSync would render every pending update (a whole
+    // channel's timeline on a switch) synchronously for nothing.
+    const onResize = () => {
+      const style = getComputedStyle(el);
+      if (`${style.width}|${style.height}` !== box) sync();
+    };
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(onResize);
     observer?.observe(el);
     return () => {
       el.removeEventListener("scroll", syncScroll);
