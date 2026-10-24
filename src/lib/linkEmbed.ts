@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 /** Extract a YouTube video ID from a URL, or null if not a YouTube link. */
 export function extractYouTubeId(url: string): string | null {
   try {
@@ -125,14 +127,16 @@ export function extractStreamableId(url: string): string | null {
   }
 }
 
-/** Odysee embed URL for a claim page (`odysee.com/[@channel:c/]name:x`), or null. */
+/** Odysee embed URL for a claim page (`odysee.com/[@channel:c/]name:x`), keeping a `?t=` start, or null. */
 export function odyseeEmbedUrl(url: string): string | null {
   try {
     const u = new URL(url);
     if (u.hostname.replace(/^www\./, "") !== "odysee.com") return null;
     // Not a bare channel page or a `/$/…` app route (other than an embed).
     const m = u.pathname.match(/^\/(?:\$\/embed\/)?((?:@[^/]+\/)?[^/@$][^/]*?)\/?$/);
-    return m ? `https://odysee.com/$/embed/${m[1]}` : null;
+    if (!m) return null;
+    const t = u.searchParams.get("t");
+    return `https://odysee.com/$/embed/${m[1]}${t && /^\d+$/.test(t) ? `?t=${t}` : ""}`;
   } catch {
     return null;
   }
@@ -157,29 +161,42 @@ export function peerTubeApiUrl(url: string): string | null {
   }
 }
 
-export interface PeerTubeFile {
-  fileUrl: string;
-  resolution: { id: number };
-  hasAudio?: boolean;
-  hasVideo?: boolean;
-  width?: number;
-  height?: number;
-}
+const PeerTubeFileSchema = z.object({
+  fileUrl: z.string(),
+  resolution: z.object({ id: z.number() }),
+  hasAudio: z.boolean().nullish(),
+  hasVideo: z.boolean().nullish(),
+  width: z.number().int().positive().nullish(),
+  height: z.number().int().positive().nullish(),
+});
+
+export type PeerTubeFile = z.infer<typeof PeerTubeFileSchema>;
+
+/** Files are checked one by one, so a malformed entry drops only itself. */
+const PeerTubeVideoSchema = z.object({
+  files: z.array(z.unknown()).optional(),
+  streamingPlaylists: z.array(z.object({ files: z.array(z.unknown()).optional() })).optional(),
+});
 
 /**
  * A progressive MP4 to play in our own `<video>`, from `/api/v1/videos/<id>`: a Web
  * Video or an HLS rendition's fragmented MP4 that carries both audio and video, the
- * largest up to 720p. Null when nothing would play (HLS-only, split streams, a live).
+ * largest up to 720p. Null when nothing would play (HLS-only, split streams, a live)
+ * or the response isn't a PeerTube video.
  */
-export function pickPeerTubeFile(video: {
-  files?: PeerTubeFile[];
-  streamingPlaylists?: { files?: PeerTubeFile[] }[];
-}): PeerTubeFile | null {
-  const files = [...(video.files ?? []), ...(video.streamingPlaylists ?? []).flatMap((p) => p.files ?? [])]
+export function pickPeerTubeFile(json: unknown): PeerTubeFile | null {
+  const video = PeerTubeVideoSchema.safeParse(json);
+  if (!video.success) return null;
+  const { files = [], streamingPlaylists = [] } = video.data;
+  const candidates = [...files, ...streamingPlaylists.flatMap((p) => p.files ?? [])]
+    .flatMap((f) => {
+      const parsed = PeerTubeFileSchema.safeParse(f);
+      return parsed.success ? [parsed.data] : [];
+    })
     .filter((f) => f.resolution.id > 0 && f.hasAudio !== false && f.hasVideo !== false)
     .filter((f) => /^https:\/\/[^?#]+\.mp4(?:[?#]|$)/.test(f.fileUrl))
     .sort((a, b) => b.resolution.id - a.resolution.id);
-  return files.find((f) => f.resolution.id <= 720) ?? files.at(-1) ?? null;
+  return candidates.find((f) => f.resolution.id <= 720) ?? candidates.at(-1) ?? null;
 }
 
 /** A Tenor GIF page (`tenor.com/view/…`, optionally `/<lang>/view/…`), shared from Discord by URL. */

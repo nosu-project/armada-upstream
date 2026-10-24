@@ -134,6 +134,8 @@ export function LinkEmbed({ url, className }: LinkEmbedProps) {
             allow="autoplay; fullscreen; picture-in-picture"
             loading="lazy"
             className="absolute inset-0 h-full w-full border-0"
+            // Odysee's player needs no top navigation or forms.
+            sandbox={odysee ? "allow-scripts allow-same-origin allow-popups allow-presentation" : undefined}
           />
         </div>
         <EmbedInfoBar url={url} />
@@ -509,6 +511,8 @@ function CopyLinkButton({ url }: { url: string }) {
  * The facade wears VideoPlayer's own play overlay, and the one click plays.
  */
 function PeerTubeEmbed({ api, url }: { api: string; url: string }) {
+  const intl = useIntl();
+  const domain = displayDomain(url);
   const [file, setFile] = useState<PeerTubeFile | "loading" | "failed" | null>(null);
   const { data } = useLinkPreview(url);
   const poster = sanitizeImageSrc(data?.thumbnail_url);
@@ -519,7 +523,7 @@ function PeerTubeEmbed({ api, url }: { api: string; url: string }) {
     // Bounded so the page can still open inside the click's user activation.
     fetch(api, { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(4000) })
       .then((r) => (r.ok ? r.json() : null))
-      .then((video) => (video && pickPeerTubeFile(video)) ?? null)
+      .then(pickPeerTubeFile)
       .catch(() => null)
       .then((picked) => {
         if (picked) return setFile(picked);
@@ -565,7 +569,7 @@ function PeerTubeEmbed({ api, url }: { api: string; url: string }) {
           rel="noopener noreferrer"
           className="absolute inset-0 flex items-center justify-center bg-black/60 text-sm font-medium text-white"
         >
-          Open on {displayDomain(url)}
+          <FormattedMessage id="linkEmbed.openOnSite" defaultMessage="Open on {domain}" values={{ domain }} />
         </a>
       ) : (
         <button
@@ -573,7 +577,10 @@ function PeerTubeEmbed({ api, url }: { api: string; url: string }) {
           className="absolute inset-0 flex items-center justify-center bg-black/30 cursor-pointer"
           onClick={play}
           disabled={file === "loading"}
-          aria-label={`Play video from ${displayDomain(url)}`}
+          aria-label={intl.formatMessage(
+            { id: "linkEmbed.playVideoFrom", defaultMessage: "Play video from {domain}" },
+            { domain },
+          )}
         >
           <span className="size-16 rounded-full bg-black/60 flex items-center justify-center backdrop-blur-sm">
             {file === "loading" ? (

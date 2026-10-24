@@ -115,6 +115,11 @@ describe("odyseeEmbedUrl", () => {
     expect(odyseeEmbedUrl("https://odysee.com/$/embed/@a:1/b:2")).toBe("https://odysee.com/$/embed/@a:1/b:2");
   });
 
+  it("keeps a numeric start time", () => {
+    expect(odyseeEmbedUrl("https://odysee.com/@a:1/b:2?t=90")).toBe("https://odysee.com/$/embed/@a:1/b:2?t=90");
+    expect(odyseeEmbedUrl("https://odysee.com/@a:1/b:2?t=x")).toBe("https://odysee.com/$/embed/@a:1/b:2");
+  });
+
   it("returns null for channel pages, app routes and other hosts", () => {
     expect(odyseeEmbedUrl("https://odysee.com/@Odysee:8")).toBeNull();
     expect(odyseeEmbedUrl("https://odysee.com/$/rewards")).toBeNull();
@@ -173,5 +178,11 @@ describe("pickPeerTubeFile", () => {
       }),
     ).toBeNull();
     expect(pickPeerTubeFile({})).toBeNull();
+  });
+
+  it("drops malformed files and rejects a non-video response", () => {
+    expect(pickPeerTubeFile({ files: [{ fileUrl: 1 }, null, f(480)] })?.fileUrl).toBe("https://x.test/480.mp4");
+    expect(pickPeerTubeFile({ files: "x" })).toBeNull();
+    expect(pickPeerTubeFile(null)).toBeNull();
   });
 });
