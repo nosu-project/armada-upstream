@@ -3593,6 +3593,7 @@
   "search.resultCount": "{count, plural, one {# 件の結果} other {# 件の結果}}",
   "search.searchingAllChannels": "すべてのチャンネルを検索中",
   "search.selectedCount": "{count} 件選択中",
+  "search.showMore": "さらに結果を表示",
   "search.token.after": "指定日より後",
   "search.token.before": "指定日より前",
   "search.token.during": "指定日",

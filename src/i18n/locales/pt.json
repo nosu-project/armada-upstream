@@ -3593,6 +3593,7 @@
   "search.resultCount": "{count, plural, one {# resultado} other {# resultados}}",
   "search.searchingAllChannels": "Buscando em todos os canais",
   "search.selectedCount": "{count} selecionados",
+  "search.showMore": "Mostrar mais resultados",
   "search.token.after": "Depois da data",
   "search.token.before": "Antes da data",
   "search.token.during": "Na data",

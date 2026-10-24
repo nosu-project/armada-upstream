@@ -626,7 +626,7 @@ const SEARCHABLE_KINDS = [9, 1068, 1111];
  * Max matches read per search. Text is matched by the store, so this bounds
  * matches, not history; a media-only search still scans newest-first.
  */
-const SEARCH_SCAN_LIMIT = 5000;
+export const SEARCH_SCAN_LIMIT = 5000;
 
 /**
  * Search cached message rumors, newest-first up to `limit`. Purely local (E2EE,

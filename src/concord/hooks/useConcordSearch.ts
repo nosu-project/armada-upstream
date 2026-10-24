@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { useMemo, useSyncExternalStore } from "react";
+import { useCallback, useMemo, useState, useSyncExternalStore } from "react";
 
 import { useDebounce } from "@/hooks/useDebounce";
 import { useMutedPubkeys } from "@/hooks/useMuteList";
@@ -11,7 +11,7 @@ import {
   recallQuarantined,
   subscribeQuarantineMemory,
 } from "@/concord/lib/quarantineMemory";
-import { readStreamCursor, searchRumors } from "@/concord/lib/rumorStore";
+import { readStreamCursor, SEARCH_SCAN_LIMIT, searchRumors } from "@/concord/lib/rumorStore";
 import { useWireScopes } from "@/wire/useWireScopes";
 import { searchDateBounds, searchIsActive, searchText, type SearchFilters } from "@/concord/lib/search";
 import type { Channel, Community } from "@/concord/lib/types";
@@ -19,6 +19,14 @@ import type { Channel, Community } from "@/concord/lib/types";
 import type { ChatMsg } from "@/components/chat/transport";
 
 const NO_RESULTS: ChatMsg[] = [];
+
+/** Results per page; "Show more" raises the limit by this much. */
+const SEARCH_PAGE = 100;
+
+interface SearchPage {
+  messages: ChatMsg[];
+  hasMore: boolean;
+}
 
 /** The timeline's retirement cutoff, per channel: search reads the same rows. */
 function applyEpochCutoffs(rumors: OpenedChat[], channels: Channel[]): OpenedChat[] {
@@ -69,7 +77,20 @@ export function useConcordSearch(
     .join(",");
   const { since, until } = searchDateBounds(filters);
 
-  const search = useQuery<ChatMsg[]>({
+  // The page count belongs to one search: any change to it starts over at one page.
+  const searchKey = [
+    communityIdHex ?? "",
+    channelsKey,
+    authorsKey,
+    filters.media,
+    since ?? "",
+    until ?? "",
+    debouncedQuery,
+  ].join("|");
+  const [paging, setPaging] = useState({ key: searchKey, limit: SEARCH_PAGE });
+  const limit = paging.key === searchKey ? paging.limit : SEARCH_PAGE;
+
+  const search = useQuery<SearchPage>({
     queryKey: [
       "concord",
       "search",
@@ -81,6 +102,7 @@ export function useConcordSearch(
       since ?? null,
       until ?? null,
       debouncedQuery,
+      limit,
     ],
     enabled: !!communityIdHex && active && channelIds.length > 0,
     staleTime: 30_000,
@@ -92,12 +114,21 @@ export function useConcordSearch(
         media: filters.media,
         since,
         until,
-        limit: 100,
+        limit,
         signal,
       });
-      return applyEpochCutoffs(rumors, channels).map(openedToChatMsg);
+      return {
+        messages: applyEpochCutoffs(rumors, channels).map(openedToChatMsg),
+        // Judged before the cutoffs and moderation drops: a full page means more may match.
+        hasMore: rumors.length >= limit && limit < SEARCH_SCAN_LIMIT,
+      };
     },
   });
+  const hasMore = !search.isPlaceholderData && (search.data?.hasMore ?? false);
+  const loadMore = useCallback(() => {
+    if (!hasMore) return;
+    setPaging({ key: searchKey, limit: Math.min(limit + SEARCH_PAGE, SEARCH_SCAN_LIMIT) });
+  }, [hasMore, searchKey, limit]);
 
   // Search reads only this device, so say when some searched channel's history
   // hasn't been walked to its start yet (the background walk is still on it).
@@ -132,7 +163,7 @@ export function useConcordSearch(
   const results = useMemo(() => {
     void memoryRev;
     if (!moderation.ready) return NO_RESULTS;
-    let list = search.data ?? [];
+    let list = search.data?.messages ?? NO_RESULTS;
     if (mutedPubkeys.size > 0) list = list.filter((m) => !mutedPubkeys.has(m.pubkey));
     if (moderation.banned.size > 0) list = list.filter((m) => !moderation.banned.has(m.pubkey));
     if (communityIdHex) {
@@ -154,5 +185,8 @@ export function useConcordSearch(
     isLoading: (search.isFetching || (active && !moderation.ready)) && results.length === 0,
     active,
     historyIncomplete: coverage.data ?? false,
+    hasMore,
+    loadingMore: limit > SEARCH_PAGE && search.isFetching && search.isPlaceholderData && results.length > 0,
+    loadMore,
   };
 }

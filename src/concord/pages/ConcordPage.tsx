@@ -2237,6 +2237,9 @@ function ConcordCommunityPage() {
     isLoading: searchLoading,
     active: searching,
     historyIncomplete: searchHistoryIncomplete,
+    hasMore: searchHasMore,
+    loadingMore: searchLoadingMore,
+    loadMore: loadMoreSearch,
   } = useConcordSearch(
     community,
     channels,
@@ -3570,6 +3573,9 @@ function ConcordCommunityPage() {
                     filters={searchFilters}
                     onFiltersChange={setSearchFilters}
                     historyIncomplete={searchHistoryIncomplete}
+                    hasMore={searchHasMore}
+                    loadingMore={searchLoadingMore}
+                    onLoadMore={loadMoreSearch}
                   />
                 </div>
               ) : (
