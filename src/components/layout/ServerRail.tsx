@@ -42,6 +42,7 @@ import { useMutes } from "@/hooks/useMutes";
 import { useNotifLevels, communityScopeKey, dmScopeKey } from "@/hooks/useNotifLevels";
 import { useRailDms } from "@/hooks/useRailDms";
 import { NotifLevelMenu } from "@/components/NotifLevelMenu";
+import { useSwipeLayout } from "@/components/layout/SwipeReveal";
 import { channelReadKey, useReadState } from "@/hooks/useReadState";
 import { useRelayGroups } from "@/hooks/useRelayGroups";
 import { useRelayInfo } from "@/hooks/useRelayInfo";
@@ -1224,21 +1225,10 @@ function RailFolder({
 
 /**
  * Side-by-side (desktop) layout, where MainLayout owns the persistent rail,
- * vs. touch drill-down. Negation of `SwipeReveal`'s `swipeEnabled`; must stay in sync.
+ * vs. touch drill-down.
  */
 function useSideBySideLayout(): boolean {
-  const isTouch = useIsTouch();
-  const [narrow, setNarrow] = useState(
-    () => typeof window !== "undefined" && window.matchMedia("(max-width: 899px)").matches,
-  );
-  useEffect(() => {
-    const mql = window.matchMedia("(max-width: 899px)");
-    const onChange = () => setNarrow(mql.matches);
-    mql.addEventListener("change", onChange);
-    setNarrow(mql.matches);
-    return () => mql.removeEventListener("change", onChange);
-  }, []);
-  return !(isTouch && narrow);
+  return !useSwipeLayout();
 }
 
 // Drill-down rail persistence: rendered ONCE by MainLayout's shell rail into

@@ -20,8 +20,20 @@ const INDEX_PERSIST_MS = 2_000;
 
 const HASH_RE = /(?:^|[^0-9a-f])([0-9a-f]{64})(?:\.[a-z0-9]{1,8})?(?:$|[?#])/i;
 
+const hashOfUrl = new Map<string, string | undefined>();
+const HASH_MEMO_MAX = 4096;
+
 /** The blob hash a URL names (also through a proxy's `?url=`), or undefined. */
 export function blobHashOf(url: string): string | undefined {
+  // Called per media row per render; `new URL` dominated a channel switch.
+  if (hashOfUrl.has(url)) return hashOfUrl.get(url);
+  const hash = parseBlobHash(url);
+  if (hashOfUrl.size >= HASH_MEMO_MAX) hashOfUrl.clear();
+  hashOfUrl.set(url, hash);
+  return hash;
+}
+
+function parseBlobHash(url: string): string | undefined {
   let u: URL;
   try {
     u = new URL(url);
@@ -169,6 +181,7 @@ export async function cachedMediaUrl(hash: string): Promise<string | undefined> 
 export function clearMediaCacheMemory(): void {
   for (const url of objectUrls.values()) URL.revokeObjectURL(url);
   objectUrls.clear();
+  hashOfUrl.clear();
   index = undefined;
   clearTimeout(persistTimer);
   persistTimer = undefined;

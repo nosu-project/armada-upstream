@@ -135,7 +135,7 @@ async function seed(p: ConcordSeedPayload): Promise<ConcordSeedResult> {
       if (p.relayHistory) {
         // The production wrap, re-signed at the message's own time (CORD-01: never backdated).
         const group = channelGroupKey(community.root, channelIds[ci], 0);
-        const w = wrapSeal(await sealRumor(rumor, KIND_SEAL_ENCRYPTED, group, signer), group);
+        const w = await wrapSeal(await sealRumor(rumor, KIND_SEAL_ENCRYPTED, group, signer), group);
         wraps.push(finalizeEvent({ kind: w.kind, content: w.content, tags: w.tags, created_at: rumor.created_at }, group.sk));
       }
     }

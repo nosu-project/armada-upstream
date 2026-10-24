@@ -409,3 +409,50 @@ describe("MessageTimeline reading anchor", () => {
     await waitFor(() => expect(screen.getByText("chat:old39")).toBeInTheDocument());
   });
 });
+
+describe("MessageTimeline detached run", () => {
+  it("reads forward at the run's bottom, never walks back on arrival, and leaves the run on jump to present", async () => {
+    const loadOlder = vi.fn(async () => 0);
+    const returnToPresent = vi.fn();
+    let setRows: (rows: ChatMsg[]) => void = () => {};
+    const loadNewer = vi.fn(async () => {
+      setRows(Array.from({ length: 40 }, (_, index) => message(index)));
+      return 20;
+    });
+    function Harness() {
+      const [rows, set] = useState(() => Array.from({ length: 20 }, (_, index) => message(index)));
+      setRows = set;
+      return (
+        <MessageTimeline
+          transport={{
+            ...transportOf(rows),
+            hasMore: true,
+            loadOlder,
+            hasNewer: true,
+            loadNewer,
+            returnToPresent,
+          }}
+          renderMessage={(msg) => <span data-event-id={msg.id}>chat:{msg.id}</span>}
+        />
+      );
+    }
+    const rendered = render(<Harness />);
+    await screen.findByText("chat:m19");
+    const scroller = rendered.container.querySelector<HTMLElement>(".scrollbar-stable")!;
+    const content = scroller.firstElementChild as HTMLElement;
+    Object.defineProperties(scroller, {
+      clientHeight: { configurable: true, value: 500 },
+      scrollHeight: { configurable: true, get: () => content.querySelectorAll("[data-scroll-anchor]").length * 100 },
+    });
+
+    // A run's bottom is history, not the present: the forward read starts on its own.
+    await waitFor(() => expect(loadNewer).toHaveBeenCalled());
+    await screen.findByText("chat:m39");
+    expect(loadOlder).not.toHaveBeenCalled();
+
+    // And the reader is never treated as caught up, so the way back is offered.
+    scroll(scroller, 0);
+    fireEvent.click(await screen.findByRole("button", { name: "Jump to the latest messages" }));
+    expect(returnToPresent).toHaveBeenCalled();
+  });
+});

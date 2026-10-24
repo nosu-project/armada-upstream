@@ -3593,6 +3593,7 @@
   "search.resultCount": "{count, plural, one {# résultat} other {# résultats}}",
   "search.searchingAllChannels": "Recherche dans tous les salons",
   "search.selectedCount": "{count} sélectionnés",
+  "search.showMore": "Afficher plus de résultats",
   "search.token.after": "Après la date",
   "search.token.before": "Avant la date",
   "search.token.during": "À la date",
