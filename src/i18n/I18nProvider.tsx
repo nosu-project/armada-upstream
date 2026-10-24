@@ -18,9 +18,12 @@ function resolveSync(locale: string): Loaded | null {
 }
 
 function buildIntl({ locale, messages }: Loaded): ReactIntlShape {
+  const formatting = formattingLocale(locale);
   return createIntl({
-    locale: formattingLocale(locale),
-    defaultLocale: "en",
+    locale: formatting,
+    // Without a catalog the defaults ARE the messages; a locale that differs
+    // from defaultLocale (`en-US` vs `en`) costs a thrown-away Error per message.
+    defaultLocale: messages ? "en" : formatting,
     messages,
     onError: (err) => {
       // Catalogs lag the source between syncs; a missing id falls back to its English defaultMessage.
