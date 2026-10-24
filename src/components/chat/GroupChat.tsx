@@ -37,6 +37,7 @@ import { useTimelineFocus } from "@/hooks/useTimelineFocus";
 import { toast } from "@/hooks/useToast";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { useLegacyFocusParams } from "@/hooks/useLegacyFocusParams";
+import { isNip29ThreadOnly } from "@/lib/nip29Threads";
 import { withSignature } from "@/lib/publishOutbox";
 import { chatRoute, parseChatRoute } from "@/lib/routes";
 import { type SlashAction } from "@/lib/slashCommands";
@@ -48,6 +49,9 @@ import { useChatEditing } from "@/components/chat/useChatEditing";
 import type { CalendarTransport } from "@/lib/calendar";
 import { FormattedMessage, t, useIntl } from "@/i18n";
 import type { NostrEvent } from "@nostrify/nostrify";
+import type { NostrRumor } from "@/lib/nostrRumor";
+
+const EMPTY_MESSAGES: NostrRumor[] = [];
 
 /**
  * NIP-29 reply context. A parent already in the loaded window renders with its
@@ -257,7 +261,7 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
     return { messageId: route.messageId, threadRoot: route.threadRoot };
   }, [location.pathname, relayUrl, groupId]);
   const {
-    data: messages = [],
+    data: stored = EMPTY_MESSAGES,
     isLoading,
     status: sendStatus,
     insertOptimistic,
@@ -268,6 +272,13 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
     hasMore,
     isLoadingOlder,
   } = useGroupMessages(relayUrl, groupId, routeFocus);
+  // Thread replies are kind 9 too, and arrive with the timeline; they render in their thread.
+  const { messages, threadReplies } = useMemo(() => {
+    const rows: NostrRumor[] = [];
+    const replies: NostrRumor[] = [];
+    for (const event of stored) (isNip29ThreadOnly(event) ? replies : rows).push(event);
+    return { messages: replies.length === 0 ? stored : rows, threadReplies: replies };
+  }, [stored]);
   const { deleteEvent, removeUser } = useGroupModeration(relayUrl, groupId);
   const { isPinned, pin, unpin } = usePinnedMessages(relayUrl, groupId);  const { mutateAsync: republish } = useRepublish();
   const { mutateAsync: editMessage } = useEditMessage(relayUrl, groupId);
@@ -293,7 +304,7 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
     for (const m of searchResults) set.add(m.id);
     return [...set];
   }, [messages, searchResults]);
-  const { replyCountFor, threadRepliesFor } = useGroupThreads(relayUrl, groupId, visibleIds);
+  const { replyCountFor, threadRepliesFor } = useGroupThreads(relayUrl, groupId, visibleIds, threadReplies);
   const sendThreadReply = useSendThreadReply(relayUrl, groupId);
 
   const room = useMemo(

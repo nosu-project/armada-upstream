@@ -34,6 +34,7 @@ import { createAppIntl, setIntl, t } from "@/i18n/intl";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { mediaPolicyFromConfig, mediaSrc, type MediaPolicy } from "@/lib/mediaPolicy";
 import { writeDm17Rumors } from "@/lib/nip17/dm17Store";
+import { nip29ThreadRootOf } from "@/lib/nip29Threads";
 import { KIND_DM_CHAT, KIND_DM_FILE, openDmWrap } from "@/lib/nip17/protocol";
 import { dmConvKey } from "@/lib/nip17/conversation";
 import {
@@ -239,12 +240,13 @@ function imageDataUrl(pointer: ImagePointer, policy: MediaPolicy): Promise<strin
   return decryptNotificationIcon(pointer, APP_BLOSSOM_SERVERS, policy);
 }
 
-/** Deep link to a message in a NIP-29 group (mirrors `routes.ts`). */
-function groupUrl(relayUrl: string, groupId: string, eventId: string): string {
+/** Deep link to a message in a NIP-29 group, inside its thread when it is a reply (mirrors `routes.ts`). */
+function groupUrl(relayUrl: string, groupId: string, eventId: string, threadRoot?: string): string {
   const param = encodeURIComponent(
     relayUrl.replace(/^wss?:\/\//i, (m) => (m.toLowerCase() === "ws://" ? "ws:" : "")),
   );
-  return `/s/${param}/${encodeURIComponent(groupId)}/m/${encodeURIComponent(eventId)}`;
+  const thread = threadRoot ? `/t/${encodeURIComponent(threadRoot)}` : "";
+  return `/s/${param}/${encodeURIComponent(groupId)}${thread}/m/${encodeURIComponent(eventId)}`;
 }
 
 /** Show nothing at all for this push (see {@link PreparedPush.drop}). */
@@ -591,6 +593,7 @@ async function prepareGroup(
 
   const mention = Boolean(cfg?.self) && ev.tags.some(([n, v]) => n === "p" && v === cfg?.self);
   const policy = policyOf(cfg);
+  const threadRoot = nip29ThreadRootOf(ev);
   return present(
     {
       plane: "nip29",
@@ -608,7 +611,9 @@ async function prepareGroup(
       // Unresolved unless exactly one tenant identifies the group.
       roomKey: only ? `h:${only.relay}|${groupId}` : undefined,
       eventId: ev.id,
-      url: only ? groupUrl(only.relay, groupId, ev.id) : (relays[0] ? groupUrl(relays[0], groupId, ev.id) : "/"),
+      url: only
+        ? groupUrl(only.relay, groupId, ev.id, threadRoot)
+        : (relays[0] ? groupUrl(relays[0], groupId, ev.id, threadRoot) : "/"),
       timestamp: ev.created_at * 1000,
     },
     policy,

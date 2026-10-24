@@ -167,6 +167,21 @@ final class PreviewTests: XCTestCase {
         XCTAssertTrue(NotificationPreview.isThreadReply(kind: 9, tags: [["E", "root"]]))
         XCTAssertFalse(NotificationPreview.isThreadReply(kind: 9, tags: [["E", ""]]))
         XCTAssertFalse(NotificationPreview.isThreadReply(kind: 9, tags: [["e", "parent"]]))
+        XCTAssertTrue(NotificationPreview.isThreadReply(kind: 9, tags: [["e", "parent", "", "reply"]]))
+        XCTAssertFalse(NotificationPreview.isThreadReply(kind: 7, tags: [["e", "parent", "", "reply"]]))
+    }
+
+    /// Mirrors `nip29ThreadRootOf` (src/lib/nip29Threads.ts).
+    func testNip29ThreadRoot() {
+        XCTAssertEqual(NotificationPreview.nip29ThreadRoot(kind: 9, tags: [["e", "root", "", "reply"]]), "root")
+        XCTAssertEqual(
+            NotificationPreview.nip29ThreadRoot(kind: 9, tags: [["e", "root", "", "root"], ["e", "parent", "", "reply"]]),
+            "root"
+        )
+        XCTAssertEqual(NotificationPreview.nip29ThreadRoot(kind: 1111, tags: [["E", "root"], ["e", "parent"]]), "root")
+        XCTAssertNil(NotificationPreview.nip29ThreadRoot(kind: 9, tags: [["e", "root"]]))
+        XCTAssertNil(NotificationPreview.nip29ThreadRoot(kind: 9, tags: [["e", "root", "", "root"]]))
+        XCTAssertNil(NotificationPreview.nip29ThreadRoot(kind: 9, tags: [["q", "root", "", "pk"]]))
     }
 
     func testFirstImetaMime() {

@@ -50,6 +50,8 @@ export interface NotifyCandidate {
   relayUrl?: string;
   /** NIP-29 group id (for mute gating); set only for `plane === "nip29"`. */
   groupId?: string;
+  /** The NIP-29 thread a reply belongs to, so a tap opens it (`nip29ThreadRootOf`). */
+  threadRoot?: string;
   /** Concord channel id hex; set only for `plane === "c2"`. */
   channelIdHex?: string;
   /** DM conversation key (`plane === "dm"`); see `dmConvKey`. */

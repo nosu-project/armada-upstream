@@ -832,27 +832,3 @@ export function buildServerProfileTags(
   if (isHexColor(color)) tags.push(["l", color, SERVER_COLOR_MARK]);
   return tags;
 }
-
-/**
- * NIP-22 tags for a kind-1111 reply inside a group: uppercase `K`/`E`/`P` pin
- * the thread root (inherited from a comment parent, as Flotilla/@welshman do),
- * lowercase point at the immediate parent; `h` scopes it to the group.
- */
-export function buildCommentTags(parent: NostrRumor, groupId: string): string[][] {
-  const tags: string[][] = [["h", groupId]];
-
-  const rootTags = parent.tags.filter(([n]) => n === "K" || n === "E" || n === "P");
-  if (rootTags.length > 0) {
-    for (const t of rootTags) tags.push([...t]);
-  } else {
-    tags.push(["K", String(parent.kind)]);
-    tags.push(["E", parent.id, "", parent.pubkey]);
-    tags.push(["P", parent.pubkey]);
-  }
-
-  tags.push(["k", String(parent.kind)]);
-  tags.push(["e", parent.id, "", parent.pubkey]);
-  tags.push(["p", parent.pubkey]);
-
-  return tags;
-}

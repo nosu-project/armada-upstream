@@ -778,6 +778,7 @@ export function useForegroundNotifications(): void {
             kind: "nip29",
             relayUrl: relay,
             groupId: cand.groupId,
+            threadRoot: cand.threadRoot,
             messageId: cand.eventId,
           });
           level = c.channelLevel(relay, cand.groupId);

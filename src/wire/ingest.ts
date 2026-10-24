@@ -8,6 +8,7 @@ import { bufferLiveDmWraps } from "@/lib/nip17/dm17Store";
 import { bufferLiveInviteWraps } from "@/concord/lib/inviteInbox";
 import { KIND_DIRECT_INVITE } from "@/concord/lib/kinds";
 import { KIND_GROUP_CHAT } from "@/lib/nip29";
+import { nip29ThreadRootOf } from "@/lib/nip29Threads";
 import { KIND_STREAM_MESSAGE_V2 } from "@/buzz/kinds";
 import { reactionContentKey } from "@/hooks/useReactions";
 import { dmThreadScope, emitWireScopes } from "@/wire/bus";
@@ -431,6 +432,7 @@ function plaintextCandidates(
       content: ev.content,
       imetaMime: firstImetaMime(ev.tags),
       threadReply: isThreadReply(ev.kind, ev.tags),
+      threadRoot: nip29ThreadRootOf(ev),
       roomKey: "", // filled by the hook once the relay URL is known
       readKey: "", // filled by the hook (needs the relay URL)
       path: "", // ditto — the route names the relay

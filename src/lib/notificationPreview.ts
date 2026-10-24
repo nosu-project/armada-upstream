@@ -133,9 +133,13 @@ export function firstImetaMime(tags: string[][]): string | undefined {
   return undefined;
 }
 
-/** Thread reply (matching Android): kind-1111 NIP-22 comment, or an uppercase `E` root tag (Concord). */
+/**
+ * Thread reply (matching Android and iOS): a kind-1111 NIP-22 comment, an uppercase `E` root
+ * tag (Concord), or a kind 9 with a marked `reply` `e` tag (NIP-29, `nip29Threads.ts`).
+ */
 export function isThreadReply(kind: number, tags: string[][]): boolean {
   if (kind === 1111) return true;
+  if (kind === 9 && tags.some((tag) => tag[0] === "e" && tag[3] === "reply" && Boolean(tag[1]))) return true;
   return tags.some((tag) => tag[0] === "E" && typeof tag[1] === "string" && tag[1] !== "");
 }
 
