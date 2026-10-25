@@ -4,6 +4,33 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.66.7] - 2026-10-21
+
+Formatted text in the message box now stays lined up with what you type on
+Android with a larger system font size, and while the window is being resized.
+
+### Fixed
+- Formatted text in the message box no longer drifts from the typed text on Android when the system font size is enlarged
+- Formatted text in the message box keeps up with the typed text while the window is resized
+
+## [0.66.6] - 2026-10-20
+
+Community calls can now be recorded, with every participant told and anyone
+able to opt out, and Armada is available in Brazilian Portuguese. A blocked
+community's page now ends in a Game Over screen with its own music.
+
+### Added
+- Record community calls, one file per person or a single mix, in FLAC, WAV, Opus or AU; everyone in the call sees who is recording, and anyone can choose "Don't record me"
+- Brazilian Portuguese translation
+
+### Changed
+- A blocked community's page plays a chiptune theme and ends on a pixel-art Game Over screen, with Continue (the self-hosting guide) and Quit
+
+### Fixed
+- Formatted text in the message box lines up with the text being typed
+- Opening the app no longer lands on a blocked community
+- Remote-signer requests no longer send a duplicate copy just before timing out
+
 ## [0.66.5] - 2026-10-20
 
 A blocked community's page now fills the whole pane, and bundled dependencies

@@ -134,6 +134,33 @@ describe("SearchResultsView", () => {
     fireEvent.click(screen.getByRole("button", { name: "Remove Images" }));
     expect(onFiltersChange).toHaveBeenCalledWith(expect.objectContaining({ media: "all", channelIds: [CHANNEL] }));
   });
+
+  it("offers more results only when the page is full", () => {
+    const onLoadMore = vi.fn();
+    const view = (hasMore: boolean) => (
+      <QueryClientProvider client={new QueryClient()}>
+        <MemoryRouter>
+          <SearchResultsView
+            channels={channels}
+            results={[message]}
+            isLoading={false}
+            query=""
+            onJump={vi.fn()}
+            filters={EMPTY_SEARCH_FILTERS}
+            onFiltersChange={() => {}}
+            hasMore={hasMore}
+            onLoadMore={onLoadMore}
+          />
+        </MemoryRouter>
+      </QueryClientProvider>
+    );
+    const { rerender } = render(view(false));
+    expect(screen.queryByRole("button", { name: "Show more results" })).toBeNull();
+
+    rerender(view(true));
+    fireEvent.click(screen.getByRole("button", { name: "Show more results" }));
+    expect(onLoadMore).toHaveBeenCalledTimes(1);
+  });
 });
 
 function SuggestHarness({ initial = EMPTY_SEARCH_FILTERS }: { initial?: SearchFilters }) {

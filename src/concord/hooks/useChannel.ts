@@ -26,6 +26,7 @@ import {
   queryChannelPageBefore,
   queryChannelRumors,
   queryChannelRumorsByIds,
+  queryChannelWindow,
   readStreamCursor,
   sweepExpiredCommunityRumors,
   updateStreamCursor,
@@ -33,7 +34,9 @@ import {
   peekPendingWraps,
   ackPendingWraps,
   removeRumors,
+  type StreamCursor,
 } from "@/concord/lib/rumorStore";
+import { readForward, type WindowRead } from "@/concord/lib/readForward";
 import {
   discardOutgoing,
   failOutgoing,
@@ -147,6 +150,49 @@ function cursorHolds(cursor: PageCursor | undefined, data: readonly OpenedChat[]
   return !!cursor && data.some((m) => cursor.ids.has(m.rumorId));
 }
 
+/** A cursor that {@link lowerCursor} may extend without touching `cursor`. */
+function copyCursor(cursor: PageCursor | undefined): PageCursor | undefined {
+  return cursor && { until: cursor.until, ids: new Set(cursor.ids) };
+}
+
+/**
+ * History loaded around a jumped-to message older than the present's run. It
+ * is shown ALONE (`span`) until reading forward closes the gap to the present,
+ * so the reader never sees two runs with a silent hole between them, and the
+ * gap is never filled newest-first above the message they came to read.
+ */
+interface DetachedRun {
+  id: number;
+  channelIdHex: string;
+  /** Older paging resumes below this. */
+  bottom: PageCursor;
+  /** Loaded whole up to this second. */
+  top: number;
+  exhausted: boolean;
+}
+let detachedRunIds = 0;
+
+/** Rows the forward read aims for per call. */
+const NEWER_WANT = 50;
+/** First forward window; grown or halved by {@link readForward}. */
+const NEWER_FIRST_SPAN_SECS = 3600;
+const NEWER_MAX_READS = 12;
+/** Relay pages per forward window: a window that needs more is halved instead. */
+const NEWER_RELAY_PAGES = 2;
+/** Forward calls in one `loadNewer` while each comes back empty (a quiet stretch). */
+const NEWER_PASSES = 3;
+
+/** Rows read below a jumped-to message when its run opens. */
+const RUN_CONTEXT = 50;
+
+/** The `created_at` range a timeline shows; `to` is set while a detached run is shown. */
+export interface TimelineSpan {
+  from: number;
+  to?: number;
+}
+
+const countRows = (rows: readonly OpenedChat[]) => rows.filter((m) => ROW_KINDS.has(m.kind)).length;
+
 export interface ChatModerationState extends ChatModeration {
   /**
    * Whether a control fold (live or restored) backs this context. Until then
@@ -253,18 +299,59 @@ export function useChannelTimeline(
   // Keeps a live re-read from turning `hasMore` back on.
   const endReachedRef = useRef(false);
   const [hasMore, setHasMore] = useState(true);
+  // Older pages in flight, the present's and a run's alike: the flag clears with the last.
+  const olderLoadsRef = useRef(new Set<symbol>());
   const [isLoadingOlder, setIsLoadingOlder] = useState(false);
+  const beginOlderLoad = useCallback(() => {
+    const token = Symbol();
+    olderLoadsRef.current.add(token);
+    setIsLoadingOlder(true);
+    return () => {
+      if (olderLoadsRef.current.delete(token)) setIsLoadingOlder(olderLoadsRef.current.size > 0);
+    };
+  }, []);
   // Wakes the fold (reads Date.now()) when a held future-dated message's time arrives.
   const [revealTick, setRevealTick] = useState(0);
-  // The load-older relay backfill in flight; aborted when the channel changes or unmounts.
-  const olderAbortRef = useRef<AbortController | null>(null);
-  useEffect(() => () => olderAbortRef.current?.abort(), [channelIdHex]);
+  // The relay backfills in flight; aborted when the channel changes or unmounts.
+  const olderAbortsRef = useRef(new Set<AbortController>());
+  const newerAbortRef = useRef<AbortController | null>(null);
+  useEffect(() => () => {
+    for (const controller of olderAbortsRef.current) controller.abort();
+    olderAbortsRef.current.clear();
+    newerAbortRef.current?.abort();
+  }, [channelIdHex]);
+  // Which run each in-flight page belongs to (0 = the present's), so a jump can
+  // start paging its own run while a stale page drains.
+  const olderBusyRef = useRef(new Set<number>());
+  const newerBusyRef = useRef<number | null>(null);
+  const [isLoadingNewer, setIsLoadingNewer] = useState(false);
+
+  // Mirrored in a ref so pages in flight test the run they started against.
+  const [run, setRunState] = useState<DetachedRun | null>(null);
+  const runRef = useRef<DetachedRun | null>(null);
+  const setRun = useCallback((next: DetachedRun | null) => {
+    runRef.current = next;
+    setRunState(next);
+  }, []);
+  const liveRun = run && run.channelIdHex === channelIdHex ? run : null;
+
+  // The present's floor lives in `pageCursors`; a move no cache write announces still re-renders.
+  const [cursorRev, setCursorRev] = useState(0);
+  const noteCursor = useCallback((key: string, next: PageCursor | undefined) => {
+    const prev = pageCursors.get(key);
+    if (next) pageCursors.set(key, next);
+    else pageCursors.delete(key);
+    if (prev?.until !== next?.until) setCursorRev((n) => n + 1);
+  }, []);
 
   useEffect(() => {
     endReachedRef.current = false;
     setHasMore(true);
+    olderLoadsRef.current.clear();
     setIsLoadingOlder(false);
-  }, [channelIdHex]);
+    setIsLoadingNewer(false);
+    setRun(null);
+  }, [channelIdHex, setRun]);
 
   // A new stream key may unlock history: reset failures/exhaustion and force a round.
   useEffect(() => {
@@ -354,9 +441,7 @@ export function useChannelTimeline(
           : (queryClient.getQueryData<OpenedChat[]>(queryKey) ?? []).filter((m) => m.channelIdHex === channelIdHex);
         // A cursor for a dropped cache would skip rows; restart it from this page.
         const held = pageCursors.get(cursorKeyId);
-        const cursor = lowerCursor(cursorHolds(held, prev) ? held : undefined, rumors);
-        if (cursor) pageCursors.set(cursorKeyId, cursor);
-        else pageCursors.delete(cursorKeyId);
+        noteCursor(cursorKeyId, lowerCursor(cursorHolds(held, prev) ? held : undefined, rumors));
         // Fold in freshly-decrypted events directly (don't race the write). The
         // cutoff filter re-applies to rows stored before a rotation was known.
         return filterEpochCutoff(upsert(prev, extra ? upsert(rumors, extra) : rumors), channel!);
@@ -414,11 +499,21 @@ export function useChannelTimeline(
     }
   }, [viewerPubkey, channelIdHex, raw]);
 
-  const loadOlder = useCallback(async (): Promise<number> => {
+  // Every write into the channel's cache; rows a filter refuses never grow it.
+  const mergeRows = useCallback((rows: OpenedChat[]) => {
+    if (rows.length === 0 || !channel) return;
+    const prev = (queryClient.getQueryData<OpenedChat[]>(queryKey) ?? []).filter(
+      (m) => m.channelIdHex === channelIdHex,
+    );
+    queryClient.setQueryData<OpenedChat[]>(queryKey, filterEpochCutoff(upsert(prev, rows), channel));
+  }, [channel, channelIdHex, queryClient, queryKey]);
+
+  const loadOlderPresent = useCallback(async (): Promise<number> => {
     if (!hasMore || isLoadingOlder) return 0;
     const before = raw.filter((m) => m.kind === KIND_MESSAGE || m.kind === KIND_POLL).length;
     const cursorKeyId = channelIdHex ?? "";
-    setIsLoadingOlder(true);
+    const endLoad = beginOlderLoad();
+    let controller: AbortController | undefined;
     try {
       // One bounded store read below the cursor; relays only when the store runs short.
       const cached = queryClient.getQueryData<OpenedChat[]>(queryKey) ?? [];
@@ -436,12 +531,11 @@ export function useChannelTimeline(
         localFull = page.full;
       }
 
+      // The timeline shows nothing below the floor, so it moves with each page.
       const mergeIntoView = (rows: OpenedChat[]) => {
         if (rows.length === 0) return;
-        const prev = (queryClient.getQueryData<OpenedChat[]>(queryKey) ?? []).filter(
-          (m) => m.channelIdHex === channelIdHex,
-        );
-        queryClient.setQueryData<OpenedChat[]>(queryKey, filterEpochCutoff(upsert(prev, rows), channel!));
+        mergeRows(rows);
+        noteCursor(cursorKeyId, lowerCursor(copyCursor(pageCursors.get(cursorKeyId)), rows));
       };
 
       let exhausted = false;
@@ -451,11 +545,12 @@ export function useChannelTimeline(
         if (!exhausted) {
           // Paint what the store had before waiting on relays.
           mergeIntoView(added);
-          const controller = new AbortController();
-          olderAbortRef.current = controller;
+          const relayRead = new AbortController();
+          controller = relayRead;
+          olderAbortsRef.current.add(relayRead);
           let writeFailed = false;
           const pendingWrites: Promise<boolean>[] = [];
-          const older = await backfillStore(nostr, historyRelays(community!), channel!, controller.signal, {
+          const older = await backfillStore(nostr, historyRelays(community!), channel!, relayRead.signal, {
             until: saved?.oldest,
             maxPages: LOAD_OLDER_MAX_PAGES,
             emptyOk: true,
@@ -464,9 +559,9 @@ export function useChannelTimeline(
             // Each page joins the timeline as it lands, so a reader at the top isn't
             // held until every page of the run has been read.
             onPage: async (events) => {
-              if (controller.signal.aborted) return;
+              if (relayRead.signal.aborted) return;
               const opened = await openChatBatch(events, channel!);
-              if (opened.length === 0 || controller.signal.aborted) return;
+              if (opened.length === 0 || relayRead.signal.aborted) return;
               // Painted before the write lands; only the cursor waits on it.
               const stored = writeRumors(community!.idHex, opened);
               void stored.then((ok) => {
@@ -478,7 +573,7 @@ export function useChannelTimeline(
             },
           });
           // The view that asked is gone; its query key is no longer read.
-          if (controller.signal.aborted) return 0;
+          if (relayRead.signal.aborted) return 0;
           // A clean empty answer below held history ends paging for this view only;
           // it isn't persisted, since an all-empty run can't seal the cursor.
           exhausted = older.exhausted || (!older.failed && older.count === 0 && !!saved?.oldest);
@@ -496,8 +591,8 @@ export function useChannelTimeline(
         }
       }
 
-      const next = lowerCursor(cursor, added);
-      if (next) pageCursors.set(cursorKeyId, next);
+      const next = lowerCursor(copyCursor(cursor), added);
+      if (next) noteCursor(cursorKeyId, next);
       endReachedRef.current = !localFull && exhausted;
       setHasMore(!endReachedRef.current);
 
@@ -509,9 +604,243 @@ export function useChannelTimeline(
       const after = merged.filter((m) => m.kind === KIND_MESSAGE || m.kind === KIND_POLL).length;
       return Math.max(0, after - before);
     } finally {
-      setIsLoadingOlder(false);
+      if (controller) olderAbortsRef.current.delete(controller);
+      endLoad();
     }
-  }, [hasMore, isLoadingOlder, raw, nostr, community, channel, channelIdHex, queryClient, queryKey]);
+  }, [hasMore, isLoadingOlder, raw, nostr, community, channel, channelIdHex, queryClient, queryKey, mergeRows, noteCursor, beginOlderLoad]);
+
+  const authGate = useCallback(
+    (url: string) => whenAuthSettled(url, () => channel!.streams.map((s) => s.group)),
+    [channel],
+  );
+
+  /** Older history below a detached run: the store first, then relays. */
+  const loadOlderRun = useCallback(async (r: DetachedRun): Promise<number> => {
+    if (r.exhausted || olderBusyRef.current.has(r.id)) return 0;
+    olderBusyRef.current.add(r.id);
+    const endLoad = beginOlderLoad();
+    let controller: AbortController | undefined;
+    const cursorKeyId = channelIdHex ?? "";
+    let bottom = copyCursor(r.bottom)!;
+    const lower = (rows: OpenedChat[]) => {
+      mergeRows(rows);
+      bottom = lowerCursor(bottom, rows)!;
+      if (runRef.current?.id === r.id) setRun({ ...runRef.current, bottom: copyCursor(bottom)! });
+    };
+    try {
+      const page = await queryChannelPageBefore(community!.idHex, channelIdHex!, {
+        until: bottom.until,
+        skip: bottom.ids,
+        limit: WINDOW_SIZE,
+      });
+      let added = page.events;
+      lower(added);
+      let exhausted = false;
+      if (!page.full) {
+        const saved = await readStreamCursor(cursorKeyId);
+        // Inside the synced region the store is whole down to `oldest`; below it only relays know.
+        const inSynced = Boolean(saved?.oldest && bottom.until >= saved.oldest);
+        if (inSynced && saved!.exhausted) exhausted = true;
+        else {
+          const relayRead = new AbortController();
+          controller = relayRead;
+          olderAbortsRef.current.add(relayRead);
+          let writeFailed = false;
+          const pendingWrites: Promise<boolean>[] = [];
+          const older = await backfillStore(nostr, historyRelays(community!), channel!, relayRead.signal, {
+            until: inSynced ? saved!.oldest : bottom.until,
+            maxPages: LOAD_OLDER_MAX_PAGES,
+            emptyOk: true,
+            beforeRelay: authGate,
+            onPage: async (events) => {
+              if (relayRead.signal.aborted) return;
+              const opened = await openChatBatch(events, channel!);
+              if (opened.length === 0 || relayRead.signal.aborted) return;
+              const stored = writeRumors(community!.idHex, opened);
+              void stored.then((ok) => {
+                if (!ok) writeFailed = true;
+              });
+              pendingWrites.push(stored);
+              added = upsert(added, opened);
+              lower(opened);
+            },
+          });
+          if (relayRead.signal.aborted) return 0;
+          exhausted = older.exhausted || (!older.failed && older.count === 0);
+          // Only a read continuing the synced region down may extend it; below it, a
+          // detached read would claim the unread gap above it as covered.
+          if (inSynced) {
+            void Promise.all(pendingWrites).then(() => {
+              if (writeFailed) return;
+              return updateStreamCursor(cursorKeyId, {
+                oldest: older.coveredDownTo,
+                exhausted: older.exhausted ? true : undefined,
+              });
+            });
+          }
+        }
+      }
+      if (runRef.current?.id === r.id) setRun({ ...runRef.current, bottom: copyCursor(bottom)!, exhausted });
+      return countRows(added);
+    } finally {
+      olderBusyRef.current.delete(r.id);
+      if (controller) olderAbortsRef.current.delete(controller);
+      endLoad();
+    }
+  }, [nostr, community, channel, channelIdHex, mergeRows, setRun, authGate, beginOlderLoad]);
+
+  /**
+   * One window `[since, until]` above a detached run: the store where the sync
+   * cursor vouches it holds the window whole, relays otherwise.
+   */
+  const readNewerWindow = useCallback(
+    async (since: number, until: number, saved: StreamCursor | undefined, signal: AbortSignal): Promise<WindowRead<OpenedChat>> => {
+      const local = await queryChannelWindow(community!.idHex, channelIdHex!, { since, until, limit: WINDOW_SIZE });
+      const whole = Boolean(
+        saved && saved.newest > 0 && until <= saved.newest && (saved.exhausted || (saved.oldest > 0 && since >= saved.oldest)),
+      );
+      if (whole) return { rows: local.events, complete: local.complete };
+      let rows = local.events;
+      const res = await backfillStore(nostr, historyRelays(community!), channel!, signal, {
+        since,
+        until,
+        maxPages: NEWER_RELAY_PAGES,
+        emptyOk: true,
+        beforeRelay: authGate,
+        onPage: async (events) => {
+          if (signal.aborted) return;
+          const opened = await openChatBatch(events, channel!);
+          if (opened.length === 0 || signal.aborted) return;
+          void writeRumors(community!.idHex, opened);
+          rows = upsert(rows, opened);
+        },
+      });
+      if (signal.aborted || res.failed) return { rows, complete: false, failed: true };
+      return { rows, complete: res.reachedBottom && local.complete };
+    },
+    [nostr, community, channel, channelIdHex, authGate],
+  );
+
+  /**
+   * Read forward from a detached run's top toward the present. Once the run
+   * reaches the present's floor the gap is gone and the two become one.
+   */
+  const loadNewer = useCallback(async (): Promise<number> => {
+    const r = runRef.current;
+    if (!r || r.channelIdHex !== channelIdHex || newerBusyRef.current !== null) return 0;
+    newerBusyRef.current = r.id;
+    setIsLoadingNewer(true);
+    const controller = new AbortController();
+    newerAbortRef.current = controller;
+    const cursorKeyId = channelIdHex ?? "";
+    let added = 0;
+    let top = r.top;
+    try {
+      const saved = await readStreamCursor(cursorKeyId);
+      for (let pass = 0; pass < NEWER_PASSES; pass++) {
+        // The present's floor, or (an empty present) the clock plus publisher skew.
+        const ceiling = pageCursors.get(cursorKeyId)?.until ?? Math.floor(Date.now() / 1000) + 600;
+        const res = await readForward<OpenedChat>({
+          from: top + 1,
+          ceiling,
+          want: NEWER_WANT,
+          span: NEWER_FIRST_SPAN_SECS,
+          maxReads: NEWER_MAX_READS,
+          read: (since, until) => readNewerWindow(since, until, saved, controller.signal),
+          count: countRows,
+          signal: controller.signal,
+        });
+        if (controller.signal.aborted || runRef.current?.id !== r.id) return 0;
+        mergeRows(res.rows);
+        if (res.coveredTo !== undefined) top = res.coveredTo;
+        added += countRows(res.rows.filter((m) => m.createdAt <= top));
+        if (top >= ceiling) {
+          noteCursor(cursorKeyId, copyCursor(runRef.current.bottom));
+          endReachedRef.current = runRef.current.exhausted;
+          setHasMore(!endReachedRef.current);
+          setRun(null);
+          return added;
+        }
+        setRun({ ...runRef.current, top });
+        if (res.failed || added > 0 || res.coveredTo === undefined) break;
+      }
+      return added;
+    } finally {
+      if (newerBusyRef.current === r.id) newerBusyRef.current = null;
+      setIsLoadingNewer(false);
+    }
+  }, [channelIdHex, mergeRows, noteCursor, readNewerWindow, setRun]);
+
+  const loadOlder = useCallback((): Promise<number> => {
+    const r = runRef.current;
+    return r && r.channelIdHex === channelIdHex ? loadOlderRun(r) : loadOlderPresent();
+  }, [channelIdHex, loadOlderRun, loadOlderPresent]);
+
+  const returnToPresent = useCallback(() => {
+    newerAbortRef.current?.abort();
+    setRun(null);
+  }, [setRun]);
+
+  // A timeline `/m/` target older than the present's floor opens a detached run
+  // around it rather than paging the present down to it, newest first.
+  const targetId = focus?.threadRoot ? undefined : focus?.messageId;
+  const target = useMemo(
+    () => (targetId ? raw.find((m) => m.rumorId === targetId && ROW_KINDS.has(m.kind)) : undefined),
+    [raw, targetId],
+  );
+  // `cursorRev` re-reads the module-level cursor when it moves.
+  const floor = useMemo(
+    () => (cursorRev >= 0 && channelIdHex ? pageCursors.get(channelIdHex)?.until : undefined),
+    [cursorRev, channelIdHex],
+  );
+  const needsRun = Boolean(
+    target &&
+      floor !== undefined &&
+      target.createdAt < floor &&
+      !(liveRun && target.createdAt >= liveRun.bottom.until && target.createdAt <= liveRun.top),
+  );
+  const buildingRef = useRef<string | null>(null);
+  useEffect(() => {
+    buildingRef.current = null;
+  }, [channelIdHex]);
+  useEffect(() => {
+    if (!community || !channel || !channelIdHex || !target) return;
+    if (liveRun && floor !== undefined && target.createdAt >= floor) {
+      returnToPresent();
+      return;
+    }
+    if (!needsRun || buildingRef.current === target.rumorId) return;
+    buildingRef.current = target.rumorId;
+    newerAbortRef.current?.abort();
+    void (async () => {
+      let rows: OpenedChat[] = [target];
+      try {
+        const page = await queryChannelPageBefore(community.idHex, channelIdHex, {
+          until: target.createdAt,
+          skip: new Set(),
+          limit: RUN_CONTEXT,
+        });
+        rows = upsert(page.events, [target]);
+      } catch { /* the target alone still opens the run */ }
+      if (buildingRef.current !== target.rumorId) return;
+      buildingRef.current = null;
+      mergeRows(rows);
+      setRun({
+        id: ++detachedRunIds,
+        channelIdHex,
+        bottom: lowerCursor(undefined, rows)!,
+        top: target.createdAt,
+        exhausted: false,
+      });
+    })();
+  }, [community, channel, channelIdHex, target, floor, liveRun, needsRun, mergeRows, setRun, returnToPresent]);
+
+  // What the timeline may show: the detached run alone, else the present down to
+  // its floor (a retained focus row below it would sit above a silent gap).
+  const span = useMemo<TimelineSpan | undefined>(
+    () => (liveRun ? { from: liveRun.bottom.until, to: liveRun.top } : floor !== undefined ? { from: floor } : undefined),
+    [liveRun, floor],
+  );
 
   const optimisticDeleted = useQuery<string[]>({
     queryKey: deletedKey(channelIdHex),
@@ -644,10 +973,16 @@ export function useChannelTimeline(
     // activity. Gated on `channel` since a disabled query stays `isPending` forever.
     isLoading:
       Boolean(channel) &&
-      (query.isPending || !moderation.ready || (focusMissing && focusQuery.isPending)),
+      (query.isPending || !moderation.ready || (focusMissing && focusQuery.isPending) || needsRun),
     loadOlder,
-    hasMore,
+    hasMore: liveRun ? !liveRun.exhausted : hasMore,
     isLoadingOlder,
+    span,
+    /** A detached run is shown: newer history is unread between it and the present. */
+    hasNewer: Boolean(liveRun),
+    loadNewer,
+    isLoadingNewer,
+    returnToPresent,
   };
 }
 

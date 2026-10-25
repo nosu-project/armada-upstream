@@ -1,6 +1,6 @@
 import { Bell, Bluetooth, CheckCheck, Compass, Folder, FolderOpen, Headphones, Lock, LogOut, MailPlus, MessageSquare, PanelLeftDashed, Plus, Settings, Trash2 } from "lucide-react";
 import { nip19 } from "nostr-tools";
-import { memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createContext, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
 
@@ -42,6 +42,7 @@ import { useMutes } from "@/hooks/useMutes";
 import { useNotifLevels, communityScopeKey, dmScopeKey } from "@/hooks/useNotifLevels";
 import { useRailDms } from "@/hooks/useRailDms";
 import { NotifLevelMenu } from "@/components/NotifLevelMenu";
+import { useSwipeLayout } from "@/components/layout/SwipeReveal";
 import { channelReadKey, useReadState } from "@/hooks/useReadState";
 import { useRelayGroups } from "@/hooks/useRelayGroups";
 import { useRelayInfo } from "@/hooks/useRelayInfo";
@@ -137,6 +138,9 @@ interface RailDragProps {
   pending?: boolean;
   onPressed?: () => void;
 }
+
+/** Reports a rail entry's menu opening or closing, so the rail can dim the rest of the app on touch. */
+const RailMenuOpenContext = createContext<((open: boolean) => void) | undefined>(undefined);
 
 function dragAttrs(anchor: string, parent?: string): Record<string, string> {
   return { "data-rail-anchor": anchor, ...(parent ? { "data-rail-parent": parent } : {}) };
@@ -563,8 +567,9 @@ const ServerButton = memo(function ServerButton({
   // Pointerdown is attached natively via `triggerRef` (see useDragPointerDown).
   const interactionProps = draggable ? dragAttrs(itemAnchor(url), dragParent) : {};
 
+  const onMenuOpenChange = useContext(RailMenuOpenContext);
   return (
-    <ContextMenu>
+    <ContextMenu onOpenChange={onMenuOpenChange}>
       <Tooltip>
         <TooltipTrigger asChild>
           <ContextMenuTrigger asChild>
@@ -702,8 +707,9 @@ const Concord2Button = memo(function Concord2Button({
     }
   };
 
+  const onMenuOpenChange = useContext(RailMenuOpenContext);
   return (
-    <ContextMenu>
+    <ContextMenu onOpenChange={onMenuOpenChange}>
       <Tooltip>
         <TooltipTrigger asChild>
           <ContextMenuTrigger asChild>
@@ -860,8 +866,9 @@ const DmButton = memo(function DmButton({
       isActive && "is-active",
     );
 
+  const onMenuOpenChange = useContext(RailMenuOpenContext);
   return (
-    <ContextMenu>
+    <ContextMenu onOpenChange={onMenuOpenChange}>
       <Tooltip>
         <TooltipTrigger asChild>
           <ContextMenuTrigger asChild>
@@ -976,8 +983,9 @@ const RecentDmButton = memo(function RecentDmButton({
   const { name } = useDmConversationName(item.peers, user?.pubkey);
   const { dmLevel, setLevel: setNotifLevel } = useNotifLevels();
 
+  const onMenuOpenChange = useContext(RailMenuOpenContext);
   return (
-    <ContextMenu>
+    <ContextMenu onOpenChange={onMenuOpenChange}>
       <Tooltip>
         <TooltipTrigger asChild>
           <ContextMenuTrigger asChild>
@@ -1081,6 +1089,7 @@ function RailFolder({
   const intl = useIntl();
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   useDragPointerDown(triggerRef, draggable, onDragPointerDown);
+  const onMenuOpenChange = useContext(RailMenuOpenContext);
 
   const label = name.trim() || intl.formatMessage({ id: "serverRail.folder", defaultMessage: "Folder" });
 
@@ -1108,7 +1117,7 @@ function RailFolder({
     : null;
 
   const header = (
-    <ContextMenu>
+    <ContextMenu onOpenChange={onMenuOpenChange}>
       <Tooltip>
         <TooltipTrigger asChild>
           <ContextMenuTrigger asChild>
@@ -1216,21 +1225,10 @@ function RailFolder({
 
 /**
  * Side-by-side (desktop) layout, where MainLayout owns the persistent rail,
- * vs. touch drill-down. Negation of `SwipeReveal`'s `swipeEnabled`; must stay in sync.
+ * vs. touch drill-down.
  */
 function useSideBySideLayout(): boolean {
-  const isTouch = useIsTouch();
-  const [narrow, setNarrow] = useState(
-    () => typeof window !== "undefined" && window.matchMedia("(max-width: 899px)").matches,
-  );
-  useEffect(() => {
-    const mql = window.matchMedia("(max-width: 899px)");
-    const onChange = () => setNarrow(mql.matches);
-    mql.addEventListener("change", onChange);
-    setNarrow(mql.matches);
-    return () => mql.removeEventListener("change", onChange);
-  }, []);
-  return !(isTouch && narrow);
+  return !useSwipeLayout();
 }
 
 // Drill-down rail persistence: rendered ONCE by MainLayout's shell rail into
@@ -1557,6 +1555,7 @@ function ServerRailInner({
       persistLayout(next);
     },
     onAbort: endDrag,
+    heldTouchOpensMenu: true,
   });
 
   const playFlip = flip.play;
@@ -1565,6 +1564,15 @@ function ServerRailInner({
   }, [renderNodes, playFlip]);
 
   const { dragging: reordering, shouldSuppressClick } = railDrag;
+  // Touch: an entry's menu or drag dims everything beside the rail, as Discord's does.
+  const isTouch = useIsTouch();
+  const [menuOpen, setMenuOpen] = useState(false);
+  const railRef = useRef<HTMLDivElement | null>(null);
+  const [railRight, setRailRight] = useState(0);
+  const dimmed = isTouch && (menuOpen || reordering);
+  useLayoutEffect(() => {
+    if (dimmed) setRailRight(railRef.current?.getBoundingClientRect().right ?? 0);
+  }, [dimmed]);
   const dragSource = railDrag.source;
   const handleDragPointerDown = railDrag.begin;
   const draggable = items.length > 1;
@@ -1680,6 +1688,7 @@ function ServerRailInner({
 
   const rail = (
     <div
+      ref={railRef}
       className={cn(
         "flex flex-col items-center w-[60px] touch:w-[72px] sidebar:w-[72px] shrink-0 overflow-hidden bg-chrome-deep select-none",
         className,
@@ -2123,17 +2132,31 @@ function ServerRailInner({
       {reordering && (
         <div data-rail-drag-overlay className="fixed inset-0 z-[298] cursor-grabbing" aria-hidden />
       )}
+      {isTouch &&
+        createPortal(
+          <div
+            aria-hidden
+            className={cn(
+              "pointer-events-none fixed inset-y-0 right-0 z-[250] bg-black/60 transition-opacity duration-150",
+              dimmed ? "opacity-100" : "opacity-0",
+            )}
+            style={{ left: railRight }}
+          />,
+          document.body,
+        )}
     </div>
   );
 
-  if (!reachZone) return rail;
-  // Outside the rail's overflow clip.
-  return (
+  const body = !reachZone ? (
+    rail
+  ) : (
+    // Outside the rail's overflow clip.
     <div className="relative flex shrink-0">
       {rail}
       <RailReachZone panFrom={railDrag.panFrom} attach={railDrag.attachPanSurface} />
     </div>
   );
+  return <RailMenuOpenContext.Provider value={setMenuOpen}>{body}</RailMenuOpenContext.Provider>;
 }
 
 /** Extends the rail's touch area over the list: swipes scroll the rail, taps reach what's beneath. */

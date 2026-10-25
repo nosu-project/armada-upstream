@@ -17,7 +17,7 @@ import { markReactionDeleted, type OpenedChat } from "@/concord/lib/chat";
 import { expirationOf, timerNoticeSeconds } from "@/concord/lib/disappearing";
 import { sendRefusal } from "@/concord/lib/sendRateLimit";
 import { hasEveryoneMention } from "@/concord/lib/everyoneMention";
-import { channelKey } from "@/concord/hooks/useChannel";
+import { channelKey, type TimelineSpan } from "@/concord/hooks/useChannel";
 import type { DmTimerTimelineEntry } from "@/components/chat/channelTimeline";
 import { buildCalendarTags, type CalendarEvent, type CalendarEventInput, type CalendarTransport, parseCalendarEvents, type RsvpStatus, type RsvpTally, tallyRsvps } from "@/lib/calendar";
 import { buildPollTags, parsePoll, tallyPollVotes, type PollTally, type PollVote } from "@/lib/polls";
@@ -70,6 +70,8 @@ export function useTransport(
   focus?: ChannelTimelineFocus,
 ): {
   transport: ChatTransport;
+  /** The `created_at` range the timeline shows; `to` is set while a detached run is shown. */
+  span: TimelineSpan | undefined;
   reactionsFor: (id: string) => MessageReactions;
   /** The full decoded message list (member enumeration, reply resolution). */
   allMessages: ChatMsg[];
@@ -88,7 +90,19 @@ export function useTransport(
   const { user } = useCurrentUser();
   const { mutedPubkeys } = useMutedPubkeys();
   const queryClient = useQueryClient();
-  const { folded, raw, isLoading, loadOlder, hasMore, isLoadingOlder } = useChannelTimeline(
+  const {
+    folded,
+    raw,
+    isLoading,
+    loadOlder,
+    hasMore,
+    isLoadingOlder,
+    span,
+    hasNewer,
+    loadNewer,
+    isLoadingNewer,
+    returnToPresent,
+  } = useChannelTimeline(
     community,
     channel,
     routeChannelIdHex,
@@ -425,12 +439,18 @@ export function useTransport(
 
   // Calendar events also render inline, slotted by announcement time.
   const calendarMsgs = useMemo<ChatMsg[]>(() => calendarEvents.map((c) => c.event as ChatMsg), [calendarEvents]);
+  // Clipped to the span the channel has loaded whole, so no row sits beside a
+  // silent gap. Threads and member lists keep reading every loaded row.
   const timeline = useMemo<ChatMsg[]>(() => {
-    if (calendarMsgs.length === 0) return topLevel;
-    return [...topLevel, ...calendarMsgs].sort((a, b) =>
-      a.created_at !== b.created_at ? a.created_at - b.created_at : a.id < b.id ? -1 : 1,
-    );
-  }, [topLevel, calendarMsgs]);
+    const merged = calendarMsgs.length === 0
+      ? topLevel
+      : [...topLevel, ...calendarMsgs].sort((a, b) =>
+          a.created_at !== b.created_at ? a.created_at - b.created_at : a.id < b.id ? -1 : 1,
+        );
+    if (!span) return merged;
+    const shown = merged.filter((m) => m.created_at >= span.from && (span.to === undefined || m.created_at <= span.to));
+    return shown.length === merged.length ? merged : shown;
+  }, [topLevel, calendarMsgs, span]);
 
   // The first row of each epoch run gets a key-rotation divider. Epochs come from
   // the fold; ChatMsg deliberately doesn't carry them.
@@ -549,6 +569,10 @@ export function useTransport(
       loadOlder,
       hasMore,
       isLoadingOlder,
+      hasNewer,
+      loadNewer,
+      isLoadingNewer,
+      returnToPresent,
       sendStatusFor,
       retry: retryEvent,
       discard,
@@ -566,7 +590,7 @@ export function useTransport(
       sendThreadReply,
       canSend,
     }),
-    [timeline, isLoading, canWrite, canModerate, canMentionEveryone, mentionsEveryone, rotationDividerIds, quarantinedIds, pausedIds, loadOlder, hasMore, isLoadingOlder, sendStatusFor, retryEvent, discard, deleteEvent, editMessage, replyCountFor, reactionsFor, zapsFor, sendZap, sendOnchainZap, pollFor, sendPoll, calendarFor, threadRepliesFor, sendThreadReply, canSend],
+    [timeline, isLoading, canWrite, canModerate, canMentionEveryone, mentionsEveryone, rotationDividerIds, quarantinedIds, pausedIds, loadOlder, hasMore, isLoadingOlder, hasNewer, loadNewer, isLoadingNewer, returnToPresent, sendStatusFor, retryEvent, discard, deleteEvent, editMessage, replyCountFor, reactionsFor, zapsFor, sendZap, sendOnchainZap, pollFor, sendPoll, calendarFor, threadRepliesFor, sendThreadReply, canSend],
   );
 
   // From RAW rows: pinning needs the original seal, and edit proofs the consumed Edit rumor.
@@ -576,5 +600,5 @@ export function useTransport(
     return map;
   }, [raw]);
 
-  return { transport, reactionsFor, allMessages: messages, calendar, timerEntries, openedById, trustedAuthors: folded.trusted };
+  return { transport, span, reactionsFor, allMessages: messages, calendar, timerEntries, openedById, trustedAuthors: folded.trusted };
 }

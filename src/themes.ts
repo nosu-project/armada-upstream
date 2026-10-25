@@ -27,10 +27,20 @@ export interface ThemeSource {
   identifier?: string;
 }
 
+/** A theme font: a CSS family name plus an optional remote .woff2/.css URL. */
+export interface ThemeFont {
+  family: string;
+  url?: string;
+}
+
 /** A theme as stored in `AppConfig.customTheme`. */
 export interface ThemeConfig {
   title?: string;
   colors: CoreThemeColors;
+  /** Body font, app-wide. Only catalog families load (see `appThemeFont`). */
+  font?: ThemeFont;
+  /** Heading font; falls back to `font`. */
+  titleFont?: ThemeFont;
   background?: ThemeBackground;
   /** Who made this theme, when it was adopted from another user. Dropped on edit. */
   source?: ThemeSource;

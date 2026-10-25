@@ -10,7 +10,9 @@ import {
   buildThemeDeletionEvent,
   parseDittoTheme,
   type ThemeExtras,
+  type ThemeFont,
 } from "@/lib/themeEvent";
+import { resolveThemeFontUrl } from "@/lib/themeFonts";
 
 import type { NostrEvent } from "@nostrify/nostrify";
 import type { UserTheme } from "@/hooks/useUserThemes";
@@ -77,7 +79,12 @@ export function useThemeLibrary() {
   /** Resolves with the event and whether it is only queued (lands via the retry worker). */
   const publishTheme = useCallback(async (input: PublishThemeInput): Promise<{ event: NostrEvent; queued: boolean }> => {
     const { title, colors, editing, ...extras } = input;
-    const template = buildThemeDefinitionEvent(title, colors, editing?.identifier, extras);
+    // Publish resolvable font URLs; the title font falls back to the body font, as Ditto's do.
+    const withUrl = (f: ThemeFont | undefined): ThemeFont | undefined =>
+      f?.family ? { family: f.family, url: resolveThemeFontUrl(f.family, f.url) } : undefined;
+    const font = withUrl(extras.font);
+    const titleFont = withUrl(extras.titleFont) ?? font;
+    const template = buildThemeDefinitionEvent(title, colors, editing?.identifier, { ...extras, font, titleFont });
 
     let event: NostrEvent;
     let queued = false;

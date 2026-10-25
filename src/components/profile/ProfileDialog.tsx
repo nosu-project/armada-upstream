@@ -256,7 +256,11 @@ function ProfileView({ pubkey, onClose }: { pubkey: string; onClose: () => void 
     const bodyFont = loadThemeFont(theme.font);
     // Title font falls back to the body font (matching Ditto).
     const titleFont = loadThemeFont(theme.titleFont) ?? bodyFont;
-    if (bodyFont) style.fontFamily = bodyFont;
+    if (bodyFont) {
+      style.fontFamily = bodyFont;
+      // Overrides the app theme's font for `font-sans` descendants too.
+      style["--theme-font"] = bodyFont;
+    }
     if (titleFont) style["--title-font-family"] = titleFont;
     return style as CSSProperties;
   }, [theme]);

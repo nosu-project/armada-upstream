@@ -757,6 +757,9 @@ export function SearchResultsView({
   filters,
   onFiltersChange,
   historyIncomplete = false,
+  hasMore = false,
+  loadingMore = false,
+  onLoadMore,
 }: {
   channels: Channel[];
   results: ChatMsg[];
@@ -767,6 +770,10 @@ export function SearchResultsView({
   onFiltersChange: (filters: SearchFilters) => void;
   /** Some searched channel's older history isn't on this device yet. */
   historyIncomplete?: boolean;
+  /** The results are a full page; more matches may follow. */
+  hasMore?: boolean;
+  loadingMore?: boolean;
+  onLoadMore?: () => void;
 }) {
   const nameByChannel = useMemo(() => {
     const m = new Map<string, Channel>();
@@ -840,6 +847,14 @@ export function SearchResultsView({
           </div>
         );
       })}
+      {(hasMore || loadingMore) && onLoadMore && (
+        <div className="flex justify-center py-3">
+          <Button variant="secondary" size="sm" className="touch:h-11" onClick={onLoadMore} disabled={loadingMore}>
+            {loadingMore && <Loader2 className="size-4 animate-spin" aria-hidden />}
+            <FormattedMessage id="search.showMore" defaultMessage="Show more results" />
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

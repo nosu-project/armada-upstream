@@ -1,4 +1,5 @@
 import { memo, useCallback, useLayoutEffect, useMemo, useRef, useState, type Ref } from "react";
+import { flushSync } from "react-dom";
 
 import { CustomEmojiImg } from "@/components/chat/CustomEmoji";
 import { FormatToolbar } from "@/components/chat/FormatToolbar";
@@ -15,6 +16,7 @@ const LAYOUT_PROPS = [
   "borderTopWidth", "borderRightWidth", "borderBottomWidth", "borderLeftWidth",
   "direction", "unicodeBidi", "wordBreak", "overflowWrap",
 ] as const;
+const PX_PROPS = ["fontSize", "lineHeight", "letterSpacing", "wordSpacing"] as const;
 
 /** A format's own markers stay plain: dimmed, never slanted, struck or underlined. */
 const content = (flags: number, format: number) => (flags & format) !== 0 && (flags & HL.MARKER) === 0;
@@ -304,8 +306,13 @@ export function RichTextarea({ rich, ref, className, onKeyDown, onCopy, onCut, f
     if (el && inner) inner.style.transform = `translate(${-el.scrollLeft}px, ${-el.scrollTop}px)`;
   }, [textareaRef]);
 
-  /** Runs after every change to the text or its layout. */
-  const syncText = useCallback(() => {
+  /**
+   * Runs after every change to the text or its layout. From a browser event
+   * (`now`) the pieces are committed at once: a resize animates the textarea's
+   * width frame by frame, and a state update would land a frame late, drawing
+   * every piece at the previous frame's wrap.
+   */
+  const syncText = useCallback((now = false) => {
     const el = textareaRef.current;
     const inner = innerRef.current;
     const layer = paintRef.current;
@@ -317,7 +324,10 @@ export function RichTextarea({ rich, ref, className, onKeyDown, onCopy, onCut, f
     inner.style.overflowY = scrollbar ? "scroll" : "";
     syncScroll();
     const base = inner.firstChild;
-    if (base instanceof Text) setPaint(measurePaint(base, layer, inner, paintInput.current.runs, paintInput.current.atoms));
+    if (!(base instanceof Text)) return;
+    const next = measurePaint(base, layer, inner, paintInput.current.runs, paintInput.current.atoms);
+    if (now) flushSync(() => setPaint(next));
+    else setPaint(next);
   }, [textareaRef, syncScroll]);
 
   useLayoutEffect(() => {
@@ -325,8 +335,10 @@ export function RichTextarea({ rich, ref, className, onKeyDown, onCopy, onCut, f
     const overlay = overlayRef.current;
     const inner = innerRef.current;
     if (!el || !overlay || !inner) return;
-    const sync = () => {
+    let box = "";
+    const sync = (now = true) => {
       const style = getComputedStyle(el);
+      box = `${style.width}|${style.height}`;
       overlay.style.top = `${el.offsetTop}px`;
       overlay.style.left = `${el.offsetLeft}px`;
       // Computed sizes, not offset/client ones: those are whole pixels, and at a
@@ -335,19 +347,35 @@ export function RichTextarea({ rich, ref, className, onKeyDown, onCopy, onCut, f
       overlay.style.height = style.height;
       for (const prop of LAYOUT_PROPS) inner.style[prop] = style[prop];
       inner.style.width = style.width;
-      syncText();
+      // Android WebView scales text by the system font size, and a computed size
+      // already carries it, so a copied size would be scaled twice. Divide it back out.
+      const copied = getComputedStyle(inner);
+      for (const prop of PX_PROPS) {
+        const want = parseFloat(style[prop]);
+        const got = parseFloat(copied[prop]);
+        if (want > 0 && got > 0 && Math.abs(got - want) > 0.001) inner.style[prop] = `${(want * want) / got}px`;
+      }
+      syncText(now);
     };
-    sync();
+    const onEvent = () => sync();
+    sync(false);
     setReady(true);
     el.addEventListener("scroll", syncScroll);
-    window.addEventListener("resize", sync);
-    document.fonts?.addEventListener("loadingdone", sync);
-    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(sync);
+    window.addEventListener("resize", onEvent);
+    document.fonts?.addEventListener("loadingdone", onEvent);
+    // The observer reports once on observe() with the box sync(false) just
+    // measured; its flushSync would render every pending update (a whole
+    // channel's timeline on a switch) synchronously for nothing.
+    const onResize = () => {
+      const style = getComputedStyle(el);
+      if (`${style.width}|${style.height}` !== box) sync();
+    };
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(onResize);
     observer?.observe(el);
     return () => {
       el.removeEventListener("scroll", syncScroll);
-      window.removeEventListener("resize", sync);
-      document.fonts?.removeEventListener("loadingdone", sync);
+      window.removeEventListener("resize", onEvent);
+      document.fonts?.removeEventListener("loadingdone", onEvent);
       observer?.disconnect();
     };
     // The text size changes the textarea's font without necessarily resizing it.
@@ -359,7 +387,7 @@ export function RichTextarea({ rich, ref, className, onKeyDown, onCopy, onCut, f
   }, [paint]);
 
   // A new value can scroll the field, or bring in a scrollbar, without an event reaching us first.
-  useLayoutEffect(syncText, [rich.display, rich.model.atoms, syncText]);
+  useLayoutEffect(() => syncText(), [rich.display, rich.model.atoms, syncText]);
 
   return (
     <>

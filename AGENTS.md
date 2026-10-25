@@ -837,8 +837,9 @@ to fail a run:
 
 ## Translations (i18n)
 
-The web UI ships in English, German, Spanish, French, Italian, Dutch and
-Japanese through FormatJS (`react-intl`), the same arrangement as Ditto. English
+The web UI ships in English, German, Spanish, French, Italian, Dutch, Brazilian
+Portuguese and Japanese through FormatJS (`react-intl`), the same arrangement as
+Ditto. English
 is never a catalog the app loads: it is the inline `defaultMessage` at each call
 site. `src/i18n/locales/<lang>.json` are flat `{ id: ICU message }` files, one
 lazily-loaded chunk each; `en.json` is GENERATED (`npm run i18n:extract`) and

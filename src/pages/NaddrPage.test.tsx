@@ -109,6 +109,14 @@ describe("NaddrPage", () => {
     expect(screen.getByText("generic event card")).toBeInTheDocument();
   });
 
+  it("titles a repository by its announced name", () => {
+    h.addrEvent.mockReturnValue({ data: rumor(30617, [["d", "armada"], ["name", "Armada"]]), isLoading: false });
+    renderAt(naddr(30617, "armada"));
+
+    expect(screen.getByRole("heading", { name: "Armada" })).toBeInTheDocument();
+    expect(screen.getByText("generic event card")).toBeInTheDocument();
+  });
+
   it("falls back to the generic card for a theme whose colors don't parse", () => {
     h.addrEvent.mockReturnValue({ data: rumor(36767, [["d", "broken"]]), isLoading: false });
     renderAt(naddr(36767, "broken"));

@@ -22,6 +22,7 @@ import {
   queryChannelPageBefore,
   queryChannelRumors,
   queryChannelRumorsByIds,
+  queryChannelWindow,
   queryMentionRumors,
   queryPlane,
   queryReplyParents,
@@ -219,6 +220,40 @@ describe("concord rumor store", () => {
     });
     expect(short.events.filter((e) => e.kind === KIND_MESSAGE)).toHaveLength(1);
     expect(short.full).toBe(true);
+  });
+
+  it("reads a time window whole or reports it incomplete", async () => {
+    const { channel, idHex } = makeChannel();
+    const alice = signer();
+    const m1 = chatRumor(idHex, alice, KIND_MESSAGE, "w1", 1_000_000);
+    const m2 = chatRumor(idHex, alice, KIND_MESSAGE, "w2", 2_000_000);
+    const m3 = chatRumor(idHex, alice, KIND_MESSAGE, "w3", 3_000_000);
+    const react = chatRumor(idHex, alice, KIND_REACTION, "🔥", 9_000_000, [["e", m2.id]]);
+    const all = [m1, m2, m3, react];
+    writeRumors(CID, await openChatBatch(await Promise.all(all.map((r) => wrapChat(r, channel, alice))), channel));
+    await eventually(() => queryChannelRumors(CID, idHex, { limit: 100 }), (r) => r.length === all.length);
+
+    // Bounded on both sides, with the reaction found by reference, not time.
+    const whole = await queryChannelWindow(CID, idHex, { since: m2.created_at, until: m3.created_at, limit: 5 });
+    expect(whole.complete).toBe(true);
+    expect(whole.events.map((e) => e.content).sort()).toEqual(["w2", "w3", "🔥"]);
+
+    // More rows than the limit: a newest-first truncation hides the oldest, so nothing is returned.
+    const over = await queryChannelWindow(CID, idHex, { since: m1.created_at, until: m3.created_at, limit: 2 });
+    expect(over).toEqual({ events: [], complete: false });
+  });
+
+  it("reads a single second whole however many rows it holds", async () => {
+    const { channel, idHex } = makeChannel();
+    const alice = signer();
+    const burst = ["s1", "s2", "s3"].map((c) => chatRumor(idHex, alice, KIND_MESSAGE, c, 4_000_000));
+    writeRumors(CID, await openChatBatch(await Promise.all(burst.map((r) => wrapChat(r, channel, alice))), channel));
+    await eventually(() => queryChannelRumors(CID, idHex, { limit: 100 }), (r) => r.length === burst.length);
+
+    const at = burst[0].created_at;
+    const second = await queryChannelWindow(CID, idHex, { since: at, until: at, limit: 1 });
+    expect(second.complete).toBe(true);
+    expect(second.events.map((e) => e.content).sort()).toEqual(["s1", "s2", "s3"]);
   });
 
   it("reads reply parents by id with the edits that fold over them", async () => {

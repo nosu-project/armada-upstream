@@ -1492,7 +1492,7 @@ function ConcordCommunityPage() {
     [canManageRoles, canKickAny, canBanAny, canCreateInvite, canReadReports, dissolved],
   );
 
-  const { transport: baseTransport, reactionsFor, allMessages, calendar, timerEntries, openedById, trustedAuthors } = useTransport(
+  const { transport: baseTransport, span: timelineSpan, reactionsFor, allMessages, calendar, timerEntries, openedById, trustedAuthors } = useTransport(
     community,
     channel,
     canWrite,
@@ -1541,7 +1541,14 @@ function ConcordCommunityPage() {
     [folded, channel?.idHex, channel?.name, channel?.isPrivate],
   );
   const gitActivity = useChannelGitActivity(channel?.idHex, gitAttachments);
-  const mixedEntries = useMemo(() => mergeChannelTimeline(baseTransport.messages, gitActivity.activities, timerEntries), [baseTransport.messages, gitActivity.activities, timerEntries]);
+  const mixedEntries = useMemo(() => {
+    const merged = mergeChannelTimeline(baseTransport.messages, gitActivity.activities, timerEntries);
+    const to = timelineSpan?.to;
+    if (!timelineSpan || to === undefined) return merged;
+    // A detached run shows only its own span; activity either side sits past a gap.
+    const { from } = timelineSpan;
+    return merged.filter((entry) => entry.type === "chat" || (entry.createdAt >= from && entry.createdAt <= to));
+  }, [baseTransport.messages, timelineSpan, gitActivity.activities, timerEntries]);
   // Memoized: rebuilding it allocates the full timeline.
   const dividerEntries = useMemo(
     () =>
@@ -2230,6 +2237,9 @@ function ConcordCommunityPage() {
     isLoading: searchLoading,
     active: searching,
     historyIncomplete: searchHistoryIncomplete,
+    hasMore: searchHasMore,
+    loadingMore: searchLoadingMore,
+    loadMore: loadMoreSearch,
   } = useConcordSearch(
     community,
     channels,
@@ -2253,6 +2263,8 @@ function ConcordCommunityPage() {
   // Legacy `?thread=` / `?m=` links become route equivalents.
   useLegacyFocusParams(channelRoute);
 
+  // Assigned below, once `useTimelineFocus` has run.
+  const clearFocusRef = useRef<() => void>(() => {});
   const transport = useMemo(() => ({
     ...baseTransport,
     // MessageTimeline owns scroll restoration around this promise, so chat and Git
@@ -2263,6 +2275,11 @@ function ConcordCommunityPage() {
     loadOlder: async () => {
       const [chatAdded, gitAdded] = await Promise.all([baseTransport.loadOlder?.() ?? Promise.resolve(0), gitActivity.loadOlder()]);
       return chatAdded + gitAdded;
+    },
+    // Drops `/m/` too, or the permalink would reopen the run it just left.
+    returnToPresent: () => {
+      baseTransport.returnToPresent?.();
+      clearFocusRef.current();
     },
     openThread,
     isPinned: pins.canPin ? pins.isPinned : undefined,
@@ -2297,6 +2314,7 @@ function ConcordCommunityPage() {
     // consume a focus arrival (titled-post links are handled below).
     enabled: view === "channel" && !searching && presentation !== "feed",
   });
+  clearFocusRef.current = clearMessageFocus;
   // `/m/<id>` into a forum: if it's a loaded titled post, open it as a page
   // (replacing the location); untitled messages keep the segment for the chat view.
   const routedMessageId = route?.threadRoot ? undefined : route?.messageId;
@@ -3555,6 +3573,9 @@ function ConcordCommunityPage() {
                     filters={searchFilters}
                     onFiltersChange={setSearchFilters}
                     historyIncomplete={searchHistoryIncomplete}
+                    hasMore={searchHasMore}
+                    loadingMore={searchLoadingMore}
+                    onLoadMore={loadMoreSearch}
                   />
                 </div>
               ) : (

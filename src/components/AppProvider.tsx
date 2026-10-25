@@ -9,6 +9,7 @@ import {
   subscribeActivePubkey,
 } from "@/lib/activeAccount";
 import { useLocalStorage } from "@/hooks/useLocalStorage";
+import { appThemeFont } from "@/lib/fontLoader";
 import { useMediaSrc } from "@/hooks/useMediaPolicy";
 import { setPowDifficulty } from "@/lib/pow";
 import { useThemePreview } from "@/lib/themePreview";
@@ -149,6 +150,7 @@ export function AppProvider({ storageKey, children }: AppProviderProps) {
   return (
     <AppContext.Provider value={value}>
       <ThemeBackgroundSync config={paintedConfig} />
+      <ThemeFontSync config={paintedConfig} />
       {children}
     </AppContext.Provider>
   );
@@ -182,6 +184,23 @@ function ThemeBackgroundSync({ config }: { config: AppConfig }) {
       root.classList.remove("theme-bg");
     };
   }, [src, tile]);
+
+  return null;
+}
+
+/** Publish the active theme's body font as `--theme-font` (read by Tailwind's `font-sans`). */
+function ThemeFontSync({ config }: { config: AppConfig }) {
+  const family = resolveTheme(config.theme) === "custom" ? config.customTheme?.font?.family : undefined;
+
+  useLayoutEffect(() => {
+    const value = appThemeFont(family ? { family } : undefined);
+    if (!value) return;
+    const root = document.documentElement;
+    root.style.setProperty("--theme-font", value);
+    return () => {
+      root.style.removeProperty("--theme-font");
+    };
+  }, [family]);
 
   return null;
 }
