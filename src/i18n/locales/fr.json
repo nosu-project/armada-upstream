@@ -4205,6 +4205,8 @@
   "useModeration.banNeedsEncryption": "Bannir d’une communauté privée renouvelle les clés de la communauté, ce que votre signataire ne peut pas faire. Demandez à un admin dont le signataire prend en charge le chiffrement d’effectuer le bannissement.",
   "useModeration.banNoPermissionMany": "Vous n’avez pas la permission de bannir l’un de ces membres.",
   "useModeration.banNoPermissionOne": "Vous n’avez pas la permission de bannir ce membre.",
+  "useModeration.channelsNotCut.description": "{count, plural, one {Le membre banni peut} other {Les membres bannis peuvent}} encore lire {channels} jusqu’à ce que quelqu’un qui détient la clé et peut gérer les salons la renouvelle.",
+  "useModeration.channelsNotCut.title": "Clés des salons privés non renouvelées",
   "useModeration.kickFailed": "Échec de l’expulsion.",
   "useModeration.kickNoPermissionMany": "Vous n’avez pas la permission d’expulser l’un de ces membres.",
   "useModeration.kickNoPermissionOne": "Vous n’avez pas la permission d’expulser ce membre.",

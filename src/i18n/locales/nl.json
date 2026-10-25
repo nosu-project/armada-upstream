@@ -4205,6 +4205,8 @@
   "useModeration.banNeedsEncryption": "Verbannen uit een privécommunity vernieuwt de communitysleutels, en dat kan je signer niet. Vraag een beheerder van wie de signer versleuteling ondersteunt om de verbanning uit te voeren.",
   "useModeration.banNoPermissionMany": "Je hebt geen toestemming om een van deze leden te verbannen.",
   "useModeration.banNoPermissionOne": "Je hebt geen toestemming om dit lid te verbannen.",
+  "useModeration.channelsNotCut.description": "{count, plural, one {Het verbannen lid kan} other {De verbannen leden kunnen}} {channels} nog lezen totdat iemand die de sleutel heeft en kanalen mag beheren hem roteert.",
+  "useModeration.channelsNotCut.title": "Sleutels van privékanalen niet geroteerd",
   "useModeration.kickFailed": "Verwijderen mislukt.",
   "useModeration.kickNoPermissionMany": "Je hebt geen toestemming om een van deze leden te verwijderen.",
   "useModeration.kickNoPermissionOne": "Je hebt geen toestemming om dit lid te verwijderen.",

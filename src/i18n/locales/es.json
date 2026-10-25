@@ -4205,6 +4205,8 @@
   "useModeration.banNeedsEncryption": "Banear a alguien de una comunidad privada rota las claves de la comunidad, algo que tu firmante no puede hacer. Pide a un administrador cuyo firmante admita cifrado que realice el baneo.",
   "useModeration.banNoPermissionMany": "No tienes permiso para banear a ninguno de estos miembros.",
   "useModeration.banNoPermissionOne": "No tienes permiso para banear a este miembro.",
+  "useModeration.channelsNotCut.description": "{count, plural, one {El miembro baneado aún puede} other {Los miembros baneados aún pueden}} leer {channels} hasta que alguien que tenga la clave y pueda gestionar canales la rote.",
+  "useModeration.channelsNotCut.title": "Claves de canales privados sin rotar",
   "useModeration.kickFailed": "No se pudo expulsar.",
   "useModeration.kickNoPermissionMany": "No tienes permiso para expulsar a ninguno de estos miembros.",
   "useModeration.kickNoPermissionOne": "No tienes permiso para expulsar a este miembro.",

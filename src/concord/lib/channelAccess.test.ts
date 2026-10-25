@@ -10,7 +10,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { channelRoleIds, channelsHingingOn, isEntitled, roleRevokeCut, vendableChannels } from "./channelAccess";
+import { banChannelCuts, channelRoleIds, channelsHingingOn, isEntitled, roleRevokeCut, vendableChannels } from "./channelAccess";
 import { bytesToHex } from "./derive";
 import { Permissions, type CommunityRoles, type Role } from "./roles";
 
@@ -257,6 +257,43 @@ describe("roleRevokeCut (the rekey a bulk role revoke owes)", () => {
     const mods = roster.roles.find((r) => r.roleId === ROLE_MODS)!;
     expect(roleRevokeCut(held, OWNER, mods, [HOLDER], channels)).toBeNull();
     expect(roleRevokeCut(held, OWNER, tester, [HOLDER], [{ idHex: CH_OTHER, heldByMe: true }])).toBeNull();
+  });
+});
+
+describe("banChannelCuts (the rekeys a ban owes)", () => {
+  const SECOND = "3".repeat(64);
+  const BANNED = "6".repeat(64);
+  const channels = [
+    { idHex: CH_SECRET, heldByMe: true },
+    { idHex: CH_OTHER, heldByMe: false },
+  ];
+  const held: CommunityRoles = {
+    roles: roster.roles,
+    grants: [
+      { member: HOLDER, roleIds: [ROLE_TESTER, ROLE_ELSEWHERE] },
+      { member: SECOND, roleIds: [ROLE_AUDIT] },
+      { member: OUTSIDER, roleIds: [ROLE_MODS] },
+      { member: BANNED, roleIds: [ROLE_AUDIT] },
+    ],
+  };
+
+  it("cuts the targets from every channel they can read, keeping everyone else entitled", () => {
+    const cuts = banChannelCuts(held, OWNER, [HOLDER], channels, new Set([BANNED]));
+    expect(cuts).toHaveLength(2);
+    const secret = cuts.find((c) => c.channelIdHex === CH_SECRET)!;
+    expect(secret).toMatchObject({ heldByMe: true, removed: [HOLDER] });
+    expect(secret.keep.sort()).toEqual([OWNER, SECOND].sort());
+    expect(cuts.find((c) => c.channelIdHex === CH_OTHER)).toMatchObject({ heldByMe: false, keep: [OWNER], removed: [HOLDER] });
+  });
+
+  it("owes nothing for a target with no channel role", () => {
+    expect(banChannelCuts(held, OWNER, [OUTSIDER], channels)).toEqual([]);
+  });
+
+  it("rotates a channel once for several targets", () => {
+    const cuts = banChannelCuts(held, OWNER, [HOLDER, SECOND], channels);
+    expect(cuts.find((c) => c.channelIdHex === CH_SECRET)).toMatchObject({ removed: [HOLDER, SECOND] });
+    expect(cuts.find((c) => c.channelIdHex === CH_SECRET)!.keep.sort()).toEqual([OWNER, BANNED].sort());
   });
 });
 

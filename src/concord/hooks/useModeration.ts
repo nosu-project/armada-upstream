@@ -4,8 +4,9 @@ import { useEffect, useRef } from "react";
 
 import { useControlFold, citationFor, invalidateControl, publishEdition } from "@/concord/hooks/useControlPlane";
 import { useGuestbookPublisher } from "@/concord/hooks/useGuestbook";
-import { useRefound } from "@/concord/hooks/useRekey";
+import { useChannelRekey, useRefound } from "@/concord/hooks/useRekey";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { banChannelCuts } from "@/concord/lib/channelAccess";
 import { banShouldRotateMany, buildBanlistEdition, buildGrantEdition, hasForeignLiveLinks } from "@/concord/lib/control";
 import { banlistLocator, bytesToHex, grantLocator, hex32 } from "@/concord/lib/derive";
 import {
@@ -24,8 +25,9 @@ import { t } from "@/i18n";
  *
  *   - KICK: grant strip, then the cooperative Guestbook directive (re-joinable).
  *   - BAN: Banlist edition FIRST (instant silencing), grant strip alongside,
- *     Refounding LAST — and only in a Private community. A Public ban is the
- *     Banlist alone (CORD-05 §5): live links would strand joiners on a dead epoch.
+ *     Refounding LAST — and only in a Private community. A Public ban keeps the
+ *     community keys (CORD-05 §5): live links would strand joiners on a dead
+ *     epoch. It still rotates the targets' Private Channels, which no link vends.
  *   - UNBAN: a Banlist edition dropping the npub (access needs a re-invite).
  *
  * Plus `rotateKeys`: a Refounding with an empty exclusion set. `recipients` is
@@ -44,6 +46,7 @@ export function useModeration(community: Community | undefined, recipients: stri
   const { data: folded } = useControlFold(community);
   const guestbook = useGuestbookPublisher(community);
   const { refound, canRefound } = useRefound(community);
+  const { rekeyChannel, canRekeyChannel } = useChannelRekey(community);
 
   const canActOn = (target: string, permission: bigint): boolean =>
     Boolean(user && folded && canActOnMember(folded.roster, user.pubkey, folded.ownerHex, target, permission));
@@ -99,6 +102,44 @@ export function useModeration(community: Community | undefined, recipients: stri
     ).catch(() => undefined);
   };
 
+  /** Every live Private Channel, flagged by whether I hold its key. */
+  const privateChannels = () => {
+    const held = new Set(community?.privateChannels.map((ch) => bytesToHex(ch.id)) ?? []);
+    return [...(folded?.channels.values() ?? [])]
+      .filter((c) => c.isPrivate && !c.deleted)
+      .map((c) => ({ idHex: c.channelIdHex, heldByMe: held.has(c.channelIdHex) }));
+  };
+
+  /** Rotate each channel away from the banned; toast the ones that still leak. */
+  const cutChannels = async (cuts: ReturnType<typeof banChannelCuts>, targets: string[]) => {
+    const leaked: string[] = [];
+    for (const cut of cuts) {
+      const name = `#${folded?.channels.get(cut.channelIdHex)?.name ?? cut.channelIdHex.slice(0, 8)}`;
+      if (!cut.heldByMe || !canRekeyChannel) {
+        leaked.push(name);
+        continue;
+      }
+      try {
+        await rekeyChannel({ channelIdHex: cut.channelIdHex, keepRecipients: cut.keep, removedTargets: cut.removed });
+      } catch {
+        leaked.push(name);
+      }
+    }
+    if (leaked.length === 0) return;
+    toast({
+      title: t({ id: "useModeration.channelsNotCut.title", defaultMessage: "Private channel keys not rotated" }),
+      description: t(
+        {
+          id: "useModeration.channelsNotCut.description",
+          defaultMessage:
+            "{count, plural, one {The banned member can} other {The banned members can}} still read {channels} until someone who holds the key and can manage channels rotates it.",
+        },
+        { count: targets.length, channels: leaked.join(", ") },
+      ),
+      variant: "destructive",
+    });
+  };
+
   const banMany = useMutation<
     { rekeyed: boolean; publicBan: boolean; banned: string[]; skipped: string[] },
     Error,
@@ -132,6 +173,9 @@ export function useModeration(community: Community | undefined, recipients: stri
         );
       }
 
+      // Judged on the pre-strip roster: once the Grants land, nobody holds the role to cut.
+      const channelCuts = folded ? banChannelCuts(folded.roster, folded.ownerHex, eligible, privateChannels(), folded.banned) : [];
+
       // 1. Banlist first (instant); it replaces entire (CORD-04 §4), so one edition.
       onPhase?.("silence");
       const next = new Set(folded?.banned ?? []);
@@ -151,6 +195,10 @@ export function useModeration(community: Community | undefined, recipients: stri
       // creator can refresh its bundle); our own links are refreshed by the refound.
       // Judged for the whole group: one rotation, never one per target.
       if (folded && !banShouldRotateMany(folded, user.pubkey, eligible, forceRotate)) {
+        // No link vends a Private Channel key (CORD-05 §2), so the channels can
+        // still be rotated away from the targets without stranding anyone.
+        if (channelCuts.length > 0) onPhase?.("rekey");
+        await cutChannels(channelCuts, eligible);
         return { rekeyed: false, publicBan: true, banned: eligible, skipped };
       }
       if (!canRefound) return { rekeyed: false, publicBan: false, banned: eligible, skipped };

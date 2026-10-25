@@ -4205,6 +4205,8 @@
   "useModeration.banNeedsEncryption": "Banning from a private community rotates the community keys, which your signer can't do. Ask an admin whose signer supports encryption to carry out the ban.",
   "useModeration.banNoPermissionMany": "You don't have permission to ban any of these members.",
   "useModeration.banNoPermissionOne": "You don't have permission to ban this member.",
+  "useModeration.channelsNotCut.description": "{count, plural, one {The banned member can} other {The banned members can}} still read {channels} until someone who holds the key and can manage channels rotates it.",
+  "useModeration.channelsNotCut.title": "Private channel keys not rotated",
   "useModeration.kickFailed": "Kick failed.",
   "useModeration.kickNoPermissionMany": "You don't have permission to kick any of these members.",
   "useModeration.kickNoPermissionOne": "You don't have permission to kick this member.",

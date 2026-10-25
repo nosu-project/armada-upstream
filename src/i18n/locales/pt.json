@@ -4205,6 +4205,8 @@
   "useModeration.banNeedsEncryption": "Banir de uma comunidade privada troca as chaves da comunidade, o que seu assinador não consegue fazer. Peça a um administrador cujo assinador suporte criptografia para aplicar o banimento.",
   "useModeration.banNoPermissionMany": "Você não tem permissão para banir nenhum destes membros.",
   "useModeration.banNoPermissionOne": "Você não tem permissão para banir este membro.",
+  "useModeration.channelsNotCut.description": "{count, plural, one {O membro banido ainda pode} other {Os membros banidos ainda podem}} ler {channels} até que alguém que tenha a chave e possa gerenciar canais a rotacione.",
+  "useModeration.channelsNotCut.title": "Chaves de canais privados não rotacionadas",
   "useModeration.kickFailed": "Falha ao expulsar.",
   "useModeration.kickNoPermissionMany": "Você não tem permissão para expulsar nenhum destes membros.",
   "useModeration.kickNoPermissionOne": "Você não tem permissão para expulsar este membro.",
