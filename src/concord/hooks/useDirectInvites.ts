@@ -5,6 +5,7 @@ import { useMemo } from "react";
 import { assertNotBanned, assertNotDissolved, bundleToEntry } from "@/concord/hooks/useCommunityActions";
 import { useCommunityList, useUpdateCommunityList } from "@/concord/hooks/useCommunityList";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useKnownDmPeers } from "@/hooks/useKnownDmPeers";
 import { concordInviteReadKey, useReadState } from "@/hooks/useReadState";
 import {
   directInviteExpired,
@@ -339,27 +340,58 @@ export interface InviteInboxItem {
 }
 
 export interface InviteInbox {
+  /** Invites from known senders, plus every catch-up. */
   items: InviteInboxItem[];
-  /** How many haven't been seen yet (drives the rail badge / toast). */
+  /** Invites from senders the viewer doesn't know: listed, never badged or toasted. */
+  requests: InviteInboxItem[];
+  /** How many of `items` haven't been seen yet (drives the rail badge / toast). */
   unreadCount: number;
 }
 
 /**
- * The invite inbox as a mail-style list: parked invites, newest first, tagged
- * unread against a single last-seen mark ({@link concordInviteReadKey}).
+ * Sort parked invites into the inbox and the request tier, newest first, by the
+ * DM request rule. Muted senders' invites are dropped. A catch-up is always in
+ * `items`: it is for a community already joined.
+ */
+export function splitInviteInbox(
+  invites: readonly ParkedInvite[],
+  lastRead: number,
+  isKnown: (pubkey: string) => boolean,
+  muted: ReadonlySet<string>,
+): InviteInbox {
+  const items: InviteInboxItem[] = [];
+  const requests: InviteInboxItem[] = [];
+  const sorted = [...invites].sort((a, b) => b.receivedAt - a.receivedAt);
+  for (const invite of sorted) {
+    const item = { invite, unread: invite.receivedAt > lastRead };
+    if (invite.catchUp) items.push(item);
+    else if (muted.has(invite.sender)) continue;
+    else if (isKnown(invite.sender)) items.push(item);
+    else requests.push(item);
+  }
+  const unreadCount = items.reduce((n, it) => n + (it.unread ? 1 : 0), 0);
+  return { items, requests, unreadCount };
+}
+
+/**
+ * The invite inbox as a mail-style list, tagged unread against a single
+ * last-seen mark ({@link concordInviteReadKey}); senders are sorted by
+ * {@link useKnownDmPeers}, as DMs are.
  */
 export function useInviteInbox(): InviteInbox {
   const { data: invites } = useDirectInvites();
   const { getLastRead } = useReadState();
+  const { isKnown, mutedPeers } = useKnownDmPeers();
 
-  return useMemo(() => {
-    const lastRead = getLastRead(concordInviteReadKey());
-    const items: InviteInboxItem[] = (invites ?? [])
-      .map((invite) => ({ invite, unread: invite.receivedAt > lastRead }))
-      .sort((a, b) => b.invite.receivedAt - a.invite.receivedAt);
-    const unreadCount = items.reduce((n, it) => n + (it.unread ? 1 : 0), 0);
-    return { items, unreadCount };
-  }, [invites, getLastRead]);
+  return useMemo(
+    () => splitInviteInbox(
+      invites ?? [],
+      getLastRead(concordInviteReadKey()),
+      (pubkey) => isKnown(pubkey, false),
+      new Set(mutedPeers),
+    ),
+    [invites, getLastRead, isKnown, mutedPeers],
+  );
 }
 
 /**

@@ -1,6 +1,7 @@
 import {
   Check,
   ChevronLeft,
+  ChevronRight,
   Loader2,
   MailPlus,
   Radio,
@@ -307,13 +308,17 @@ function FriendLine({ names, rest }: { names: React.ReactNode[]; rest: number })
 function InviteRow({
   item,
   selected,
+  request = false,
   onOpen,
 }: {
   item: InviteInboxItem;
   selected: boolean;
+  /** From a sender the viewer doesn't know: no trust mark, no unread emphasis. */
+  request?: boolean;
   onOpen: (item: InviteInboxItem) => void;
 }) {
-  const { invite, unread } = item;
+  const { invite } = item;
+  const unread = item.unread && !request;
   const isCatchUp = Boolean(invite.catchUp);
   const channels = channelCount(invite);
   const sender = useAuthor(invite.sender);
@@ -351,7 +356,7 @@ function InviteRow({
             unread ? "text-foreground" : "text-muted-foreground",
           )}
         >
-          <ShieldCheck className="size-3 shrink-0 text-success" />
+          {!request && <ShieldCheck className="size-3 shrink-0 text-success" />}
           <span className="truncate">
             {isCatchUp ? (
               <FormattedMessage id="invitesPage.row.keysBy" defaultMessage="Updated keys by {name}" values={{ name: senderName }} />
@@ -389,6 +394,7 @@ export function InviteDetail({
   sender,
   receivedAt,
   isCatchUp = false,
+  isRequest = false,
   accepting,
   declining,
   onAccept,
@@ -405,6 +411,8 @@ export function InviteDetail({
   receivedAt?: number;
   /** A key update for a community already joined (Direct Invite catch-up). */
   isCatchUp?: boolean;
+  /** The sender is someone the viewer doesn't know (the DM request rule). */
+  isRequest?: boolean;
   accepting: boolean;
   declining: boolean;
   onAccept: () => void;
@@ -656,6 +664,14 @@ export function InviteDetail({
                   </p>
                 </div>
               )}
+              {isRequest && (
+                <p className="mt-2.5 text-xs leading-snug text-warning">
+                  <FormattedMessage
+                    id="invitesPage.detail.requestNotice"
+                    defaultMessage="You don’t know this sender. Only accept invites from people you trust."
+                  />
+                </p>
+              )}
             </div>
           )}
 
@@ -721,10 +737,12 @@ export function InviteDetail({
  */
 function InboxInviteDetail({
   invite,
+  isRequest,
   onDone,
   onBack,
 }: {
   invite: ParkedInvite;
+  isRequest: boolean;
   /** The invite left the inbox (accepted or declined) — drop the selection. */
   onDone: () => void;
   /** Mobile back to the list. */
@@ -787,6 +805,7 @@ function InboxInviteDetail({
       sender={invite.sender}
       receivedAt={invite.receivedAt}
       isCatchUp={isCatchUp}
+      isRequest={isRequest}
       accepting={accepting}
       declining={declining}
       onAccept={handleAccept}
@@ -802,26 +821,31 @@ function InboxInviteDetail({
  * an explicit per-invite action.
  */
 export function InvitesPage() {
-  const { items, unreadCount } = useInviteInbox();
+  const { items, requests, unreadCount } = useInviteInbox();
   const { markRead } = useReadState();
   const [selectedWrapId, setSelectedWrapId] = useState<string | undefined>(undefined);
+  const [showRequests, setShowRequests] = useState(false);
 
-  const selected = items.find((it) => it.invite.wrapId === selectedWrapId)?.invite;
+  const all = useMemo(() => [...items, ...requests], [items, requests]);
+  const selected = all.find((it) => it.invite.wrapId === selectedWrapId)?.invite;
+  const selectedIsRequest = requests.some((it) => it.invite.wrapId === selectedWrapId);
+  // Nothing else to show: no reason to make the viewer expand them.
+  const requestsOpen = showRequests || items.length === 0;
 
   // Mark everything seen (one high-water mark) while on screen — not while
   // Settings covers the page. Seeing isn't accepting.
   const covered = usePageCovered();
-  const newest = items[0]?.invite.receivedAt ?? 0;
+  const newest = Math.max(items[0]?.invite.receivedAt ?? 0, requests[0]?.invite.receivedAt ?? 0);
   useEffect(() => {
     if (!covered && newest > 0) markRead(concordInviteReadKey(), newest);
   }, [covered, newest, markRead]);
 
   // Drop a stale selection when its invite leaves the inbox.
   useEffect(() => {
-    if (selectedWrapId && !items.some((it) => it.invite.wrapId === selectedWrapId)) {
+    if (selectedWrapId && !all.some((it) => it.invite.wrapId === selectedWrapId)) {
       setSelectedWrapId(undefined);
     }
-  }, [items, selectedWrapId]);
+  }, [all, selectedWrapId]);
 
   return (
     <SwipeReveal
@@ -845,7 +869,7 @@ export function InvitesPage() {
               )}
             </header>
             <div className="flex-1 min-h-0 overflow-y-auto px-2 py-2">
-              {items.length === 0 ? (
+              {all.length === 0 ? (
                 <div className="flex flex-col items-center gap-3 px-3 py-16 text-center text-muted-foreground">
                   <MailPlus className="size-10 opacity-40" />
                   <p className="text-sm">
@@ -865,6 +889,32 @@ export function InvitesPage() {
                       onOpen={(it) => setSelectedWrapId(it.invite.wrapId)}
                     />
                   ))}
+                  {requests.length > 0 && (
+                    <>
+                      <button
+                        type="button"
+                        aria-expanded={requestsOpen}
+                        onClick={() => setShowRequests(!requestsOpen)}
+                        className="mt-2 flex w-full items-center gap-1.5 px-3 py-2 touch:py-3 text-left text-xs font-semibold uppercase tracking-wider text-muted-foreground transition-colors hover:text-foreground"
+                      >
+                        <ChevronRight className={cn("size-3.5 shrink-0 transition-transform", requestsOpen && "rotate-90")} />
+                        <FormattedMessage
+                          id="invitesPage.requests"
+                          defaultMessage="Requests ({count, number})"
+                          values={{ count: requests.length }}
+                        />
+                      </button>
+                      {requestsOpen && requests.map((item) => (
+                        <InviteRow
+                          key={item.invite.wrapId}
+                          item={item}
+                          request
+                          selected={item.invite.wrapId === selectedWrapId}
+                          onOpen={(it) => setSelectedWrapId(it.invite.wrapId)}
+                        />
+                      ))}
+                    </>
+                  )}
                 </div>
               )}
             </div>
@@ -877,6 +927,7 @@ export function InvitesPage() {
           <InboxInviteDetail
             key={selected.wrapId}
             invite={selected}
+            isRequest={selectedIsRequest}
             onDone={() => setSelectedWrapId(undefined)}
             onBack={() => setSelectedWrapId(undefined)}
           />
@@ -885,7 +936,7 @@ export function InvitesPage() {
             <div className="flex flex-col items-center gap-3 max-w-sm">
               <MailPlus className="size-12 opacity-30" />
               <p className="text-sm">
-                {items.length === 0 ? (
+                {all.length === 0 ? (
                   <FormattedMessage id="invitesPage.noPending" defaultMessage="You have no pending invites." />
                 ) : (
                   <FormattedMessage id="invitesPage.selectInvite" defaultMessage="Select an invite to review it." />

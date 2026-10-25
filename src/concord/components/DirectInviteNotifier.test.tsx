@@ -41,7 +41,7 @@ const community = { idHex: CID, rootEpoch: 0n } as const;
 vi.mock("@/hooks/useToast", () => ({ toast: (...a: unknown[]) => toast(...a) }));
 vi.mock("@/hooks/useCurrentUser", () => ({ useCurrentUser: () => ({ user: { pubkey: ME } }) }));
 vi.mock("@/concord/hooks/useDirectInvites", () => ({
-  useInviteInbox: () => ({ items, unreadCount: items.filter((i) => i.unread).length }),
+  useInviteInbox: () => ({ items, requests: [], unreadCount: items.filter((i) => i.unread).length }),
 }));
 vi.mock("@/concord/hooks/useCommunityList", () => ({
   useCommunityEntry: () => entry,

@@ -118,7 +118,7 @@ vi.mock("@/concord/hooks/useConcordUnread", () => ({
   useConcordUnread: () => ({ byChannel: {} }),
 }));
 vi.mock("@/concord/hooks/useDirectInvites", () => ({
-  useInviteInbox: () => ({ items: [], unreadCount: 0 }),
+  useInviteInbox: () => ({ items: [], requests: [], unreadCount: 0 }),
 }));
 vi.mock("@/concord/hooks/useDecryptedImage", () => ({
   useDecryptedImage: () => undefined,
