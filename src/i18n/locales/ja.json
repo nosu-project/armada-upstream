@@ -4205,6 +4205,8 @@
   "useModeration.banNeedsEncryption": "非公開コミュニティでの BAN はコミュニティの鍵を更新しますが、お使いの署名アプリではできません。暗号化に対応した署名アプリを使う管理者に BAN を依頼してください。",
   "useModeration.banNoPermissionMany": "これらのメンバーを BAN する権限がありません。",
   "useModeration.banNoPermissionOne": "このメンバーを BAN する権限がありません。",
+  "useModeration.channelsNotCut.description": "{count, plural, other {BAN されたメンバーは}}、鍵を持ちチャンネルを管理できる人がローテーションするまで、引き続き {channels} を読めます。",
+  "useModeration.channelsNotCut.title": "プライベートチャンネルの鍵をローテーションできませんでした",
   "useModeration.kickFailed": "キックに失敗しました。",
   "useModeration.kickNoPermissionMany": "これらのメンバーをキックする権限がありません。",
   "useModeration.kickNoPermissionOne": "このメンバーをキックする権限がありません。",

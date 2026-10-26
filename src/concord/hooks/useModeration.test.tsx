@@ -24,7 +24,7 @@ import { bytesToHex } from "@/concord/lib/derive";
 import type { FoldedControl } from "@/concord/lib/control";
 import type { NostrRumor } from "@/lib/nostrRumor";
 import { VSK_BANLIST, VSK_GRANT } from "@/concord/lib/kinds";
-import { adminRole, type CommunityRoles } from "@/concord/lib/roles";
+import { adminRole, moderatorRole, type CommunityRoles, type Role } from "@/concord/lib/roles";
 
 import { useModeration } from "./useModeration";
 
@@ -41,9 +41,12 @@ const h = vi.hoisted(() => ({
     | { op: "refound"; keep: string[]; exclude: string[] }
     | { op: "readcut-add"; target: string; keep: string[] }
     | { op: "readcut-clear" }
+    | { op: "chrekey"; channelIdHex: string; keep: string[]; removed: string[] }
   >,
+  canRekeyChannel: true,
   refoundError: undefined as Error | undefined,
   kickErrorFor: undefined as string | undefined,
+  toasts: [] as string[],
 }));
 
 vi.mock("@nostrify/react", () => ({ useNostr: () => ({ nostr: {} }) }));
@@ -73,7 +76,14 @@ vi.mock("@/concord/hooks/useRekey", () => ({
       h.log.push({ op: "refound", keep, exclude });
     },
   }),
+  useChannelRekey: () => ({
+    canRekeyChannel: h.canRekeyChannel,
+    rekeyChannel: async (input: { channelIdHex: string; keepRecipients: string[]; removedTargets: string[] }) => {
+      h.log.push({ op: "chrekey", channelIdHex: input.channelIdHex, keep: input.keepRecipients, removed: input.removedTargets });
+    },
+  }),
 }));
+vi.mock("@/hooks/useToast", () => ({ toast: (t: { title: string }) => h.toasts.push(t.title) }));
 vi.mock("@/concord/lib/readCutPending", () => ({
   addReadCutPending: async (_me: string, _cid: string, target: string, keep: string[]) => {
     h.log.push({ op: "readcut-add", target, keep });
@@ -92,18 +102,33 @@ const targetA = getPublicKey(generateSecretKey());
 const targetB = getPublicKey(generateSecretKey());
 const bystander = getPublicKey(generateSecretKey());
 
-const { community } = mintCommunity("test", owner, ["wss://relay.test"]);
+const minted = mintCommunity("test", owner, ["wss://relay.test"]).community;
 
 const adm = adminRole(bytesToHex(new Uint8Array(32).fill(7)));
+const mod = moderatorRole(bytesToHex(new Uint8Array(32).fill(8)));
+const secretId = new Uint8Array(32).fill(5);
+const secretHex = bytesToHex(secretId);
+const secretRole: Role = {
+  roleId: "e".repeat(64),
+  name: "Secret",
+  position: 20,
+  permissions: 0n,
+  scope: { kind: "channel", channelId: secretHex },
+  color: 0,
+};
+// The actor holds #secret's key, and the fold says it is a live Private Channel.
+const community = { ...minted, privateChannels: [{ id: secretId, key: new Uint8Array(32).fill(6), epoch: 0n, name: "secret" }] };
 
 function foldedWith(input: { grants?: CommunityRoles["grants"]; foreignLinks?: string[]; banned?: string[] }): FoldedControl {
   const registries = new Map<string, string[]>();
   for (const creator of input.foreignLinks ?? []) registries.set(creator, [bytesToHex(new Uint8Array(32).fill(9))]);
   return {
-    roster: { roles: [adm], grants: input.grants ?? [] },
+    roster: { roles: [adm, mod, secretRole], grants: input.grants ?? [] },
     ownerHex: owner,
     metadata: undefined,
-    channels: new Map(),
+    channels: new Map([
+      [secretHex, { channelIdHex: secretHex, name: "secret", isPrivate: true, deleted: false, metadata: {} as never }],
+    ]),
     banned: new Set(input.banned ?? []),
     liveInviteLinks: new Set(),
     registriesByCreator: registries,
@@ -130,6 +155,8 @@ beforeEach(() => {
   h.log = [];
   h.refoundError = undefined;
   h.kickErrorFor = undefined;
+  h.canRekeyChannel = true;
+  h.toasts = [];
 });
 
 const editions = (vsk: string) => h.log.filter((e) => e.op === "edition" && e.vsk === vsk);
@@ -186,6 +213,56 @@ describe("banMany", () => {
     expect(h.log.filter((e) => e.op === "refound")).toHaveLength(0);
     expect(h.log.filter((e) => e.op === "readcut-add")).toHaveLength(0);
     expect(editions(VSK_BANLIST)).toHaveLength(1);
+    expect(h.log.filter((e) => e.op === "chrekey"), "nobody read a private channel").toHaveLength(0);
+  });
+
+  it("a public ban still rotates the targets' private channels, keeping everyone else entitled", async () => {
+    h.folded = foldedWith({
+      foreignLinks: [bystander],
+      grants: [
+        { member: targetA, roleIds: [secretRole.roleId] },
+        { member: bystander, roleIds: [secretRole.roleId] },
+      ],
+    });
+    const { result } = mount([owner, targetA, bystander]);
+    await waitFor(() => expect(result.current.canBan(targetA)).toBe(true));
+
+    const out = await result.current.banMany({ targets: [targetA] });
+    expect(out).toMatchObject({ rekeyed: false, publicBan: true });
+    expect(h.log.filter((e) => e.op === "refound")).toHaveLength(0);
+    const rekeys = h.log.filter((e) => e.op === "chrekey");
+    expect(rekeys).toMatchObject([{ channelIdHex: secretHex, removed: [targetA] }]);
+    if (rekeys[0]?.op === "chrekey") expect(rekeys[0].keep.sort()).toEqual([owner, bystander].sort());
+    expect(h.toasts).toEqual([]);
+  });
+
+  it("cuts the channel even when the banner can't strip the Grant that unlocks it", async () => {
+    const moderator = getPublicKey(generateSecretKey());
+    h.user = { pubkey: moderator, signer: {} };
+    h.folded = foldedWith({
+      foreignLinks: [bystander],
+      grants: [
+        { member: moderator, roleIds: [mod.roleId] },
+        { member: targetA, roleIds: [secretRole.roleId] },
+      ],
+    });
+    const { result } = mount([owner, moderator, targetA]);
+    await waitFor(() => expect(result.current.canBan(targetA)).toBe(true));
+
+    await result.current.banMany({ targets: [targetA] });
+    expect(editions(VSK_GRANT), "no Manage Roles, no strip").toHaveLength(0);
+    expect(h.log.filter((e) => e.op === "chrekey")).toMatchObject([{ channelIdHex: secretHex, removed: [targetA] }]);
+  });
+
+  it("says so when a private channel can't be rotated", async () => {
+    h.canRekeyChannel = false;
+    h.folded = foldedWith({ foreignLinks: [bystander], grants: [{ member: targetA, roleIds: [secretRole.roleId] }] });
+    const { result } = mount([owner, targetA]);
+    await waitFor(() => expect(result.current.canBan(targetA)).toBe(true));
+
+    await result.current.banMany({ targets: [targetA] });
+    expect(h.log.filter((e) => e.op === "chrekey")).toHaveLength(0);
+    expect(h.toasts).toEqual(["Private channel keys not rotated"]);
   });
 
   it("banning every foreign link creator clears the way for the single rotation", async () => {

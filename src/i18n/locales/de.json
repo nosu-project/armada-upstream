@@ -4205,6 +4205,8 @@
   "useModeration.banNeedsEncryption": "Das Sperren in einer privaten Community erneuert die Community-Schlüssel, was dein Signer nicht kann. Bitte einen Admin, dessen Signer Verschlüsselung unterstützt, die Sperre durchzuführen.",
   "useModeration.banNoPermissionMany": "Du hast keine Berechtigung, eines dieser Mitglieder zu sperren.",
   "useModeration.banNoPermissionOne": "Du hast keine Berechtigung, dieses Mitglied zu sperren.",
+  "useModeration.channelsNotCut.description": "{count, plural, one {Das gesperrte Mitglied kann} other {Die gesperrten Mitglieder können}} {channels} weiterhin lesen, bis jemand, der den Schlüssel hat und Kanäle verwalten darf, ihn rotiert.",
+  "useModeration.channelsNotCut.title": "Private Kanalschlüssel nicht rotiert",
   "useModeration.kickFailed": "Entfernen fehlgeschlagen.",
   "useModeration.kickNoPermissionMany": "Du hast keine Berechtigung, eines dieser Mitglieder zu entfernen.",
   "useModeration.kickNoPermissionOne": "Du hast keine Berechtigung, dieses Mitglied zu entfernen.",

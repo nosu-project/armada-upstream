@@ -4205,6 +4205,8 @@
   "useModeration.banNeedsEncryption": "Bannare da una community privata rinnova le chiavi della community, cosa che il tuo firmatario non può fare. Chiedi a un admin il cui firmatario supporta la crittografia di eseguire il ban.",
   "useModeration.banNoPermissionMany": "Non hai il permesso di bannare nessuno di questi membri.",
   "useModeration.banNoPermissionOne": "Non hai il permesso di bannare questo membro.",
+  "useModeration.channelsNotCut.description": "{count, plural, one {Il membro bannato può} other {I membri bannati possono}} ancora leggere {channels} finché qualcuno che ha la chiave e può gestire i canali non la ruota.",
+  "useModeration.channelsNotCut.title": "Chiavi dei canali privati non ruotate",
   "useModeration.kickFailed": "Espulsione non riuscita.",
   "useModeration.kickNoPermissionMany": "Non hai il permesso di espellere nessuno di questi membri.",
   "useModeration.kickNoPermissionOne": "Non hai il permesso di espellere questo membro.",

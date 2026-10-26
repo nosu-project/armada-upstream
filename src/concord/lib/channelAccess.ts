@@ -137,3 +137,32 @@ export function roleRevokeCut(
   const keep = [...candidates].filter((pk) => !banned?.has(pk) && entitledAfter(pk));
   return { channelIdHex: channel.idHex, heldByMe: channel.heldByMe, keep, removed };
 }
+
+type ChannelCut = { channelIdHex: string; heldByMe: boolean; keep: string[]; removed: string[] };
+
+/**
+ * The channel rekeys a ban owes (CORD-06 §1): every live Private Channel a
+ * target is entitled to on the PRE-ban roster, keeping everyone else entitled.
+ * Judged before the strip, so it holds when the banner can't strip the Grant.
+ */
+export function banChannelCuts(
+  roster: CommunityRoles,
+  ownerHex: string | undefined,
+  targets: readonly string[],
+  channels: ReadonlyArray<{ idHex: string; heldByMe: boolean }>,
+  banned?: ReadonlySet<string>,
+): ChannelCut[] {
+  const cut = new Set(targets);
+  const candidates = new Set(roster.grants.map((g) => g.member));
+  if (ownerHex) candidates.add(ownerHex);
+  const cuts: ChannelCut[] = [];
+  for (const ch of channels) {
+    const removed = targets.filter((pk) => isEntitled(roster, ownerHex, pk, ch.idHex));
+    if (removed.length === 0) continue;
+    const keep = [...candidates].filter(
+      (pk) => !cut.has(pk) && !banned?.has(pk) && isEntitled(roster, ownerHex, pk, ch.idHex),
+    );
+    cuts.push({ channelIdHex: ch.idHex, heldByMe: ch.heldByMe, keep, removed });
+  }
+  return cuts;
+}
