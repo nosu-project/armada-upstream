@@ -4,6 +4,29 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.66.8] - 2026-10-25
+
+Community invites from people you don't know now wait in a separate Requests
+section, and the theme picker has been redesigned around your own themes.
+Jumping to an old message opens the conversation right there, and search
+results go past the first 100.
+
+### Added
+- Community invites from unknown senders are sorted into a collapsed Requests section, with a warning when opened; they no longer raise notifications or count as unread, and invites from muted people are hidden
+- "Show more results" in community search, past the first 100 matches
+- Git repository announcements show as a card with the clone address and a GitWorkshop link
+- Press and hold a community in the sidebar on a touchscreen to open its menu, or keep moving your finger to drag it into a new position
+
+### Changed
+- The theme picker lists your own themes first with a New theme tile, merges the presets with System, Light and Dark, previews each theme's background and font, and credits each theme's creator
+- Theme fonts apply across the whole app
+- Jumping to an old message in a community opens the history around it, and you can scroll up or down from there
+- Banning someone without resetting the community's keys also replaces the keys of the private channels they could read
+- Uploads finish sooner when the preferred media server is slow but another already has the file
+
+### Fixed
+- Swiping back from the message list on a phone drags in the conversation you came from instead of an empty pane
+
 ## [0.66.7] - 2026-10-21
 
 Formatted text in the message box now stays lined up with what you type on
