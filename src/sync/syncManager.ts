@@ -15,6 +15,7 @@
 import { isBackgroundQuiet, onBackgroundQuiet } from "@/lib/backgroundQuiet";
 import { isBootGateOpen, onBootGateOpen } from "@/lib/bootGate";
 import { KvPrefixCache } from "@/lib/db/kvCache";
+import { isMeteredNetwork, onMeteredNetworkChange } from "@/lib/meteredNetwork";
 import { logSync } from "@/lib/syncLog";
 
 export type SyncPriority = "visible" | "background" | "prefetch";
@@ -40,6 +41,8 @@ export interface TopicPolicy {
   staleAfterMs: number;
   /** Fetch and write into ArmadaDB. Results reach readers via the wire bus. */
   handler: (ctx: SyncCtx) => Promise<void>;
+  /** Deferrable bulk work: held (and an in-flight run aborted) while the connection is metered. */
+  unmeteredOnly?: boolean;
 }
 
 export interface WantOpts {
@@ -228,7 +231,14 @@ function ensureWired(): void {
     requestSchedule();
   });
   onBootGateOpen(requestSchedule);
-  onBackgroundQuiet(requestSchedule);
+  onBackgroundQuiet(() => {
+    if (isBackgroundQuiet()) suspendRuns(() => true);
+    requestSchedule();
+  });
+  onMeteredNetworkChange(() => {
+    if (isMeteredNetwork()) suspendRuns((topic) => policyFor(topic)?.unmeteredOnly === true);
+    requestSchedule();
+  });
   if (typeof document !== "undefined") {
     document.addEventListener("visibilitychange", requestSchedule);
   }
@@ -257,6 +267,19 @@ export function haltSyncManager(): void {
 /** Whether {@link haltSyncManager} ran: a handler's late write must not land. */
 export function syncHalted(): boolean {
   return halted;
+}
+
+/**
+ * Going quiet (or metered) stops in-flight runs too, not just new ones: a history
+ * round pages on for minutes over a radio the native service is otherwise letting
+ * sleep. An abort leaves no stamp, and `forced` re-runs each topic once allowed.
+ */
+function suspendRuns(match: (topic: string) => boolean): void {
+  for (const [topic, rt] of topics) {
+    if (!rt.run || !match(topic)) continue;
+    rt.forced = true;
+    rt.run.controller.abort();
+  }
 }
 
 function paused(): boolean {
@@ -305,10 +328,12 @@ function schedule(): void {
     at: number;
   }
   const candidates: Candidate[] = [];
+  const metered = isMeteredNetwork();
   for (const [topic, rt] of topics) {
     if (rt.wants.size === 0 || rt.run) continue;
     const policy = policyFor(topic);
     if (!policy) continue;
+    if (policy.unmeteredOnly && metered) continue; // re-nudged by the connection listener
     candidates.push({ topic, rt, policy, priority: topicPriority(rt), at: dueAt(topic, rt, policy) });
   }
   candidates.sort((a, b) => PRIORITY_RANK[b.priority] - PRIORITY_RANK[a.priority] || a.at - b.at);

@@ -314,4 +314,88 @@ describe("syncManager", () => {
     unsubscribe();
     release();
   });
+
+  it("going quiet aborts an in-flight run without stamping it, and resuming re-runs it", async () => {
+    let quiet = false;
+    const quietListeners = new Set<() => void>();
+    vi.doMock("@/lib/backgroundQuiet", () => ({
+      isBackgroundQuiet: () => quiet,
+      onBackgroundQuiet: (listener: () => void) => {
+        quietListeners.add(listener);
+        return () => quietListeners.delete(listener);
+      },
+    }));
+    const setQuiet = (next: boolean) => {
+      quiet = next;
+      for (const listener of quietListeners) listener();
+    };
+    try {
+      const m = await freshModule();
+      const signals: AbortSignal[] = [];
+      const handler = vi.fn(({ signal }: SyncCtx) => {
+        signals.push(signal);
+        return new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve()));
+      });
+      m.registerSyncTopic("t:", { minIntervalMs: 0, staleAfterMs: 60 * 60_000, handler });
+
+      const release = m.want("t:a", "background");
+      await vi.waitFor(() => expect(handler).toHaveBeenCalledTimes(1));
+
+      setQuiet(true);
+      expect(signals[0]!.aborted).toBe(true);
+      await sleep(20);
+      expect(handler).toHaveBeenCalledTimes(1);
+      expect(m.syncState("t:a").lastSyncedAt).toBeUndefined();
+
+      setQuiet(false);
+      await vi.waitFor(() => expect(handler).toHaveBeenCalledTimes(2));
+      release();
+    } finally {
+      vi.doUnmock("@/lib/backgroundQuiet");
+    }
+  });
+
+  it("holds an unmetered-only topic on a metered connection and aborts it when one starts", async () => {
+    let metered = false;
+    const networkListeners = new Set<() => void>();
+    vi.doMock("@/lib/meteredNetwork", () => ({
+      isMeteredNetwork: () => metered,
+      onMeteredNetworkChange: (listener: () => void) => {
+        networkListeners.add(listener);
+        return () => networkListeners.delete(listener);
+      },
+    }));
+    const setMetered = (next: boolean) => {
+      metered = next;
+      for (const listener of networkListeners) listener();
+    };
+    try {
+      const m = await freshModule();
+      const signals: AbortSignal[] = [];
+      const bulk = vi.fn(({ signal }: SyncCtx) => {
+        signals.push(signal);
+        return new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve()));
+      });
+      const live = vi.fn(async () => {});
+      m.registerSyncTopic("bulk:", { minIntervalMs: 0, staleAfterMs: 60 * 60_000, handler: bulk, unmeteredOnly: true });
+      m.registerSyncTopic("live:", { minIntervalMs: 0, staleAfterMs: 60 * 60_000, handler: live });
+
+      const releaseBulk = m.want("bulk:a", "prefetch");
+      await vi.waitFor(() => expect(bulk).toHaveBeenCalledTimes(1));
+
+      setMetered(true);
+      expect(signals[0]!.aborted).toBe(true);
+      const releaseLive = m.want("live:a");
+      await vi.waitFor(() => expect(live).toHaveBeenCalledTimes(1));
+      await sleep(20);
+      expect(bulk).toHaveBeenCalledTimes(1);
+
+      setMetered(false);
+      await vi.waitFor(() => expect(bulk).toHaveBeenCalledTimes(2));
+      releaseBulk();
+      releaseLive();
+    } finally {
+      vi.doUnmock("@/lib/meteredNetwork");
+    }
+  });
 });
