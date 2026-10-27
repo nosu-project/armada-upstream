@@ -1,8 +1,8 @@
 /**
  * Hands the Web Push service worker what it needs to OPEN inlined encrypted
  * events: DM policy, known peers, own pubkey, the nsec (nsec logins only, while
- * push is enabled) and per-channel Concord stream keys. Written to Cache
- * Storage (workers can't read localStorage); missing/stale entries degrade to a
+ * push is enabled) and per-channel Concord stream keys. Written to
+ * `pushState.ts` (workers can't read localStorage); missing/stale entries degrade to a
  * generic wake-up. Display data is read from ArmadaDB at push time instead,
  * with `profileRelays` asked for any profile the device has never stored.
  *
@@ -13,11 +13,11 @@
 
 import type { MediaPolicyConfig } from "@/lib/mediaPolicy";
 import type { DmRequestLevel } from "@/lib/pushPrefs";
+import { deletePushState, writePushState } from "@/lib/pushState";
 import { clearVault, sealConfig } from "@/lib/swSecretVault";
 
-/** Must match `PUSH_STATE_CACHE` / the config URL in `src/sw/worker.ts`. */
-const PUSH_STATE_CACHE = "armada-push-state-v1";
-const PUSH_CONFIG_PATH = "/.armada-push-state/dm-config";
+/** Must match `PUSH_CONFIG_KEY` in `src/sw/worker.ts`. */
+const PUSH_CONFIG_KEY = "dm-config";
 
 /** One Concord channel's current stream as the worker needs it (mirrors `ConcordStream`). */
 export interface SwConcordStream {
@@ -82,20 +82,13 @@ export interface SwPushConfig {
   messages?: Record<string, string>;
 }
 
-function pushConfigUrl(): string {
-  return new URL(PUSH_CONFIG_PATH, location.origin).href;
-}
-
 /**
  * Write the worker's push config, sealed at rest. The result gates lifting the
  * worker kill switch: no enforceable policy, no activation.
  */
 export async function writeSwPushConfig(config: SwPushConfig): Promise<boolean> {
-  if (typeof caches === "undefined" || typeof location === "undefined") return false;
   try {
-    const sealed = await sealConfig(config);
-    const cache = await caches.open(PUSH_STATE_CACHE);
-    await cache.put(pushConfigUrl(), new Response(sealed));
+    await writePushState(PUSH_CONFIG_KEY, await sealConfig(config));
     return true;
   } catch {
     return false;
@@ -104,10 +97,8 @@ export async function writeSwPushConfig(config: SwPushConfig): Promise<boolean> 
 
 /** Remove the config blob AND destroy its key. Called on disable/logout. */
 export async function clearSwPushConfig(): Promise<void> {
-  if (typeof caches === "undefined" || typeof location === "undefined") return;
   try {
-    const cache = await caches.open(PUSH_STATE_CACHE);
-    await cache.delete(pushConfigUrl());
+    await deletePushState(PUSH_CONFIG_KEY);
   } catch {
     // ignore
   }

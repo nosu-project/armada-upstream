@@ -23,6 +23,7 @@ import type { NostrEvent } from "@nostrify/nostrify";
 
 import { t } from "@/i18n/intl";
 import { notificationMessages } from "@/lib/notificationPreview";
+import { deletePushState, readPushState, trimPushState, writePushState } from "@/lib/pushState";
 import type { PushScope } from "@/lib/pushSubscriptions";
 import type { SwPushConfig } from "@/lib/swPushConfig";
 import type { PreparedPush, PushData } from "@/sw/pushRuntime";
@@ -119,32 +120,23 @@ type ArmadaNotificationOptions = NotificationOptions & {
 };
 
 const PLAINTEXT_SCOPES = new Set<string | undefined>(["group", "group-mention"]);
-const PUSH_STATE_CACHE = "armada-push-state-v1";
-const PUSH_STATE_PREFIX = "/.armada-push-state/";
-
-/** An absolute URL under the push-state prefix, the Cache Storage key. */
-function stateUrl(path: string): string {
-  return new URL(`${PUSH_STATE_PREFIX}${path}`, self.location.origin).href;
-}
-
-const BADGE_STATE_PATH = "badge";
+const BADGE_STATE_KEY = "badge";
 // The page-provided push config: the DM request policy, the known-peer set, the
 // viewer's pubkey, (nsec logins only) the decrypt key, and the per-channel
 // Concord stream keys. Written by swPushConfig.ts; read here per push. Must
-// match that module's path — `dm-config` is the ON-DISK spelling from when the
-// blob only carried DM state, kept so an existing install's config stays
-// readable across the update.
-const PUSH_CONFIG_PATH = "dm-config";
+// match that module's key — `dm-config` is the ON-DISK spelling from when the
+// blob only carried DM state.
+const PUSH_CONFIG_KEY = "dm-config";
 // The user's push kill switch, written by swPushDisabled.ts BEFORE the disable
 // path's best-effort network teardown and deleted when push is re-enabled.
 // While it is set this worker displays nothing and tears down its own
 // subscription — the page's unsubscribe/server-delete can fail or be cut off
 // mid-way, and a gateway that never saw the delete keeps pushing forever at a
 // device whose user said stop.
-const PUSH_DISABLED_PATH = "disabled";
+const PUSH_DISABLED_KEY = "disabled";
 // Event ids this install has already presented, so a replayed push can't
 // re-alert for a message the user has seen. Bounded like the own-event set.
-const SEEN_EVENT_PATH = "seen/";
+const SEEN_EVENT_PREFIX = "seen/";
 const MAX_SEEN_EVENTS = 256;
 
 /**
@@ -173,8 +165,8 @@ function pushEventKey(data: WorkerPushData): string {
 // tray entry and its line count still update), they just stop making noise.
 // Content-blind, exactly like native: nothing is classified, a flood simply
 // stops buzzing. The worker is killed between pushes, so the window's alert
-// timestamps live in the push-state cache, keyed by tag.
-const ROOM_ALERT_PATH = "alert/";
+// timestamps live in the push state, keyed by tag.
+const ROOM_ALERT_PREFIX = "alert/";
 const ROOM_ALERT_MAX = 5;
 const ROOM_ALERT_WINDOW_MS = 120_000;
 // Cap the timestamps one tag re-serializes while a flood is live (native's
@@ -182,22 +174,19 @@ const ROOM_ALERT_WINDOW_MS = 120_000;
 // headroom keeps a sustained flood's window full so it stays quiet until it
 // genuinely stops, instead of the budget refilling mid-flood.
 const ROOM_ALERT_MAX_TRACKED = 64;
-// Bound on alert/ entries, oldest-written dropped first like seen/. A re-put
-// moves an entry to the end of Cache.keys(), so only rooms quiet for longer
-// than this many others are dropped — and a dropped room merely alerts again.
+// Bound on alert/ entries, oldest-written dropped first like seen/. A rewrite
+// makes an entry the newest, so only rooms quiet for longer than this many
+// others are dropped — and a dropped room merely alerts again.
 const MAX_ROOM_ALERT_ENTRIES = 128;
 
 /** Increment the Home-Screen badge without needing a live page. */
 async function incrementAppBadge(): Promise<void> {
   if (typeof self.navigator?.setAppBadge !== "function") return;
   try {
-    const cache = await caches.open(PUSH_STATE_CACHE);
-    const url = stateUrl(BADGE_STATE_PATH);
-    const stored = await cache.match(url);
-    const current = stored ? Number.parseInt(await stored.text(), 10) || 0 : 0;
-    const next = Math.min(current + 1, 999);
+    const current = await readPushState<number>(BADGE_STATE_KEY);
+    const next = Math.min((typeof current === "number" ? current : 0) + 1, 999);
     await Promise.all([
-      cache.put(url, new Response(String(next))),
+      writePushState(BADGE_STATE_KEY, next),
       self.navigator.setAppBadge(next),
     ]);
   } catch {
@@ -208,8 +197,7 @@ async function incrementAppBadge(): Promise<void> {
 /** Clear both the OS badge and the counter the next push increments. */
 async function clearAppBadge(): Promise<void> {
   try {
-    const cache = await caches.open(PUSH_STATE_CACHE);
-    await cache.delete(stateUrl(BADGE_STATE_PATH));
+    await deletePushState(BADGE_STATE_KEY);
     if (typeof self.navigator?.clearAppBadge === "function") {
       await self.navigator.clearAppBadge();
     }
@@ -222,8 +210,7 @@ async function clearAppBadge(): Promise<void> {
 async function isOwnPush(data: WorkerPushData): Promise<boolean> {
   if (!data.event_id) return false;
   try {
-    const cache = await caches.open(PUSH_STATE_CACHE);
-    return Boolean(await cache.match(stateUrl(`own/${encodeURIComponent(data.event_id)}`)));
+    return Boolean(await readPushState(`own/${encodeURIComponent(data.event_id)}`));
   } catch {
     return false;
   }
@@ -234,16 +221,9 @@ async function seenBefore(data: WorkerPushData): Promise<SeenDetails | undefined
   const eventKey = pushEventKey(data);
   if (!eventKey) return undefined;
   try {
-    const cache = await caches.open(PUSH_STATE_CACHE);
-    const stored = await cache.match(stateUrl(`${SEEN_EVENT_PATH}${encodeURIComponent(eventKey)}`));
-    if (!stored) return undefined;
-    try {
-      const parsed = JSON.parse(await stored.text());
-      if (parsed && typeof parsed === "object") return parsed;
-    } catch {
-      // Legacy entries contained the literal "1".
-    }
-    return { outcome: "handled" };
+    const stored = await readPushState(`${SEEN_EVENT_PREFIX}${encodeURIComponent(eventKey)}`);
+    if (stored === undefined) return undefined;
+    return stored && typeof stored === "object" ? stored as SeenDetails : { outcome: "handled" };
   } catch {
     // Never trade a real notification for a bookkeeping failure.
     return undefined;
@@ -262,20 +242,9 @@ async function markSeen(
   const eventKey = pushEventKey(data);
   if (!eventKey) return;
   try {
-    const cache = await caches.open(PUSH_STATE_CACHE);
-    await cache.put(
-      stateUrl(`${SEEN_EVENT_PATH}${encodeURIComponent(eventKey)}`),
-      new Response(JSON.stringify(details)),
-    );
+    await writePushState(`${SEEN_EVENT_PREFIX}${encodeURIComponent(eventKey)}`, details);
     try {
-      // Cache.keys() preserves insertion order, so the oldest go first.
-      const prefix = stateUrl(SEEN_EVENT_PATH);
-      const seen = (await cache.keys()).filter((request) => request.url.startsWith(prefix));
-      if (seen.length > MAX_SEEN_EVENTS) {
-        await Promise.all(
-          seen.slice(0, seen.length - MAX_SEEN_EVENTS).map((request) => cache.delete(request)),
-        );
-      }
+      await trimPushState(SEEN_EVENT_PREFIX, MAX_SEEN_EVENTS);
     } catch {
       // No enumeration — the ledger just grows slowly.
     }
@@ -418,9 +387,8 @@ async function pagePresentationOutcome(prepared: PreparedPush): Promise<PageOutc
 async function readConfig(runtime: PushRuntime): Promise<SwPushConfig | null> {
   let sealed: Uint8Array | undefined;
   try {
-    const cache = await caches.open(PUSH_STATE_CACHE);
-    const stored = await cache.match(stateUrl(PUSH_CONFIG_PATH));
-    if (stored) sealed = new Uint8Array(await stored.arrayBuffer());
+    const stored = await readPushState(PUSH_CONFIG_KEY);
+    if (stored instanceof Uint8Array) sealed = stored;
   } catch {
     // Treated as no config.
   }
@@ -610,35 +578,17 @@ function mustShowOnce(): () => Promise<boolean> {
 async function roomAlertSilent(tag: string | undefined): Promise<boolean> {
   if (!tag) return false;
   try {
-    const cache = await caches.open(PUSH_STATE_CACHE);
-    const url = stateUrl(`${ROOM_ALERT_PATH}${encodeURIComponent(tag)}`);
+    const key = `${ROOM_ALERT_PREFIX}${encodeURIComponent(tag)}`;
     const now = Date.now();
-    const stored = await cache.match(url);
-    let times: unknown[] = [];
-    if (stored) {
-      try {
-        const parsed = JSON.parse(await stored.text());
-        if (Array.isArray(parsed)) times = parsed;
-      } catch {
-        // Corrupt entry — treat as empty.
-      }
-    }
+    const stored = await readPushState(key);
+    const times: unknown[] = Array.isArray(stored) ? stored : [];
     let recent = times.filter((t): t is number => typeof t === "number" && now - t <= ROOM_ALERT_WINDOW_MS);
     const silent = recent.length >= ROOM_ALERT_MAX;
     recent.push(now);
     if (recent.length > ROOM_ALERT_MAX_TRACKED) recent = recent.slice(-ROOM_ALERT_MAX_TRACKED);
-    // Delete before put so the entry moves to the end of Cache.keys() on every
-    // engine, which is what makes the oldest-first trim below drop quiet rooms.
-    await cache.delete(url);
-    await cache.put(url, new Response(JSON.stringify(recent)));
+    await writePushState(key, recent);
     try {
-      const prefix = stateUrl(ROOM_ALERT_PATH);
-      const entries = (await cache.keys()).filter((request) => request.url.startsWith(prefix));
-      if (entries.length > MAX_ROOM_ALERT_ENTRIES) {
-        await Promise.all(
-          entries.slice(0, entries.length - MAX_ROOM_ALERT_ENTRIES).map((request) => cache.delete(request)),
-        );
-      }
+      await trimPushState(ROOM_ALERT_PREFIX, MAX_ROOM_ALERT_ENTRIES);
     } catch {
       // No enumeration — the entries just grow slowly.
     }
@@ -656,8 +606,7 @@ async function roomAlertSilent(tag: string | undefined): Promise<boolean> {
  */
 async function pushDisabled(): Promise<boolean> {
   try {
-    const cache = await caches.open(PUSH_STATE_CACHE);
-    return Boolean(await cache.match(stateUrl(PUSH_DISABLED_PATH)));
+    return Boolean(await readPushState(PUSH_DISABLED_KEY));
   } catch {
     return false;
   }
