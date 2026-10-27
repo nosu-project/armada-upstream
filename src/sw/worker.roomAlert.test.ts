@@ -1,5 +1,7 @@
+import { IDBFactory } from "fake-indexeddb";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { pushStateKeys } from "@/lib/pushState";
 import { installServiceWorker, type PushRuntime } from "@/sw/worker";
 
 afterEach(() => {
@@ -9,14 +11,6 @@ afterEach(() => {
 
 function loadWorker() {
   const handlers = new Map<string, (event: unknown) => unknown>();
-  const store = new Map<string, Response>();
-  const keyOf = (request: string | { url: string }) => (typeof request === "string" ? request : request.url);
-  const cache = {
-    match: vi.fn(async (request: string) => store.get(keyOf(request))?.clone()),
-    put: vi.fn(async (request: string, response: Response) => { store.set(keyOf(request), response); }),
-    delete: vi.fn(async (request: string | { url: string }) => store.delete(keyOf(request))),
-    keys: vi.fn(async () => [...store.keys()].map((url) => ({ url }))),
-  };
   const self = {
     location: { origin: "https://armada.buzz" },
     registration: {
@@ -30,7 +24,8 @@ function loadWorker() {
     },
   };
   vi.stubGlobal("self", self);
-  vi.stubGlobal("caches", { open: vi.fn(async () => cache), keys: vi.fn(async () => []) });
+  vi.stubGlobal("indexedDB", new IDBFactory());
+  vi.stubGlobal("caches", { has: vi.fn(async () => false), keys: vi.fn(async () => []) });
   const runtime: PushRuntime = {
     preparePush: async () => undefined,
     pushScope: () => undefined,
@@ -46,7 +41,7 @@ function loadWorker() {
     });
     await pending;
   }
-  const alertKeys = () => [...store.keys()].filter((k) => k.includes("/.armada-push-state/alert/"));
+  const alertKeys = () => pushStateKeys("alert/");
   const silentFlags = () =>
     self.registration.showNotification.mock.calls.map((call) => Boolean((call as unknown[])[1] && ((call as unknown[])[1] as { silent?: boolean }).silent));
   return { push, alertKeys, silentFlags };
@@ -60,10 +55,10 @@ describe("roomAlertSilent alert/ entries", () => {
     for (let i = 0; i < 200; i++) {
       await w.push({ scope: "group", event_id: `ev-${i}`, tag: `room-${i}` });
     }
-    const keys = w.alertKeys();
+    const keys = await w.alertKeys();
     expect(keys).toHaveLength(128);
-    expect(keys.some((k) => k.endsWith("/alert/room-0"))).toBe(false);
-    expect(keys.at(-1)).toContain("/alert/room-199");
+    expect(keys.some((k) => k === "alert/room-0")).toBe(false);
+    expect(keys.at(-1)).toBe("alert/room-199");
   });
 
   it("keeps an active room's entry when it is re-written, and its flood stays silent", async () => {
@@ -74,7 +69,7 @@ describe("roomAlertSilent alert/ entries", () => {
     for (let i = 0; i < 127; i++) await w.push({ scope: "group", event_id: `o-${i}`, tag: `room-${i}` });
     await w.push({ scope: "group", event_id: "f-6", tag: "flood" });
     for (let i = 127; i < 200; i++) await w.push({ scope: "group", event_id: `o-${i}`, tag: `room-${i}` });
-    expect(w.alertKeys().some((k) => k.endsWith("/alert/flood"))).toBe(true);
+    expect((await w.alertKeys()).some((k) => k === "alert/flood")).toBe(true);
     await w.push({ scope: "group", event_id: "f-7", tag: "flood" });
     // Five alerting, then silent for the rest of the window.
     const flags = w.silentFlags();
@@ -85,6 +80,6 @@ describe("roomAlertSilent alert/ entries", () => {
   it("bounds legacy event-id rate keys too", async () => {
     const w = loadWorker();
     for (let i = 0; i < 150; i++) await w.push({ scope: "group", event_id: `untagged-${i}` });
-    expect(w.alertKeys()).toHaveLength(128);
+    expect(await w.alertKeys()).toHaveLength(128);
   });
 });

@@ -35,6 +35,7 @@ import { clearGroupListMemo } from "@/hooks/useUserGroupList";
 import { clearAttachmentCache } from "@/lib/encryptedMedia";
 import { clearMediaCacheMemory } from "@/lib/mediaCache";
 import { closeAllNip46Transports } from "@/lib/nip46Transport";
+import { PUSH_STATE_DB_NAME } from "@/lib/pushState";
 import { clearDm17ThreadSnapshotMemory } from "@/lib/nip17/threadSnapshot";
 import { clearSettingsRootMemory } from "@/lib/settingsRootStore";
 import { clearProfileSyncMemory } from "@/sync/profileSync";
@@ -98,6 +99,7 @@ async function purgeIndexedDB(): Promise<void> {
     const known = [
       // Tenant DBs (`armada:t:<id>`) are deleted by `purgeArmadaDB`, which can close them first.
       `${ARMADA_DB_NAME}:kv`,
+      PUSH_STATE_DB_NAME,
       ...RETIRED_DATABASES,
     ];
     const dbs =

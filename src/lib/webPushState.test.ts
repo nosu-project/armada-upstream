@@ -1,28 +1,28 @@
-// @vitest-environment jsdom
+import { IDBFactory } from "fake-indexeddb";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { pushStateKeys, readPushState } from "@/lib/pushState";
 import { markOwnWebPushEvent } from "@/lib/webPushState";
 
 describe("Web Push local-event state", () => {
-  afterEach(() => {
-    Reflect.deleteProperty(window, "caches");
-  });
+  afterEach(() => vi.unstubAllGlobals());
 
-  it("stores an event marker under the URL read by the service worker", async () => {
-    const put = vi.fn(async (_request: string, _response: Response) => undefined);
-    const cache = {
-      put,
-      keys: vi.fn(async () => []),
-      delete: vi.fn(async () => true),
-    };
-    Object.defineProperty(window, "caches", {
-      configurable: true,
-      value: { open: vi.fn(async () => cache) },
-    });
+  it("stores an event marker under the key read by the service worker", async () => {
+    vi.stubGlobal("indexedDB", new IDBFactory());
 
     await markOwnWebPushEvent("event/id");
 
-    expect(put).toHaveBeenCalledTimes(1);
-    expect(put.mock.calls[0]?.[0]).toBe(`${window.location.origin}/.armada-push-state/own/event%2Fid`);
+    expect(await readPushState("own/event%2Fid")).toBe(true);
+  });
+
+  it("keeps only the newest markers", async () => {
+    vi.stubGlobal("indexedDB", new IDBFactory());
+
+    for (let i = 0; i < 515; i++) await markOwnWebPushEvent(`e${i}`);
+
+    const keys = await pushStateKeys("own/");
+    expect(keys).toHaveLength(512);
+    expect(keys[0]).toBe("own/e3");
+    expect(keys.at(-1)).toBe("own/e514");
   });
 });

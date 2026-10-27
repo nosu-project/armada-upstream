@@ -1,5 +1,6 @@
 // @vitest-environment node
 
+import { IDBFactory } from "fake-indexeddb";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -10,6 +11,7 @@ import {
   retireSeenRoomLines,
   showPageOsNotification,
 } from "@/hooks/useForegroundNotifications";
+import { writePushState } from "@/lib/pushState";
 import { pushScope as realPushScope } from "@/sw/pushRuntime";
 import { installServiceWorker, type PushRuntime } from "@/sw/worker";
 
@@ -93,31 +95,15 @@ function loadWorker(options: {
   const setAppBadge = vi.fn(async () => undefined);
   const unsubscribe = vi.fn(async () => true);
   const subscribe = vi.fn(async () => ({ endpoint: "https://push.example/new", unsubscribe }));
-  // A real per-URL store: badge/rate state and the seen-event ledger all read
-  // back what they wrote, and the ledger enumerates.
-  const store = new Map<string, unknown>();
-  if (options.pushDisabled) {
+  // A real store per worker: badge/rate state and the seen-event ledger all
+  // read back what they wrote. The sealed config is not seeded: the runtime's
+  // openConfig is stubbed below to hand back `pushConfig` directly.
+  vi.stubGlobal("indexedDB", new IDBFactory());
+  const seeded = Promise.all([
     // The kill switch swPushDisabled.ts writes when the user turns push off.
-    store.set(
-      new URL("/.armada-push-state/disabled", "https://armada.buzz").href,
-      new Response("1"),
-    );
-  }
-  const cache = {
-    match: vi.fn(async (request: string) => {
-      if (options.ownEventId && request.includes(`/own/${options.ownEventId}`)) return {};
-      if (options.pushConfig && request.endsWith("/.armada-push-state/dm-config")) {
-        // The worker reads sealed bytes and opens them via the runtime's
-        // openConfig (stubbed below); the bytes themselves are opaque here.
-        return { arrayBuffer: async () => new ArrayBuffer(16) };
-      }
-      const stored = store.get(request);
-      return stored instanceof Response ? stored.clone() : stored;
-    }),
-    put: vi.fn(async (request: string, response: Response) => { store.set(request, response); }),
-    delete: vi.fn(async (request: string) => store.delete(request)),
-    keys: vi.fn(async () => [...store.keys()].map((url) => ({ url }))),
-  };
+    options.pushDisabled ? writePushState("disabled", true) : undefined,
+    options.ownEventId ? writePushState(`own/${options.ownEventId}`, true) : undefined,
+  ]);
   const clients = (options.clients ?? []).map((client) => {
     const stub = {
       ...client,
@@ -186,7 +172,7 @@ function loadWorker(options: {
     },
   };
   const caches = {
-    open: vi.fn(async () => cache),
+    has: vi.fn(async () => false),
     keys: vi.fn(async () => []),
   };
 
@@ -233,6 +219,7 @@ function loadWorker(options: {
   installServiceWorker(runtime);
 
   async function push(data?: Record<string, unknown>): Promise<void> {
+    await seeded;
     let pending: Promise<unknown> | undefined;
     const event: PushEventStub = {
       ...(data
@@ -253,6 +240,7 @@ function loadWorker(options: {
 
   /** Deliver an exact `event.data.json()` value, as either napp transport does. */
   async function pushPayload(payload: unknown): Promise<void> {
+    await seeded;
     let pending: Promise<unknown> | undefined;
     const event: PushEventStub = {
       data: { json: () => payload, text: () => JSON.stringify(payload) },
@@ -265,6 +253,7 @@ function loadWorker(options: {
   }
 
   async function notificationClick(url?: string): Promise<void> {
+    await seeded;
     let pending: Promise<unknown> | undefined;
     const event = {
       notification: { data: { url }, close: vi.fn() },
@@ -277,6 +266,7 @@ function loadWorker(options: {
   }
 
   async function pushSubscriptionChange(newSubscription?: { unsubscribe: () => Promise<boolean> }) {
+    await seeded;
     let pending: Promise<unknown> | undefined;
     const event = {
       oldSubscription: { options: { applicationServerKey: new ArrayBuffer(8) } },
