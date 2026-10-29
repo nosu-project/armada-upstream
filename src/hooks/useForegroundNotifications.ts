@@ -54,10 +54,11 @@ import {
   installTabAttentionClearHandlers,
   markTabAttention,
 } from "@/lib/tabAttention";
+import { PROFILE_FETCH_TIMEOUT_MS } from "@/sw/profileFetch";
 import { registerNotifySink, type NotifyCandidate } from "@/wire/notify";
 import { useWireNip29Groups } from "@/wire/useWireNip29Groups";
 
-import type { NostrMetadata } from "@nostrify/nostrify";
+import type { NostrEvent, NostrMetadata } from "@nostrify/nostrify";
 
 /**
  * Client-side notifier while Armada is OPEN (web/desktop; native uses its service). Turns the
@@ -72,6 +73,8 @@ import type { NostrMetadata } from "@nostrify/nostrify";
  * notifications post without sound.
  */
 const ROOM_ALERT_MAX = 5;
+/** Mentions looked up per message, matching the push worker; any beyond keep their raw token. */
+const MAX_MENTION_LOOKUPS = 8;
 const ROOM_ALERT_WINDOW_MS = 120_000;
 const ROOM_ALERT_MAX_TRACKED = 64;
 
@@ -269,7 +272,7 @@ export function useForegroundNotifications(): void {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const eventStore = useEventStore();
-  useNostr(); // keep within the Nostr provider tree
+  const { nostr } = useNostr();
 
   const { readState } = useReadState();
   const { channelLevel, concordChannelLevel, dmLevel } = useNotifLevels();
@@ -332,6 +335,7 @@ export function useForegroundNotifications(): void {
     navigate,
     queryClient,
     eventStore,
+    nostr,
     dmRequestPolicy: config.pushPrefs.dmRequests,
     mediaPolicy,
     blossomServers,
@@ -348,6 +352,7 @@ export function useForegroundNotifications(): void {
     navigate,
     queryClient,
     eventStore,
+    nostr,
     dmRequestPolicy: config.pushPrefs.dmRequests,
     mediaPolicy,
     blossomServers,
@@ -559,16 +564,43 @@ export function useForegroundNotifications(): void {
       return {};
     };
 
+    // Unlike the sender, a mentioned user is often someone this device has never
+    // shown (a newcomer being welcomed), so a local miss gets one short relay lookup,
+    // bounded as in the push worker.
     const mentionNamesFor = async (content: string | undefined): Promise<Map<string, string>> => {
       const names = new Map<string, string>();
       if (!content) return names;
-      const keys = mentionPubkeys(content);
+      const keys = mentionPubkeys(content).slice(0, MAX_MENTION_LOOKUPS);
       if (keys.length === 0) return names;
+      const missing: string[] = [];
       await Promise.all(keys.map(async (pk) => {
         const { name, named } = await profileFor(pk);
         // "Anonymous" is an absence; the raw token means more.
         if (named) names.set(pk, name);
+        else missing.push(pk);
       }));
+      if (missing.length === 0) return names;
+
+      try {
+        const fetched = await ctx.current.nostr.query(
+          [{ kinds: [0], authors: missing, limit: missing.length }],
+          { signal: AbortSignal.timeout(PROFILE_FETCH_TIMEOUT_MS) },
+        );
+        const newest = new Map<string, NostrEvent>();
+        for (const ev of fetched) {
+          const prev = newest.get(ev.pubkey);
+          if (missing.includes(ev.pubkey) && (!prev || ev.created_at > prev.created_at)) newest.set(ev.pubkey, ev);
+        }
+        const store = await ctx.current.eventStore;
+        for (const [pk, ev] of newest) {
+          seedAuthorCache(ctx.current.queryClient, pk, ev);
+          void store.event(ev).catch(() => undefined);
+          const { metadata } = parseAuthorEvent(ev);
+          if (metadata?.name || metadata?.display_name) names.set(pk, getDisplayName(metadata, pk));
+        }
+      } catch {
+        // Timed out or no relays: unresolved mentions keep their raw token.
+      }
       return names;
     };
 
