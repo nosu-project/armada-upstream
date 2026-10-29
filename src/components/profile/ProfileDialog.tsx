@@ -22,6 +22,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { DittoIcon } from "@/components/brand/DittoIcon";
 import { BotPill } from "@/components/BotPill";
 import { EmojifiedText } from "@/components/chat/CustomEmoji";
+import { ProfileImageLightbox } from "@/components/profile/ProfileImageLightbox";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { BlurhashCanvas } from "@/components/BlurhashCanvas";
@@ -112,8 +113,8 @@ export function ProfileDialog({ pubkey, onClose }: { pubkey: string; onClose: ()
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
-      // Stacked dialogs/menus portal to body and own Escape first.
-      if (document.querySelector("[data-radix-dialog-overlay], [data-radix-menu-content]")) return;
+      // Stacked dialogs/menus/lightboxes portal to body and own Escape first.
+      if (document.querySelector("[data-radix-dialog-overlay], [data-radix-menu-content], [data-lightbox-content]")) return;
       onClose();
     };
     window.addEventListener("keydown", onKeyDown);
@@ -249,6 +250,9 @@ function ProfileView({ pubkey, onClose }: { pubkey: string; onClose: () => void 
   const [copied, setCopied] = useState(false);
   const [themeEditorOpen, setThemeEditorOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
+  const [viewing, setViewing] = useState<"picture" | "banner" | null>(null);
+  const picture = sanitizeImageSrc(metadata?.picture);
+  const viewedSrc = viewing === "picture" ? picture : viewing === "banner" ? banner : undefined;
 
   const pageStyle = useMemo(() => {
     if (!theme) return undefined;
@@ -295,6 +299,13 @@ function ProfileView({ pubkey, onClose }: { pubkey: string; onClose: () => void 
       style={pageStyle}
     >
       {moderation.dialogs}
+      {viewedSrc && (
+        <ProfileImageLightbox
+          src={viewedSrc}
+          imeta={viewing === "picture" ? author.data?.imeta?.picture : author.data?.imeta?.banner}
+          onClose={() => setViewing(null)}
+        />
+      )}
       {background && backgroundSrc && (
         <div aria-hidden className="absolute inset-0" style={backgroundStyle(background, backgroundSrc)} />
       )}
@@ -317,9 +328,10 @@ function ProfileView({ pubkey, onClose }: { pubkey: string; onClose: () => void 
           <FallbackImage
             src={banner}
             imeta={bannerImeta}
-            className="relative w-full h-full object-cover"
+            className="relative w-full h-full object-cover cursor-zoom-in"
             loading="lazy"
             decoding="async"
+            onClick={() => setViewing("banner")}
           />
         </div>
 
@@ -327,12 +339,20 @@ function ProfileView({ pubkey, onClose }: { pubkey: string; onClose: () => void 
             <div className="mx-auto w-full max-w-4xl px-4 pb-5 md:px-8 md:pb-6">
               <div className="flex items-end justify-between gap-2 flex-wrap">
                 <div className="-mt-10 md:-mt-12">
-                  <Avatar shape={getAvatarShape(metadata)} className="size-20 md:size-24 border-4 border-background">
-                    <AvatarImage src={metadata?.picture} imeta={author.data?.imeta?.picture} alt={displayName} />
-                    <AvatarFallback className="bg-primary/20 text-primary text-2xl">
-                      {displayName[0]?.toUpperCase()}
-                    </AvatarFallback>
-                  </Avatar>
+                  <button
+                    type="button"
+                    disabled={!picture}
+                    onClick={() => setViewing("picture")}
+                    aria-label={intl.formatMessage({ id: "profileDialog.viewPicture", defaultMessage: "View profile picture" })}
+                    className="block rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-ring enabled:cursor-zoom-in"
+                  >
+                    <Avatar shape={getAvatarShape(metadata)} className="size-20 md:size-24 border-4 border-background">
+                      <AvatarImage src={metadata?.picture} imeta={author.data?.imeta?.picture} alt={displayName} />
+                      <AvatarFallback className="bg-primary/20 text-primary text-2xl">
+                        {displayName[0]?.toUpperCase()}
+                      </AvatarFallback>
+                    </Avatar>
+                  </button>
                 </div>
 
                 <div className="flex min-w-0 flex-wrap items-center justify-end gap-2 pt-2">

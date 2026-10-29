@@ -8,6 +8,7 @@ import { BotPill } from "@/components/BotPill";
 import { EmojifiedText } from "@/components/chat/CustomEmoji";
 import { UserModerationMenuSection } from "@/components/chat/ModerationMenuSection";
 import { RolePickerItems } from "@/components/chat/RolePickerItems";
+import { ProfileImageLightbox } from "@/components/profile/ProfileImageLightbox";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { FallbackImage } from "@/components/ui/FallbackImage";
@@ -43,6 +44,7 @@ import { tryNpubEncode } from "@/lib/safeNip19";
 import { sanitizeImageSrc } from "@/lib/sanitizeUrl";
 import { cn } from "@/lib/utils";
 import { writeClipboardText } from "@/lib/clipboard";
+import type { ImetaEntry } from "@/lib/imeta";
 import { buildThemeVarStyle } from "@/themes";
 import { FormattedMessage, t, useIntl } from "@/i18n";
 
@@ -53,6 +55,11 @@ const MENU_PARTS = {
   SubContent: DropdownMenuSubContent,
 };
 
+interface ViewedImage {
+  src: string;
+  imeta?: ImetaEntry;
+}
+
 interface ProfilePreviewCardProps {
   pubkey: string;
   children: React.ReactNode;
@@ -61,10 +68,12 @@ interface ProfilePreviewCardProps {
 function ProfilePreviewBody({
   pubkey,
   onAction,
+  onViewImage,
   moderation,
 }: {
   pubkey: string;
   onAction?: () => void;
+  onViewImage: (image: ViewedImage) => void;
   moderation: UserModeration;
 }) {
   const intl = useIntl();
@@ -84,6 +93,7 @@ function ProfilePreviewBody({
   const musicStatus = isStatusExpired(rawMusicStatus) ? undefined : rawMusicStatus;
   const displayName = getDisplayName(metadata, pubkey);
   const avatarShape = getAvatarShape(metadata);
+  const picture = sanitizeImageSrc(metadata?.picture);
   const npub = tryNpubEncode(pubkey);
   const [copied, setCopied] = useState(false);
   const isSelf = user?.pubkey === pubkey;
@@ -177,12 +187,20 @@ function ProfilePreviewBody({
 
       <div className="px-4 pb-4">
         <div className="-mt-8 mb-2">
-          <Avatar shape={avatarShape} className="size-16 border-[3px] border-background">
-            <AvatarImage src={metadata?.picture} imeta={author.data?.imeta?.picture} alt={displayName} />
-            <AvatarFallback className="bg-primary/20 text-primary text-lg">
-              {displayName[0]?.toUpperCase()}
-            </AvatarFallback>
-          </Avatar>
+          <button
+            type="button"
+            disabled={!picture}
+            onClick={() => picture && onViewImage({ src: picture, imeta: author.data?.imeta?.picture })}
+            aria-label={intl.formatMessage({ id: "profilePreviewCard.viewPicture", defaultMessage: "View profile picture" })}
+            className="block rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-ring enabled:cursor-zoom-in"
+          >
+            <Avatar shape={avatarShape} className="size-16 border-[3px] border-background">
+              <AvatarImage src={metadata?.picture} imeta={author.data?.imeta?.picture} alt={displayName} />
+              <AvatarFallback className="bg-primary/20 text-primary text-lg">
+                {displayName[0]?.toUpperCase()}
+              </AvatarFallback>
+            </Avatar>
+          </button>
         </div>
 
         <div className="flex items-center gap-1.5 min-w-0">
@@ -403,6 +421,12 @@ function ArmedPreviewCard({
   children: React.ReactNode;
 }) {
   const moderation = useUserModeration(pubkey);
+  const [viewed, setViewed] = useState<ViewedImage | null>(null);
+  // The card closes so the viewer isn't stacked inside a modal popover.
+  const viewImage = (image: ViewedImage) => {
+    onOpenChange(false);
+    setViewed(image);
+  };
   return (
     <>
       {/* Modal, so a click outside only dismisses rather than also landing on what's beneath. */}
@@ -415,11 +439,25 @@ function ArmedPreviewCard({
           {children}
         </PopoverTrigger>
         {open && (
-          <ThemedPreviewContent pubkey={pubkey} onClose={() => onOpenChange(false)} moderation={moderation} />
+          <ThemedPreviewContent
+            pubkey={pubkey}
+            onClose={() => onOpenChange(false)}
+            onViewImage={viewImage}
+            moderation={moderation}
+          />
         )}
       </Popover>
       {/* Outside the popover: Report closes the card, which would unmount the dialog. */}
       {moderation.dialogs}
+      {viewed && (
+        // pointer-events: the closing popover holds `pointer-events: none` on body until it unmounts.
+        <ProfileImageLightbox
+          src={viewed.src}
+          imeta={viewed.imeta}
+          onClose={() => setViewed(null)}
+          className="pointer-events-auto"
+        />
+      )}
     </>
   );
 }
@@ -428,10 +466,12 @@ function ArmedPreviewCard({
 function ThemedPreviewContent({
   pubkey,
   onClose,
+  onViewImage,
   moderation,
 }: {
   pubkey: string;
   onClose: () => void;
+  onViewImage: (image: ViewedImage) => void;
   moderation: UserModeration;
 }) {
   const dittoTheme = useProfileTheme(pubkey).data?.theme;
@@ -447,7 +487,7 @@ function ThemedPreviewContent({
       className="w-72 p-0 overflow-x-hidden overflow-y-auto overscroll-contain"
       onClick={(e) => e.stopPropagation()}
     >
-      <ProfilePreviewBody pubkey={pubkey} onAction={onClose} moderation={moderation} />
+      <ProfilePreviewBody pubkey={pubkey} onAction={onClose} onViewImage={onViewImage} moderation={moderation} />
     </PopoverContent>
   );
 }
