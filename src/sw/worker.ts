@@ -472,6 +472,9 @@ async function showPreparedNotification(
       ...routeDataOf(data),
       url: prepared.url,
       lines: prepared.accumulate ? lines : undefined,
+      // Read by the page's `dismissReadWebNotifications`.
+      roomKey: prepared.roomKey,
+      newestMs: prepared.timestamp,
     },
   } as ArmadaNotificationOptions);
 }
