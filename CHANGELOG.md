@@ -4,6 +4,15 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.67.1] - 2026-10-30
+
+You can now add your pronouns to your profile. They show under your name on
+your profile page and in the profile card, and pronouns set in other Nostr apps
+like Amethyst and Nos show up too.
+
+### Added
+- Pronouns on your profile, set in Settings › Profile and shown on profile pages and profile cards
+
 ## [0.67.0] - 2026-10-30
 
 Introducing Armada Ultra, the premium tier that costs nothing. Turn it on in
