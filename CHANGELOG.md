@@ -4,6 +4,21 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.67.0] - 2026-10-30
+
+Introducing Armada Ultra, the premium tier that costs nothing. Turn it on in
+Settings to get an Ultra badge next to your name, a shimmering name style, a
+glowing avatar frame, a profile effect and exclusive themes, all visible to
+everyone on Armada. Profile pictures and banners also open full size now.
+
+### Added
+- Armada Ultra in Settings: a free "subscription" with confetti and fanfare that adds an Ultra badge, name styles, avatar frames and profile effects everyone can see, plus Ultra-only themes
+- Tap a profile picture or banner to view it full size
+
+### Fixed
+- Message notifications show the names of mentioned people instead of raw codes, even when this device hasn't seen them before
+- Background notifications work when Armada runs as an nsite in Tenna
+
 ## [0.66.8] - 2026-10-25
 
 Community invites from people you don't know now wait in a separate Requests
