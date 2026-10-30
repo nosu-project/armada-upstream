@@ -3,6 +3,7 @@ import { UsersRound } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { BotPill } from "@/components/BotPill";
+import { UltraPill } from "@/components/UltraPill";
 import { EmojifiedText } from "@/components/chat/CustomEmoji";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { usePortalDropdown } from "@/hooks/usePortalDropdown";
@@ -313,6 +314,7 @@ function MentionItem({
             <EmojifiedText tags={profile.event.tags}>{displayName}</EmojifiedText>
           </div>
           <BotPill metadata={metadata} />
+          <UltraPill metadata={metadata} />
         </div>
         <div className="text-xs text-muted-foreground truncate font-mono text-2xs">
           {identifier}

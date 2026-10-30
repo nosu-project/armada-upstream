@@ -47,6 +47,7 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { isValidAvatarShape } from '@/lib/avatarShape';
 import { isAnimatedImage, METADATA_SCAN_BYTES } from '@/lib/imageMetadata';
+import { getPronouns, MAX_PRONOUNS_LENGTH } from '@/lib/pronouns';
 import { isGifBytes } from '@/lib/runGifCrop';
 import { common, defineMessage, FormattedMessage, t, useIntl, type MessageDescriptor } from '@/i18n';
 
@@ -257,6 +258,7 @@ const formSchema = n.metadata().extend({
     placeholder: z.string().optional(),
   })),
   shape: z.string().optional(),
+  pronouns: z.string().max(MAX_PRONOUNS_LENGTH).optional(),
 });
 
 type FormValues = z.infer<typeof formSchema>;
@@ -528,7 +530,7 @@ export function ProfileSettings({ onSaved, saveLabel, centerSave, showNip05 = tr
     defaultValues: {
       name: '', about: '', picture: '', banner: '',
       website: '', nip05: '', lud16: '', lud06: '', bot: false, fields: [],
-      shape: '',
+      shape: '', pronouns: '',
     },
   });
 
@@ -586,6 +588,7 @@ export function ProfileSettings({ onSaved, saveLabel, centerSave, showNip05 = tr
         bot: metadata.bot ?? false,
         fields: parseFields(),
         shape: parseShape(),
+        pronouns: getPronouns(metadata) ?? '',
       });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -603,6 +606,7 @@ export function ProfileSettings({ onSaved, saveLabel, centerSave, showNip05 = tr
     lud06: watched.lud06,
     bot: watched.bot,
     shape: watched.shape,
+    pronouns: watched.pronouns,
   };
 
   const handleCardChange = (patch: Partial<NostrMetadata>) => {
@@ -699,8 +703,10 @@ export function ProfileSettings({ onSaved, saveLabel, centerSave, showNip05 = tr
       return;
     }
     try {
-      const { fields: customFields, shape, ...standardMetadata } = values;
+      const { fields: customFields, shape, pronouns, ...standardMetadata } = values;
       const data: Record<string, unknown> = { ...metadata, ...standardMetadata };
+
+      data.pronouns = pronouns?.trim() ?? '';
 
       if (shape && isValidAvatarShape(shape)) {
         data.shape = shape;

@@ -5,6 +5,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Download,
+  Gem,
   Info,
   LifeBuoy,
   MessageSquare,
@@ -58,6 +59,7 @@ import {
   type SettingsPageId,
 } from "@/components/settings/settingsNav";
 import { useSettingsFilter } from "@/components/settings/settingsSearch";
+import { UltraSettings } from "@/components/settings/UltraSettings";
 import { VoiceSettings } from "@/components/settings/VoiceSettings";
 import { WalletSettings } from "@/components/settings/WalletSettings";
 import { ThemeSelector } from "@/components/ThemeSelector";
@@ -68,6 +70,7 @@ import { useAuthor } from "@/hooks/useAuthor";
 import { useBackOrHome } from "@/hooks/useBackOrHome";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useInstallPrompt } from "@/hooks/useInstallPrompt";
+import { useMyUltra } from "@/hooks/useUltra";
 import { common, useIntl } from "@/i18n";
 import { appVersionLabel } from "@/lib/appVersion";
 import { getAvatarShape } from "@/lib/avatarShape";
@@ -93,6 +96,7 @@ const WIDE_PX = 860;
 function useSettingsPages(): { pages: Partial<Record<SettingsPageId, PageDef>>; groups: SettingsPageId[][] } {
   const { user } = useCurrentUser();
   const intl = useIntl();
+  const ultra = !!useMyUltra().ultra;
   return useMemo(() => {
     const profiling = import.meta.env.VITE_PROFILE === "1";
     const pages: Partial<Record<SettingsPageId, PageDef>> = {
@@ -184,6 +188,15 @@ function useSettingsPages(): { pages: Partial<Record<SettingsPageId, PageDef>>; 
       },
     };
     if (user) {
+      pages.ultra = {
+        title: "Armada Ultra",
+        icon: Gem,
+        tone: "accent2",
+        summary: ultra
+          ? intl.formatMessage({ id: "settingsPage.ultra.summaryActive", defaultMessage: "Active. Thanks for being Ultra" })
+          : intl.formatMessage({ id: "settingsPage.ultra.summary", defaultMessage: "Premium, for $0.00" }),
+        render: () => <UltraSettings />,
+      };
       pages.profile = {
         title: intl.formatMessage({ id: "settingsPage.profile.title", defaultMessage: "Profile" }),
         icon: UserRound,
@@ -276,13 +289,14 @@ function useSettingsPages(): { pages: Partial<Record<SettingsPageId, PageDef>>; 
       };
     }
     const groups: SettingsPageId[][] = [
+      ["ultra"],
       ["account", "notifications", "privacy"],
       ["appearance", "chat", "dms", "voice", "emojis"],
       ["relays", "wallet", "desktop", "diagnostics"],
       ["support", "about"],
     ];
     return { pages, groups: groups.map((ids) => ids.filter((id) => pages[id])).filter((ids) => ids.length > 0) };
-  }, [user, intl]);
+  }, [user, intl, ultra]);
 }
 
 /** The root list's identity card: the account at a glance, opening Profile (or Account when logged out). */

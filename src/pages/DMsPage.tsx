@@ -24,6 +24,7 @@ import { LoginArea } from "@/components/auth/LoginArea";
 import { ServerRail } from "@/components/layout/ServerRail";
 import { VoicePresence } from "@/components/VoicePresence";
 import { BotPill } from "@/components/BotPill";
+import { UltraPill } from "@/components/UltraPill";
 import { DeferredRow } from "@/components/DeferredRow";
 import { DisplayName } from "@/components/DisplayName";
 import { DmAvatar } from "@/components/DmAvatar";
@@ -282,6 +283,7 @@ const ConversationRow = memo(function ConversationRow({
                 )}
               </div>
               {!noteToSelf && !group && <BotPill metadata={metadata} />}
+              {!noteToSelf && !group && <UltraPill metadata={metadata} />}
             </div>
             {(preview || secondLine) && (
               <div className={cn("text-sm truncate", unread ? "text-foreground/80" : "text-muted-foreground")}>
@@ -987,6 +989,7 @@ const Conversation = memo(function Conversation({
             {noteToSelf || group ? name : <DisplayName pubkey={peer} name={name} />}
           </h1>
           {!noteToSelf && !group && <BotPill metadata={peerMetadata} />}
+          {!noteToSelf && !group && <UltraPill metadata={peerMetadata} />}
         </div>
         {dmOthersInVoice.length > 0 && (
           <VoicePresence participants={dmOthersInVoice} className="text-success/90" />

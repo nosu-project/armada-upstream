@@ -10,6 +10,7 @@ import {
   useReadState,
 } from "@/hooks/useReadState";
 import { ArmadaNotification } from "@/lib/nativeNotifications";
+import { dismissReadWebNotifications } from "@/lib/webNotificationDismiss";
 
 /**
  * Applies the Android service's "Mark read" markers to in-app read state on
@@ -91,7 +92,8 @@ function dismissibleReadKey(key: string): boolean {
 /**
  * Reverse of {@link NativeReadMarkerSync}: pushes read state to the Android
  * service so it dismisses notifications for read conversations (including
- * ones read on other devices). Must sit under ReadStateProvider.
+ * ones read on other devices). On the web it closes the service worker's
+ * notifications for them instead. Must sit under ReadStateProvider.
  */
 export function NativeReadDismiss() {
   const { readState } = useReadState();
@@ -99,6 +101,10 @@ export function NativeReadDismiss() {
   readStateRef.current = readState;
 
   const send = useCallback(() => {
+    if (!Capacitor.isNativePlatform()) {
+      void dismissReadWebNotifications(readStateRef.current);
+      return;
+    }
     const markers = Object.entries(readStateRef.current)
       .filter(([room]) => dismissibleReadKey(room))
       .map(([room, ts]) => ({ room, ts: Math.floor(ts) }))
@@ -110,10 +116,20 @@ export function NativeReadDismiss() {
   }, []);
 
   useEffect(() => {
-    if (Capacitor.getPlatform() !== "android") return;
+    if (Capacitor.getPlatform() === "ios") return;
     const t = setTimeout(send, 400);
     return () => clearTimeout(t);
   }, [readState, send]);
+
+  // Web: notifications posted while hidden may already be read.
+  useEffect(() => {
+    if (Capacitor.isNativePlatform()) return;
+    const onVisible = () => {
+      if (document.visibilityState === "visible") send();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [send]);
 
   // Re-push on resume: notifications posted while backgrounded may already be read.
   useEffect(() => {

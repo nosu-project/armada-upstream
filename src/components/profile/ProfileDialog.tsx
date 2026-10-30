@@ -21,6 +21,8 @@ import { Link, useNavigate } from "react-router-dom";
 
 import { DittoIcon } from "@/components/brand/DittoIcon";
 import { BotPill } from "@/components/BotPill";
+import { UltraEffect } from "@/components/UltraEffect";
+import { UltraPill } from "@/components/UltraPill";
 import { EmojifiedText } from "@/components/chat/CustomEmoji";
 import { ProfileImageLightbox } from "@/components/profile/ProfileImageLightbox";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -63,6 +65,8 @@ import { useProfileTheme } from "@/hooks/useProfileTheme";
 import { useStartedDms } from "@/hooks/useStartedDms";
 import { isStatusExpired, useUserStatus } from "@/hooks/useUserStatus";
 import { getAvatarShape } from "@/lib/avatarShape";
+import { getPronouns } from "@/lib/pronouns";
+import { frameCss, nameStyleCss, readUltra, ULTRA_NAME_CLASS } from "@/lib/ultra";
 import { dittoNip19Url, dittoProfileUrl } from "@/lib/dittoUrl";
 import { faviconUrl } from "@/lib/faviconUrl";
 import { loadThemeFont } from "@/lib/fontLoader";
@@ -198,6 +202,8 @@ function ProfileView({ pubkey, onClose }: { pubkey: string; onClose: () => void 
   const { config } = useAppContext();
   const author = useAuthor(pubkey);
   const metadata = author.data?.metadata;
+  const ultra = readUltra(metadata);
+  const pronouns = getPronouns(metadata);
   // kind-0 is author-controlled.
   const banner = sanitizeImageSrc(metadata?.banner);
   const bannerImeta = imetaFor(banner, author.data?.imeta?.banner);
@@ -298,6 +304,7 @@ function ProfileView({ pubkey, onClose }: { pubkey: string; onClose: () => void 
       className="theme-scope relative h-full overflow-hidden bg-background text-foreground"
       style={pageStyle}
     >
+      <UltraEffect effect={ultra?.effect} className="z-20" />
       {moderation.dialogs}
       {viewedSrc && (
         <ProfileImageLightbox
@@ -345,6 +352,7 @@ function ProfileView({ pubkey, onClose }: { pubkey: string; onClose: () => void 
                     onClick={() => setViewing("picture")}
                     aria-label={intl.formatMessage({ id: "profileDialog.viewPicture", defaultMessage: "View profile picture" })}
                     className="block rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-ring enabled:cursor-zoom-in"
+                    style={frameCss(ultra?.frame)}
                   >
                     <Avatar shape={getAvatarShape(metadata)} className="size-20 md:size-24 border-4 border-background">
                       <AvatarImage src={metadata?.picture} imeta={author.data?.imeta?.picture} alt={displayName} />
@@ -453,15 +461,17 @@ function ProfileView({ pubkey, onClose }: { pubkey: string; onClose: () => void 
 
               <div className="mt-2 flex items-center gap-2 min-w-0">
                 <h1
-                  className="text-xl md:text-2xl font-bold truncate"
-                  style={{ fontFamily: "var(--title-font-family, inherit)" }}
+                  className={cn("text-xl md:text-2xl font-bold truncate", ultra?.name && ULTRA_NAME_CLASS)}
+                  style={{ fontFamily: "var(--title-font-family, inherit)", ...nameStyleCss(ultra?.name) }}
                 >
                   {author.data?.event
                     ? <EmojifiedText tags={author.data.event.tags}>{displayName}</EmojifiedText>
                     : displayName}
                 </h1>
                 <BotPill metadata={metadata} />
+                {ultra && <UltraPill force />}
               </div>
+              {pronouns && <div className="text-sm text-muted-foreground truncate">{pronouns}</div>}
 
               {metadata?.nip05 && (
                 <div className="mt-0.5 flex items-center gap-1 text-sm text-muted-foreground truncate">

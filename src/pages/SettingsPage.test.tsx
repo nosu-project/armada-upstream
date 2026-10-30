@@ -8,6 +8,7 @@ vi.mock("@/hooks/useCurrentUser", () => ({
 vi.mock("@/hooks/useAuthor", () => ({
   useAuthor: () => ({ data: { metadata: { name: "pixelwitch" } }, isLoading: false }),
 }));
+vi.mock("@/hooks/useUltra", () => ({ useMyUltra: () => ({ ultra: undefined }) }));
 vi.mock("@/hooks/useInstallPrompt", () => ({
   useInstallPrompt: () => ({ canInstall: false, install: vi.fn(), needsManualInstall: false }),
 }));
@@ -26,6 +27,7 @@ vi.mock("@/components/settings/DirectMessageSettings", () => ({ DirectMessageSet
 vi.mock("@/components/settings/VoiceSettings", () => ({ VoiceSettings: stub("Voice") }));
 vi.mock("@/components/settings/RelaysSettings", () => ({ RelaysSettings: stub("Relays") }));
 vi.mock("@/components/settings/EmojiPackSettings", () => ({ EmojiPackSettings: stub("Emoji") }));
+vi.mock("@/components/settings/UltraSettings", () => ({ UltraSettings: stub("Ultra") }));
 vi.mock("@/components/settings/WalletSettings", () => ({ WalletSettings: stub("Wallet") }));
 vi.mock("@/components/settings/MutedWordsSettings", () => ({ MutedWordsSettings: stub("Muted words") }));
 vi.mock("@/components/settings/MutedPeopleSettings", () => ({ MutedPeopleSettings: stub("Blocked") }));

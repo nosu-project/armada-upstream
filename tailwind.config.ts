@@ -195,6 +195,17 @@ export default {
 				'25%': { transform: 'translate(-50%, calc(var(--rise, 300px) * -0.3)) scale(1)', opacity: '1' },
 				'85%': { transform: 'translate(-50%, calc(var(--rise, 300px) * -0.92)) scale(1)', opacity: '1' },
 				'100%': { transform: 'translate(-50%, calc(var(--rise, 300px) * -1)) scale(1)', opacity: '0' }
+			},
+			'ultra-shimmer': {
+				// Armada Ultra name styles: the gradient drifts along the name.
+				from: { backgroundPosition: '0% center' },
+				to: { backgroundPosition: '200% center' }
+			},
+			'ultra-float': {
+				// Armada Ultra profile effects: a particle pops in and drifts up.
+				'0%': { transform: 'translateY(0) scale(0.4)', opacity: '0' },
+				'20%': { transform: 'translateY(-15%) scale(1)', opacity: '1' },
+				'100%': { transform: 'translateY(var(--float, -120px)) scale(0.8)', opacity: '0' }
 			}
 			},
 			animation: {
@@ -209,7 +220,9 @@ export default {
 				'success-pop': 'success-pop 0.55s cubic-bezier(0.34, 1.56, 0.64, 1) both',
 				'success-fade-up': 'success-fade-up 0.45s ease-out both',
 				'typing-dot': 'typing-dot 1.2s ease-in-out infinite',
-				'reaction-rise': 'reaction-rise 4s ease-out forwards'
+				'reaction-rise': 'reaction-rise 4s ease-out forwards',
+				'ultra-shimmer': 'ultra-shimmer 4s linear infinite',
+				'ultra-float': 'ultra-float 2.4s ease-out both'
 			}
 		}
 	},

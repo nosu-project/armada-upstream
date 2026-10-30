@@ -3,6 +3,7 @@ import { createContext } from "react";
 /** A Settings screen. The root list is not one: it is the empty stack. */
 export type SettingsPageId =
   | "profile"
+  | "ultra"
   | "account"
   | "notifications"
   | "privacy"
@@ -45,7 +46,7 @@ const SECTION_PAGE: Record<string, SettingsPageId> = {
 };
 
 const PAGE_IDS = new Set<string>([
-  "profile", "account", "notifications", "privacy", "blocked", "muted-words", "appearance", "chat",
+  "profile", "ultra", "account", "notifications", "privacy", "blocked", "muted-words", "appearance", "chat",
   "dms", "voice", "emojis", "relays", "wallet", "desktop", "diagnostics", "support", "about",
 ] satisfies SettingsPageId[]);
 

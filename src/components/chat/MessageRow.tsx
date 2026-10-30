@@ -1,10 +1,11 @@
 import { Reply } from "lucide-react";
-import { memo, useEffect, useState } from "react";
+import { memo, useEffect, useMemo, useState } from "react";
 
 import { ExpirationTimerIcon } from "@/components/chat/ExpirationTimerIcon";
 import { MeshProfilePreviewCard } from "@/components/chat/MeshProfilePreviewCard";
 import { ProfilePreviewCard } from "@/components/chat/ProfilePreviewCard";
 import { BotPill } from "@/components/BotPill";
+import { UltraPill } from "@/components/UltraPill";
 import { DisplayName } from "@/components/DisplayName";
 import { ProxyPill } from "@/components/ProxyPill";
 import { StaffPill } from "@/components/StaffPill";
@@ -15,6 +16,7 @@ import { useScopedIdentity } from "@/hooks/useScopedDisplayName";
 import { getAvatarShape } from "@/lib/avatarShape";
 import { shortClockTime, shortTimeAgo } from "@/lib/formatTime";
 import { formatTimeLeft } from "@/lib/nip17/disappearing";
+import { frameCss, nameStyleCss, readUltra, ULTRA_NAME_CLASS } from "@/lib/ultra";
 import { cn } from "@/lib/utils";
 import { FormattedMessage, useIntl } from "@/i18n";
 import { useLongPress } from "@/hooks/useLongPress";
@@ -154,6 +156,7 @@ export const MessageRow = memo(function MessageRow({
   const displayName = identityOverride?.name ?? scoped.displayName;
   const color = identityOverride?.color ?? scoped.color;
   const label = identityOverride ? undefined : scoped.label;
+  const ultra = useMemo(() => readUltra(metadata), [metadata]);
   const suffix = identityOverride?.suffix;
 
   const swipe = useSwipeToReply(
@@ -252,7 +255,7 @@ export const MessageRow = memo(function MessageRow({
         )
       ) : (
         <ProfilePreviewCard pubkey={pubkey}>
-          <button type="button" className="shrink-0 mt-0.5 rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+          <button type="button" className="shrink-0 mt-0.5 rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-ring" style={frameCss(ultra?.frame)}>
             <Avatar shape={getAvatarShape(metadata)} className="size-10 cursor-pointer transition-opacity hover:opacity-90">
               <AvatarImage src={metadata?.picture} imeta={author.data?.imeta?.picture} alt={displayName} />
               <AvatarFallback className="bg-primary/20 text-primary text-sm">
@@ -304,8 +307,8 @@ export const MessageRow = memo(function MessageRow({
               <ProfilePreviewCard pubkey={pubkey}>
                 <button
                   type="button"
-                  className="text-chat font-semibold text-primary truncate min-w-0 hover:underline focus:outline-none"
-                  style={color ? { color } : undefined}
+                  className={cn("text-chat font-semibold text-primary truncate min-w-0 hover:underline focus:outline-none", !color && ultra?.name && ULTRA_NAME_CLASS)}
+                  style={color ? { color } : nameStyleCss(ultra?.name)}
                 >
                   <DisplayName pubkey={pubkey} name={displayName} tags={author.data?.event?.tags ?? NO_TAGS} />
                 </button>
@@ -313,6 +316,7 @@ export const MessageRow = memo(function MessageRow({
             )}
             {!identityOverride && <StaffPill pubkey={pubkey} />}
             <BotPill metadata={metadata} />
+            {ultra && <UltraPill force />}
             <ProxyPill proxy={proxy} />
             {nameBadge}
             {label && (
