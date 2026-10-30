@@ -2989,6 +2989,8 @@
   "profileCard.fieldValue": "Wert oder URL",
   "profileCard.fields": "Profilfelder",
   "profileCard.namePlaceholder": "Dein Name",
+  "profileCard.pronouns": "Pronomen",
+  "profileCard.pronounsPlaceholder": "Pronomen, z. B. they/them",
   "profileCard.removeAvatar": "Avatar entfernen",
   "profileCard.removeAvatarShape": "Avatar-Form entfernen",
   "profileCard.setAvatarShape": "Avatar-Form festlegen",

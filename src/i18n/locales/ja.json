@@ -2989,6 +2989,8 @@
   "profileCard.fieldValue": "値またはURL",
   "profileCard.fields": "プロフィール項目",
   "profileCard.namePlaceholder": "あなたの名前",
+  "profileCard.pronouns": "代名詞",
+  "profileCard.pronounsPlaceholder": "代名詞（例: they/them）",
   "profileCard.removeAvatar": "アバターを削除",
   "profileCard.removeAvatarShape": "アバターの形を削除",
   "profileCard.setAvatarShape": "アバターの形を設定",

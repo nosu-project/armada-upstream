@@ -11,6 +11,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/component
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { ChromeDialogContent, ChromeDialogFooter, ChromeDialogHeader, Dialog } from '@/components/ui/dialog';
 import type { EmojiSelection } from '@/components/chat/EmojiPicker';
+import { getPronouns, MAX_PRONOUNS_LENGTH } from '@/lib/pronouns';
 import { sanitizeImageSrc } from '@/lib/sanitizeUrl';
 import { FallbackImage } from '@/components/ui/FallbackImage';
 import type { ProfileImeta } from '@/lib/profileImeta';
@@ -37,17 +38,23 @@ function EditableInput({
   placeholder,
   onChange,
   className,
+  maxLength,
+  ariaLabel,
 }: {
   value: string;
   placeholder: string;
   onChange: (v: string) => void;
   className?: string;
+  maxLength?: number;
+  ariaLabel?: string;
 }) {
   return (
     <input
       type="text"
       value={value}
       placeholder={placeholder}
+      maxLength={maxLength}
+      aria-label={ariaLabel}
       onChange={(e) => onChange(e.target.value)}
       className={cn(editableBase, 'w-full min-w-0 py-0.5', className)}
     />
@@ -169,6 +176,7 @@ export function ProfileCard({
   }, [overlayMaskUrl]);
 
   const nip05 = metadata.nip05;
+  const pronouns = getPronouns(metadata);
 
   const addField = () => onExtraFieldsChange?.([...(extraFields ?? []), { label: '', value: '' }]);
   const removeField = (i: number) => onExtraFieldsChange?.((extraFields ?? []).filter((_, idx) => idx !== i));
@@ -326,6 +334,19 @@ export function ProfileCard({
             <DisplayName pubkey={pubkey} name={displayName} />
           </h2>
         )}
+
+        {editable ? (
+          <EditableInput
+            value={typeof metadata.pronouns === 'string' ? metadata.pronouns : ''}
+            placeholder={intl.formatMessage({ id: 'profileCard.pronounsPlaceholder', defaultMessage: 'Pronouns, e.g. they/them' })}
+            ariaLabel={intl.formatMessage({ id: 'profileCard.pronouns', defaultMessage: 'Pronouns' })}
+            maxLength={MAX_PRONOUNS_LENGTH}
+            onChange={patch('pronouns')}
+            className="mt-1 text-base md:text-sm text-muted-foreground"
+          />
+        ) : pronouns ? (
+          <p className="text-sm text-muted-foreground truncate">{pronouns}</p>
+        ) : null}
 
         {showNip05 && (editable || nip05) && (
           <div className="flex items-center gap-1 mt-2 min-w-0 text-sm text-muted-foreground ml-2">

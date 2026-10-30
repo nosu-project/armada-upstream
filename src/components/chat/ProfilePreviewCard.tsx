@@ -43,6 +43,7 @@ import { getAvatarShape } from "@/lib/avatarShape";
 import { dittoProfileUrl } from "@/lib/dittoUrl";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { tryNpubEncode } from "@/lib/safeNip19";
+import { getPronouns } from "@/lib/pronouns";
 import { frameCss, nameStyleCss, readUltra, ULTRA_NAME_CLASS } from "@/lib/ultra";
 import { sanitizeImageSrc } from "@/lib/sanitizeUrl";
 import { cn } from "@/lib/utils";
@@ -97,6 +98,7 @@ function ProfilePreviewBody({
   const displayName = getDisplayName(metadata, pubkey);
   const avatarShape = getAvatarShape(metadata);
   const ultra = readUltra(metadata);
+  const pronouns = getPronouns(metadata);
   const picture = sanitizeImageSrc(metadata?.picture);
   const npub = tryNpubEncode(pubkey);
   const [copied, setCopied] = useState(false);
@@ -218,6 +220,7 @@ function ProfilePreviewBody({
           <BotPill metadata={metadata} />
           {ultra && <UltraPill force />}
         </div>
+        {pronouns && <div className="text-xs text-muted-foreground truncate">{pronouns}</div>}
 
         {/* Concord roles; the card shows every role, the member row only the highest. */}
         {roles.length > 0 && (

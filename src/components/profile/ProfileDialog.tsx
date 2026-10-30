@@ -65,6 +65,7 @@ import { useProfileTheme } from "@/hooks/useProfileTheme";
 import { useStartedDms } from "@/hooks/useStartedDms";
 import { isStatusExpired, useUserStatus } from "@/hooks/useUserStatus";
 import { getAvatarShape } from "@/lib/avatarShape";
+import { getPronouns } from "@/lib/pronouns";
 import { frameCss, nameStyleCss, readUltra, ULTRA_NAME_CLASS } from "@/lib/ultra";
 import { dittoNip19Url, dittoProfileUrl } from "@/lib/dittoUrl";
 import { faviconUrl } from "@/lib/faviconUrl";
@@ -202,6 +203,7 @@ function ProfileView({ pubkey, onClose }: { pubkey: string; onClose: () => void 
   const author = useAuthor(pubkey);
   const metadata = author.data?.metadata;
   const ultra = readUltra(metadata);
+  const pronouns = getPronouns(metadata);
   // kind-0 is author-controlled.
   const banner = sanitizeImageSrc(metadata?.banner);
   const bannerImeta = imetaFor(banner, author.data?.imeta?.banner);
@@ -469,6 +471,7 @@ function ProfileView({ pubkey, onClose }: { pubkey: string; onClose: () => void 
                 <BotPill metadata={metadata} />
                 {ultra && <UltraPill force />}
               </div>
+              {pronouns && <div className="text-sm text-muted-foreground truncate">{pronouns}</div>}
 
               {metadata?.nip05 && (
                 <div className="mt-0.5 flex items-center gap-1 text-sm text-muted-foreground truncate">
