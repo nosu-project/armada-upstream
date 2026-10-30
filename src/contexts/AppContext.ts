@@ -69,6 +69,8 @@ export interface AppConfig {
    * Per-device, not synced.
    */
   memberListVisible?: boolean;
+  /** When this install activated Armada Ultra (ms), the free "subscription". Per-device. */
+  armadaUltraSince?: number;
   /**
    * App relays for non-NIP-29 traffic (profiles, lists…). Seeded from
    * APP_RELAYS; user-editable. Group-scoped events never route here.
@@ -378,6 +380,7 @@ export const PER_DEVICE_CONFIG_KEYS = [
   "railOpenFolders",
   "collapsedChannelCategories",
   "memberListVisible",
+  "armadaUltraSince",
   "lastChannelByServer",
   "meshIncognito",
   "meshEnabled",
