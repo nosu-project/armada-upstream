@@ -87,7 +87,7 @@ import {
 import { invalidateSyncTopic, registerSyncTopic, syncHalted, want } from "@/sync/syncManager";
 import { useWireScopes } from "@/wire/useWireScopes";
 import { dmThreadScope, emitWireScopes } from "@/wire/bus";
-import { dm17NotifyCandidates, feedNotifyCandidates } from "@/wire/notify";
+import { dm17NotifyCandidates, feedNotifyCandidates, noteWrapsOpened } from "@/wire/notify";
 import type { SendStatus } from "@/hooks/useSendStatusMap";
 import { shareByRumorId } from "@/lib/shareRows";
 import type { NostrEvent, NostrFilter, NostrSigner } from "@nostrify/nostrify";
@@ -299,6 +299,7 @@ async function openAndStore(
   const seen = seenSetFor(ctx.self);
   const opened: OpenedDm[] = [];
   const peerSignals: OpenedDm[] = [];
+  const openedWrapIds: string[] = [];
 
   // Bounded waves: each wrap costs two synchronous NIP-44 opens, so one big batch blocks
   // the main thread; setTimeout(0) between waves yields.
@@ -308,6 +309,7 @@ async function openAndStore(
         const dm = await openDmWrap(wrap, ctx.signer as Dm17Signer, ctx.self, remember ? undefined : { cache: false });
         if (remember) seen.add(wrap.id);
         if (!dm) return;
+        openedWrapIds.push(wrap.id);
         if (opts?.stats) opts.stats.opened++;
         // Peer signals are live routing, not history: dispatched, not stored.
         if (dm.kind === KIND_DM_PEER_SIGNAL) {
@@ -326,6 +328,7 @@ async function openAndStore(
   if (opts?.signal?.aborted || syncHalted()) return false;
   await writeDm17Rumors(ctx.self, opened);
   feedNotifyCandidates(dm17NotifyCandidates(opened, ctx.self));
+  noteWrapsOpened(openedWrapIds);
   if (remember) persistSeenWraps(ctx.self);
   for (const signal of peerSignals) dispatchDmPeerSignal(signal);
 

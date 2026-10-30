@@ -48,6 +48,8 @@ import { perfCount, perfMark } from "@/lib/perf";
 import { emitWireScopes, onWireScopes } from "@/wire/bus";
 import { useWireNip29Groups } from "@/wire/useWireNip29Groups";
 import { ingestWireEvents } from "@/wire/ingest";
+import { registerPushedEventIngest } from "@/wire/notify";
+import { verifyEventOnce } from "@/lib/verifyCache";
 import { bootLedgers, isLedgerFilter, partitionByLedger, recordLedger, type BootLedger } from "@/wire/bootLedger";
 import { PROBE_FILTER, PROBE_TIMEOUT_MS, roundWatch, settleDue } from "@/wire/roundWatch";
 import { buildWireSpec, stampRoundSince, type WireSpec } from "@/wire/spec";
@@ -933,6 +935,13 @@ function WireSyncInner() {
       loopsRef.current.clear();
     };
   }, []);
+
+  // Gift wraps a push worker without the signer hands over. Only wraps: they
+  // name no relay tenant, and anything else the worker opens itself.
+  useEffect(() => registerPushedEventIngest(async (event) => {
+    if (event.kind !== 1059 || !verifyEventOnce(event)) return;
+    await ingestWireEvents(sinksRef.current, [event], { live: true });
+  }), []);
 
   useEffect(() => {
     if (!hasNativeNotificationService()) return;

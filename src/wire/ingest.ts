@@ -11,7 +11,7 @@ import { KIND_GROUP_CHAT } from "@/lib/nip29";
 import { KIND_STREAM_MESSAGE_V2 } from "@/buzz/kinds";
 import { reactionContentKey } from "@/hooks/useReactions";
 import { dmThreadScope, emitWireScopes } from "@/wire/bus";
-import { feedNotifyCandidates, type GitNotifyAction, type NotifyCandidate } from "@/wire/notify";
+import { feedNotifyCandidates, noteWrapsOpened, type GitNotifyAction, type NotifyCandidate } from "@/wire/notify";
 import { isCIEventKind, matchCIEventRepository } from "@/lib/ci";
 import { firstImetaMime, isThreadReply } from "@/lib/notificationPreview";
 import { chatRoute } from "@/lib/routes";
@@ -145,6 +145,7 @@ export async function ingestWireEvents(
   const plain: NostrEvent[] = [];
   const dmWraps: NostrEvent[] = [];
   const inviteWraps: NostrEvent[] = [];
+  const openedChatWraps: string[] = [];
   for (const ev of events) {
     if (!ev || typeof ev.id !== "string" || typeof ev.kind !== "number") continue;
     if (WRAP_KINDS.has(ev.kind)) {
@@ -212,6 +213,7 @@ export async function ingestWireEvents(
     // Banned authors are stored (the timeline hides them) but never notify.
     const banned = communityIdHex ? spec?.concordBannedByCommunity.get(communityIdHex) : undefined;
     for (const c of concordCandidates(opened, channel, communityIdHex, self, banned)) candidates.push(c);
+    for (const o of opened) if (o.wrapId) openedChatWraps.push(o.wrapId);
   }
 
   // Concord CONTROL → opened-event store, ring `c2ctl:<idHex>` so
@@ -335,6 +337,7 @@ export async function ingestWireEvents(
 
   if (scopes.size > 0) emitWireScopes(scopes);
   feedNotifyCandidates(candidates);
+  noteWrapsOpened(openedChatWraps);
 }
 
 /** Build notify candidates for a batch of decrypted Concord chat rumors. */
@@ -374,6 +377,7 @@ function concordCandidates(
         // Link to the reacted-to message (reactions aren't rows).
         path: pathTo(tagValueIn(r.tags, "e")),
         eventId: r.rumorId,
+        wrapId: r.wrapId,
         channelIdHex: channel.idHex,
       });
       continue;
@@ -393,6 +397,7 @@ function concordCandidates(
       readKey: channel.idHex, // Concord read map is keyed by channel id hex
       path: pathTo(r.rumorId),
       eventId: r.rumorId,
+      wrapId: r.wrapId,
       channelIdHex: channel.idHex,
     });
   }

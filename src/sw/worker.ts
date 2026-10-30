@@ -282,12 +282,20 @@ const PAGE_PRESENTATION_OUTCOMES = new Set([
   "worker",
 ]);
 
-/** Ask or claim one exact opened event in a live page (room may be unresolved). */
+/** The event a page is asked about: an opened rumor, or a wrap the worker could not open. */
+interface PresentationTarget {
+  eventId?: string;
+  /** Unset for a wrap: any room the page names is accepted. */
+  roomKey?: string;
+}
+
+/** Ask or claim one exact event in a live page (room may be unresolved). */
 function clientPresentationState(
   client: Client,
-  prepared: PreparedPush,
+  prepared: PresentationTarget,
   type: string,
   timeoutMs: number,
+  extra: Record<string, unknown> = {},
 ): Promise<PageOutcome> {
   if (typeof MessageChannel === "undefined" || typeof client.postMessage !== "function") {
     return Promise.resolve({ outcome: "unhandled", roomKey: prepared.roomKey });
@@ -323,6 +331,7 @@ function clientPresentationState(
     };
     try {
       client.postMessage({
+        ...extra,
         type,
         eventId: prepared.eventId,
         roomKey: prepared.roomKey,
@@ -375,6 +384,78 @@ async function pagePresentationOutcome(prepared: PreparedPush): Promise<PageOutc
   } catch {
     return undefined;
   }
+}
+
+/** Total time the worker gives open pages to open a wrap it could not. */
+const PAGE_OPEN_BUDGET_MS = 5_000;
+
+/** Focused, then visible, then the rest: the first page likeliest to hold a ready signer. */
+function windowPreference(client: Client): number {
+  const win = client as WindowClient;
+  if (win.focused) return 0;
+  return win.visibilityState === "visible" ? 1 : 2;
+}
+
+/**
+ * Hand an encrypted event this worker could not open to the open pages, which
+ * hold the signer, one at a time. A page that opens it notifies (or not) itself
+ * and says so. Otherwise every page is claimed for the worker, as in
+ * {@link pagePresentationOutcome}, so none presents after the generic text.
+ */
+async function pageOpenOutcome(data: WorkerPushData): Promise<PageOutcome | undefined> {
+  const ev = data.event;
+  const eventId = pushEventKey(data);
+  if (!ev || !eventId || ev.id !== eventId) return undefined;
+  if (data.scope !== "dm" && data.scope !== "c2") return undefined;
+  try {
+    const windows = [...await self.clients.matchAll({ type: "window", includeUncontrolled: true })]
+      .sort((a, b) => windowPreference(a) - windowPreference(b));
+    if (windows.length === 0) return undefined;
+    const target = { eventId };
+    const deadline = Date.now() + PAGE_OPEN_BUDGET_MS;
+    for (const client of windows) {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) break;
+      const answer = await clientPresentationState(client, target, "armada-push-open", remaining, { event: ev });
+      const decided = strongestPageOutcome([answer]);
+      if (decided) return decided;
+    }
+    const claimed = await Promise.all(
+      windows.map((client) => clientPresentationState(client, target, "armada-push-worker-claim", 650)),
+    );
+    return strongestPageOutcome(claimed);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Re-post the notification a page already showed under `tag`, silently: the
+ * one way to satisfy a runtime that demands a notification per push without a
+ * second entry. Falls back to the fixed sync entry.
+ */
+async function reshowPageNotification(tag: string, mustShow: () => Promise<boolean>): Promise<void> {
+  if (!(await mustShow())) return;
+  try {
+    if (typeof self.registration.getNotifications === "function") {
+      const [shown] = await self.registration.getNotifications({ tag });
+      if (shown) {
+        await self.registration.showNotification(shown.title, {
+          body: shown.body,
+          icon: shown.icon,
+          badge: shown.badge,
+          tag,
+          data: shown.data,
+          silent: true,
+          renotify: false,
+        } as ArmadaNotificationOptions);
+        return;
+      }
+    }
+  } catch {
+    // Fall through to the sync entry.
+  }
+  await quietSync(mustShow);
 }
 
 /**
@@ -723,6 +804,21 @@ async function handlePush(
       silent,
     });
     await Promise.all([incrementAppBadge(), markSeen(data)]);
+    return;
+  }
+
+  // An open page holds the signer this worker lacks: let it open the event.
+  const handed = await pageOpenOutcome(data);
+  if (handed?.outcome === "presented" || handed?.outcome === "presenting") {
+    const roomKey = handed.roomKey || "";
+    if (roomKey) await reshowPageNotification(roomKey, mustShow);
+    else await quietSync(mustShow);
+    await markSeen(data, { outcome: "page-presented", roomKey });
+    return;
+  }
+  if (handed?.outcome === "suppressed") {
+    await quietSync(mustShow);
+    await markSeen(data, { outcome: "suppressed" });
     return;
   }
 
