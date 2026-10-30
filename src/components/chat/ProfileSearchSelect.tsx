@@ -3,6 +3,7 @@ import { nip19 } from "nostr-tools";
 import { useState } from "react";
 
 import { BotPill } from "@/components/BotPill";
+import { UltraPill } from "@/components/UltraPill";
 import { EmojifiedText } from "@/components/chat/CustomEmoji";
 import { SearchField } from "@/components/ui/search-field";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -179,6 +180,7 @@ function ProfileRow({
             <EmojifiedText tags={profile.event.tags}>{displayName}</EmojifiedText>
           </div>
           <BotPill metadata={metadata} />
+          <UltraPill metadata={metadata} />
         </div>
         <div className="truncate font-mono text-2xs text-muted-foreground">{identifier}</div>
       </div>

@@ -5,6 +5,8 @@ import { useNavigate } from "react-router-dom";
 
 import { DittoIcon } from "@/components/brand/DittoIcon";
 import { BotPill } from "@/components/BotPill";
+import { UltraEffect } from "@/components/UltraEffect";
+import { UltraPill } from "@/components/UltraPill";
 import { EmojifiedText } from "@/components/chat/CustomEmoji";
 import { UserModerationMenuSection } from "@/components/chat/ModerationMenuSection";
 import { RolePickerItems } from "@/components/chat/RolePickerItems";
@@ -41,6 +43,7 @@ import { getAvatarShape } from "@/lib/avatarShape";
 import { dittoProfileUrl } from "@/lib/dittoUrl";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { tryNpubEncode } from "@/lib/safeNip19";
+import { frameCss, nameStyleCss, readUltra, ULTRA_NAME_CLASS } from "@/lib/ultra";
 import { sanitizeImageSrc } from "@/lib/sanitizeUrl";
 import { cn } from "@/lib/utils";
 import { writeClipboardText } from "@/lib/clipboard";
@@ -93,6 +96,7 @@ function ProfilePreviewBody({
   const musicStatus = isStatusExpired(rawMusicStatus) ? undefined : rawMusicStatus;
   const displayName = getDisplayName(metadata, pubkey);
   const avatarShape = getAvatarShape(metadata);
+  const ultra = readUltra(metadata);
   const picture = sanitizeImageSrc(metadata?.picture);
   const npub = tryNpubEncode(pubkey);
   const [copied, setCopied] = useState(false);
@@ -185,6 +189,7 @@ function ProfilePreviewBody({
         )}
       </div>
 
+      <UltraEffect effect={ultra?.effect} />
       <div className="px-4 pb-4">
         <div className="-mt-8 mb-2">
           <button
@@ -193,6 +198,7 @@ function ProfilePreviewBody({
             onClick={() => picture && onViewImage({ src: picture, imeta: author.data?.imeta?.picture })}
             aria-label={intl.formatMessage({ id: "profilePreviewCard.viewPicture", defaultMessage: "View profile picture" })}
             className="block rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-ring enabled:cursor-zoom-in"
+            style={frameCss(ultra?.frame)}
           >
             <Avatar shape={avatarShape} className="size-16 border-[3px] border-background">
               <AvatarImage src={metadata?.picture} imeta={author.data?.imeta?.picture} alt={displayName} />
@@ -204,12 +210,13 @@ function ProfilePreviewBody({
         </div>
 
         <div className="flex items-center gap-1.5 min-w-0">
-          <div className="font-bold text-chat truncate">
+          <div className={cn("font-bold text-chat truncate", ultra?.name && ULTRA_NAME_CLASS)} style={nameStyleCss(ultra?.name)}>
             {author.data?.event
               ? <EmojifiedText tags={author.data.event.tags}>{displayName}</EmojifiedText>
               : displayName}
           </div>
           <BotPill metadata={metadata} />
+          {ultra && <UltraPill force />}
         </div>
 
         {/* Concord roles; the card shows every role, the member row only the highest. */}
@@ -484,7 +491,7 @@ function ThemedPreviewContent({
       sideOffset={8}
       style={themeStyle}
       // Scrolls when taller than Radix's available height rather than clipping.
-      className="w-72 p-0 overflow-x-hidden overflow-y-auto overscroll-contain"
+      className="relative w-72 p-0 overflow-x-hidden overflow-y-auto overscroll-contain"
       onClick={(e) => e.stopPropagation()}
     >
       <ProfilePreviewBody pubkey={pubkey} onAction={onClose} onViewImage={onViewImage} moderation={moderation} />

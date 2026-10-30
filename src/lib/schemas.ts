@@ -121,7 +121,6 @@ export const AppConfigSchema = z.object({
   railOpenFolders: z.array(z.string()).catch([]),
   collapsedChannelCategories: z.record(z.string(), z.array(z.string())).catch({}),
   memberListVisible: z.boolean().optional().catch(undefined),
-  armadaUltraSince: z.number().optional().catch(undefined),
   appRelays: z.array(z.string()).catch(defaultConfig.appRelays),
   broadcastRelays: z.array(z.string()).catch(defaultConfig.broadcastRelays),
   communityRelays: z.array(z.string()).catch(defaultConfig.communityRelays),

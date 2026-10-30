@@ -8,10 +8,7 @@ vi.mock("@/hooks/useCurrentUser", () => ({
 vi.mock("@/hooks/useAuthor", () => ({
   useAuthor: () => ({ data: { metadata: { name: "pixelwitch" } }, isLoading: false }),
 }));
-vi.mock("@/hooks/useAppContext", async () => {
-  const { defaultConfig } = await import("@/contexts/AppContext");
-  return { useAppContext: () => ({ config: defaultConfig, updateConfig: vi.fn() }) };
-});
+vi.mock("@/hooks/useUltra", () => ({ useMyUltra: () => ({ ultra: undefined }) }));
 vi.mock("@/hooks/useInstallPrompt", () => ({
   useInstallPrompt: () => ({ canInstall: false, install: vi.fn(), needsManualInstall: false }),
 }));

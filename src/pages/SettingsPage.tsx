@@ -66,11 +66,11 @@ import { ThemeSelector } from "@/components/ThemeSelector";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { useAndroidBack } from "@/hooks/useAndroidBack";
-import { useAppContext } from "@/hooks/useAppContext";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useBackOrHome } from "@/hooks/useBackOrHome";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useInstallPrompt } from "@/hooks/useInstallPrompt";
+import { useMyUltra } from "@/hooks/useUltra";
 import { common, useIntl } from "@/i18n";
 import { appVersionLabel } from "@/lib/appVersion";
 import { getAvatarShape } from "@/lib/avatarShape";
@@ -96,20 +96,10 @@ const WIDE_PX = 860;
 function useSettingsPages(): { pages: Partial<Record<SettingsPageId, PageDef>>; groups: SettingsPageId[][] } {
   const { user } = useCurrentUser();
   const intl = useIntl();
-  const { config } = useAppContext();
-  const ultra = config.armadaUltraSince !== undefined;
+  const ultra = !!useMyUltra().ultra;
   return useMemo(() => {
     const profiling = import.meta.env.VITE_PROFILE === "1";
     const pages: Partial<Record<SettingsPageId, PageDef>> = {
-      ultra: {
-        title: "Armada Ultra",
-        icon: Gem,
-        tone: "accent2",
-        summary: ultra
-          ? intl.formatMessage({ id: "settingsPage.ultra.summaryActive", defaultMessage: "Active. Thanks for being Ultra" })
-          : intl.formatMessage({ id: "settingsPage.ultra.summary", defaultMessage: "Premium, for $0.00" }),
-        render: () => <UltraSettings />,
-      },
       account: {
         title: intl.formatMessage({ id: "settingsPage.account.title", defaultMessage: "Account" }),
         icon: UserCircle,
@@ -198,6 +188,15 @@ function useSettingsPages(): { pages: Partial<Record<SettingsPageId, PageDef>>; 
       },
     };
     if (user) {
+      pages.ultra = {
+        title: "Armada Ultra",
+        icon: Gem,
+        tone: "accent2",
+        summary: ultra
+          ? intl.formatMessage({ id: "settingsPage.ultra.summaryActive", defaultMessage: "Active. Thanks for being Ultra" })
+          : intl.formatMessage({ id: "settingsPage.ultra.summary", defaultMessage: "Premium, for $0.00" }),
+        render: () => <UltraSettings />,
+      };
       pages.profile = {
         title: intl.formatMessage({ id: "settingsPage.profile.title", defaultMessage: "Profile" }),
         icon: UserRound,
