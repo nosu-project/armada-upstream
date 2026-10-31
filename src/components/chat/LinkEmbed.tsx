@@ -128,7 +128,7 @@ export function LinkEmbed({ url, className }: LinkEmbedProps) {
             key={pauseEpoch}
             src={odysee ?? `https://streamable.com/e/${streamableId}`}
             title={odysee
-              ? "Odysee video"
+              ? intl.formatMessage({ id: "linkEmbed.odyseeVideo", defaultMessage: "Odysee video" })
               : intl.formatMessage({ id: "linkEmbed.streamableVideo", defaultMessage: "Streamable video" })}
             // Supersedes `allowFullScreen` (browsers warn if both are set).
             allow="autoplay; fullscreen; picture-in-picture"
