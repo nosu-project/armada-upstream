@@ -270,11 +270,28 @@ enum NotificationPreview {
     }
 
     /// Whether a message is a reply inside a thread rather than to the room:
-    /// a kind-1111 NIP-22 comment always is, and a Concord chat message carries
-    /// the thread root in the uppercase `E` tag.
+    /// a kind-1111 NIP-22 comment always is, a Concord chat message carries
+    /// the thread root in the uppercase `E` tag, and a NIP-29 kind 9 carries a
+    /// marked `reply` `e` tag (`nip29Threads.ts`).
     static func isThreadReply(kind: Int, tags: [[String]]) -> Bool {
         if kind == 1111 { return true }
+        if kind == 9 && tags.contains(where: { $0.count > 3 && $0[0] == "e" && $0[3] == "reply" && !$0[1].isEmpty }) {
+            return true
+        }
         return tags.contains { $0.count > 1 && $0[0] == "E" && !$0[1].isEmpty }
+    }
+
+    /// The thread a NIP-29 event replies into (`nip29ThreadRootOf`): a legacy
+    /// kind-1111's `E`, else a kind 9's `root` marker, else its last `reply`.
+    static func nip29ThreadRoot(kind: Int, tags: [[String]]) -> String? {
+        if kind == 1111 {
+            return tags.first(where: { $0.count > 1 && $0[0] == "E" && !$0[1].isEmpty })?[1]
+        }
+        guard kind == 9 else { return nil }
+        let marked = tags.filter { $0.count > 3 && $0[0] == "e" }
+        guard let reply = marked.last(where: { $0[3] == "reply" })?[1] else { return nil }
+        let root = marked.first(where: { $0[3] == "root" })?[1] ?? reply
+        return root.isEmpty ? nil : root
     }
 
     /// Elide to `contentCap`.

@@ -28,6 +28,7 @@ import {
   resolveGroupListRead,
   type UserGroupListQuery,
 } from "@/hooks/useUserGroupList";
+import { isBlockedNow, refreshBlocklist } from "@/lib/blocklistStore";
 import { readFolded, writeFolded } from "@/lib/foldedCache";
 import { groupListFoldKey, type PersistedGroupList } from "@/lib/nip29ServerCache";
 import {
@@ -695,6 +696,9 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
 
       const branchConcord = async () => {
         let concordLive: ReturnType<typeof liveEntries> = [];
+        // Alongside the list fetch, and settled before the warm-up below, so a
+        // blocked community's history is never pulled onto the device. Never throws.
+        const blocklist = refreshBlocklist(nostr);
         if (user.signer.nip44) {
           const vId = begin("communities");
           try {
@@ -726,6 +730,9 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
           }
         }
         if (cancelled) return;
+        await blocklist;
+        if (cancelled) return;
+        concordLive = concordLive.filter((e) => !isBlockedNow(e.community_id));
 
         // Without warm-up the gate lifts onto empty rooms. Raced against the budget; it keeps running
         // after a lift, visible in the sync status bar.

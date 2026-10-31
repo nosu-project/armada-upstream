@@ -538,7 +538,13 @@ either transport a presentation path of its own.
 - **nostr-push2 ignores `relays`**: it matches against the firehose of its own
   relays only. Tenna on Android does honour them (and cannot answer NIP-42).
 - The page must not show its own OS notification while either path is live —
-  `backgroundPushActive` is the one check, used by the foreground notifier.
+  `backgroundPushActive` is the one check, used by the foreground notifier —
+  except for an event the worker arbitrates with it by id. A worker that
+  cannot open an encrypted event (a bunker or NIP-07 login keeps the signer in
+  the page) hands the wrap to the open pages (`armada-push-open`); a page runs
+  it through its own ingest and answers by wrap id (`NotifyCandidate.wrapId`)
+  with what its notifier did, and the worker's generic text is the fallback
+  only when no page opens it.
 
 ## Local storage: ArmadaDB
 

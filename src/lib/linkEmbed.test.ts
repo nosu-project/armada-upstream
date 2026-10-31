@@ -5,6 +5,9 @@ import {
   extractStreamableId,
   giphyMp4FromPageUrl,
   isTenorPageUrl,
+  odyseeEmbedUrl,
+  peerTubeApiUrl,
+  pickPeerTubeFile,
   tenorMp4FromThumbnail,
 } from "@/lib/linkEmbed";
 
@@ -98,5 +101,88 @@ describe("giphyMp4FromPageUrl", () => {
     expect(giphyMp4FromPageUrl("https://giphy.com/gifs/JIX9t2j0ZTN9S"))
       .toBe("https://media.giphy.com/media/JIX9t2j0ZTN9S/giphy.mp4");
     expect(giphyMp4FromPageUrl("https://giphy.com/explore/cats")).toBeNull();
+  });
+});
+
+describe("odyseeEmbedUrl", () => {
+  it("embeds channel and channel-less claim pages", () => {
+    expect(odyseeEmbedUrl("https://odysee.com/@Odysee:8/odysee-is-live:a")).toBe(
+      "https://odysee.com/$/embed/@Odysee:8/odysee-is-live:a",
+    );
+    expect(odyseeEmbedUrl("https://odysee.com/some-video:5?r=abc")).toBe(
+      "https://odysee.com/$/embed/some-video:5",
+    );
+    expect(odyseeEmbedUrl("https://odysee.com/$/embed/@a:1/b:2")).toBe("https://odysee.com/$/embed/@a:1/b:2");
+  });
+
+  it("keeps a numeric start time", () => {
+    expect(odyseeEmbedUrl("https://odysee.com/@a:1/b:2?t=90")).toBe("https://odysee.com/$/embed/@a:1/b:2?t=90");
+    expect(odyseeEmbedUrl("https://odysee.com/@a:1/b:2?t=x")).toBe("https://odysee.com/$/embed/@a:1/b:2");
+  });
+
+  it("returns null for channel pages, app routes and other hosts", () => {
+    expect(odyseeEmbedUrl("https://odysee.com/@Odysee:8")).toBeNull();
+    expect(odyseeEmbedUrl("https://odysee.com/$/rewards")).toBeNull();
+    expect(odyseeEmbedUrl("https://odysee.com/")).toBeNull();
+    expect(odyseeEmbedUrl("https://example.com/some-video:5")).toBeNull();
+  });
+});
+
+describe("peerTubeApiUrl", () => {
+  it("reads short-UUID, UUID and embed links on any instance", () => {
+    expect(peerTubeApiUrl("https://framatube.org/w/9c9de5e8-0a1e-484a-b099-e80766180a6d")).toBe(
+      "https://framatube.org/api/v1/videos/9c9de5e8-0a1e-484a-b099-e80766180a6d",
+    );
+    expect(peerTubeApiUrl("https://tilvids.com/w/kkGMgK9ZtnKfYAgnEtQxbv?start=10s")).toBe(
+      "https://tilvids.com/api/v1/videos/kkGMgK9ZtnKfYAgnEtQxbv",
+    );
+    expect(peerTubeApiUrl("https://peertube.tv/videos/watch/kkGMgK9ZtnKfYAgnEtQxbv")).toBe(
+      "https://peertube.tv/api/v1/videos/kkGMgK9ZtnKfYAgnEtQxbv",
+    );
+    expect(peerTubeApiUrl("https://peertube.tv/videos/embed/kkGMgK9ZtnKfYAgnEtQxbv")).toBe(
+      "https://peertube.tv/api/v1/videos/kkGMgK9ZtnKfYAgnEtQxbv",
+    );
+  });
+
+  it("returns null for other paths, non-ids and plain http", () => {
+    expect(peerTubeApiUrl("https://framatube.org/w/p/kkGMgK9ZtnKfYAgnEtQxbv")).toBeNull();
+    expect(peerTubeApiUrl("https://example.com/w/hello")).toBeNull();
+    expect(peerTubeApiUrl("http://tilvids.com/w/kkGMgK9ZtnKfYAgnEtQxbv")).toBeNull();
+    expect(peerTubeApiUrl("not a url")).toBeNull();
+  });
+});
+
+describe("pickPeerTubeFile", () => {
+  const f = (id: number, extra: object = {}) => ({ fileUrl: `https://x.test/${id}.mp4`, resolution: { id }, ...extra });
+
+  it("picks the largest muxed rendition up to 720p across Web Videos and HLS", () => {
+    const video = {
+      files: [f(0, { hasVideo: false })],
+      streamingPlaylists: [{ files: [f(1080), f(720), f(480)] }],
+    };
+    expect(pickPeerTubeFile(video)?.fileUrl).toBe("https://x.test/720.mp4");
+  });
+
+  it("falls back to the smallest above 720p", () => {
+    expect(pickPeerTubeFile({ files: [f(2160), f(1080)] })?.fileUrl).toBe("https://x.test/1080.mp4");
+  });
+
+  it("skips audio-only, split video-only, non-MP4 and non-https files", () => {
+    expect(
+      pickPeerTubeFile({
+        files: [
+          { fileUrl: "http://x.test/480.mp4", resolution: { id: 480 } },
+          { fileUrl: "https://x.test/480.m3u8", resolution: { id: 480 } },
+        ],
+        streamingPlaylists: [{ files: [f(720, { hasAudio: false }), f(0)] }],
+      }),
+    ).toBeNull();
+    expect(pickPeerTubeFile({})).toBeNull();
+  });
+
+  it("drops malformed files and rejects a non-video response", () => {
+    expect(pickPeerTubeFile({ files: [{ fileUrl: 1 }, null, f(480)] })?.fileUrl).toBe("https://x.test/480.mp4");
+    expect(pickPeerTubeFile({ files: "x" })).toBeNull();
+    expect(pickPeerTubeFile(null)).toBeNull();
   });
 });

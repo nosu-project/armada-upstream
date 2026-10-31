@@ -1,4 +1,4 @@
-import { Check, Copy, ExternalLink } from "lucide-react";
+import { Check, Copy, ExternalLink, Loader2, Play } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { Skeleton } from "@/components/ui/skeleton";
@@ -19,6 +19,10 @@ import {
   extractYouTubeId,
   giphyMp4FromPageUrl,
   isTenorPageUrl,
+  odyseeEmbedUrl,
+  peerTubeApiUrl,
+  pickPeerTubeFile,
+  type PeerTubeFile,
   tenorMp4FromThumbnail,
 } from "@/lib/linkEmbed";
 import { faviconUrl } from "@/lib/faviconUrl";
@@ -39,7 +43,7 @@ interface LinkEmbedProps {
   className?: string;
 }
 
-/** YouTube: click-to-play facade; Spotify: official iframe; else an OEmbed preview card. */
+/** YouTube: click-to-play facade; PeerTube: click-to-play MP4; Spotify, Streamable, Odysee: official iframe; else an OEmbed preview card. */
 export function LinkEmbed({ url, className }: LinkEmbedProps) {
   const intl = useIntl();
   const youtubeId = extractYouTubeId(url);
@@ -47,6 +51,8 @@ export function LinkEmbed({ url, className }: LinkEmbedProps) {
   const tweetId = extractTweetId(url);
   const instagramShortcode = extractInstagramShortcode(url);
   const streamableId = extractStreamableId(url);
+  const odysee = odyseeEmbedUrl(url);
+  const peerTube = peerTubeApiUrl(url);
   const giphyMp4 = giphyMp4FromPageUrl(url);
   // Remounting the provider iframe is the only way to stop its playback.
   const pauseEpoch = useEmbedPauseEpoch();
@@ -102,7 +108,16 @@ export function LinkEmbed({ url, className }: LinkEmbedProps) {
     );
   }
 
-  if (streamableId) {
+  if (peerTube) {
+    return (
+      <div className={cn("max-w-md", className)}>
+        <PeerTubeEmbed api={peerTube} url={url} />
+        <EmbedInfoBar url={url} />
+      </div>
+    );
+  }
+
+  if (streamableId || odysee) {
     return (
       <div className={cn("max-w-md", className)} onClick={(e) => e.stopPropagation()}>
         <div
@@ -111,12 +126,16 @@ export function LinkEmbed({ url, className }: LinkEmbedProps) {
         >
           <iframe
             key={pauseEpoch}
-            src={`https://streamable.com/e/${streamableId}`}
-            title={intl.formatMessage({ id: "linkEmbed.streamableVideo", defaultMessage: "Streamable video" })}
+            src={odysee ?? `https://streamable.com/e/${streamableId}`}
+            title={odysee
+              ? intl.formatMessage({ id: "linkEmbed.odyseeVideo", defaultMessage: "Odysee video" })
+              : intl.formatMessage({ id: "linkEmbed.streamableVideo", defaultMessage: "Streamable video" })}
             // Supersedes `allowFullScreen` (browsers warn if both are set).
             allow="autoplay; fullscreen; picture-in-picture"
             loading="lazy"
             className="absolute inset-0 h-full w-full border-0"
+            // Odysee's player needs no top navigation or forms.
+            sandbox={odysee ? "allow-scripts allow-same-origin allow-popups allow-presentation" : undefined}
           />
         </div>
         <EmbedInfoBar url={url} />
@@ -481,6 +500,98 @@ function CopyLinkButton({ url }: { url: string }) {
     >
       {copied ? <Check className="size-3.5 shrink-0" /> : <Copy className="size-3.5 shrink-0" />}
     </button>
+  );
+}
+
+/**
+ * Click-to-load: a PeerTube instance is whatever host the link names, so nothing
+ * is asked of it (no viewer IP to the sender) until play. Then its API names an
+ * MP4 that plays in our own player, under the media policy — no foreign frame.
+ * No MP4 (HLS-only, a live, private, unreachable): the link's own page opens.
+ * The facade wears VideoPlayer's own play overlay, and the one click plays.
+ */
+function PeerTubeEmbed({ api, url }: { api: string; url: string }) {
+  const intl = useIntl();
+  const domain = displayDomain(url);
+  const [file, setFile] = useState<PeerTubeFile | "loading" | "failed" | null>(null);
+  const { data } = useLinkPreview(url);
+  const poster = sanitizeImageSrc(data?.thumbnail_url);
+  const thumb = useMediaSrc(poster);
+
+  const play = () => {
+    setFile("loading");
+    // Bounded so the page can still open inside the click's user activation.
+    fetch(api, { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(4000) })
+      .then((r) => (r.ok ? r.json() : null))
+      .then(pickPeerTubeFile)
+      .catch(() => null)
+      .then((picked) => {
+        if (picked) return setFile(picked);
+        // A blocked popup leaves the link below to click.
+        window.open(url, "_blank", "noopener,noreferrer");
+        setFile("failed");
+      });
+  };
+
+  // Starts on mount with sound, on the facade click's activation; muted where
+  // that has lapsed (iOS), so it never takes a second click.
+  const startPlayback = useCallback((video: HTMLVideoElement | null) => {
+    video?.play().catch((e: unknown) => {
+      if ((e as Error)?.name !== "NotAllowedError") return;
+      video.muted = true;
+      void video.play().catch(() => {});
+    });
+  }, []);
+
+  if (file && typeof file === "object") {
+    return (
+      <VideoPlayer
+        src={file.fileUrl}
+        poster={poster}
+        dim={file.width && file.height ? `${file.width}x${file.height}` : undefined}
+        title={data?.title}
+        videoRef={startPlayback}
+      />
+    );
+  }
+
+  return (
+    <div
+      className="relative my-1.5 clip-corner-lg overflow-hidden bg-black"
+      style={{ aspectRatio: "16 / 9" }}
+      onClick={(e) => e.stopPropagation()}
+    >
+      {thumb && <img src={thumb} alt="" className="absolute inset-0 h-full w-full object-cover" />}
+      {file === "failed" ? (
+        <a
+          href={url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="absolute inset-0 flex items-center justify-center bg-black/60 text-sm font-medium text-white"
+        >
+          <FormattedMessage id="linkEmbed.openOnSite" defaultMessage="Open on {domain}" values={{ domain }} />
+        </a>
+      ) : (
+        <button
+          type="button"
+          className="absolute inset-0 flex items-center justify-center bg-black/30 cursor-pointer"
+          onClick={play}
+          disabled={file === "loading"}
+          aria-label={intl.formatMessage(
+            { id: "linkEmbed.playVideoFrom", defaultMessage: "Play video from {domain}" },
+            { domain },
+          )}
+        >
+          <span className="size-16 rounded-full bg-black/60 flex items-center justify-center backdrop-blur-sm">
+            {file === "loading" ? (
+              <Loader2 className="size-8 animate-spin text-white" />
+            ) : (
+              <Play className="size-8 text-white ml-1" fill="white" />
+            )}
+          </span>
+        </button>
+      )}
+    </div>
   );
 }
 

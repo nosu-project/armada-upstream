@@ -567,7 +567,10 @@ struct PushProcessor {
 
         let presented = NotificationPreview.present(message, strings: strings)
         let relay = only?.relay ?? relays.first
-        let path = relay.map { groupPath(relayUrl: $0, groupId: groupId, eventId: eventId) }
+        let threadRoot = NotificationPreview.nip29ThreadRoot(kind: event.kind, tags: event.tags)
+        let path = relay.map {
+            groupPath(relayUrl: $0, groupId: groupId, eventId: eventId, threadRoot: threadRoot)
+        }
         return PreparedPush(
             drop: false,
             title: presented.title,
@@ -584,16 +587,18 @@ struct PushProcessor {
         )
     }
 
-    /// Deep link to a message in a NIP-29 group. Mirrors `routes.ts`: the
-    /// relay's `wss://` scheme is dropped and `ws://` shortened to `ws:`.
-    private func groupPath(relayUrl: String, groupId: String, eventId: String) -> String {
+    /// Deep link to a message in a NIP-29 group, inside its thread when it is a
+    /// reply. Mirrors `routes.ts`: the relay's `wss://` scheme is dropped and
+    /// `ws://` shortened to `ws:`.
+    private func groupPath(relayUrl: String, groupId: String, eventId: String, threadRoot: String?) -> String {
         var trimmed = relayUrl
         if trimmed.lowercased().hasPrefix("wss://") {
             trimmed = String(trimmed.dropFirst(6))
         } else if trimmed.lowercased().hasPrefix("ws://") {
             trimmed = "ws:" + trimmed.dropFirst(5)
         }
-        return "/s/\(escape(trimmed))/\(escape(groupId))/m/\(escape(eventId))"
+        let thread = threadRoot.map { "/t/\(escape($0))" } ?? ""
+        return "/s/\(escape(trimmed))/\(escape(groupId))\(thread)/m/\(escape(eventId))"
     }
 
     private func escape(_ value: String) -> String {

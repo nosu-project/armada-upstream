@@ -23,10 +23,9 @@ const h = vi.hoisted(() => ({
 
 vi.mock("@nostrify/react", () => ({ useNostr: () => ({ nostr: {} }) }));
 vi.mock("@/concord/hooks/useCommunityList", () => ({
-  useCommunityList: () => ({ data: h.communityListData }),
+  useJoinedCommunities: () => (h.communityListData ? h.entries : []),
 }));
 vi.mock("@/concord/lib/communityList", () => ({
-  liveEntries: () => h.entries,
   rehydrateCommunity: (e: unknown) => e,
 }));
 vi.mock("@/lib/controlPlaneSync", () => ({

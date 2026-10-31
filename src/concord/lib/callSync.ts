@@ -10,7 +10,7 @@ import type { Channel, Community } from "@/concord/lib/types";
 
 export type CallSyncDecision =
   | { action: "stay" }
-  | { action: "leave"; reason: "removed" | "banned" | "kicked" | "channel-gone" }
+  | { action: "leave"; reason: "removed" | "banned" | "kicked" | "blocked" | "channel-gone" }
   | { action: "rejoin"; community: Community; channel: Channel };
 
 /**
@@ -55,11 +55,14 @@ export function decideCallSync(input: {
   selfKicked: boolean;
   /** Whether this community has been dissolved (terminal, CORD-02 §9). */
   dissolved: boolean;
+  /** Whether this community is on the blocklist (`blocklistStore.ts`). */
+  blocked?: boolean;
 }): CallSyncDecision {
   // A removal is a judgment: hang up regardless of loading. A kick severs nothing
   // cryptographically, so this compliance IS the removal.
   if (input.selfBanned) return { action: "leave", reason: "banned" };
   if (input.selfKicked) return { action: "leave", reason: "kicked" };
+  if (input.blocked) return { action: "leave", reason: "blocked" };
   // Dissolution severs no key, so the call finishes on its own terms; without this
   // the dropped vault entry below would boot everyone.
   if (input.dissolved) return { action: "stay" };

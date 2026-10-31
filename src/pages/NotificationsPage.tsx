@@ -25,6 +25,7 @@ import { useRelayGroups } from "@/hooks/useRelayGroups";
 import { useRelayInbox } from "@/hooks/useRelayInbox";
 import { useRelayInfo } from "@/hooks/useRelayInfo";
 import { shortTimeAgo } from "@/lib/formatTime";
+import { nip29ThreadRootOf } from "@/lib/nip29Threads";
 import { cleanContent, truncate } from "@/lib/notificationPreview";
 import { chatRoute } from "@/lib/routes";
 import { cn } from "@/lib/utils";
@@ -77,11 +78,12 @@ function messagePreview(content: string | undefined, fallback: string): string {
 function focusedRoute(
   base: { kind: "nip29"; relayUrl: string; groupId: string } |
     { kind: "concord"; communityId: string; channelId: string },
-  id: string,
-  tags: string[][],
+  event: { id: string; kind: number; tags: string[][] },
 ): string {
-  const threadRoot = tags.find(([name, value]) => name === "E" && value)?.[1];
-  return chatRoute({ ...base, messageId: id, ...(threadRoot ? { threadRoot } : {}) });
+  const threadRoot = base.kind === "nip29"
+    ? nip29ThreadRootOf(event)
+    : event.tags.find(([name, value]) => name === "E" && value)?.[1];
+  return chatRoute({ ...base, messageId: event.id, ...(threadRoot ? { threadRoot } : {}) });
 }
 
 /** Report one NIP-29 server's locally-known mentions into the aggregate page. */
@@ -104,7 +106,7 @@ function RelayNotificationSource({ relayUrl, report }: { relayUrl: string; repor
       createdAt: event.created_at,
       unread,
       readKey: channelReadKey(relayUrl, groupId),
-      route: focusedRoute({ kind: "nip29", relayUrl, groupId }, event.id, event.tags),
+      route: focusedRoute({ kind: "nip29", relayUrl, groupId }, event),
       author: event.pubkey,
       body: messagePreview(event.content, intl.formatMessage(messages.mentionedYou)),
       source: `${sourceName} · #${nameById.get(groupId) ?? groupId}`,
@@ -155,8 +157,7 @@ function ConcordNotificationSource({
         readKey,
         route: focusedRoute(
           { kind: "concord", communityId: entry.community_id, channelId },
-          message.id,
-          message.tags,
+          message,
         ),
         author: message.pubkey,
         body: messagePreview(message.content, intl.formatMessage(messages.mentionedYou)),

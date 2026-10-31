@@ -94,6 +94,7 @@ vi.mock("@/wire/useWireScopes", () => ({
 vi.mock("@/wire/notify", () => ({
   dm17NotifyCandidates: () => [],
   feedNotifyCandidates: () => undefined,
+  noteWrapsOpened: () => undefined,
 }));
 
 vi.mock("@/lib/nip17/dm17Store", async (importOriginal) => {

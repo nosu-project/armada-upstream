@@ -294,3 +294,35 @@ describe("provider iframe embeds", () => {
     expect(screen.getByTitle("Tweet")).toBeInTheDocument();
   });
 });
+
+describe("PeerTube embeds", () => {
+  const LINK = "https://framatube.org/w/e6TjfMBXc5jAsLs1co4zHh";
+  const API = "https://framatube.org/api/v1/videos/e6TjfMBXc5jAsLs1co4zHh";
+  const respond = (body: object) =>
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify(body), { status: 200 }));
+
+  it("asks the instance nothing until play, then plays its MP4 from that one click", async () => {
+    const fetchSpy = respond({ files: [{ fileUrl: "https://framatube.org/v-720.mp4", resolution: { id: 720 } }] });
+    const play = vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue();
+    vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => {});
+    const { container } = render(<LinkEmbed url={LINK} />);
+    expect(fetchSpy).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Play video from framatube.org" }));
+    await waitFor(() => expect(container.querySelector("video")).toHaveAttribute("src", "https://framatube.org/v-720.mp4"));
+    expect(fetchSpy.mock.calls[0][0]).toBe(API);
+    expect(play).toHaveBeenCalledTimes(1);
+    expect(container.querySelector("video")!.muted).toBe(false);
+    expect(container.querySelector("iframe")).toBeNull();
+  });
+
+  it("opens the PeerTube page when there is only HLS", async () => {
+    respond({ files: [], streamingPlaylists: [{ playlistUrl: "https://framatube.org/m.m3u8", files: [] }] });
+    const open = vi.spyOn(window, "open").mockReturnValue(null);
+    render(<LinkEmbed url={LINK} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Play video from framatube.org" }));
+    await waitFor(() => expect(open).toHaveBeenCalledWith(LINK, "_blank", "noopener,noreferrer"));
+    expect(screen.getByRole("link", { name: "Open on framatube.org" })).toHaveAttribute("href", LINK);
+  });
+});

@@ -2,7 +2,7 @@ import { useNostr } from "@nostrify/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo } from "react";
 
-import { assertNotBanned, assertNotDissolved, bundleToEntry } from "@/concord/hooks/useCommunityActions";
+import { assertNotBanned, assertNotBlocked, assertNotDissolved, bundleToEntry } from "@/concord/hooks/useCommunityActions";
 import { useCommunityList, useUpdateCommunityList } from "@/concord/hooks/useCommunityList";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useKnownDmPeers } from "@/hooks/useKnownDmPeers";
@@ -27,6 +27,7 @@ import {
 } from "@/concord/lib/inviteInbox";
 import { liveEntries, rehydrateCommunity } from "@/concord/lib/communityList";
 import { inviteDeliveryRelays, recipientInboxRelays } from "@/concord/lib/inviteRelays";
+import { useIsBlocked } from "@/lib/blocklistStore";
 import { getDecryptConsent } from "@/lib/decryptConsent";
 import { signerNeedsApproval } from "@/lib/bulkDecryptGate";
 import { useDecryptConsent } from "@/hooks/useDecryptConsent";
@@ -382,15 +383,16 @@ export function useInviteInbox(): InviteInbox {
   const { data: invites } = useDirectInvites();
   const { getLastRead } = useReadState();
   const { isKnown, mutedPeers } = useKnownDmPeers();
+  const isBlocked = useIsBlocked();
 
   return useMemo(
     () => splitInviteInbox(
-      invites ?? [],
+      (invites ?? []).filter((invite) => !isBlocked(invite.bundle.community_id)),
       getLastRead(concordInviteReadKey()),
       (pubkey) => isKnown(pubkey, false),
       new Set(mutedPeers),
     ),
-    [invites, getLastRead, isKnown, mutedPeers],
+    [invites, getLastRead, isKnown, mutedPeers, isBlocked],
   );
 }
 
@@ -411,7 +413,8 @@ export function useAcceptDirectInvite() {
       const { bundle } = invite;
       if (directInviteExpired(bundle)) throw new Error(t({ id: "useDirectInvites.expired", defaultMessage: "This invite has expired." }));
 
-      // No accepting into a dissolved community, as with link joins (`completeJoin`).
+      // No accepting into a blocked or dissolved community, as with link joins (`completeJoin`).
+      await assertNotBlocked(nostr, bundle.community_id);
       await assertNotDissolved(nostr, bundle);
       const entry = bundleToEntry(bundle);
       // A banned npub must not accept (CORD-04 §4) — catch-ups included, since the

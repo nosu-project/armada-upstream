@@ -371,6 +371,24 @@ describe("preparePush — relay-scoped NIP-29 identity", () => {
     expect(prepared?.roomKey).toBe("h:wss://relay-a.example|general");
     expect(prepared?.url).toContain("relay-a.example");
   });
+
+  it("opens a thread reply inside its thread", async () => {
+    const root = "a".repeat(64);
+    const event = finalizeEvent({
+      kind: 9,
+      content: "in the thread",
+      tags: [["h", "general"], ["e", root, "", "reply"], ["q", root, "", "b".repeat(64)]],
+      created_at: now(),
+    }, generateSecretKey());
+
+    const prepared = await preparePush({
+      scope: "group",
+      relays: ["wss://relay-a.example"],
+      event,
+    }, null);
+
+    expect(prepared?.url).toBe(`/s/relay-a.example/general/t/${root}/m/${event.id}`);
+  });
 });
 
 describe("preparePush — DM request gating", () => {

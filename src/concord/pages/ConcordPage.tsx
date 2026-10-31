@@ -1948,10 +1948,11 @@ function ConcordCommunityPage() {
     if (threadRoot) setOpenTicket(undefined);
   }
 
-  // Search survives channel switches, resets on community change.
-  const [searchCommunityKey, setSearchCommunityKey] = useState(communityId);
-  if (searchCommunityKey !== communityId) {
-    setSearchCommunityKey(communityId);
+  // Search resets on any channel or community switch.
+  const searchNavKey = `${communityId ?? ""}|${routeChannelId ?? ""}`;
+  const [searchKey, setSearchKey] = useState(searchNavKey);
+  if (searchKey !== searchNavKey) {
+    setSearchKey(searchNavKey);
     setSearchOpen(false);
     setSearchFilters(EMPTY_SEARCH_FILTERS);
   }

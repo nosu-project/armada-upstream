@@ -4,6 +4,8 @@ import { KIND_DM_CHAT, KIND_DM_FILE, type OpenedDm } from "@/lib/nip17/protocol"
 import { dmConvKey } from "@/lib/nip17/conversation";
 import { chatRoute } from "@/lib/routes";
 
+import type { NostrEvent } from "@nostrify/nostrify";
+
 /**
  * Foreground-notification feed: ingest hands its freshly decoded events to
  * the notifier sink instead of the notifier re-reading stores (and racing
@@ -48,6 +50,8 @@ export interface NotifyCandidate {
   relayUrl?: string;
   /** NIP-29 group id (for mute gating); set only for `plane === "nip29"`. */
   groupId?: string;
+  /** The NIP-29 thread a reply belongs to, so a tap opens it (`nip29ThreadRootOf`). */
+  threadRoot?: string;
   /** Concord channel id hex; set only for `plane === "c2"`. */
   channelIdHex?: string;
   /** DM conversation key (`plane === "dm"`); see `dmConvKey`. */
@@ -56,6 +60,11 @@ export interface NotifyCandidate {
   git?: { action: GitNotifyAction; repository: string; ticketId?: string; ticketTitle?: string };
   /** Stable source event id, used to dedupe distinct same-second Git activity. */
   eventId?: string;
+  /**
+   * The gift wrap that carried an encrypted candidate: the only id a push
+   * worker that can't decrypt shares with the page.
+   */
+  wrapId?: string;
 }
 
 export type NotifySink = (candidates: NotifyCandidate[]) => void;
@@ -84,6 +93,7 @@ export function dm17NotifyCandidates(opened: OpenedDm[], self: string): NotifyCa
       path: chatRoute({ kind: "dm", peer: conversation, messageId: dm.rumorId }),
       peer: conversation,
       eventId: dm.rumorId,
+      wrapId: dm.wrapId,
     }];
   });
 }
@@ -105,5 +115,49 @@ export function feedNotifyCandidates(candidates: NotifyCandidate[]): void {
     sink(candidates);
   } catch {
     // the notifier must never break ingest
+  }
+}
+
+/**
+ * Wraps this page opened this session, recorded AFTER their candidates were
+ * fed: one here with no candidate was opened and found nothing to notify.
+ */
+const openedWraps = new Set<string>();
+const OPENED_WRAPS_CAP = 4096;
+
+export function noteWrapsOpened(wrapIds: Iterable<string>): void {
+  for (const id of wrapIds) {
+    if (openedWraps.size >= OPENED_WRAPS_CAP) {
+      const oldest = openedWraps.values().next();
+      if (!oldest.done) openedWraps.delete(oldest.value);
+    }
+    openedWraps.add(id);
+  }
+}
+
+export function wrapOpenedThisSession(wrapId: string): boolean {
+  return openedWraps.has(wrapId);
+}
+
+export type PushedEventIngest = (event: NostrEvent) => Promise<void>;
+
+let pushedIngest: PushedEventIngest | undefined;
+
+/** Register the wire's entry for events a push worker hands the page. */
+export function registerPushedEventIngest(next: PushedEventIngest): () => void {
+  pushedIngest = next;
+  return () => {
+    if (pushedIngest === next) pushedIngest = undefined;
+  };
+}
+
+/** Run a pushed event through the wire, as if a relay had delivered it. */
+export async function ingestPushedEvent(event: NostrEvent): Promise<boolean> {
+  if (!pushedIngest) return false;
+  try {
+    await pushedIngest(event);
+    return true;
+  } catch {
+    return false;
   }
 }

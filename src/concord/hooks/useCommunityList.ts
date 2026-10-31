@@ -1295,6 +1295,20 @@ function usePendingJoins(): CommunityListEntry[] {
 }
 
 /**
+ * The LIVE joined entries less any on the blocklist, without pending joins: what
+ * background sync (wire, sweeps, history walk) may touch. A blocked community
+ * must not be fetched onto the device at all, not merely hidden.
+ */
+export function useJoinedCommunities(): CommunityListEntry[] {
+  const { data } = useCommunityList();
+  const isBlocked = useIsBlocked();
+  return useMemo(
+    () => (data ? liveEntries(data.list).filter((e) => !isBlocked(e.community_id)) : []),
+    [data, isBlocked],
+  );
+}
+
+/**
  * The LIVE Concord membership entries (tombstoned ones stay in the doc but not
  * here), less any on the blocklist. A blocked membership stays in the doc too,
  * so lifting the block brings it back.

@@ -6,6 +6,7 @@ import { loadCatalog, notificationLocale } from "@/i18n/locales";
 import {
   attributedLine,
   cleanContent,
+  isThreadReply,
   mediaKind,
   mentionPubkeys,
   messageLine,
@@ -128,6 +129,18 @@ describe("reactionEmoji", () => {
 
   it("passes a real emoji through", () => {
     expect(reactionEmoji("🎉")).toBe("🎉");
+  });
+});
+
+describe("isThreadReply", () => {
+  const id = "a".repeat(64);
+  it("reads every thread shape and nothing else", () => {
+    expect(isThreadReply(1111, [])).toBe(true);
+    expect(isThreadReply(9, [["E", id]])).toBe(true);
+    expect(isThreadReply(9, [["e", id, "", "reply"]])).toBe(true);
+    expect(isThreadReply(9, [["q", id]])).toBe(false);
+    expect(isThreadReply(9, [["e", id]])).toBe(false);
+    expect(isThreadReply(7, [["e", id, "", "reply"]])).toBe(false);
   });
 });
 

@@ -204,8 +204,8 @@ export function useGroupMessages(
         : undefined,
   });
 
-  // Resolve route ids from the relay tenant for far-back search hits, kept outside the query
-  // cache so a lone old hit can't drag the pagination cursor.
+  // Resolve route ids (far-back search hits, a notified thread's root) from the relay tenant,
+  // kept outside the query cache so a lone old hit can't drag the pagination cursor.
   const focusQuery = useQuery<NostrRumor[]>({
     ...STORE_READ,
     queryKey: ["nip29", "message-focus", relayUrl, groupId, focusSig],
@@ -220,9 +220,27 @@ export function useGroupMessages(
     staleTime: Infinity,
   });
 
+  // Not part of `isLoading`: a dead relay must not hold the timeline's skeleton.
+  const missingSig = focusQuery.data
+    ? focusIds.filter((id) => !focusQuery.data.some((e) => e.id === id)).join(",")
+    : "";
+  const focusFetch = useQuery<NostrRumor[]>({
+    queryKey: ["nip29", "message-focus-fetch", relayUrl, groupId, missingSig],
+    queryFn: ({ signal }) => {
+      const ids = missingSig.split(",");
+      return nostr.relay(relayUrl!).query(
+        [{ ids, kinds: NIP29_TIMELINE_KINDS, "#h": [groupId!], limit: ids.length }],
+        { signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]) },
+      );
+    },
+    enabled: Boolean(relayUrl && groupId && missingSig),
+    staleTime: Infinity,
+    retry: false,
+  });
+
   const focusedData = useMemo(
-    () => sortDedupe([...(query.data ?? []), ...(focusQuery.data ?? [])]),
-    [query.data, focusQuery.data],
+    () => sortDedupe([...(query.data ?? []), ...(focusQuery.data ?? []), ...(focusFetch.data ?? [])]),
+    [query.data, focusQuery.data, focusFetch.data],
   );
 
   useWireScopes((scopes) => {

@@ -139,6 +139,20 @@ describe("useGroupMessages (wire hydration)", () => {
     expect(result.current.data?.some((event) => event.id === oldest.id)).toBe(true);
   });
 
+  it("fetches a routed thread root the store has never held from the relay", async () => {
+    const { wrapper } = setup();
+    h.store.events.push(msg("g1", { created_at: 2_000 }));
+    const root = { ...msg("g1", { created_at: 1_000 }), id: "f".repeat(64) };
+    h.relayEvents = [root];
+
+    const { result } = renderHook(
+      () => useGroupMessages(RELAY, "g1", { threadRoot: root.id }),
+      { wrapper },
+    );
+
+    await waitFor(() => expect(result.current.data?.some((event) => event.id === root.id)).toBe(true));
+  });
+
   it("renders a new message when the wire rings the bus (no socket in the hook)", async () => {
     const { wrapper } = setup();
     const { result } = renderHook(() => useGroupMessages(RELAY, "g1"), { wrapper });

@@ -5571,10 +5571,11 @@ public class NotificationRelayService extends Service {
 
         final boolean mention = mentionsMe;
         final long fTs = (ts > 0 ? ts * 1000L : System.currentTimeMillis());
-        // For NIP-29 kind-1111 thread replies, the thread root lives in the
-        // uppercase `E` tag (NIP-22). We append it to the deep-link so the
-        // WebView can auto-open the thread panel on tap.
-        final String nip29ThreadRoot = kind == 1111 ? tagValue(event, "E") : null;
+        // A NIP-29 thread reply's root (nip29Threads.ts): a kind 9's marked
+        // `e` tags, or a legacy kind-1111's uppercase `E`. We append it to the
+        // deep-link so the WebView can auto-open the thread panel on tap.
+        final String nip29ThreadRoot = kind == 1111 ? tagValue(event, "E")
+                : kind == 9 ? markedThreadRoot(event) : null;
         // Pre-compute the NIP-29 room key for the synchronous active-room check
         // below (so we don't need to re-extract the group id inside the callback).
         final String nip29GroupId = tagValue(event, "h");
@@ -5596,14 +5597,18 @@ public class NotificationRelayService extends Service {
             String url;
             switch (kind) {
                 case 9: {
-                    line = messagePreview(event);
-                    if (line.isEmpty()) line = str(R.string.notif_sent_message);
-                    if (mention) line = str(R.string.notif_mentioned_you, line);
+                    if (nip29ThreadRoot != null) {
+                        line = NotificationContent.messageText(labels(), messagePreview(event), true);
+                    } else {
+                        line = messagePreview(event);
+                        if (line.isEmpty()) line = str(R.string.notif_sent_message);
+                        if (mention) line = str(R.string.notif_mentioned_you, line);
+                    }
                     url = nip29GroupId != null
                             ? "/s/" + relayToRouteParam(relayUrl) + "/" + uriEncode(nip29GroupId)
                             : "/";
-                    // Land on the message itself, not just its channel.
-                    url = appendMessageSegment(url, id);
+                    // Land on the message itself, inside its thread when it is a reply.
+                    url = appendMessageSegment(appendThreadSegment(url, nip29ThreadRoot), id);
                     break;
                 }
                 case 7: {
@@ -8296,6 +8301,28 @@ public class NotificationRelayService extends Service {
             }
         }
         return null;
+    }
+
+    /**
+     * The thread root of a kind 9 carrying NIP-10 MARKED `e` tags (Buzz's
+     * thread shape, mirroring buzzThreadRef in src/buzz/protocol.ts): the
+     * `root` marker, else the last `reply` marker; null without a `reply`.
+     */
+    static String markedThreadRoot(JSONObject event) {
+        JSONArray tags = event.optJSONArray("tags");
+        if (tags == null) return null;
+        String root = null;
+        String reply = null;
+        for (int i = 0; i < tags.length(); i++) {
+            JSONArray tag = tags.optJSONArray(i);
+            if (tag == null || tag.length() < 4 || !"e".equals(tag.optString(0))) continue;
+            String marker = tag.optString(3);
+            if ("root".equals(marker) && root == null) root = tag.optString(1);
+            else if ("reply".equals(marker)) reply = tag.optString(1);
+        }
+        if (reply == null) return null;
+        String result = root != null ? root : reply;
+        return result.isEmpty() ? null : result;
     }
 
     /**

@@ -2,11 +2,11 @@ import { useNostr } from "@nostrify/react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef } from "react";
 
-import { useCommunityList } from "@/concord/hooks/useCommunityList";
+import { useJoinedCommunities } from "@/concord/hooks/useCommunityList";
 import { dissolvedAt } from "@/concord/hooks/useControlPlane";
 import { setChannelHistoryContext, type ChannelSyncContext } from "@/concord/lib/channelSync";
 import { channelsView } from "@/concord/lib/community";
-import { heldChannelKeys, liveEntries, rehydrateCommunity } from "@/concord/lib/communityList";
+import { heldChannelKeys, rehydrateCommunity } from "@/concord/lib/communityList";
 import { readControlFold } from "@/concord/lib/control";
 import { registerStreamKeys } from "@/concord/lib/streamAuth";
 import { onFoldedWrite } from "@/lib/foldedCache";
@@ -37,8 +37,7 @@ function walkSig({ community, channel }: Walk): string {
  */
 export function useChannelHistoryWalk(): void {
   const { nostr } = useNostr();
-  const { data } = useCommunityList();
-  const entries = useMemo(() => (data ? liveEntries(data.list) : []), [data]);
+  const entries = useJoinedCommunities();
   const listSig = useMemo(
     () =>
       entries

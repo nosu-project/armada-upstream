@@ -633,6 +633,8 @@ export function setChannelHistoryContext(channelIdHex: string, ctx: ChannelSyncC
 
 registerSyncTopic("c2hist:", {
   minIntervalMs: 5_000,
+  // Search coverage, not anything on screen: megabytes per round are left for Wi-Fi.
+  unmeteredOnly: true,
   // A walked channel is revisited now and then for gaps the wire's lookback skipped.
   staleAfterMs: 3 * 60 * 60_000,
   handler: async ({ topic, signal }) => {

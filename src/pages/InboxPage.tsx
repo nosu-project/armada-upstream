@@ -23,7 +23,7 @@ import { useRelayGroups } from "@/hooks/useRelayGroups";
 import { useRelayInbox, type InboxItem } from "@/hooks/useRelayInbox";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { shortTimeAgo } from "@/lib/formatTime";
-import { KIND_COMMENT } from "@/lib/nip29";
+import { nip29ThreadRootOf } from "@/lib/nip29Threads";
 import { routeParamToRelay } from "@/lib/platform";
 import { chatRoute } from "@/lib/routes";
 import { cn } from "@/lib/utils";
@@ -95,8 +95,8 @@ function InboxRow({
 }
 
 /**
- * The mention's conversation via the shared {@link ThreadPanel}. A NIP-22 reply
- * (kind 1111) hangs off the root in its uppercase `E` tag.
+ * The mention's conversation via the shared {@link ThreadPanel}, rooted at the
+ * thread a reply belongs to (`nip29ThreadRootOf`).
  */
 function InboxThreadDetail({
   mention,
@@ -111,10 +111,7 @@ function InboxThreadDetail({
 }) {
   const { user } = useCurrentUser();
 
-  const rootId =
-    mention.kind === KIND_COMMENT
-      ? mention.tags.find(([n]) => n === "E")?.[1] ?? mention.id
-      : mention.id;
+  const rootId = nip29ThreadRootOf(mention) ?? mention.id;
   const needFetch = rootId !== mention.id;
   const { data: fetchedRoot } = useEvent(needFetch ? rootId : undefined, [relayUrl]);
   const root: NostrRumor | undefined = needFetch ? fetchedRoot ?? undefined : mention;
@@ -213,10 +210,7 @@ export function InboxPage() {
   };
 
   const openInChannel = (item: InboxItem) => {
-    const root =
-      item.event.kind === KIND_COMMENT
-        ? item.event.tags.find(([n]) => n === "E")?.[1]
-        : undefined;
+    const root = nip29ThreadRootOf(item.event);
     navigate(chatRoute({ kind: "nip29", relayUrl, groupId: item.groupId, threadRoot: root }));
   };
 

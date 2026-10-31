@@ -59,7 +59,13 @@ function loadWorker(options: {
   /** A runtime with no Push API at all (Tenna before its shim). */
   noPushManager?: boolean;
   pushDisabled?: boolean;
-  priorNotifications?: Array<{ tag: string; data: Record<string, unknown>; close?: () => void }>;
+  priorNotifications?: Array<{
+    tag: string;
+    data: Record<string, unknown>;
+    title?: string;
+    body?: string;
+    close?: () => void;
+  }>;
   /** Add each shown notification to `priorNotifications`, like a real tray. */
   trackShown?: boolean;
   /**
@@ -1667,6 +1673,103 @@ describe("napp.push.payload", () => {
     expect(opts.data.event).toBeUndefined();
     // Already failed to open; a refetch would fail the same way.
     expect(worker.sockets).toEqual([]);
+  });
+
+  describe("an event only the open page can open", () => {
+    const CHROMIUM = "https://fcm.googleapis.com/x";
+    const cannotOpen = { preparePush: vi.fn(async () => undefined), pushScope: () => "dm" };
+    /** A page that answers `armada-push-open` with `outcome`, and records every message. */
+    const openingPage = (
+      outcome: string | undefined,
+      over: Partial<WindowClientStub> = {},
+    ) => {
+      const messages: Array<Record<string, unknown>> = [];
+      const client: WindowClientStub = {
+        url: "https://armada.buzz/",
+        visibilityState: "visible",
+        focused: false,
+        ...over,
+        postMessage: (message, transfer) => {
+          const query = message as Record<string, unknown>;
+          messages.push(query);
+          const port = transfer[0] as MessagePort;
+          if (query.type === "armada-push-open" && outcome) {
+            port.postMessage({ eventId: query.eventId, roomKey: "dm:alice", outcome });
+          } else if (query.type === "armada-push-worker-claim") {
+            port.postMessage({ eventId: query.eventId, roomKey: "", outcome: "worker" });
+          } else {
+            port.postMessage({ eventId: query.eventId, roomKey: "", outcome: "unhandled" });
+          }
+        },
+      };
+      return { client, messages };
+    };
+
+    it("hands the wrap to the page and shows nothing of its own when the page presented it", async () => {
+      const page = openingPage("presented");
+      const worker = loadWorker({ runtime: cannotOpen, pushConfig: { self: "me" }, clients: [page.client], pushEndpoint: CHROMIUM });
+
+      await worker.pushPayload(payload({ event: wrapEvent }));
+
+      expect(page.messages[0]).toMatchObject({ type: "armada-push-open", eventId: "w1", event: wrapEvent });
+      // A visible page exempts the push from showing anything.
+      expect(worker.showNotification).not.toHaveBeenCalled();
+    });
+
+    it("re-posts the page's own entry silently where every push must show something", async () => {
+      const page = openingPage("presented");
+      const tray = [{ tag: "dm:alice", data: { url: "/dm/alice" }, title: "Alice", body: "hi" }];
+      const worker = loadWorker({
+        runtime: cannotOpen,
+        pushConfig: { self: "me" },
+        clients: [page.client],
+        pushEndpoint: "https://web.push.apple.com/x",
+        priorNotifications: tray,
+      });
+
+      await worker.pushPayload(payload({ event: wrapEvent }));
+
+      expect(worker.showNotification).toHaveBeenCalledTimes(1);
+      const [title, opts] = worker.showNotification.mock.calls[0] as unknown as [string, Record<string, unknown>];
+      expect(title).toBe("Alice");
+      expect(opts).toMatchObject({ tag: "dm:alice", body: "hi", silent: true, renotify: false });
+    });
+
+    it("shows nothing when the page suppressed it", async () => {
+      const page = openingPage("suppressed");
+      const worker = loadWorker({ runtime: cannotOpen, pushConfig: { self: "me" }, clients: [page.client], pushEndpoint: CHROMIUM });
+
+      await worker.pushPayload(payload({ event: wrapEvent }));
+
+      expect(worker.showNotification).not.toHaveBeenCalled();
+    });
+
+    it("claims the event and shows the generic text when no page opens it", async () => {
+      const page = openingPage(undefined);
+      const worker = loadWorker({ runtime: cannotOpen, pushConfig: { self: "me" }, clients: [page.client], pushEndpoint: CHROMIUM });
+
+      await worker.pushPayload(payload({ event: wrapEvent }));
+
+      expect(page.messages.map((m) => m.type)).toEqual(["armada-push-open", "armada-push-worker-claim"]);
+      expect(worker.showNotification).toHaveBeenCalledTimes(1);
+      const [, opts] = worker.showNotification.mock.calls[0] as unknown as [string, { body: string }];
+      expect(opts.body).toBe("New direct message");
+    });
+
+    it("asks the focused page first and stops at the first that opens it", async () => {
+      const background = openingPage("presented", { visibilityState: "hidden" });
+      const focused = openingPage("presented", { focused: true });
+      const worker = loadWorker({
+        runtime: cannotOpen,
+        pushConfig: { self: "me" },
+        clients: [background.client, focused.client],
+      });
+
+      await worker.pushPayload(payload({ event: wrapEvent }));
+
+      expect(focused.messages.map((m) => m.type)).toEqual(["armada-push-open"]);
+      expect(background.messages).toEqual([]);
+    });
   });
 
   it("shows a group message's text from the event in hand without the bundle", async () => {

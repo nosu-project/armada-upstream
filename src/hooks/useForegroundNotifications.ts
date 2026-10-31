@@ -55,7 +55,12 @@ import {
   markTabAttention,
 } from "@/lib/tabAttention";
 import { PROFILE_FETCH_TIMEOUT_MS } from "@/sw/profileFetch";
-import { registerNotifySink, type NotifyCandidate } from "@/wire/notify";
+import {
+  ingestPushedEvent,
+  registerNotifySink,
+  wrapOpenedThisSession,
+  type NotifyCandidate,
+} from "@/wire/notify";
 import { useWireNip29Groups } from "@/wire/useWireNip29Groups";
 
 import type { NostrEvent, NostrMetadata } from "@nostrify/nostrify";
@@ -77,6 +82,11 @@ const ROOM_ALERT_MAX = 5;
 const MAX_MENTION_LOOKUPS = 8;
 const ROOM_ALERT_WINDOW_MS = 120_000;
 const ROOM_ALERT_MAX_TRACKED = 64;
+/**
+ * How long a page opens a wrap the worker handed it: a signer round trip and
+ * the profile lookups, inside the worker's own budget (`PAGE_OPEN_BUDGET_MS`).
+ */
+export const PUSH_OPEN_WAIT_MS = 4_000;
 
 function levelAdmits(level: NotifLevel, mention: boolean): boolean {
   if (level === "nothing") return false;
@@ -438,6 +448,62 @@ export function useForegroundNotifications(): void {
       workerOwnedPushes.current.set(eventId, roomKey);
       trimExactMap(workerOwnedPushes.current);
     };
+    // An encrypted candidate is known to the page by its rumor id and to a
+    // worker that couldn't open it by its wrap id, so both carry the state.
+    const recordCandidateState = (cand: NotifyCandidate, roomKey: string, outcome: PagePushOutcome) => {
+      recordPushState(cand.eventId, roomKey, outcome);
+      recordPushState(cand.wrapId, roomKey, outcome);
+    };
+    const clearCandidatePresenting = (cand: NotifyCandidate, roomKey: string) => {
+      clearPresenting(cand.eventId, roomKey);
+      clearPresenting(cand.wrapId, roomKey);
+    };
+    const workerOwnsCandidate = (cand: NotifyCandidate, roomKey: string) => (
+      workerOwns(cand.eventId, roomKey) || workerOwns(cand.wrapId, roomKey)
+    );
+    const trimSet = (set: Set<string>) => {
+      if (set.size <= 512) return;
+      const oldest = set.values().next().value;
+      if (oldest !== undefined) set.delete(oldest);
+    };
+    // Wraps a worker that couldn't open them handed here, and wraps that
+    // reached the sink as a candidate.
+    const handedPushes = new Set<string>();
+    const candidateWraps = new Set<string>();
+
+    /**
+     * A worker without the signer hands the page the wrap it can't open. The
+     * page runs it through its own ingest and answers with what its notifier
+     * did, so the worker shows its generic text only when no page could open it.
+     */
+    const answerPushOpen = (event: MessageEvent) => {
+      if (event.data?.type !== "armada-push-open") return;
+      const port = event.ports[0];
+      const eventId = typeof event.data.eventId === "string" ? event.data.eventId : "";
+      const pushed = event.data.event as NostrEvent | undefined;
+      if (!port || !eventId) return;
+
+      handedPushes.add(eventId);
+      trimSet(handedPushes);
+      void (async () => {
+        const reply = (roomKey: string, outcome: string) => port.postMessage({ eventId, roomKey, outcome });
+        if (pushed && typeof pushed === "object" && pushed.id === eventId) void ingestPushedEvent(pushed);
+        const deadline = Date.now() + PUSH_OPEN_WAIT_MS;
+        while (mounted) {
+          const state = stateForWorkerRequest(eventId, "");
+          if (state && state.outcome !== "presenting") return reply(state.roomKey, state.outcome);
+          // Opened with nothing to notify (a self-copy, an edit, a reaction to someone else).
+          if (!state && !candidateWraps.has(eventId) && wrapOpenedThisSession(eventId)) {
+            return reply("*", "suppressed");
+          }
+          if (Date.now() >= deadline) {
+            return reply(state?.roomKey ?? "", state?.outcome ?? "unhandled");
+          }
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        }
+      })();
+    };
+    navigator.serviceWorker?.addEventListener("message", answerPushOpen);
 
     const answerPushPresentationQuery = (event: MessageEvent) => {
       if (event.data?.type !== "armada-push-presentation-query") return;
@@ -663,11 +729,11 @@ export function useForegroundNotifications(): void {
 
       for (const cand of candidates) {
         const initialRoomKey = foregroundPushRoomKey(cand, c.relayByGroup);
-        const suppress = (key: string) => recordPushState(
-          cand.eventId,
-          key,
-          "suppressed",
-        );
+        const suppress = (key: string) => recordCandidateState(cand, key, "suppressed");
+        if (cand.wrapId) {
+          candidateWraps.add(cand.wrapId);
+          trimSet(candidateWraps);
+        }
         if (cand.createdAt <= sessionFloor.current) {
           suppress(initialRoomKey);
           continue;
@@ -712,6 +778,7 @@ export function useForegroundNotifications(): void {
             kind: "nip29",
             relayUrl: relay,
             groupId: cand.groupId,
+            threadRoot: cand.threadRoot,
             messageId: cand.eventId,
           });
           level = c.channelLevel(relay, cand.groupId);
@@ -810,13 +877,16 @@ export function useForegroundNotifications(): void {
           && document.hasFocus(),
         );
 
+        // The worker asked this page to present it, whatever the page's focus.
+        const handed = Boolean(cand.wrapId && handedPushes.has(cand.wrapId));
+
         if (!canShowOsNotification) continue;
 
         // Errors are swallowed so one bad event never breaks the batch.
         void (async () => {
           // A visible page may cover a missing PushEvent only for exact events the worker can arbitrate.
-          if (!canCoordinateExactEvent() && !(await pageOwnsPresentation())) return;
-          if (workerOwns(cand.eventId, roomKey)) return;
+          if (!handed && !canCoordinateExactEvent() && !(await pageOwnsPresentation())) return;
+          if (workerOwnsCandidate(cand, roomKey)) return;
           // Composing is deferred past the last active-room check so an unshown notification leaves no
           // line in the room body.
           let presented: PresentedNotification | undefined;
@@ -880,7 +950,7 @@ export function useForegroundNotifications(): void {
             if (!presented) return;
             // libnotify draws animated GIF icons blank.
             const icon = await desktopSafeNotificationIcon(presented.icon);
-            const allowActivePush = canCoordinateExactEvent();
+            const allowActivePush = handed || canCoordinateExactEvent();
             const n = await showPageOsNotification(presented.title, {
               body: presented.body,
               icon,
@@ -895,16 +965,16 @@ export function useForegroundNotifications(): void {
             }, {
               allowActivePush,
               shouldAbort: () => (
-                workerOwns(cand.eventId, roomKey)
-                || (allowActivePush && !canCoordinateExactEvent())
+                workerOwnsCandidate(cand, roomKey)
+                || (allowActivePush && !handed && !canCoordinateExactEvent())
               ),
-              onPresenting: () => recordPushState(cand.eventId, roomKey, "presenting"),
+              onPresenting: () => recordCandidateState(cand, roomKey, "presenting"),
             });
             if (n === null) {
-              clearPresenting(cand.eventId, roomKey);
+              clearCandidatePresenting(cand, roomKey);
               return;
             }
-            recordPushState(cand.eventId, roomKey, "presented");
+            recordCandidateState(cand, roomKey, "presented");
             if (n) {
               n.onclick = () => {
                 window.focus();
@@ -919,7 +989,7 @@ export function useForegroundNotifications(): void {
               if (isDesktop()) requestDesktopAttention();
             }
           } catch {
-            clearPresenting(cand.eventId, roomKey);
+            clearCandidatePresenting(cand, roomKey);
             // Permission may have changed after the initial gate.
           }
         })();
@@ -932,6 +1002,7 @@ export function useForegroundNotifications(): void {
       removeTabAttentionHandlers();
       navigator.serviceWorker?.removeEventListener("message", answerPushPresentationQuery);
       navigator.serviceWorker?.removeEventListener("message", answerWorkerClaim);
+      navigator.serviceWorker?.removeEventListener("message", answerPushOpen);
     };
   }, [user, notificationSettingsReady]);
 }

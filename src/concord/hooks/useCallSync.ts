@@ -9,6 +9,7 @@ import { kickVerdictPostdatesMembership } from "@/concord/lib/selfRemoval";
 import type { ConcordVoiceContext } from "@/contexts/CallContext";
 import { useCall } from "@/hooks/useCall";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useIsBlocked } from "@/lib/blocklistStore";
 import { logSync } from "@/lib/syncLog";
 
 /**
@@ -28,6 +29,8 @@ export function useCallSync(ctx: ConcordVoiceContext, onLeave: () => void): void
   // Keyed on the join-time snapshot: the live `community` vanishes on dissolve, but the grave outlives it.
   const { data: dissolvedAtMs } = useDissolved(ctx.community);
   const channels = useMemo(() => (community ? channelsView(community, folded) : []), [community, folded]);
+  const isBlocked = useIsBlocked();
+  const blocked = isBlocked(ctx.community.idHex);
   const acted = useRef(false);
 
   useEffect(() => {
@@ -50,6 +53,7 @@ export function useCallSync(ctx: ConcordVoiceContext, onLeave: () => void): void
         entry?.added_at,
       ),
       dissolved: Boolean(dissolvedAtMs),
+      blocked,
     });
     if (decision.action === "stay") return;
     acted.current = true;
@@ -64,5 +68,5 @@ export function useCallSync(ctx: ConcordVoiceContext, onLeave: () => void): void
     );
     // Keep the current broker; §5 migration re-runs in the remounted room.
     joinConcordCall({ community: decision.community, channel: decision.channel, broker: ctx.broker });
-  }, [ctx, listData, community, folded, coalesced, channels, entry, user, dissolvedAtMs, onLeave, joinConcordCall]);
+  }, [ctx, listData, community, folded, coalesced, channels, entry, user, dissolvedAtMs, blocked, onLeave, joinConcordCall]);
 }
