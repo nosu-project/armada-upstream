@@ -76,6 +76,9 @@ import { invalidateSyncTopic } from "@/sync/syncManager";
 import { useSyncTopic } from "@/sync/useSyncTopic";
 import { useWireScopes } from "@/wire/useWireScopes";
 import { shareByRumorId } from "@/lib/shareRows";
+import { evictRemovedMessageMedia } from "@/lib/evictMessageMedia";
+import { otherUsersOfMedia } from "@/lib/removeMessageFromDevice";
+import { getArmadaDB } from "@/lib/db/armadaDB";
 
 import type { NostrEvent } from "@nostrify/nostrify";
 import { t } from "@/i18n";
@@ -918,6 +921,18 @@ export function useChannelTimeline(
     }
     return merged;
   }, [moderated, moderation, optimisticDeleted, readingUser?.pubkey, firstSeen, establishedSinceMs, pauseSince, community?.idHex, channelIdHex, memoryRev, revealTick]);
+
+  // A removed message's media leaves this device too: a moderator deleting it
+  // (abuse, CSAM) shouldn't leave its plaintext in the decrypt cache.
+  const removed = folded.removed;
+  const survivors = folded.messages;
+  useEffect(() => {
+    for (const msg of removed) {
+      // A forward elsewhere on the device (another channel, an older page) still shows it.
+      const message = { id: msg.rumorId, tags: msg.tags, content: msg.content };
+      void evictRemovedMessageMedia(message.id, message.tags, message.content, survivors, () => otherUsersOfMedia(getArmadaDB(), message));
+    }
+  }, [removed, survivors]);
 
   // Wake the fold when a held future-dated message (FUTURE_HOLD_MS) comes due;
   // nothing else re-renders this timeline for it.

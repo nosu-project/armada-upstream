@@ -10,10 +10,12 @@ import {
 } from "@/lib/activeAccount";
 import { useLocalStorage } from "@/hooks/useLocalStorage";
 import { appThemeFont } from "@/lib/fontLoader";
+import { parseProxyList } from "@/lib/mediaPolicy";
 import { useMediaSrc } from "@/hooks/useMediaPolicy";
 import { setPowDifficulty } from "@/lib/pow";
 import { useThemePreview } from "@/lib/themePreview";
 import { hslStringToHex, isDarkTheme } from "@/lib/colorUtils";
+import { applyPaneWidth } from "@/lib/paneWidth";
 import { syncNativeStatusBar } from "@/lib/statusBar";
 import {
   buildThemeCssFromCore,
@@ -21,6 +23,7 @@ import {
   resolveTheme,
   resolveThemeColors,
   type CoreThemeColors,
+  type ThemeFont,
 } from "@/themes";
 
 /** Validate each key individually so one corrupt field doesn't reset everything. */
@@ -151,6 +154,7 @@ export function AppProvider({ storageKey, children }: AppProviderProps) {
     <AppContext.Provider value={value}>
       <ThemeBackgroundSync config={paintedConfig} />
       <ThemeFontSync config={paintedConfig} />
+      <PaneWidthSync config={config} />
       {children}
     </AppContext.Provider>
   );
@@ -188,19 +192,40 @@ function ThemeBackgroundSync({ config }: { config: AppConfig }) {
   return null;
 }
 
-/** Publish the active theme's body font as `--theme-font` (read by Tailwind's `font-sans`). */
-function ThemeFontSync({ config }: { config: AppConfig }) {
-  const family = resolveTheme(config.theme) === "custom" ? config.customTheme?.font?.family : undefined;
+/** Publish the dragged desktop pane widths (see PaneResizeHandle) as CSS variables. */
+function PaneWidthSync({ config }: { config: AppConfig }) {
+  useLayoutEffect(() => applyPaneWidth("channel", config.channelListWidth), [config.channelListWidth]);
+  useLayoutEffect(() => applyPaneWidth("member", config.memberListWidth), [config.memberListWidth]);
+  return null;
+}
 
-  useLayoutEffect(() => {
-    const value = appThemeFont(family ? { family } : undefined);
-    if (!value) return;
-    const root = document.documentElement;
-    root.style.setProperty("--theme-font", value);
-    return () => {
-      root.style.removeProperty("--theme-font");
-    };
-  }, [family]);
+/**
+ * Publish the active theme's body font as `--theme-font` (read by Tailwind's
+ * `font-sans`) and its name font as `--theme-name-font` (read by `font-name`).
+ */
+function ThemeFontSync({ config }: { config: AppConfig }) {
+  const custom = resolveTheme(config.theme) === "custom" ? config.customTheme : undefined;
+  // An adopted theme's uploaded font is someone else's URL; see appThemeFont.
+  const own = !custom?.source;
+  // The provider's own config, since this renders where useMediaPolicy can't read it yet.
+  const proxy = parseProxyList((config.mediaProxies ?? []).join("\n"))[0] ?? "";
+
+  useThemeFontProperty("--theme-font", custom?.font, own, proxy);
+  useThemeFontProperty("--theme-name-font", custom?.titleFont, own, proxy);
 
   return null;
+}
+
+function useThemeFontProperty(property: string, font: ThemeFont | undefined, ownFont: boolean, proxy: string) {
+  const family = font?.family;
+  const url = font?.url;
+  useLayoutEffect(() => {
+    const value = appThemeFont(family ? { family, url } : undefined, { ownFont, policy: { proxy } });
+    if (!value) return;
+    const root = document.documentElement;
+    root.style.setProperty(property, value);
+    return () => {
+      root.style.removeProperty(property);
+    };
+  }, [property, family, url, ownFont, proxy]);
 }

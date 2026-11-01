@@ -60,6 +60,7 @@ const {
   isArmadaAppUrl,
   isExternallyOpenableUrl,
   isSignerHandoffUrl,
+  isMagnetUrl,
   internalAppLinkPath,
 } = require("./appOrigin");
 const {
@@ -183,9 +184,15 @@ function installBundleIpc() {
 
   // The renderer asks on mount too, since the check can finish before it
   // subscribes to armada:web-update-ready.
-  ipcMain.handle("armada:web-update-pending", () => pendingWebBundle !== null);
+  // A downloaded installer (electron-updater) is offered through the same toast.
+  ipcMain.handle("armada:web-update-pending", () => pendingWebBundle !== null || installerDownloaded);
   ipcMain.on("armada:web-update-restart", (event) => {
     if (!mainWindow || event.sender !== mainWindow.webContents) return;
+    if (installerDownloaded) {
+      isQuitting = true;
+      autoUpdater.quitAndInstall(false, true);
+      return;
+    }
     if (pendingWebBundle === null) return;
     isQuitting = true;
     app.relaunch();
@@ -262,6 +269,7 @@ const DEV_URL = (() => {
   }
 })();
 const DEV_ORIGIN = DEV_URL ? new URL(DEV_URL).origin : "";
+const SPELL_DICTIONARY_URL = "https://armada.buzz/dictionaries/";
 const START_URL = DEV_URL || APP_START_URL;
 
 /**
@@ -353,6 +361,8 @@ let macSelfUpdateEligible;
 let updateCheckTimer = null;
 // Id of a web bundle installed this run and awaiting a restart to activate.
 let pendingWebBundle = null;
+// electron-updater has an installer staged; it also installs on quit.
+let installerDownloaded = false;
 const pushToTalk = new PushToTalkController({
   platform: process.platform,
   env: process.env,
@@ -1062,7 +1072,15 @@ function installElectronUpdater() {
   });
 
   autoUpdater.on("update-downloaded", async (info) => {
+    installerDownloaded = true;
+    const wasManual = manualUpdateCheck;
     manualUpdateCheck = false;
+    // An unprompted check must not raise a modal: on Windows it takes focus from
+    // whatever app the user is in. The in-app toast offers the restart instead.
+    if (!wasManual) {
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("armada:web-update-ready");
+      return;
+    }
     const { response } = await showUpdateMessage({
       type: "info",
       title: "Armada update ready",
@@ -1528,17 +1546,17 @@ function installNavigationHandlers() {
     contents.on("will-navigate", (event, url) => {
       if (isAppOrigin(url)) return;
       event.preventDefault();
-      if (isSignerHandoffUrl(url)) {
-        // Only our own top frame may hand a pairing link to the signer: an
-        // embed with top-navigation rights must not pair it to a client of its
-        // choosing. A missing initiator (frame gone) is refused.
+      if (isSignerHandoffUrl(url) || isMagnetUrl(url)) {
+        // Only our own top frame may hand a pairing link to the signer, or a
+        // magnet link to the torrent client: an embed with top-navigation
+        // rights must not choose either. A missing initiator (frame gone) is refused.
         const initiator = event.initiator;
         if (initiator && !initiator.parent && isAppOrigin(initiator.url)) {
           shell.openExternal(url).catch((error) => {
-            console.warn("[shell] no handler for signer link", error);
+            console.warn("[shell] no handler for", new URL(url).protocol, error);
           });
         } else {
-          console.warn("[shell] refused signer link from", initiator?.url);
+          console.warn("[shell] refused", new URL(url).protocol, "link from", initiator?.url);
         }
         return;
       }
@@ -1895,6 +1913,10 @@ if (!gotLock) {
       webRequest: session.defaultSession.webRequest,
       isPackaged: app.isPackaged,
     });
+    // Hunspell dictionaries (Windows/Linux) from our site, not Google's CDN.
+    // The deploy publishes them (scripts/fetch-spell-dictionaries.sh); a locale
+    // it lacks gets no spellcheck rather than a request to Google.
+    session.defaultSession.setSpellCheckerDictionaryDownloadURL(SPELL_DICTIONARY_URL);
     // Before createWindow(): these bind through `web-contents-created`, so
     // they have to be listening before the first webContents exists.
     installNavigationHandlers();

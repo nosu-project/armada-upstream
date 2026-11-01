@@ -69,6 +69,19 @@ export function clearChatDecodeMemo(): void {
   skippedNoKey.clear();
 }
 
+/**
+ * Drop a removed message's decrypted copy. Kept as a remembered failure, so its
+ * wrap is not opened again this session.
+ */
+export function forgetChatRumor(rumorId: string): void {
+  for (const [key, opened] of decodeMemo) {
+    if (opened?.rumorId === rumorId) {
+      decodeMemo.set(key, null);
+      skippedNoKey.delete(key);
+    }
+  }
+}
+
 /** Test seam. */
 export const _resetChatMemoForTests = clearChatDecodeMemo;
 
@@ -142,15 +155,23 @@ function finishChat(pending: PendingChat, channel: Channel, remember: boolean): 
 
 /**
  * Drop stored events violating their epoch's retirement cutoff — rows stored
- * before the rotation was adopted locally.
+ * before the rotation was adopted locally. A stored row names only its epoch
+ * NUMBER, and root and channel-key epochs share one number space (a once-private
+ * channel's key epoch 0 beside root epoch 0), so a number a live stream also
+ * carries has no cutoff here: the open path already applied the opening
+ * stream's own.
  */
 export function filterEpochCutoff(events: OpenedChat[], channel: Channel): OpenedChat[] {
   let cutoffs: Map<string, number> | undefined;
   for (const s of channel.streams) {
     if (s.retiredAt === undefined) continue;
-    (cutoffs ??= new Map()).set(s.epoch.toString(), s.retiredAt);
+    const epoch = s.epoch.toString();
+    const prev = cutoffs?.get(epoch);
+    (cutoffs ??= new Map()).set(epoch, prev === undefined ? s.retiredAt : Math.max(prev, s.retiredAt));
   }
   if (!cutoffs) return events;
+  for (const s of channel.streams) if (s.retiredAt === undefined) cutoffs.delete(s.epoch.toString());
+  if (cutoffs.size === 0) return events;
   const caps = cutoffs;
   return events.filter((ev) => {
     const cap = caps.get(ev.epoch.toString());
@@ -409,6 +430,8 @@ export interface FoldedTimeline {
    * notice rows by the transport.
    */
   timerNotices: OpenedChat[];
+  /** Messages an authorized delete removed in this fold, so their cached media can go. */
+  removed: OpenedChat[];
 }
 
 /** Per-rumor CORD.md zap verdict cache (payment hash when valid, else null). Capped. */
@@ -634,13 +657,17 @@ export function foldTimeline(
   }
 
   // In-batch deletes: self-delete, or an authorized moderator delete.
+  const removed: OpenedChat[] = [];
   for (const [id, msg] of byId) {
     const deleters = deletes.get(id);
     if (!deleters) continue;
     const deleted =
       deleters.has(msg.author) ||
       (moderation && [...deleters].some(([d, act]) => moderation.canDelete(d, msg.author, act)));
-    if (deleted) byId.delete(id);
+    if (deleted) {
+      byId.delete(id);
+      removed.push(msg);
+    }
   }
 
   // Calendar deletes: same authorization as messages.
@@ -732,5 +759,6 @@ export function foldTimeline(
     calendarEvents: [...calendarById.values()],
     rsvps,
     timerNotices: timerNotices.sort((a, b) => (a.ms !== b.ms ? a.ms - b.ms : a.rumorId < b.rumorId ? -1 : 1)),
+    removed,
   };
 }

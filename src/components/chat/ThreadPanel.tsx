@@ -1,3 +1,4 @@
+import { useQueryClient } from "@tanstack/react-query";
 import { Braces, ChevronDown, Copy, EyeOff, Flag, Link2, Link as LinkIcon, Loader2, Maximize2, MessagesSquare, Minimize2, Pencil, Reply, Trash2, X, Zap } from "lucide-react";
 import { nip19 } from "nostr-tools";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -60,6 +61,8 @@ import { sendsOnEnter } from "@/lib/sendOnEnter";
 import { fullDateTime, shortClockTime, shortTimeAgo } from "@/lib/formatTime";
 import { writeClipboardText } from "@/lib/clipboard";
 import { reportDestination, type ReportTarget } from "@/lib/report";
+import { getActivePubkey } from "@/lib/activeAccount";
+import { removeMessageFromDevice } from "@/lib/removeMessageFromDevice";
 import { chatUrl, type ChatRoute } from "@/lib/routes";
 import { cn } from "@/lib/utils";
 import { common, FormattedMessage, useIntl } from "@/i18n";
@@ -186,6 +189,11 @@ export function ThreadMessage({
   // Blocking needs no destination; hiding is viewer-local.
   const personModeration = useUserModeration(event.pubkey, { report: false });
   const hiddenMessages = useHiddenMessages();
+  const queryClient = useQueryClient();
+  const removeLocal = useCallback(() => {
+    const viewer = getActivePubkey();
+    if (viewer) void removeMessageFromDevice(viewer, event, { queryClient });
+  }, [event, queryClient]);
   const reportTarget: ReportTarget =
     isRumor && reportTo?.kind === "network"
       ? { pubkey: event.pubkey }
@@ -383,7 +391,7 @@ export function ThreadMessage({
             <div className="min-w-0 flex flex-col justify-center">
               <div className="flex min-w-0 items-center gap-2">
                 <ProfilePreviewCard pubkey={event.pubkey}>
-                  <button type="button" className="text-chat font-semibold text-primary truncate text-left hover:underline focus:outline-none">
+                  <button type="button" className="text-chat font-name font-semibold text-primary truncate text-left hover:underline focus:outline-none">
                     <DisplayName pubkey={event.pubkey} name={displayName} />
                   </button>
                 </ProfilePreviewCard>
@@ -420,7 +428,7 @@ export function ThreadMessage({
         {!continuation && (
           <div className="flex items-baseline gap-2">
             <ProfilePreviewCard pubkey={event.pubkey}>
-              <button type="button" className="text-chat font-semibold text-primary truncate hover:underline focus:outline-none">
+              <button type="button" className="text-chat font-name font-semibold text-primary truncate hover:underline focus:outline-none">
                 <DisplayName pubkey={event.pubkey} name={displayName} />
               </button>
             </ProfilePreviewCard>
@@ -457,7 +465,7 @@ export function ThreadMessage({
         // A comment row has its own padding, so the strip sits inside its top edge.
         <div className={cn(
           "absolute right-2.5 z-20 flex flex-wrap justify-end items-center max-w-[calc(100%-1.25rem)] gap-0.5 vessel [--vessel-cut:0.45rem] px-1 py-0.5 select-none opacity-0 group-hover/threadmsg:opacity-100 focus-within:opacity-100 transition-opacity",
-          isComment ? "top-1" : continuation ? "-top-3" : "-top-2.5",
+          isComment ? "top-1" : continuation ? "-top-1" : "top-0",
         )}>
           {toolbar}
         </div>
@@ -524,6 +532,7 @@ export function ThreadMessage({
         onOpenChange={setReportOpen}
         destination={reportTo}
         target={reportTarget}
+        onRemoveLocal={removeLocal}
       />
     )}
     {jsonOpen && (

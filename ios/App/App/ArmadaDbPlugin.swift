@@ -37,6 +37,7 @@ public class ArmadaDbPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "kvList", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "kvOps", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "wipe", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "forget", returnType: CAPPluginReturnPromise),
     ]
 
     /// The store, opened on first use.
@@ -121,6 +122,20 @@ public class ArmadaDbPlugin: CAPPlugin, CAPBridgedPlugin {
     @objc func tenants(_ call: CAPPluginCall) {
         do {
             call.resolve(["tenants": try db().tenants()])
+        } catch {
+            call.reject("\(error)")
+        }
+    }
+
+    /// Remove rumors from this device for good (`ArmadaDB.forget`); `ids` is a JSON array.
+    @objc func forget(_ call: CAPPluginCall) {
+        guard let ids = call.getString("ids") else {
+            return call.reject("ids is required")
+        }
+
+        do {
+            try db().forget(ids: ids)
+            call.resolve()
         } catch {
             call.reject("\(error)")
         }

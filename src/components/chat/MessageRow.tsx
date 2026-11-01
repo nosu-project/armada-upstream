@@ -14,7 +14,7 @@ import { Badge } from "@/components/ui/badge";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useScopedIdentity } from "@/hooks/useScopedDisplayName";
 import { getAvatarShape } from "@/lib/avatarShape";
-import { shortClockTime, shortTimeAgo } from "@/lib/formatTime";
+import { fullDateTime, isoDateTime, shortClockTime, shortTimeAgo } from "@/lib/formatTime";
 import { formatTimeLeft } from "@/lib/nip17/disappearing";
 import { frameCss, nameStyleCss, readUltra, ULTRA_NAME_CLASS } from "@/lib/ultra";
 import { cn } from "@/lib/utils";
@@ -234,9 +234,13 @@ export const MessageRow = memo(function MessageRow({
       {/* Relative so the toolbar anchors to the message, not the preview. */}
       <div className="flex items-start gap-3 relative">
       {continuation ? (
-        <span className="shrink-0 w-10 self-stretch flex items-start justify-end pr-0.5 pt-0.5 text-3xs leading-none text-muted-foreground/60 opacity-0 group-hover:opacity-100 transition-opacity tabular-nums select-none">
+        <time
+          dateTime={isoDateTime(createdAt)}
+          title={fullDateTime(createdAt)}
+          className="shrink-0 w-10 self-stretch flex items-start justify-end pr-0.5 pt-0.5 text-3xs leading-none text-muted-foreground/60 opacity-0 group-hover:opacity-100 transition-opacity tabular-nums select-none"
+        >
           {shortClockTime(createdAt)}
-        </span>
+        </time>
       ) : identityOverride ? (
         meshActions ? (
           <MeshProfilePreviewCard
@@ -279,7 +283,7 @@ export const MessageRow = memo(function MessageRow({
                 >
                   <button
                     type="button"
-                    className="text-chat font-semibold text-primary truncate min-w-0 inline-flex items-baseline gap-1 hover:underline focus:outline-none"
+                    className="text-chat font-name font-semibold text-primary truncate min-w-0 inline-flex items-baseline gap-1 hover:underline focus:outline-none"
                     style={color ? { color } : undefined}
                   >
                     <span className="truncate">{displayName}</span>
@@ -292,7 +296,7 @@ export const MessageRow = memo(function MessageRow({
                 </MeshProfilePreviewCard>
               ) : (
                 <span
-                  className="text-chat font-semibold text-primary truncate min-w-0 inline-flex items-baseline gap-1"
+                  className="text-chat font-name font-semibold text-primary truncate min-w-0 inline-flex items-baseline gap-1"
                   style={color ? { color } : undefined}
                 >
                   <span className="truncate">{displayName}</span>
@@ -307,7 +311,7 @@ export const MessageRow = memo(function MessageRow({
               <ProfilePreviewCard pubkey={pubkey}>
                 <button
                   type="button"
-                  className={cn("text-chat font-semibold text-primary truncate min-w-0 hover:underline focus:outline-none", !color && ultra?.name && ULTRA_NAME_CLASS)}
+                  className={cn("text-chat font-name font-semibold text-primary truncate min-w-0 hover:underline focus:outline-none", !color && ultra?.name && ULTRA_NAME_CLASS)}
                   style={color ? { color } : nameStyleCss(ultra?.name)}
                 >
                   <DisplayName pubkey={pubkey} name={displayName} tags={author.data?.event?.tags ?? NO_TAGS} />
@@ -324,9 +328,13 @@ export const MessageRow = memo(function MessageRow({
                 <span className="truncate">{label}</span>
               </Badge>
             )}
-            <span className="text-2xs text-muted-foreground/70 shrink-0">
+            <time
+              dateTime={isoDateTime(createdAt)}
+              title={fullDateTime(createdAt)}
+              className="text-2xs text-muted-foreground/70 shrink-0"
+            >
               {shortTimeAgo(createdAt)}
-            </span>
+            </time>
             {edited && (
               <EditedMark />
             )}
@@ -334,12 +342,13 @@ export const MessageRow = memo(function MessageRow({
           </div>
         )}
         {actions && actionsArmed && (
-          // Floated above the top-right so long names aren't crushed. Pointer only;
+          // Top-right of the hovered row and inside it, so it never covers the row
+          // above (its text or reactions). One line where it fits; a cramped row
+          // wraps it downward rather than past the row's left edge. Pointer only;
           // touch uses the long-press sheet.
           <div data-message-actions className={cn(
             "absolute right-2.5 z-20 flex flex-wrap justify-end items-center max-w-[calc(100%-1.25rem)] gap-0.5 vessel [--vessel-cut:0.45rem] px-1 py-0.5 select-none opacity-0 group-hover:opacity-100 focus-within:opacity-100 has-[[aria-expanded=true]]:opacity-100 transition-opacity",
-            // Overlap the row so it stays inside its hover region.
-            continuation ? "-top-3" : "-top-2.5",
+            continuation ? "-top-1" : "top-0",
           )}>
             {actions}
           </div>
