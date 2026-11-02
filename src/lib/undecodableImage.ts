@@ -1,3 +1,5 @@
+import { sniffImageMime } from "@/lib/fileBytes";
+
 /**
  * An image this browser has no decoder for, prepared to send as a plain file,
  * or undefined when its metadata can't be removed and it must not be sent.
@@ -12,6 +14,27 @@ export async function undecodableImageAsFile(file: File): Promise<File | undefin
   const stripped = isTiff(bytes) ? stripTiff(bytes) : isHeif(bytes) ? stripHeif(bytes) : false;
   if (!stripped) return undefined;
   return new File([bytes], file.name, { type: "application/octet-stream", lastModified: file.lastModified });
+}
+
+/** Bytes enough for every signature {@link sniffPickedImage} reads. */
+export const PICKED_IMAGE_HEAD_BYTES = 64;
+
+/**
+ * An image MIME type for a picked file's leading bytes, whatever the browser
+ * reported. A camera file often arrives untyped (RAW, HEIC without the OS
+ * codec), and an untyped image would otherwise be sent as a plain file with
+ * its location intact. RAWs whose metadata can't be blanked here (CR3, ORF,
+ * RW2) are named too, so they are refused rather than sent.
+ */
+export function sniffPickedImage(head: Uint8Array): string | undefined {
+  const sniffed = sniffImageMime(head);
+  if (sniffed) return sniffed;
+  if (isTiff(head)) return "image/tiff";
+  const ascii = (start: number, len: number) => String.fromCharCode(...head.subarray(start, start + len));
+  if (head.length >= 4 && ["IIRO", "IIRS", "MMOR", "IIU\0"].includes(ascii(0, 4))) return "image/x-raw";
+  if (head.length >= 12 && ascii(4, 8) === "ftypcrx ") return "image/x-canon-cr3";
+  if (isHeif(head)) return "image/heif";
+  return undefined;
 }
 
 /** Thrown on a read past the end or a structure too odd to trust. */
@@ -47,6 +70,11 @@ const TIFF_METADATA_TAGS = new Set([
   0x02bc, // XMP
   0x83bb, // IPTC
   0x8298, // Copyright
+  0x8649, // Photoshop image resources (can embed IPTC and XMP)
+  0x927c, // MakerNote, when a writer puts it in an image IFD
+  0x935c, // ImageSourceData (Photoshop layers)
+  0xa420, // ImageUniqueID, when it sits in an image IFD
+  0xc634, // DNGPrivateData (Adobe's MakN copy of the original MakerNote, serials included)
   0x9c9b, 0x9c9c, 0x9c9d, 0x9c9e, 0x9c9f, // Windows XP title/comment/author/keywords/subject
   0xa430, 0xa431, 0xa432, 0xa433, 0xa434, 0xa435, // owner, serial, lens (also in Exif IFD)
   0xc614, // DNG UniqueCameraModel

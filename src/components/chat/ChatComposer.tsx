@@ -91,7 +91,8 @@ import { describeRefusal, uploadFailureReason } from "@/lib/blossomPreflight";
 import { KIND_GROUP_CHAT, relayRejectionMessage } from "@/lib/nip29";
 import { canDecodeImage, makeImageThumb, resizeImage } from "@/lib/resizeImage";
 import { parseChatRoute, roomPath } from "@/lib/routes";
-import { undecodableImageAsFile } from "@/lib/undecodableImage";
+import { PICKED_IMAGE_HEAD_BYTES, sniffPickedImage, undecodableImageAsFile } from "@/lib/undecodableImage";
+import { stripVideoMetadata } from "@/lib/video/stripMetadata";
 import { consumeShareFor, onShareStashChanged } from "@/lib/shareTarget";
 import { recordSent } from "@/lib/shareTargets";
 import { sendsOnEnter } from "@/lib/sendOnEnter";
@@ -111,6 +112,7 @@ import type { NostrEvent } from "@nostrify/nostrify";
 import type { NostrRumor } from "@/lib/nostrRumor";
 import { WEBXDC_MIME, isWebxdcMime } from "@/lib/webxdcMime";
 import { mintTopicId } from "@/lib/webxdcRealtime";
+import { AvatarInitial } from "@/components/AvatarInitial";
 
 /** Lazy: keeps emoji-mart + its data out of the main bundle. */
 const LazyEmojiPicker = lazy(() => import("@/components/chat/EmojiPicker").then((m) => ({ default: m.EmojiPicker })));
@@ -1133,6 +1135,17 @@ function ChatComposerBody({ relayUrl, groupId, messages, replyTo, onCancelReply,
       const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
       const modelMime = modelMimeFromExt(ext);
       let mime = modelMime ?? (file.type || mimeFromExt(ext));
+      // The reported type is a guess; an image's bytes are not. One labelled as
+      // anything but media must still go through the metadata rules below.
+      if (!modelMime && !/^(image|video|audio)\//.test(mime)) {
+        const sniffed = sniffPickedImage(new Uint8Array(await file.slice(0, PICKED_IMAGE_HEAD_BYTES).arrayBuffer()));
+        if (abort.signal.aborted) return;
+        if (sniffed) {
+          mime = sniffed;
+          // Re-typed: resizeImage reads the file's own type.
+          file = new File([file], file.name, { type: sniffed, lastModified: file.lastModified });
+        }
+      }
       // No decoder for it here (a camera RAW, TIFF, HEIC outside Safari): sent as a
       // file card with its metadata blanked, or not at all where that can't be done.
       if (mime.startsWith("image/") && !(await canDecodeImage(file, mime))) {
@@ -1213,7 +1226,23 @@ function ChatComposerBody({ relayUrl, groupId, messages, replyTo, onCancelReply,
             patchPending({ progress });
           },
         });
-        uploadableFile = video.file;
+        // Also the original when processing couldn't help, location and all.
+        const stripped = await stripVideoMetadata(video.file);
+        if (abort.signal.aborted) return;
+        if (!stripped) {
+          toast({
+            title: t({ id: "chatComposer.cantUpload", defaultMessage: "Can't upload this file" }),
+            description: t({
+              id: "chatComposer.videoMetadataNotRemovable",
+              defaultMessage: "Armada can't remove the location and camera details from this video, so it wasn't sent.",
+            }),
+            variant: "destructive",
+          });
+          return;
+        }
+        uploadableFile = stripped === video.file
+          ? video.file
+          : new File([stripped], video.file.name, { type: video.file.type, lastModified: video.file.lastModified });
       } else if (isAudio) {
         // Tags/cover shown on the card only (recipients read the same bytes); the
         // waveform decodes alongside the upload.
@@ -2748,7 +2777,7 @@ function ReplyBanner({ event, onCancel, onJump }: { event: NostrRumor; onCancel?
           <Avatar shape={getAvatarShape(metadata)} className="size-5 shrink-0">
             <AvatarImage src={metadata?.picture} imeta={author.data?.imeta?.picture} alt="" />
             <AvatarFallback className="bg-primary/20 text-primary text-monogram">
-              {displayName[0]?.toUpperCase()}
+              <AvatarInitial name={displayName} />
             </AvatarFallback>
           </Avatar>
           <span className="font-semibold text-primary shrink-0 truncate max-w-[45%]">
@@ -2825,7 +2854,7 @@ function QuoteBannerBody({ event }: { event: NostrRumor }) {
       <Avatar shape={getAvatarShape(metadata)} className="size-5 shrink-0">
         <AvatarImage src={metadata?.picture} imeta={author.data?.imeta?.picture} alt="" />
         <AvatarFallback className="bg-primary/20 text-primary text-monogram">
-          {displayName[0]?.toUpperCase()}
+          <AvatarInitial name={displayName} />
         </AvatarFallback>
       </Avatar>
       <span className="font-semibold text-primary shrink-0 truncate max-w-[45%]">

@@ -16,7 +16,7 @@ import { useScopedIdentity } from "@/hooks/useScopedDisplayName";
 import { getAvatarShape } from "@/lib/avatarShape";
 import { fullDateTime, isoDateTime, shortClockTime, shortTimeAgo } from "@/lib/formatTime";
 import { formatTimeLeft } from "@/lib/nip17/disappearing";
-import { frameCss, nameStyleCss, readUltra, ULTRA_NAME_CLASS } from "@/lib/ultra";
+import { frameCss, nameStyleCss, readUltra, ULTRA_LIST_NAME_CLASS } from "@/lib/ultra";
 import { cn } from "@/lib/utils";
 import { FormattedMessage, useIntl } from "@/i18n";
 import { useLongPress } from "@/hooks/useLongPress";
@@ -24,6 +24,7 @@ import { useSwipeToReply } from "@/hooks/useSwipeToReply";
 
 import type { ProxyInfo } from "@/lib/nip48";
 import type { ReactNode } from "react";
+import { AvatarInitial } from "@/components/AvatarInitial";
 
 const NO_TAGS: string[][] = [];
 
@@ -263,7 +264,7 @@ export const MessageRow = memo(function MessageRow({
             <Avatar shape={getAvatarShape(metadata)} className="size-10 cursor-pointer transition-opacity hover:opacity-90">
               <AvatarImage src={metadata?.picture} imeta={author.data?.imeta?.picture} alt={displayName} />
               <AvatarFallback className="bg-primary/20 text-primary text-sm">
-                {displayName[0]?.toUpperCase()}
+                <AvatarInitial name={displayName} />
               </AvatarFallback>
             </Avatar>
           </button>
@@ -311,7 +312,7 @@ export const MessageRow = memo(function MessageRow({
               <ProfilePreviewCard pubkey={pubkey}>
                 <button
                   type="button"
-                  className={cn("text-chat font-name font-semibold text-primary truncate min-w-0 hover:underline focus:outline-none", !color && ultra?.name && ULTRA_NAME_CLASS)}
+                  className={cn("text-chat font-name font-semibold text-primary truncate min-w-0 hover:underline focus:outline-none", !color && ultra?.name && ULTRA_LIST_NAME_CLASS)}
                   style={color ? { color } : nameStyleCss(ultra?.name)}
                 >
                   <DisplayName pubkey={pubkey} name={displayName} tags={author.data?.event?.tags ?? NO_TAGS} />

@@ -81,6 +81,7 @@ import { buildThemeVarStyle } from "@/themes";
 
 import type { CSSProperties } from "react";
 import type { ThemeBackground } from "@/lib/themeEvent";
+import { AvatarInitial } from "@/components/AvatarInitial";
 
 /** Lazy: only reachable from the viewer's own profile, behind a click. */
 const ProfileSettings = lazy(
@@ -358,7 +359,7 @@ function ProfileView({ pubkey, onClose }: { pubkey: string; onClose: () => void 
                     <Avatar shape={getAvatarShape(metadata)} className="size-20 md:size-24 border-4 border-background">
                       <AvatarImage src={metadata?.picture} imeta={author.data?.imeta?.picture} alt={displayName} />
                       <AvatarFallback className="bg-primary/20 text-primary text-2xl">
-                        {displayName[0]?.toUpperCase()}
+                        <AvatarInitial name={displayName} />
                       </AvatarFallback>
                     </Avatar>
                   </button>
@@ -677,20 +678,22 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 function FieldValue({ value }: { value: string }) {
   const url = sanitizeUrl(value);
   const embeddable = url && !isLocalNetworkUrl(url) ? url : undefined;
+  // The profile's owner named the host; the viewer's request goes through the media policy.
+  const src = useMediaSrc(embeddable);
 
-  if (embeddable && IMAGE_EXT.test(embeddable)) {
+  if (embeddable && src && IMAGE_EXT.test(embeddable)) {
     return (
       <a href={embeddable} target="_blank" rel="noopener noreferrer" className="block mt-1.5">
-        <img src={embeddable} alt="" className="w-full rounded-lg object-cover" loading="lazy" decoding="async" />
+        <img src={src} alt="" className="w-full rounded-lg object-cover" loading="lazy" decoding="async" />
       </a>
     );
   }
-  if (embeddable && AUDIO_EXT.test(embeddable)) {
-    return <audio controls preload="none" src={embeddable} className="mt-1.5 w-full h-10" />;
+  if (embeddable && src && AUDIO_EXT.test(embeddable)) {
+    return <audio controls preload="none" src={src} className="mt-1.5 w-full h-10" />;
   }
-  if (embeddable && VIDEO_EXT.test(embeddable)) {
+  if (embeddable && src && VIDEO_EXT.test(embeddable)) {
     return (
-      <video controls preload="metadata" src={embeddable} className="mt-1.5 w-full rounded-lg" />
+      <video controls preload="metadata" src={src} className="mt-1.5 w-full rounded-lg" />
     );
   }
   if (!url && EMAIL_RE.test(value.trim())) {
@@ -830,7 +833,7 @@ function PersonRow({ pubkey }: { pubkey: string }) {
         <Avatar shape={getAvatarShape(metadata)} className="size-7 shrink-0">
           <AvatarImage src={metadata?.picture} imeta={author.data?.imeta?.picture} alt="" />
           <AvatarFallback className="bg-primary/20 text-primary text-xs">
-            {name[0]?.toUpperCase()}
+            <AvatarInitial name={name} />
           </AvatarFallback>
         </Avatar>
         <span className="text-sm truncate">{name}</span>
