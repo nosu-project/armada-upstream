@@ -1,4 +1,5 @@
 import { clearImageDims } from "@/components/chat/imageDims";
+import { clearThumbs } from "@/lib/imageThumb";
 import { clearRevealedMedia } from "@/components/chat/revealedMedia";
 import { clearTokenCache } from "@/components/chat/tokenCache";
 import { clearRenderedPlaintext } from "@/hooks/dmRenderCache";
@@ -10,6 +11,7 @@ import { resetKvCaches } from "@/lib/db/kvCache";
 import { resetDecryptConsent } from "@/lib/decryptConsent";
 import { clearEvictedMediaMemory } from "@/lib/evictMessageMedia";
 import { FONT_SCALE_KEY } from "@/lib/fontScale";
+import { EFFECT_KEYS } from "@/lib/reducedMotion";
 import { closeDmEphemeralSubs } from "@/lib/nip17/ephemeralInbox";
 import { clearFoldedMemory } from "@/lib/foldedCache";
 import { clearDeferredFoldMemory } from "@/concord/hooks/useDeferredFold";
@@ -65,6 +67,8 @@ const PRESERVE_LOCAL_STORAGE_KEYS = new Set<string>([
   FONT_SCALE_KEY,
   // Likewise the interface language.
   LOCALE_KEY,
+  // And the motion and effects switches.
+  ...EFFECT_KEYS,
 ]);
 
 /**
@@ -171,6 +175,7 @@ function clearSessionMemos(): void {
   clearImageDims();
   clearMediaCacheMemory();
   clearBuzzMediaCache();
+  clearThumbs();
   clearProfileSyncMemory();
   resetFrequentReactionsCache();
   resetSettingsKeysAnnouncements();

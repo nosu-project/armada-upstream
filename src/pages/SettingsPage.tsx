@@ -34,10 +34,12 @@ import { AboutSettings, SupportSettings } from "@/components/settings/AboutSetti
 import { AccountSettings } from "@/components/settings/AccountSettings";
 import { ChatSettings } from "@/components/settings/ChatSettings";
 import { DesktopSettings } from "@/components/settings/DesktopSettings";
+import { LowMemorySettings } from "@/components/settings/LowMemorySettings";
 import { DiagnosticsSettings } from "@/components/settings/DiagnosticsSettings";
 import { DirectMessageSettings } from "@/components/settings/DirectMessageSettings";
 import { EmojiPackSettings } from "@/components/settings/EmojiPackSettings";
 import { FontScaleSettings } from "@/components/settings/FontScaleSettings";
+import { MotionSettings } from "@/components/settings/MotionSettings";
 import { LanguageSettings } from "@/components/settings/LanguageSettings";
 import { MutedPeopleSettings } from "@/components/settings/MutedPeopleSettings";
 import { MutedWordsSettings } from "@/components/settings/MutedWordsSettings";
@@ -129,7 +131,7 @@ function useSettingsPages(): { pages: Partial<Record<SettingsPageId, PageDef>>; 
         title: intl.formatMessage({ id: "settingsPage.appearance.title", defaultMessage: "Appearance" }),
         icon: Palette,
         tone: "primary",
-        summary: intl.formatMessage({ id: "settingsPage.appearance.summary", defaultMessage: "Theme, language and text size" }),
+        summary: intl.formatMessage({ id: "settingsPage.appearance.summary", defaultMessage: "Theme, language, text size and effects" }),
         render: () => (
           <>
             <SettingsGroup id="appearance">
@@ -140,6 +142,9 @@ function useSettingsPages(): { pages: Partial<Record<SettingsPageId, PageDef>>; 
             <SettingsGroup title={intl.formatMessage({ id: "settingsPage.appearance.text", defaultMessage: "Text" })}>
               <LanguageSettings />
               <FontScaleSettings />
+            </SettingsGroup>
+            <SettingsGroup title={intl.formatMessage({ id: "settingsPage.appearance.motion", defaultMessage: "Effects" })}>
+              <MotionSettings />
             </SettingsGroup>
           </>
         ),
@@ -267,10 +272,11 @@ function useSettingsPages(): { pages: Partial<Record<SettingsPageId, PageDef>>; 
         title: intl.formatMessage({ id: "settingsPage.desktop.title", defaultMessage: "Desktop" }),
         icon: Monitor,
         tone: "muted",
-        summary: intl.formatMessage({ id: "settingsPage.desktop.summary", defaultMessage: "Startup and the tray" }),
+        summary: intl.formatMessage({ id: "settingsPage.desktop.summary", defaultMessage: "Startup, the tray and memory" }),
         render: () => (
           <SettingsGroup id="desktop">
             <DesktopSettings />
+            <LowMemorySettings />
           </SettingsGroup>
         ),
       };

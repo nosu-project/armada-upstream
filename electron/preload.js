@@ -133,6 +133,17 @@ contextBridge.exposeInMainWorld("armadaDesktop", {
   },
 
   /**
+   * Subscribe to whether the window can be seen (shown and not minimized),
+   * including once per page load. Returns an unsubscribe.
+   */
+  onWindowVisibility: (handler) => {
+    if (typeof handler !== "function") return () => {};
+    const listener = (_event, visible) => handler(visible === true);
+    ipcRenderer.on("armada:window-visibility", listener);
+    return () => ipcRenderer.removeListener("armada:window-visibility", listener);
+  },
+
+  /**
    * Read the "launch Armada at login" state: { supported, openAtLogin,
    * openAsHidden }. `openAsHidden` starts the app minimized to the tray.
    */
@@ -143,6 +154,13 @@ contextBridge.exposeInMainWorld("armadaDesktop", {
     ipcRenderer.invoke("armada:set-launch-settings", settings),
 
   /** Linux WebRTC encoder policy. Changes take effect after an app restart. */
+  /** `{ type, data }` of a public https image the page can't read for want of CORS, or null. */
+  fetchImage: (url) => ipcRenderer.invoke("armada:fetch-image", String(url)),
+  /** Low memory mode: { active, configured, restartRequired }. Applies from the next launch. */
+  getLowMemoryMode: () => ipcRenderer.invoke("armada:low-memory-mode"),
+  setLowMemoryMode: (on) => ipcRenderer.invoke("armada:set-low-memory-mode", on === true),
+  /** Restart the app, e.g. to apply low memory mode. */
+  relaunch: () => ipcRenderer.invoke("armada:relaunch"),
   getVideoEncoderMode: () => ipcRenderer.invoke("armada:video-encoder-mode"),
   setVideoEncoderMode: (mode) => ipcRenderer.invoke("armada:set-video-encoder-mode", mode),
 

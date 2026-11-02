@@ -62,6 +62,13 @@ export interface DesktopLaunchSettings {
   openAsHidden: boolean;
 }
 
+/** Low memory mode as the shell has it: what this launch runs, what the next will. */
+export interface DesktopLowMemoryState {
+  active: boolean;
+  configured: boolean;
+  restartRequired: boolean;
+}
+
 export type DesktopVideoEncoderMode = "compatibility" | "hardware";
 
 export interface DesktopVideoEncoderState {
@@ -156,11 +163,16 @@ interface ArmadaDesktopBridge {
   // Optional members: newer bundles may run in older shells; feature-detect.
   onResume?: (handler: () => void) => () => void;
   onWindowHidden?: (handler: () => void) => () => void;
+  onWindowVisibility?: (handler: (visible: boolean) => void) => () => void;
   getLaunchSettings?: () => Promise<DesktopLaunchSettings>;
   setLaunchSettings?: (settings: {
     openAtLogin: boolean;
     openAsHidden: boolean;
   }) => Promise<DesktopLaunchSettings>;
+  fetchImage?: (url: string) => Promise<{ type: string; data: Uint8Array<ArrayBuffer> } | null>;
+  getLowMemoryMode?: () => Promise<DesktopLowMemoryState>;
+  setLowMemoryMode?: (on: boolean) => Promise<DesktopLowMemoryState>;
+  relaunch?: () => Promise<void>;
   getVideoEncoderMode?: () => Promise<DesktopVideoEncoderState>;
   setVideoEncoderMode?: (mode: DesktopVideoEncoderMode) => Promise<DesktopVideoEncoderState>;
   getHevcScreenShareCapability?: () => Promise<DesktopHevcScreenShareCapability>;
@@ -218,6 +230,42 @@ export function desktop(): ArmadaDesktopBridge | undefined {
 export const isDesktop = (): boolean => Boolean(desktop()?.isDesktop);
 
 // Bridge wrappers treat a failing shell as "no answer" rather than propagating.
+export async function getDesktopLowMemoryState(): Promise<DesktopLowMemoryState | null> {
+  try {
+    return (await desktop()?.getLowMemoryMode?.()) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export async function setDesktopLowMemoryMode(on: boolean): Promise<DesktopLowMemoryState | null> {
+  try {
+    return (await desktop()?.setLowMemoryMode?.(on)) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** Whether the shell can read images for hosts that send no CORS headers. */
+export function canFetchDesktopImages(): boolean {
+  return typeof desktop()?.fetchImage === "function";
+}
+
+/** An image's bytes through the shell, for a host without CORS. Null on web/older shells. */
+export async function fetchDesktopImage(url: string): Promise<Blob | null> {
+  try {
+    const out = await desktop()?.fetchImage?.(url);
+    return out ? new Blob([out.data], { type: out.type }) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Restart the desktop app. No-op on web/older shells. */
+export function relaunchDesktop(): void {
+  void desktop()?.relaunch?.()?.catch(() => {});
+}
+
 export async function getDesktopVideoEncoderState(): Promise<DesktopVideoEncoderState | null> {
   try {
     return (await desktop()?.getVideoEncoderMode?.()) ?? null;
@@ -242,6 +290,15 @@ export async function setDesktopVideoEncoderMode(
 export function onDesktopResume(handler: () => void): () => void {
   try {
     return desktop()?.onResume?.(handler) ?? (() => {});
+  } catch {
+    return () => {};
+  }
+}
+
+/** Subscribe to the window being shown or hidden/minimized. No-op on web/older shells. */
+export function onDesktopWindowVisibility(handler: (visible: boolean) => void): () => void {
+  try {
+    return desktop()?.onWindowVisibility?.(handler) ?? (() => {});
   } catch {
     return () => {};
   }

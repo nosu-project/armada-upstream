@@ -55,7 +55,14 @@ const {
   powerMonitor,
   utilityProcess,
 } = require("electron");
-const { autoUpdater } = require("electron-updater");
+// electron-updater and its dependency tree are ~650 KB of source kept resident
+// once required; only the self-updating packages ever use it, and only once
+// installElectronUpdater runs, so it is required then.
+let autoUpdaterInstance = null;
+function updater() {
+  autoUpdaterInstance ??= require("electron-updater").autoUpdater;
+  return autoUpdaterInstance;
+}
 const {
   isArmadaAppUrl,
   isExternallyOpenableUrl,
@@ -68,7 +75,6 @@ const {
   hasDeveloperIdUpdateSignature,
   supportsSelfUpdate,
 } = require("./updateSupport");
-const { NostrReleaseProvider } = require("./nostrUpdateProvider");
 const { integrateAppImage } = require("./desktopIntegration");
 const { listLinuxAudioApplications } = require("./linuxAudioSources");
 const {
@@ -102,6 +108,8 @@ const {
 const { displayMediaGrant, displayMediaHandlerOptions } = require("./displayMediaPolicy");
 const { installYouTubeEmbedIdentity } = require("./youtubeEmbedIdentity");
 const { allowPermissionCheck, allowPermissionRequest } = require("./permissionPolicy");
+const { configureLowMemory, readLowMemoryMode, writeLowMemoryMode } = require("./lowMemory");
+const { fetchImage } = require("./imageFetch");
 
 // Encoder selection is process-wide in Chromium and must be installed before
 // app readiness (and therefore before the GPU process starts). Software is the
@@ -114,6 +122,10 @@ configureLinuxVideoEncoding({
   commandLine: app.commandLine,
   mode: activeLinuxVideoEncoderMode,
 });
+
+// Process-wide V8 flags, so also before readiness (see lowMemory.js).
+const activeLowMemoryMode = readLowMemoryMode({ userDataPath: app.getPath("userData") });
+configureLowMemory({ commandLine: app.commandLine, on: activeLowMemoryMode });
 
 // Keep Linux's desktop-file identity stable in both the AppImage and Flatpak.
 // Electron must receive this before ready so notifications and tray hosts can
@@ -190,7 +202,7 @@ function installBundleIpc() {
     if (!mainWindow || event.sender !== mainWindow.webContents) return;
     if (installerDownloaded) {
       isQuitting = true;
-      autoUpdater.quitAndInstall(false, true);
+      updater().quitAndInstall(false, true);
       return;
     }
     if (pendingWebBundle === null) return;
@@ -433,6 +445,9 @@ protocol.registerSchemesAsPrivileged([
       supportFetchAPI: true,
       stream: true,
       corsEnabled: true,
+      // Keep V8's compiled bytecode for app:// scripts between loads, as
+      // Chromium does for http(s); without it every launch compiles the bundle.
+      codeCache: true,
     },
   },
 ]);
@@ -583,6 +598,17 @@ function createWindow({ show = !startHidden || !closeToTraySupported } = {}) {
   mainWindow.on("closed", () => {
     mainWindow = null;
   });
+  // Tell the page whether anyone can see it (armada:window-visibility). With
+  // background throttling off it can't tell from the Page Visibility API, and
+  // it rests while unseen: no catch-up or history paging, no animation frames.
+  // Sent on every load too, so a launch straight to the tray starts resting.
+  const sendVisibility = () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    mainWindow.webContents.send("armada:window-visibility", mainWindow.isVisible() && !mainWindow.isMinimized());
+  };
+  for (const event of ["show", "hide", "minimize", "restore"]) mainWindow.on(event, sendVisibility);
+  mainWindow.webContents.on("did-finish-load", sendVisibility);
+
   // A flash requested for a notification ends the moment the user is looking
   // (Windows keeps the taskbar entry highlighted until told otherwise).
   mainWindow.on("focus", () => {
@@ -975,7 +1001,7 @@ async function checkForDesktopUpdates(manual = false) {
   updateCheckInFlight = true;
   manualUpdateCheck = manual;
   try {
-    await autoUpdater.checkForUpdates();
+    await updater().checkForUpdates();
   } catch (error) {
     console.warn("[updater] update check failed", error);
     const shouldReport = manual && manualUpdateCheck;
@@ -1077,11 +1103,12 @@ function installElectronUpdater() {
   // AppImage. Windows signing improves publisher verification and reputation,
   // but is not required: a user who installed Armada's unsigned NSIS build has
   // opted into the same HTTPS + feed-SHA-512 trust model the AppImage uses.
+  const autoUpdater = updater();
   configureAutoUpdater(autoUpdater);
   // Overrides the `provider: generic` feed baked into app-update.yml at package
   // time. Passing the class rather than a URL is electron-updater's documented
   // `custom` provider contract.
-  autoUpdater.setFeedURL({ provider: "custom", updateProvider: NostrReleaseProvider });
+  autoUpdater.setFeedURL({ provider: "custom", updateProvider: require("./nostrUpdateProvider").NostrReleaseProvider });
   autoUpdater.logger = console;
 
   autoUpdater.on("update-not-available", async () => {
@@ -1823,6 +1850,26 @@ function installIpc() {
     active: process.platform === "linux" ? activeLinuxVideoEncoderMode : null,
     configured: readLinuxVideoEncoderMode({ userDataPath: app.getPath("userData") }),
   }));
+  const lowMemoryState = () => {
+    const configured = readLowMemoryMode({ userDataPath: app.getPath("userData") });
+    return { active: activeLowMemoryMode, configured, restartRequired: configured !== activeLowMemoryMode };
+  };
+  ipcMain.handle("armada:low-memory-mode", lowMemoryState);
+  // Bytes of an image whose host sends no CORS headers (see imageFetch.js).
+  handleFromMainWindow("armada:fetch-image", (_event, url) => fetchImage(typeof url === "string" ? url : ""));
+  handleFromMainWindow("armada:set-low-memory-mode", (_event, on) => {
+    try {
+      writeLowMemoryMode(on === true, { userDataPath: app.getPath("userData") });
+    } catch (error) {
+      console.warn("failed to save low memory mode", error);
+    }
+    return lowMemoryState();
+  });
+  handleFromMainWindow("armada:relaunch", () => {
+    isQuitting = true;
+    app.relaunch();
+    app.quit();
+  });
   handleFromMainWindow("armada:set-video-encoder-mode", (_event, mode) => {
     try {
       const saved = writeLinuxVideoEncoderMode(mode, { userDataPath: app.getPath("userData") });

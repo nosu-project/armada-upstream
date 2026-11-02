@@ -183,4 +183,15 @@
     var scale = Number(localStorage.getItem("armada:font-scale"));
     if (scale) root.style.setProperty("--font-scale", String(scale / 100));
   } catch (e) { /* storage blocked */ }
+
+  // Reduce effects; see src/lib/reducedMotion.ts, the keys' only writer. The
+  // master is on when set or when the OS reduces motion; a part stored as "0"
+  // is left out, and the OS always forces motion.
+  try {
+    var system = !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+    var on = system || localStorage.getItem("armada:reduce-effects") === "1";
+    var part = function (key) { return on && localStorage.getItem(key) !== "0"; };
+    if (system || part("armada:reduce-motion")) root.setAttribute("data-reduce-motion", "");
+    if (part("armada:reduce-blur")) root.setAttribute("data-reduce-blur", "");
+  } catch (e) { /* storage blocked */ }
 })();
