@@ -27,7 +27,7 @@ import { VoicePresence } from "@/components/VoicePresence";
 import { BotPill } from "@/components/BotPill";
 import { UltraPill } from "@/components/UltraPill";
 import { DeferredRow } from "@/components/DeferredRow";
-import { DisplayName } from "@/components/DisplayName";
+import { DisplayName, NameSkeleton } from "@/components/DisplayName";
 import { DmAvatar } from "@/components/DmAvatar";
 import { NoteToSelfAvatar, NoteToSelfIcon, NOTE_TO_SELF_NAME } from "@/components/NoteToSelfAvatar";
 import { ReportDialog } from "@/components/ReportDialog";
@@ -126,6 +126,7 @@ import { stashShare } from "@/lib/shareTarget";
 import { dittoProfileUrl } from "@/lib/dittoUrl";
 import { tryNpubEncode } from "@/lib/safeNip19";
 import { getDisplayName } from "@/lib/getDisplayName";
+import { useProfilesPending } from "@/lib/profileLoading";
 import { DISAPPEARING_PRESETS, disappearingNotice, formatDisappearingDuration } from "@/lib/nip17/disappearing";
 import { expirationOf, KIND_DM_CHAT, KIND_DM_FILE } from "@/lib/nip17/protocol";
 import { dmConvKey, dmConvPeers } from "@/lib/nip17/conversation";
@@ -277,9 +278,11 @@ const ConversationRow = memo(function ConversationRow({
               <div className={cn("text-chat truncate", unread ? "font-semibold text-foreground" : "font-medium")}>
                 {q ? (
                   <Highlight text={name} query={query} emojiTags={emojiTags} />
-                ) : noteToSelf || group ? (
-                  // Several names: plain text, no single-person DisplayName chrome.
+                ) : noteToSelf ? (
                   name
+                ) : group ? (
+                  // Several names: plain text, no single-person DisplayName chrome.
+                  <GroupName peers={peers} name={name} />
                 ) : (
                   <DisplayName pubkey={peers[0]} name={name} />
                 )}
@@ -994,7 +997,7 @@ const Conversation = memo(function Conversation({
         </div>
         <div className="flex items-center gap-1.5 flex-1 min-w-0">
           <h1 className="font-semibold truncate min-w-0">
-            {noteToSelf || group ? name : <DisplayName pubkey={peer} name={name} />}
+            {noteToSelf ? name : group ? <GroupName peers={peers} name={name} /> : <DisplayName pubkey={peer} name={name} />}
           </h1>
           {!noteToSelf && !group && <BotPill metadata={peerMetadata} />}
           {!noteToSelf && !group && <UltraPill metadata={peerMetadata} />}
@@ -1343,7 +1346,7 @@ const Conversation = memo(function Conversation({
                   <FormattedMessage
                     id="dmsPage.empty.sayHello"
                     defaultMessage="Say hello to {name}!"
-                    values={{ name: group ? name : <DisplayName pubkey={peer} name={name} /> }}
+                    values={{ name: group ? <GroupName peers={peers} name={name} /> : <DisplayName pubkey={peer} name={name} /> }}
                   />
                 </p>
               </div>
@@ -1928,6 +1931,11 @@ const SKELETON_WIDTHS = [
   "70%", "45%", "58%", "38%", "64%", "50%", "72%", "42%",
   "55%", "66%", "34%", "61%", "47%", "75%", "40%", "53%",
 ] as const;
+
+/** A group's joined names, or a skeleton until every participant's profile has resolved. */
+function GroupName({ peers, name }: { peers: readonly string[]; name: string }) {
+  return useProfilesPending(peers) ? <NameSkeleton /> : <>{name}</>;
+}
 
 function ConversationRowSkeletons() {
   return (
@@ -2772,11 +2780,13 @@ export function DMsPage() {
 
   const dismissRequests = useCallback(() => {
     closeManyDms(visibleRequestRows.map((row) => ({ peer: row.conversation, latest: dmListRowLatestMarker(row) })));
-    if (activePeer && visibleRequestRows.some((row) => row.conversation === activePeer)) {
+    const dismissed = (peer: string | undefined) => !!peer && visibleRequestRows.some((row) => row.conversation === peer);
+    if (dismissed(returnPeer)) setReturnPeer(undefined);
+    if (dismissed(activePeer)) {
       setRenderedPeer(undefined);
       navigate("/dm");
     }
-  }, [closeManyDms, visibleRequestRows, activePeer, navigate]);
+  }, [closeManyDms, visibleRequestRows, activePeer, returnPeer, navigate]);
 
   // Opening a request switches the list INTO the request view (never out of it mid-thread).
   useEffect(() => {

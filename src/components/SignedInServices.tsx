@@ -14,6 +14,8 @@ import { useChannelHistoryWalk } from "@/concord/hooks/useChannelHistoryWalk";
 import { useResumePendingJoins } from "@/concord/hooks/useCommunityActions";
 import { useResumeOutgoing } from "@/concord/hooks/useResumeOutgoing";
 import { useResumeGuestbookJoins } from "@/concord/hooks/usePendingGuestbookJoin";
+import { useBannedUserPurge } from "@/hooks/useBannedUserPurge";
+import { useBlockedMediaEviction } from "@/hooks/useBlockedMediaEviction";
 import { useBlocklistSync } from "@/hooks/useBlocklistSync";
 import { useWarmDiscover } from "@/hooks/useDiscover";
 import { useForegroundNotifications } from "@/hooks/useForegroundNotifications";
@@ -41,8 +43,14 @@ export function SignedInServices() {
       <NativeReadDismiss />
       {/* Its own leaf: it reads app config, which changes often. */}
       <NotificationSettingsAbsenceProof />
+      <BlockedMediaEviction />
     </>
   );
+}
+
+function BlockedMediaEviction() {
+  useBlockedMediaEviction();
+  return null;
 }
 
 /** Its own leaf: it reads the live community list, which changes often. */
@@ -70,8 +78,8 @@ export function SignedInPushServices() {
 
 /**
  * Signed-in services that must sit inside `<BrowserRouter>`: the foreground
- * notifier (navigates on click), the Discover directory warm, the community
- * blocklist refresh, and resuming
+ * notifier (navigates on click), the Discover directory warm, the blocklist
+ * refresh and banned users' purge (`purgeBannedUser.ts`), and resuming
  * interrupted Concord joins (`pendingJoins.ts`), their Guestbook Joins
  * (`pendingGuestbookJoin.ts`) and sends (`outgoing.ts`).
  */
@@ -79,6 +87,7 @@ export function SignedInRouterServices() {
   useForegroundNotifications();
   useWarmDiscover();
   useBlocklistSync();
+  useBannedUserPurge();
   useResumePendingJoins();
   useResumeOutgoing();
   // Its own leaf: it reads the live community list, which changes often.

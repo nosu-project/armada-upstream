@@ -1,10 +1,14 @@
 import { useNostr } from '@nostrify/react';
 import { type QueryClient, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useEffect } from 'react';
+import { useContext, useEffect } from 'react';
 
+import { MutedPubkeysContext } from '@/contexts/MutedPubkeysContext';
 import { useEventStore } from '@/hooks/useEventStore';
 import { authorQueryKey, parseAuthorEvent, type AuthorResult } from '@/lib/authorCache';
-import { demandProfiles } from '@/sync/profileSync';
+import { isUserBannedNow } from '@/lib/bannedUsers';
+import { useIsUserBanned } from '@/lib/blocklistStore';
+import { markProfileSettled } from '@/lib/profileLoading';
+import { demandProfiles, hasProfileStamp } from '@/sync/profileSync';
 
 type EventStore = ReturnType<typeof useEventStore>;
 
@@ -22,7 +26,7 @@ export function authorQueryOptions(
   return {
     queryKey: authorQueryKey(pubkey ?? ''),
     queryFn: async (): Promise<AuthorResult> => {
-      if (!pubkey) {
+      if (!pubkey || isUserBannedNow(pubkey)) {
         return {};
       }
 
@@ -34,6 +38,8 @@ export function authorQueryOptions(
       if (existing?.event && (!cached || existing.event.created_at >= cached.created_at)) {
         return existing;
       }
+      // A found profile settles when profileSync seeds it, after its data is in the cache.
+      if (!cached && await hasProfileStamp(pubkey)) markProfileSettled(pubkey);
       return cached ? parseAuthorEvent(cached) : {};
     },
     enabled: !!pubkey,
@@ -45,10 +51,26 @@ export function authorQueryOptions(
   };
 }
 
+/** A banned user's profile: nothing, whatever was cached before the ban. */
+const BANNED: AuthorResult = {};
+const asBanned = (): AuthorResult => BANNED;
+
+/** A blocked user's profile without its images: their picture and banner are theirs to choose. */
+function asBlocked(data: AuthorResult): AuthorResult {
+  const metadata = data.metadata;
+  if (!metadata?.picture && !metadata?.banner && !data.imeta) return data;
+  const stripped = metadata && { ...metadata };
+  delete stripped?.picture;
+  delete stripped?.banner;
+  return { ...data, metadata: stripped, imeta: undefined };
+}
+
 export function useAuthor(pubkey: string | undefined) {
   const { nostr } = useNostr();
   const queryClient = useQueryClient();
   const eventStore = useEventStore();
+  const banned = useIsUserBanned()(pubkey);
+  const blocked = useContext(MutedPubkeysContext).mutedPubkeys.has(pubkey ?? '');
 
   // Declare demand to the profile sync topic for the life of the mount.
   useEffect(() => {
@@ -56,5 +78,8 @@ export function useAuthor(pubkey: string | undefined) {
     return demandProfiles([pubkey], { nostr, queryClient });
   }, [pubkey, nostr, queryClient]);
 
-  return useQuery<AuthorResult>(authorQueryOptions(queryClient, eventStore, pubkey));
+  return useQuery<AuthorResult>({
+    ...authorQueryOptions(queryClient, eventStore, pubkey),
+    select: banned ? asBanned : blocked ? asBlocked : undefined,
+  });
 }

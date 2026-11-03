@@ -9,6 +9,13 @@ const { contextBridge, ipcRenderer } = require("electron");
 
 let screenSourcePicker = null;
 
+// The load-time visibility message can land before the page subscribes, so
+// remember it here, where the listener exists before any page script runs.
+let lastWindowVisibility;
+ipcRenderer.on("armada:window-visibility", (_event, visible) => {
+  lastWindowVisibility = visible === true;
+});
+
 ipcRenderer.on("armada:hevc-screen-share-port", (event, message) => {
   const next = event.ports?.[0];
   const sessionId = message?.sessionId;
@@ -63,16 +70,16 @@ contextBridge.exposeInMainWorld("armadaDesktop", {
   requestAttention: () => ipcRenderer.send("armada:request-attention"),
 
   /**
-   * Tell the shell the web bundle actually painted. The shell serves a
-   * swappable bundle from userData, and this is how it learns the one it chose
+   * Tell the shell the web app actually painted. The shell serves the site it
+   * stored from Armada's nsite, and this is how it learns the one it chose
    * comes up at all — silence past a grace period makes it look for a newer
    * one immediately rather than waiting for the next scheduled check.
    */
   signalWebReady: () => ipcRenderer.send("armada:web-ready"),
 
   /**
-   * Web-bundle updates (Flatpak): whether a newer bundle was installed this
-   * run, a subscription for when one is, and a restart to activate it.
+   * Updates: whether a newer web app (or an installer) was staged this run, a
+   * subscription for when one is, and a restart to activate it.
    */
   isWebUpdatePending: () => ipcRenderer.invoke("armada:web-update-pending"),
   onWebUpdateReady: (handler) => {
@@ -140,6 +147,7 @@ contextBridge.exposeInMainWorld("armadaDesktop", {
     if (typeof handler !== "function") return () => {};
     const listener = (_event, visible) => handler(visible === true);
     ipcRenderer.on("armada:window-visibility", listener);
+    if (lastWindowVisibility !== undefined) handler(lastWindowVisibility);
     return () => ipcRenderer.removeListener("armada:window-visibility", listener);
   },
 
@@ -156,6 +164,9 @@ contextBridge.exposeInMainWorld("armadaDesktop", {
   /** Linux WebRTC encoder policy. Changes take effect after an app restart. */
   /** `{ type, data }` of a public https image the page can't read for want of CORS, or null. */
   fetchImage: (url) => ipcRenderer.invoke("armada:fetch-image", String(url)),
+  /** Bytes in Chromium's HTTP cache, and clearing it. */
+  getWebCacheSize: () => ipcRenderer.invoke("armada:web-cache-size"),
+  clearWebCache: () => ipcRenderer.invoke("armada:clear-web-cache"),
   /** Low memory mode: { active, configured, restartRequired }. Applies from the next launch. */
   getLowMemoryMode: () => ipcRenderer.invoke("armada:low-memory-mode"),
   setLowMemoryMode: (on) => ipcRenderer.invoke("armada:set-low-memory-mode", on === true),
