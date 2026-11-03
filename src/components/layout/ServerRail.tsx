@@ -224,7 +224,7 @@ function DmMiniIcon({ pubkey }: { pubkey: string }) {
         <Avatar shape={getAvatarShape(metadata)} className="size-full">
           <AvatarImage src={metadata?.picture} imeta={author.data?.imeta?.picture} alt="" draggable={false} />
           <AvatarFallback className="bg-primary/20 text-monogram font-semibold leading-none text-primary">
-            <AvatarInitial name={name} />
+            <AvatarInitial name={name} pubkey={pubkey} />
           </AvatarFallback>
         </Avatar>
       )}
@@ -394,7 +394,7 @@ function DmDragGhost({ pubkey }: { pubkey: string }) {
         <Avatar shape={getAvatarShape(metadata)} className="size-12 ring-2 ring-primary">
           <AvatarImage src={metadata?.picture} imeta={author.data?.imeta?.picture} alt={name} />
           <AvatarFallback className="bg-primary/20 font-semibold text-primary">
-            <AvatarInitial name={name} />
+            <AvatarInitial name={name} pubkey={pubkey} />
           </AvatarFallback>
         </Avatar>
       )}
@@ -921,7 +921,7 @@ const DmButton = memo(function DmButton({
                         >
                           <AvatarImage src={metadata?.picture} imeta={author.data?.imeta?.picture} alt={name} />
                           <AvatarFallback className="bg-primary/20 font-semibold text-primary">
-                            <AvatarInitial name={name} />
+                            <AvatarInitial name={name} pubkey={pubkey} />
                           </AvatarFallback>
                         </Avatar>
                       )}
@@ -2008,49 +2008,51 @@ function ServerRailInner({
           <RailTooltipContent side="right"><FormattedMessage id="serverRail.addTooltip" defaultMessage="Add a server or chat" /></RailTooltipContent>
         </Tooltip>
 
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <NavLink
-              to="/discover"
-              aria-label={intl.formatMessage({ id: "serverRail.discover", defaultMessage: "Discover" })}
-              onClick={() => {
-                onPressedFor("nav:discover")();
-                onNavigate?.();
-              }}
-              className="group relative flex items-center justify-center shrink-0"
-            >
-              <span
-                className={cn(
-                  "absolute -left-2 w-[3px] bg-primary transition-all",
-                  "h-2 opacity-0 group-hover:opacity-60 group-hover:h-6",
-                  "group-aria-[current=page]:h-12 group-aria-[current=page]:opacity-100",
-                  pendingNav === "nav:discover" && "h-12 opacity-100",
-                )}
-              />
-              <span
-                className={cn(
-                  "relative block size-12 transition-all duration-150",
-                  "group-aria-[current=page]:[filter:drop-shadow(0_0_3px_hsl(var(--primary)/0.6))]",
-                )}
+        {config.showDiscover && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <NavLink
+                to="/discover"
+                aria-label={intl.formatMessage({ id: "serverRail.discover", defaultMessage: "Discover" })}
+                onClick={() => {
+                  onPressedFor("nav:discover")();
+                  onNavigate?.();
+                }}
+                className="group relative flex items-center justify-center shrink-0"
               >
                 <span
                   className={cn(
-                    "flex items-center justify-center size-12 clip-corner-lg transition-all duration-150",
-                    "bg-muted text-primary opacity-50 saturate-50",
-                    "group-hover:opacity-100 group-hover:saturate-100",
-                    "group-aria-[current=page]:opacity-100 group-aria-[current=page]:saturate-100",
-                    pendingNav === "nav:discover" && "opacity-100 saturate-100",
+                    "absolute -left-2 w-[3px] bg-primary transition-all",
+                    "h-2 opacity-0 group-hover:opacity-60 group-hover:h-6",
+                    "group-aria-[current=page]:h-12 group-aria-[current=page]:opacity-100",
+                    pendingNav === "nav:discover" && "h-12 opacity-100",
+                  )}
+                />
+                <span
+                  className={cn(
+                    "relative block size-12 transition-all duration-150",
+                    "group-aria-[current=page]:[filter:drop-shadow(0_0_3px_hsl(var(--primary)/0.6))]",
                   )}
                 >
-                  <Compass className="size-5" />
+                  <span
+                    className={cn(
+                      "flex items-center justify-center size-12 clip-corner-lg transition-all duration-150",
+                      "bg-muted text-primary opacity-50 saturate-50",
+                      "group-hover:opacity-100 group-hover:saturate-100",
+                      "group-aria-[current=page]:opacity-100 group-aria-[current=page]:saturate-100",
+                      pendingNav === "nav:discover" && "opacity-100 saturate-100",
+                    )}
+                  >
+                    <Compass className="size-5" />
+                  </span>
                 </span>
-              </span>
-            </NavLink>
-          </TooltipTrigger>
-          <RailTooltipContent side="right" className="font-medium">
-            <FormattedMessage id="serverRail.discover" defaultMessage="Discover" />
-          </RailTooltipContent>
-        </Tooltip>
+              </NavLink>
+            </TooltipTrigger>
+            <RailTooltipContent side="right" className="font-medium">
+              <FormattedMessage id="serverRail.discover" defaultMessage="Discover" />
+            </RailTooltipContent>
+          </Tooltip>
+        )}
       </nav>
 
       {/* Bottom safe-area padding lives here so Settings lines up with ChannelSidebar's account switcher. */}

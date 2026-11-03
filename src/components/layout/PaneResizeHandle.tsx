@@ -51,9 +51,15 @@ export function PaneResizeHandle({ pane, className }: { pane: Pane; className?: 
       aria-valuenow={config[CONFIG_KEY[pane]] ?? PANES[pane].fallback}
       tabIndex={0}
       className={cn(
-        "absolute inset-y-0 z-30 hidden sidebar:block w-1.5 cursor-col-resize touch-none",
-        "hover:bg-primary/30 focus-visible:bg-primary/40 focus-visible:outline-none transition-colors",
-        pane === "channel" ? "right-0" : "left-0",
+        // A gutter-wide grab area around a thinner visible bar.
+        "absolute inset-y-0 z-30 w-3 cursor-col-resize touch-none focus-visible:outline-none",
+        // The channel list sits beside the chat on any desktop window; on a phone
+        // it is a full-width drill-down, and the member list is an overlay below `sidebar`.
+        pane === "channel" ? "touch:max-sidebar:hidden" : "hidden sidebar:block",
+        "before:absolute before:inset-y-0 before:left-1/2 before:w-1.5 before:-translate-x-1/2 before:transition-colors",
+        "hover:before:bg-primary/30 focus-visible:before:bg-primary/40",
+        // The channel list's scrollbar is on this edge, so its handle sits in the gutter beside it.
+        pane === "channel" ? "-right-3" : "-left-1.5",
         className,
       )}
       onPointerDown={(e) => {

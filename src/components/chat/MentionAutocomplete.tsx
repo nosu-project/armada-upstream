@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { BotPill } from "@/components/BotPill";
 import { UltraPill } from "@/components/UltraPill";
-import { EmojifiedText } from "@/components/chat/CustomEmoji";
+import { DisplayName } from "@/components/DisplayName";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { usePortalDropdown } from "@/hooks/usePortalDropdown";
 import { useSearchProfiles, useMemberProfiles, type SearchProfile } from "@/hooks/useSearchProfiles";
@@ -305,14 +305,14 @@ function MentionItem({
       <Avatar shape={getAvatarShape(metadata)} className="size-8 shrink-0">
         <AvatarImage src={metadata.picture} imeta={parseProfileImeta(profile.event.tags, metadata)?.picture} alt={displayName} />
         <AvatarFallback className="bg-primary/20 text-primary text-xs">
-          <AvatarInitial name={displayName} />
+          <AvatarInitial name={displayName} pubkey={pubkey} />
         </AvatarFallback>
       </Avatar>
 
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-1.5 min-w-0">
           <div className="font-semibold text-sm truncate">
-            <EmojifiedText tags={profile.event.tags}>{displayName}</EmojifiedText>
+            <DisplayName pubkey={pubkey} name={displayName} tags={profile.event.tags} />
           </div>
           <BotPill metadata={metadata} />
           <UltraPill metadata={metadata} />

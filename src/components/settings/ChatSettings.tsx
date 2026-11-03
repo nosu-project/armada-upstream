@@ -2,11 +2,13 @@ import { Capacitor } from "@capacitor/core";
 
 import { QuickReactionsSettings } from "@/components/settings/QuickReactionsSettings";
 import { SettingsGroup, SettingsRow } from "@/components/settings/SettingsSection";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import type { ReplyGestures } from "@/contexts/AppContext";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useIsTouch } from "@/hooks/useIsMobile";
-import { useIntl } from "@/i18n";
+import { FormattedMessage, useIntl } from "@/i18n";
 import { sendsOnEnter } from "@/lib/sendOnEnter";
 
 /** Settings › Chats: composing, typing status and reactions, everywhere you chat. */
@@ -63,6 +65,47 @@ export function ChatSettings() {
             />
           </SettingsRow>
         )}
+        {isTouch && (
+          <SettingsRow
+            label={intl.formatMessage({ id: "chatSettings.replyGestures", defaultMessage: "Reply gestures" })}
+            description={intl.formatMessage({ id: "chatSettings.replyGesturesDescription", defaultMessage: "Swipe a message left or double-tap it to reply. Off, reply from the message's menu." })}
+          >
+            <Select
+              value={config.replyGestures}
+              onValueChange={(value) => updateConfig((current) => ({ ...current, replyGestures: value as ReplyGestures }))}
+            >
+              <SelectTrigger className="w-40 shrink-0" aria-label={intl.formatMessage({ id: "chatSettings.replyGestures", defaultMessage: "Reply gestures" })}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="swipe"><FormattedMessage id="chatSettings.replyGestures.swipe" defaultMessage="Swipe" /></SelectItem>
+                <SelectItem value="doubleTap"><FormattedMessage id="chatSettings.replyGestures.doubleTap" defaultMessage="Double-tap" /></SelectItem>
+                <SelectItem value="both"><FormattedMessage id="chatSettings.replyGestures.both" defaultMessage="Both" /></SelectItem>
+                <SelectItem value="off"><FormattedMessage id="chatSettings.replyGestures.off" defaultMessage="Off" /></SelectItem>
+              </SelectContent>
+            </Select>
+          </SettingsRow>
+        )}
+        <SettingsRow
+          label={intl.formatMessage({ id: "chatSettings.absoluteTimestamps", defaultMessage: "Show message times" })}
+          description={intl.formatMessage({ id: "chatSettings.absoluteTimestampsDescription", defaultMessage: "Show the time each message was sent, like 3:07 PM, instead of how long ago." })}
+        >
+          <Switch
+            checked={config.absoluteTimestamps}
+            onCheckedChange={(absoluteTimestamps) =>
+              updateConfig((current) => ({ ...current, absoluteTimestamps }))}
+          />
+        </SettingsRow>
+        <SettingsRow
+          label={intl.formatMessage({ id: "chatSettings.foldSimilar", defaultMessage: "Fold similar messages" })}
+          description={intl.formatMessage({ id: "chatSettings.foldSimilarDescription", defaultMessage: "Collapse bursts of near-identical messages in communities into one row. Off, every message is shown." })}
+        >
+          <Switch
+            checked={config.foldSimilarMessages}
+            onCheckedChange={(foldSimilarMessages) =>
+              updateConfig((current) => ({ ...current, foldSimilarMessages }))}
+          />
+        </SettingsRow>
         {Capacitor.getPlatform() === "android" && (
           // Per-device: leave the app vs. walk history from the revealed list pane.
           <SettingsRow

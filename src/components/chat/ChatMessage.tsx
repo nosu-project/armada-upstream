@@ -179,7 +179,7 @@ export function ReplyContextLine({
         <Avatar shape={getAvatarShape(metadata)} className="size-4 shrink-0">
           <AvatarImage src={metadata?.picture} imeta={author.data?.imeta?.picture} alt="" />
           <AvatarFallback className="bg-primary/20 text-primary text-monogram">
-            <AvatarInitial name={name} />
+            <AvatarInitial name={name} pubkey={pubkey} />
           </AvatarFallback>
         </Avatar>
       )}
@@ -237,7 +237,7 @@ function ThreadParticipantAvatar({ pubkey }: { pubkey: string }) {
     <Avatar shape={getAvatarShape(metadata)} className="size-5 ring-2 ring-background">
       <AvatarImage src={metadata?.picture} imeta={author.data?.imeta?.picture} alt={name} />
       <AvatarFallback className="bg-primary/25 text-primary text-monogram font-semibold">
-        <AvatarInitial name={name} />
+        <AvatarInitial name={name} pubkey={pubkey} />
       </AvatarFallback>
     </Avatar>
   );
@@ -426,6 +426,7 @@ const ChatMessageInner = memo(function ChatMessageInner({
   const appConfig = useContext(AppContext)?.config;
   const sendOnEnter = sendsOnEnter(appConfig?.sendOnEnter, isTouch);
   const hoverActions = appConfig?.messageHoverActions ?? true;
+  const replyGestures = appConfig?.replyGestures ?? "swipe";
   const composerBoundsRef = useComposerBoundsRef();
   // The author name is resolved by MessageRow, not here. A bot command reads as
   // an action line rather than raw arguments.
@@ -902,7 +903,8 @@ const ChatMessageInner = memo(function ChatMessageInner({
             "data-active": sheetOpen || undefined,
             "data-event-id": event.id,
           } as React.HTMLAttributes<HTMLDivElement>}
-          onSwipeReply={isTouch && onReply ? () => onReply(event) : undefined}
+          onSwipeReply={isTouch && onReply && (replyGestures === "swipe" || replyGestures === "both") ? () => onReply(event) : undefined}
+          onDoubleTapReply={isTouch && onReply && !isEditing && (replyGestures === "doubleTap" || replyGestures === "both") ? () => onReply(event) : undefined}
           onLongPress={isTouch && !isEditing && menuActions.length > 0 ? openSheet : undefined}
         >
           {body}

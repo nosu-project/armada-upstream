@@ -132,7 +132,7 @@ export function ProfileCard({
   const [emojiPickerOpen, setEmojiPickerOpen] = useState(false);
 
   const displayName = metadata.name || metadata.display_name || intl.formatMessage({ id: 'profileCard.anonymous', defaultMessage: 'Anonymous' });
-  const initial = <AvatarInitial name={displayName} />;
+  const initial = <AvatarInitial name={displayName} pubkey={pubkey} />;
   const patch = (key: keyof NostrMetadata) => (v: string) => onChange?.({ [key]: v });
 
   const bannerUrl = sanitizeImageSrc(metadata.banner);
@@ -372,7 +372,7 @@ export function ProfileCard({
                 onClick={() => editable && setNip05Focused(true)}
               >
                 <span className="shrink min-w-0 overflow-hidden text-ellipsis whitespace-nowrap">
-                  {nip05 ? nip05 : editable ? 'you@domain.com' : ''}
+                  {nip05 ? nip05.replace(/^_@/, '') : editable ? 'you@domain.com' : ''}
                 </span>
               </span>
             )}

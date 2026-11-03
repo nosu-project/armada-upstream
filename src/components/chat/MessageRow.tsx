@@ -1,5 +1,5 @@
 import { Reply } from "lucide-react";
-import { memo, useEffect, useMemo, useState } from "react";
+import { memo, useContext, useEffect, useMemo, useState } from "react";
 
 import { ExpirationTimerIcon } from "@/components/chat/ExpirationTimerIcon";
 import { MeshProfilePreviewCard } from "@/components/chat/MeshProfilePreviewCard";
@@ -11,6 +11,7 @@ import { ProxyPill } from "@/components/ProxyPill";
 import { StaffPill } from "@/components/StaffPill";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
+import { AppContext } from "@/contexts/AppContext";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useScopedIdentity } from "@/hooks/useScopedDisplayName";
 import { getAvatarShape } from "@/lib/avatarShape";
@@ -19,6 +20,7 @@ import { formatTimeLeft } from "@/lib/nip17/disappearing";
 import { useFrameCss, nameStyleCss, readUltra, ULTRA_LIST_NAME_CLASS } from "@/lib/ultra";
 import { cn } from "@/lib/utils";
 import { FormattedMessage, useIntl } from "@/i18n";
+import { useDoubleTap } from "@/hooks/useDoubleTap";
 import { useLongPress } from "@/hooks/useLongPress";
 import { useSwipeToReply } from "@/hooks/useSwipeToReply";
 
@@ -118,6 +120,8 @@ interface MessageRowProps {
    * "leave room" gesture.
    */
   onSwipeReply?: () => void;
+  /** Touch double-tap to reply. */
+  onDoubleTapReply?: () => void;
   /**
    * Touch press-and-hold (action sheet). Ignored on interactive children;
    * cancelled by scroll or swipe.
@@ -144,9 +148,12 @@ export const MessageRow = memo(function MessageRow({
   className,
   containerProps,
   onSwipeReply,
+  onDoubleTapReply,
   onLongPress,
 }: MessageRowProps) {
   const longPress = useLongPress(onLongPress);
+  const doubleTap = useDoubleTap(onDoubleTapReply);
+  const absoluteTime = useContext(AppContext)?.config.absoluteTimestamps ?? false;
   // The toolbar is built only once hovered/focused (it's heavy per row), then latched.
   const [actionsArmed, setActionsArmed] = useState(false);
   const armActions = actions ? () => setActionsArmed(true) : undefined;
@@ -183,6 +190,14 @@ export const MessageRow = memo(function MessageRow({
       {...containerProps}
       {...(onSwipeReply ? swipe.touchHandlers : undefined)}
       {...longPress}
+      onPointerDown={(e) => {
+        longPress.onPointerDown(e);
+        doubleTap.onPointerDown(e);
+      }}
+      onPointerUp={(e) => {
+        longPress.onPointerUp(e);
+        doubleTap.onPointerUp(e);
+      }}
       onPointerEnter={(e) => {
         armActions?.();
         containerProps?.onPointerEnter?.(e);
@@ -265,7 +280,7 @@ export const MessageRow = memo(function MessageRow({
             <Avatar shape={getAvatarShape(metadata)} className="size-10 cursor-pointer transition-opacity hover:opacity-90">
               <AvatarImage src={metadata?.picture} imeta={author.data?.imeta?.picture} alt={displayName} />
               <AvatarFallback className="bg-primary/20 text-primary text-sm">
-                <AvatarInitial name={displayName} />
+                <AvatarInitial name={displayName} pubkey={pubkey} />
               </AvatarFallback>
             </Avatar>
           </button>
@@ -333,9 +348,10 @@ export const MessageRow = memo(function MessageRow({
             <time
               dateTime={isoDateTime(createdAt)}
               title={fullDateTime(createdAt)}
-              className="text-2xs text-muted-foreground/70 shrink-0"
+              className="text-2xs text-muted-foreground/70 shrink-0 tabular-nums"
             >
-              {shortTimeAgo(createdAt)}
+              {/* The day dividers carry the date, so the clock time is exact. */}
+              {absoluteTime ? shortClockTime(createdAt) : shortTimeAgo(createdAt)}
             </time>
             {edited && (
               <EditedMark />

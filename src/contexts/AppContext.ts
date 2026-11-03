@@ -43,6 +43,9 @@ export interface RelayMetadata {
  * Application configuration, persisted to localStorage by AppProvider. Holds no
  * NIP-29 server list: that lives in the user's kind 10009 (`useNip29Servers`).
  */
+export const REPLY_GESTURES = ["off", "swipe", "doubleTap", "both"] as const;
+export type ReplyGestures = (typeof REPLY_GESTURES)[number];
+
 export interface AppConfig {
   theme: Theme;
   /** Custom theme colors, used when `theme === "custom"`. */
@@ -256,6 +259,21 @@ export interface AppConfig {
    */
   messageHoverActions: boolean;
   /**
+   * Touch reply gestures: swipe a message, double-tap it, both, or neither
+   * (reply stays in the message's menu). Default swipe. Synced.
+   */
+  replyGestures: ReplyGestures;
+  /**
+   * Whether bursts of near-identical Concord messages fold into one expandable
+   * "Similar messages" row (default on; `floodCluster.ts`). Off shows every
+   * message; a community pause still collapses. Synced.
+   */
+  foldSimilarMessages: boolean;
+  /** Whether message headers show the clock time instead of "2h" (default off). Synced. */
+  absoluteTimestamps: boolean;
+  /** Whether the rail shows the Discover button (default on). Display only; /discover still opens. Synced. */
+  showDiscover: boolean;
+  /**
    * Bluetooth-mesh incognito (default on): announce `anon<peerid>` instead of the
    * display name, like bitchat. Per-device.
    */
@@ -334,6 +352,10 @@ export const METADATA_CONFIG_KEYS = [
   "trustedMediaHosts",
   "sendOnEnter",
   "messageHoverActions",
+  "replyGestures",
+  "foldSimilarMessages",
+  "absoluteTimestamps",
+  "showDiscover",
   "currencyDisplay",
   "defaultZapMethod",
   "zapsEnabled",
@@ -431,6 +453,10 @@ export const defaultConfig: AppConfig = {
   communityMediaKnownHostsOnly: true,
   trustedMediaHosts: [],
   messageHoverActions: true,
+  replyGestures: "swipe",
+  foldSimilarMessages: true,
+  absoluteTimestamps: false,
+  showDiscover: true,
   meshIncognito: true,
   meshEnabled: false,
   androidBackLeavesApp: true,

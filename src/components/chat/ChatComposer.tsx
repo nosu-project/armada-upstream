@@ -18,7 +18,7 @@ import {
   X,
 } from "lucide-react";
 import { nip19 } from "nostr-tools";
-import { lazy, memo, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from "react";
+import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentType } from "react";
 
 import { AttachSheet, type AttachAction } from "@/components/chat/AttachSheet";
 import { AttachmentTray, MAX_ALT_CHARS, type TrayItem } from "@/components/chat/AttachmentTray";
@@ -90,6 +90,7 @@ import { attachmentExpiration } from "@/lib/blossom";
 import { describeRefusal, uploadFailureReason } from "@/lib/blossomPreflight";
 import { KIND_GROUP_CHAT, relayRejectionMessage } from "@/lib/nip29";
 import { canDecodeImage, makeImageThumb, resizeImage } from "@/lib/resizeImage";
+import { reducedMotion } from "@/lib/reducedMotion";
 import { parseChatRoute, roomPath } from "@/lib/routes";
 import { PICKED_IMAGE_HEAD_BYTES, sniffPickedImage, undecodableImageAsFile } from "@/lib/undecodableImage";
 import { stripVideoMetadata } from "@/lib/video/stripMetadata";
@@ -1923,6 +1924,10 @@ function ChatComposerBody({ relayUrl, groupId, messages, replyTo, onCancelReply,
   const hasContent = content.trim().length > 0 || attachments.length > 0;
   // Touch bar while there's something to send: the GIF button folds into the picker's tabs.
   const compact = isTouch && layout === "bar" && hasContent;
+  // Reduced motion leaves the GIF button's fold with no transition, so no transitionend to remeasure on.
+  useLayoutEffect(() => {
+    if (reducedMotion()) remeasureRef.current();
+  }, [compact]);
   const pickerTabs: readonly PillTab<PickerTab>[] = [
     { id: "emoji", label: intl.formatMessage(msg.emoji), icon: Smile },
     ...(customEmojis.length > 0 ? [{ id: "stickers" as const, label: intl.formatMessage({ id: "chatComposer.stickers", defaultMessage: "Stickers" }), icon: Sticker }] : []),
@@ -2777,7 +2782,7 @@ function ReplyBanner({ event, onCancel, onJump }: { event: NostrRumor; onCancel?
           <Avatar shape={getAvatarShape(metadata)} className="size-5 shrink-0">
             <AvatarImage src={metadata?.picture} imeta={author.data?.imeta?.picture} alt="" />
             <AvatarFallback className="bg-primary/20 text-primary text-monogram">
-              <AvatarInitial name={displayName} />
+              <AvatarInitial name={displayName} pubkey={event.pubkey} />
             </AvatarFallback>
           </Avatar>
           <span className="font-semibold text-primary shrink-0 truncate max-w-[45%]">
@@ -2854,7 +2859,7 @@ function QuoteBannerBody({ event }: { event: NostrRumor }) {
       <Avatar shape={getAvatarShape(metadata)} className="size-5 shrink-0">
         <AvatarImage src={metadata?.picture} imeta={author.data?.imeta?.picture} alt="" />
         <AvatarFallback className="bg-primary/20 text-primary text-monogram">
-          <AvatarInitial name={displayName} />
+          <AvatarInitial name={displayName} pubkey={event.pubkey} />
         </AvatarFallback>
       </Avatar>
       <span className="font-semibold text-primary shrink-0 truncate max-w-[45%]">

@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { defaultConfig } from "@/contexts/AppContext";
+import { defaultConfig, REPLY_GESTURES } from "@/contexts/AppContext";
 import { PAYMENT_METHOD_LIST, type PaymentTargetType } from "@/lib/paymentTargets";
 import { MAX_POW_DIFFICULTY } from "@/lib/pow";
 
@@ -159,6 +159,10 @@ export const AppConfigSchema = z.object({
   trustedMediaHosts: z.array(z.string()).catch(defaultConfig.trustedMediaHosts),
   sendOnEnter: SendOnEnterSchema.optional().catch(undefined),
   messageHoverActions: z.boolean().catch(defaultConfig.messageHoverActions),
+  replyGestures: z.enum(REPLY_GESTURES).catch(defaultConfig.replyGestures),
+  foldSimilarMessages: z.boolean().catch(defaultConfig.foldSimilarMessages),
+  absoluteTimestamps: z.boolean().catch(defaultConfig.absoluteTimestamps),
+  showDiscover: z.boolean().catch(defaultConfig.showDiscover),
   currencyDisplay: z.enum(["usd", "sats"]).catch(defaultConfig.currencyDisplay),
   defaultZapMethod: z.enum(PAYMENT_METHOD_TYPES).catch(defaultConfig.defaultZapMethod),
   zapsEnabled: z.boolean().catch(defaultConfig.zapsEnabled),
@@ -211,6 +215,14 @@ export const MetadataDocSchema = z.looseObject({
   sendOnEnter: SendOnEnterSchema.optional(),
   /** Desktop hover action strip on messages. */
   messageHoverActions: z.boolean().optional(),
+  /** Touch reply gestures: off, swipe, double-tap or both. */
+  replyGestures: z.enum(REPLY_GESTURES).optional(),
+  /** Fold near-identical Concord bursts into "Similar messages". */
+  foldSimilarMessages: z.boolean().optional(),
+  /** Clock time instead of relative time in message headers. */
+  absoluteTimestamps: z.boolean().optional(),
+  /** The rail's Discover button. */
+  showDiscover: z.boolean().optional(),
   currencyDisplay: z.enum(["usd", "sats"]).optional(),
   defaultZapMethod: z.enum(PAYMENT_METHOD_TYPES).optional(),
   zapsEnabled: z.boolean().optional(),

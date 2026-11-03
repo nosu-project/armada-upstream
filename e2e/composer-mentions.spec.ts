@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { devices, expect, test, type Page } from "@playwright/test";
 
 import { loginAs, makePerson, profilesOf, settle } from "./screenshotWorld";
 
@@ -21,8 +21,14 @@ async function offline(page: Page) {
   });
 }
 
-async function bootChannel(page: Page) {
+async function bootChannel(page: Page, config?: Record<string, unknown>) {
   const me = makePerson("viewer", "", 286);
+  if (config) {
+    await page.context().addInitScript(
+      ([key, value]) => localStorage.setItem(key, value),
+      [`armada:app-config:${me.pubkey}`, JSON.stringify(config)] as const,
+    );
+  }
   const ana = makePerson("ana", "", 20);
   await offline(page);
   await page.route("https://emoji.test/**", (r) => r.fulfill({
@@ -102,4 +108,89 @@ test("a custom emoji shows as its image and is sent as its shortcode", async ({ 
   await page.keyboard.press("Enter");
   const sent = page.locator("[data-event-id]").filter({ hasText: "there" });
   await expect(sent.locator("img[alt=':blob:']")).toBeVisible();
+});
+
+// Reduce motion is on whenever the OS asks for it. Its stylesheet once gave
+// every element a 0.01ms transition, so the overlay read back its pre-write
+// font size, divided it out as a text zoom, and drew the text smaller than the
+// textarea under it: the caret drifted further from the glyphs with every word.
+test("the overlay keeps the textarea's font under Reduce motion", async ({ page }) => {
+  test.setTimeout(120_000);
+  await page.context().addInitScript(() => localStorage.setItem("armada:reduce-effects", "1"));
+  await bootChannel(page);
+  await expect(page.locator("html")).toHaveAttribute("data-reduce-motion", "");
+
+  const field = page.getByRole("textbox").last();
+  await field.click();
+  await page.keyboard.type("adwjdi wdwdwdw wdwd   wdwdwd wdwd");
+
+  const fonts = await page.evaluate(() => {
+    const textarea = [...document.querySelectorAll<HTMLTextAreaElement>("textarea.rt-input")].pop()!;
+    const inner = textarea.parentElement!.querySelector<HTMLElement>(".rt-inner")!;
+    const piece = inner.querySelector<HTMLElement>(".rt-piece")!;
+    return [getComputedStyle(textarea).font, getComputedStyle(inner).font, getComputedStyle(piece).fontSize];
+  });
+  expect(fonts[1]).toBe(fonts[0]);
+  expect(fonts[0]).toContain(fonts[2]);
+});
+
+// A theme font that needs no download changes the textarea's font without a
+// resize or a `loadingdone`; the overlay must follow it all the same.
+test("the overlay follows a theme font that needs no loading", async ({ page }) => {
+  test.setTimeout(120_000);
+  await bootChannel(page);
+  const field = page.getByRole("textbox").last();
+  await field.click();
+  await page.keyboard.type("adwjdi wdwdwdw wdwd");
+  await page.evaluate(() => document.documentElement.style.setProperty("--theme-font", "monospace"));
+
+  const fonts = () => page.evaluate(() => {
+    const textarea = [...document.querySelectorAll<HTMLTextAreaElement>("textarea.rt-input")].pop()!;
+    const inner = textarea.parentElement!.querySelector<HTMLElement>(".rt-inner")!;
+    return [getComputedStyle(textarea).fontFamily, getComputedStyle(inner).fontFamily];
+  });
+  await expect.poll(async () => (await fonts())[0]).toContain("monospace");
+  const [textareaFont, overlayFont] = await fonts();
+  expect(overlayFont).toBe(textareaFont);
+});
+
+// Reply gestures are touch-only: a desktop double-click selects as usual.
+test("double-clicking a message on desktop doesn't reply", async ({ page }) => {
+  test.setTimeout(120_000);
+  await bootChannel(page);
+  await page.locator("[data-event-id]").filter({ hasText: "hello" }).getByText("hello").dblclick();
+  await page.waitForTimeout(500);
+  await expect(page.getByText("Replying to")).toHaveCount(0);
+});
+
+test.describe("on a phone", () => {
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const { defaultBrowserType, ...phone } = devices["Pixel 7"];
+  test.use(phone);
+
+  async function doubleTap(page: Page, text: string) {
+    const box = (await page.locator("[data-event-id]").filter({ hasText: text }).getByText(text).boundingBox())!;
+    const cdp = await page.context().newCDPSession(page);
+    const point = [{ x: box.x + box.width / 2, y: box.y + box.height / 2, id: 0 }];
+    for (let i = 0; i < 2; i++) {
+      await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: point });
+      await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+      await page.waitForTimeout(80);
+    }
+  }
+
+  test("double-tapping a message replies when the setting includes it", async ({ page }) => {
+    test.setTimeout(120_000);
+    await bootChannel(page, { replyGestures: "both" });
+    await doubleTap(page, "hello");
+    await expect(page.getByText("Replying to")).toBeVisible();
+  });
+
+  test("double-tapping does nothing with the default swipe-only setting", async ({ page }) => {
+    test.setTimeout(120_000);
+    await bootChannel(page);
+    await doubleTap(page, "hello");
+    await page.waitForTimeout(500);
+    await expect(page.getByText("Replying to")).toHaveCount(0);
+  });
 });

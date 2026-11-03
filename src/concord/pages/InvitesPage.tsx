@@ -232,7 +232,7 @@ function FriendFace({ pubkey, className }: { pubkey: string; className?: string 
     >
       <AvatarImage src={metadata?.picture} imeta={author.data?.imeta?.picture} alt={name} />
       <AvatarFallback className="bg-primary/20 text-monogram font-semibold text-primary">
-        <AvatarInitial name={name} />
+        <AvatarInitial name={name} pubkey={pubkey} />
       </AvatarFallback>
     </Avatar>
   );
@@ -644,7 +644,7 @@ export function InviteDetail({
                     <Avatar shape={getAvatarShape(senderMeta)} className="size-11">
                       <AvatarImage src={senderMeta?.picture} imeta={senderAuthor.data?.imeta?.picture} alt={senderName} />
                       <AvatarFallback className="bg-primary/20 font-semibold text-primary">
-                        <AvatarInitial name={senderName} />
+                        <AvatarInitial name={senderName} pubkey={sender} />
                       </AvatarFallback>
                     </Avatar>
                     {followsSender && (
@@ -847,13 +847,12 @@ export function InvitesPage() {
   const { items, requests, unreadCount } = useInviteInbox();
   const { markRead } = useReadState();
   const [selectedWrapId, setSelectedWrapId] = useState<string | undefined>(undefined);
-  const [showRequests, setShowRequests] = useState(false);
+  // Collapsed until asked, even when there is nothing else: strangers' invites are where spam lands.
+  const [requestsOpen, setRequestsOpen] = useState(false);
 
   const all = useMemo(() => [...items, ...requests], [items, requests]);
   const selected = all.find((it) => it.invite.wrapId === selectedWrapId)?.invite;
   const selectedIsRequest = requests.some((it) => it.invite.wrapId === selectedWrapId);
-  // Nothing else to show: no reason to make the viewer expand them.
-  const requestsOpen = showRequests || items.length === 0;
 
   // Mark everything seen (one high-water mark) while on screen — not while
   // Settings covers the page. Seeing isn't accepting.
@@ -879,7 +878,7 @@ export function InvitesPage() {
       underlay={
         <>
           <ServerRail />
-          <div className="flex flex-1 sidebar:flex-none sidebar:w-80 min-w-0 flex-col safe-area-top h-full">
+          <div className="flex w-80 touch:max-sidebar:flex-1 min-w-0 flex-col safe-area-top h-full">
             <header className="relative h-12 touch:h-[3.25rem] mx-gutter mt-1 sidebar:mt-3 px-2 sidebar:px-3 flex items-center gap-1.5 shrink-0 clip-corner-lg bg-chrome">
               <MailPlus className="size-5 text-muted-foreground shrink-0" />
               <h1 className="font-semibold truncate leading-tight">
@@ -917,7 +916,7 @@ export function InvitesPage() {
                       <button
                         type="button"
                         aria-expanded={requestsOpen}
-                        onClick={() => setShowRequests(!requestsOpen)}
+                        onClick={() => setRequestsOpen(!requestsOpen)}
                         className="mt-2 flex w-full items-center gap-1.5 px-3 py-2 touch:py-3 text-left text-xs font-semibold uppercase tracking-wider text-muted-foreground transition-colors hover:text-foreground"
                       >
                         <ChevronRight className={cn("size-3.5 shrink-0 transition-transform", requestsOpen && "rotate-90")} />

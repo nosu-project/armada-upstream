@@ -72,6 +72,7 @@ import {
   ChatHeaderMenuTrigger,
   ChatHeaderTitle,
   ChatHeaderViewItems,
+  keepItemFocus,
 } from "@/components/chat/ChatHeader";
 import { ChatSearchBar } from "@/components/chat/ChatSearchBar";
 import { ChatShell } from "@/components/chat/ChatShell";
@@ -3296,7 +3297,7 @@ function ConcordCommunityPage() {
               {/* No onNavigate: closing this list would flash this community's chat
                   before the route changes. */}
               <ServerRail />
-              {channelList(() => setChannelsOpen(false), "flex-1 sidebar:flex-none")}
+              {channelList(() => setChannelsOpen(false), "touch:max-sidebar:flex-1")}
             </>
           ),
         }}
@@ -3365,7 +3366,7 @@ function ConcordCommunityPage() {
 
               <DropdownMenu>
                 <ChatHeaderMenuTrigger />
-                <DropdownMenuContent align="end" className="w-52">
+                <DropdownMenuContent align="end" className="w-52" onCloseAutoFocus={keepItemFocus}>
                   <ChatHeaderViewItems
                     onSearch={view === "channel" && channel ? () => setSearchOpen(true) : undefined}
                     onMembers={() => setMembersOpen(true)}
