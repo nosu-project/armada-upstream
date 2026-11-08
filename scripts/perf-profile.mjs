@@ -10,6 +10,7 @@
  *   node scripts/perf-profile.mjs --only idle-thread,switch
  *   node scripts/perf-profile.mjs --only concord-switch --cpu-profile   # + hot functions
  *   node scripts/perf-profile.mjs --react-timings   # per-component self ms (inflates CPU)
+ *   node scripts/perf-profile.mjs --cpu-throttle 4   # the main thread N× slower, nearer a phone
  *
  * Scenarios (each a fresh page on the same seeded origin):
  *   dm-walk      a fresh account whose 3000 DMs are on its DM relay and none
@@ -32,6 +33,8 @@
  *                the query cache and module caches, and a heap-snapshot diff of
  *                round 2 against the last (`leak-diff.txt`: what grew, and what
  *                holds it). --leak-rounds <n> (10)
+ *                   (--ranked seeds the community on the vsk-13 Roster, so the
+ *                   owner's background Concord duties stay mounted)
  *   concord-type    composing in #general: per-keystroke cost to the next frame
  *   concord-type-touch  the same, phone-sized with touch emulation
  *   concord-walk    a community with only each channel's newest page on disk and
@@ -239,6 +242,8 @@ page.on("pageerror", (e) => errors.push(String(e).slice(0, 300)));
 page.on("crash", () => errors.push("RENDERER CRASHED"));
 const cdp = await context.newCDPSession(page);
 await cdp.send("Performance.enable");
+// Survives navigations within the page, so the warm reload is throttled too.
+if (opt("cpu-throttle", "")) await cdp.send("Emulation.setCPUThrottlingRate", { rate: Number(opt("cpu-throttle", "1")) });
 
 /**
  * Nothing this run does may land on a relay. The throwaway account still
@@ -809,6 +814,7 @@ try {
         others: world.peers.slice(0, 8).map((p) => p.pubkey),
         channelSizes: [CONCORD_BIG, 60, 60, 60, 60, 60, 60, 60],
         lines: LINES,
+        ranked: process.argv.includes("--ranked"),
       },
     );
     console.log(`\nseeded community ${concord.communityId.slice(0, 8)}… (${CONCORD_BIG} + 7×60 messages) in ${Date.now() - seedAt}ms`);
@@ -833,7 +839,23 @@ try {
       await page.keyboard.press("Escape");
       return opened;
     })();
-    save("concord-boot", { bootMs, painted, profileCardOpens, errors: errorsSince(mark), report: await report(page) });
+    const coldReport = await report(page);
+    // Warm: the same channel reloaded, as every launch after the first opens it, from its snapshot.
+    const t1 = Date.now();
+    const { result: warmPainted, hot: warmHot } = await cpuProfile("concord-boot-warm", async () => {
+      await page.goto(channelPath(0));
+      return until(page, generalVisible, 90_000);
+    });
+    const warmBootMs = Date.now() - t1;
+    await perfReady(page);
+    // When each script arrived on the warm load: a chunk fetched late holds the first paint behind it.
+    const warmScripts = await page.evaluate(() =>
+      performance.getEntriesByType("resource")
+        .filter((e) => e.name.endsWith(".js"))
+        .map((e) => ({ name: e.name.replace(/^.*\/assets\//, ""), start: Math.round(e.startTime), end: Math.round(e.responseEnd), kb: Math.round(e.decodedBodySize / 1024) }))
+        .sort((a, b) => a.start - b.start),
+    );
+    save("concord-boot", { bootMs, painted, warmBootMs, warmPainted, warmHot, warmScripts, profileCardOpens, errors: errorsSince(mark), report: coldReport, warmReport: await report(page) });
 
     if (wants("concord-idle")) {
       console.log(`▶ concord-idle (${IDLE_SEC}s)`);
@@ -1085,6 +1107,8 @@ try {
     // The same page once the walk has had its window: what it costs to sit there afterwards.
     const after = await measureIdle(page, cdp, Number(opt("walk-after-sec", "60")));
     const heapFloorAfterMB = await heapFloorMB(cdp);
+    // Read after that forced GC: `after.listeners` still counts collectable abort and request listeners.
+    const listenersAfterGc = (await metrics(cdp)).JSEventListeners;
     // What the walk left retained, for DevTools → Memory → load.
     if (flag("heap-snapshot")) await writeHeapSnapshot(cdp, "concord-walk.heapsnapshot");
     // Read the coverage from the seed page, which bundles the store's readers.
@@ -1097,6 +1121,7 @@ try {
       cost: cost(a, b, (Date.now() - t) / 1000),
       after,
       heapFloorAfterMB,
+      listenersAfterGc,
       longTasks: {
         count: longTasks.length,
         totalMs: longTasks.reduce((n, [, d]) => n + d, 0),

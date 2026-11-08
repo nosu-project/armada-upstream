@@ -9,6 +9,8 @@ struct OpenedChat {
     let content: String
     let tags: [[String]]
     let createdAt: Int
+    /// Its time in ms (CORD-02 §4): `createdAt` plus its `ms` tag.
+    let ms: Int
     /// The channel whose key opened it, already checked against the binding.
     let channelIdHex: String
 }
@@ -42,10 +44,10 @@ enum Concord {
     /// they can't yet see. A small grace, so ordinary sub-second clock jitter
     /// between honest clients doesn't flap — NOT the hour of ingest skew NIP-17
     /// tolerates (`Dm17.maxFutureSkewSecs`).
-    static let futureHoldSecs = 2
+    static let futureHoldSecs = 5
 
     /// Kinds claimed by a NON-chat plane (CORD-02 §5): control, guestbook
-    /// (join/leave, kick, snapshot) and rekey.
+    /// (join/leave, kick, snapshot, timeout, nickname) and rekey.
     ///
     /// The chat ingress refuses these, and that refusal is half a fence. A
     /// community's planes share one tenant and a plane is read back BY KIND, so
@@ -53,7 +55,7 @@ enum Concord {
     /// kind-3308 rumor carrying a valid channel binding and have it served as a
     /// control edition — and nothing downstream would catch it, a stored rumor
     /// having no seal left whose form could be checked.
-    static let planeKinds: Set<Int> = [3308, 3306, 3309, 3312, 3303]
+    static let planeKinds: Set<Int> = [3308, 3306, 3309, 3312, 3314, 3315, 3303]
 
     /// Open a chat wrap under the stream key that claims it.
     ///
@@ -67,6 +69,18 @@ enum Concord {
     /// and this matches the web worker's rule rather than the Android
     /// service's laxer one.
     static func open(wrap: NostrEvent, stream: ConcordStream) -> OpenedChat? {
+        if case .chat(let opened) = read(wrap: wrap, stream: stream) { return opened }
+        return nil
+    }
+
+    /// What a wrap held: a chat rumor, or one that opened but is malformed (a bad `ms`,
+    /// CORD-02 §5), which is dropped rather than announced as a wrap that wouldn't open.
+    enum Read {
+        case chat(OpenedChat)
+        case malformed
+    }
+
+    static func read(wrap: NostrEvent, stream: ConcordStream) -> Read? {
         guard wrap.kind == kindWrap || wrap.kind == kindWrapEphemeral else { return nil }
         guard wrap.pubkey == stream.pubkey else { return nil }
         guard let convKey = Hex.decode(stream.conversationKey), convKey.count == 32 else {
@@ -104,18 +118,34 @@ enum Concord {
         // a private channel, or one in another community.
         guard rumor.uniqueTag("channel") == stream.channelId else { return nil }
         guard rumor.uniqueTag("epoch") == stream.epoch else { return nil }
+        // Only read addresses are listened on, where a `wepoch` is forged (CORD-03 §3):
+        // stored, the timeline would stand it as a writer's post.
+        guard !rumor.tags.contains(where: { $0.first == "wepoch" }) else { return nil }
 
         guard rumor.kind == kindMessage || rumor.kind == kindReaction else { return nil }
+        guard let ms = resolvedMs(createdAt: rumor.createdAt, tags: rumor.tags) else { return .malformed }
 
-        return OpenedChat(
+        return .chat(OpenedChat(
             rumorId: claimedId,
             author: seal.pubkey,
             kind: rumor.kind,
             content: rumor.content,
             tags: rumor.tags,
             createdAt: rumor.createdAt,
+            ms: ms,
             channelIdHex: stream.channelId
-        )
+        ))
+    }
+
+    /// A rumor's time in ms: `createdAt` plus its first `ms` tag, or nil when that tag is
+    /// malformed, which refuses the rumor as `resolveMs` in `src/concord/lib/stream.ts` does.
+    static func resolvedMs(createdAt: Int, tags: [[String]]) -> Int? {
+        guard let tag = tags.first(where: { $0.first == "ms" }) else { return createdAt * 1000 }
+        guard tag.count > 1 else { return nil }
+        let raw = tag[1]
+        let digits = raw.utf8.allSatisfy { $0 >= 0x30 && $0 <= 0x39 }
+        guard digits, (1...3).contains(raw.utf8.count), raw == "0" || !raw.hasPrefix("0"), let n = Int(raw) else { return nil }
+        return createdAt * 1000 + n
     }
 
     /// Find the stream whose address authored this wrap, if any is watched.

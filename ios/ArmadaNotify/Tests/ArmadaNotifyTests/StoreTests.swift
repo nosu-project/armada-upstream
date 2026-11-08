@@ -45,7 +45,7 @@ final class StoreTests: XCTestCase {
     private func chat(kind: Int = 9, tags: [[String]] = []) -> OpenedChat {
         OpenedChat(
             rumorId: String(repeating: "2", count: 64), author: peer, kind: kind,
-            content: "shipped it", tags: tags, createdAt: now, channelIdHex: channel
+            content: "shipped it", tags: tags, createdAt: now, ms: now * 1000, channelIdHex: channel
         )
     }
 
@@ -339,6 +339,117 @@ final class StorelessTests: XCTestCase {
     /// buzzing now would notify about a message the reader can't yet see, and
     /// the OS would stamp it "in 5m" from the future createdAt. Mirrors the web
     /// worker's `prepareConcord` and the Android service's FUTURE_HOLD_MS.
+    /// A post its readers collapse rings nobody (CORD-04 §8, Vector `post_silenced`):
+    /// an author without SEND in the Channel, or inside a running Timeout's window.
+    func testSilencesACollapsedPost() {
+        let concord = vectorObject("concord")
+        let author = vectorString("bobPk")
+        let wrap: [AnyHashable: Any] = napp(concord["wrap"] as! [String: Any])
+        func prepared(_ denied: Set<String>, _ timeouts: [String: (from: Int, until: Int)]) -> Bool? {
+            let stream = ConcordStream(
+                pubkey: concord["streamPk"] as! String, conversationKey: concord["convKey"] as! String,
+                epoch: concord["epoch"] as! String, communityId: "cc", channelId: concord["channelId"] as! String,
+                banned: [], sendDenied: denied, timeouts: timeouts
+            )
+            let config = PushConfig(policy: .generic, selfPubkey: self_, knownPeers: [], secretKey: nil, nip46: nil, concord: [stream])
+            return PushProcessor(store: nil, config: config, now: 1_700_000_600).prepare(userInfo: wrap)?.drop
+        }
+        XCTAssertNotEqual(prepared([], [:]), true, "the baseline notifies")
+        XCTAssertEqual(prepared([author], [:]), true, "no SEND in an open Channel")
+        XCTAssertEqual(prepared([], [author: (from: 1_700_000_000, until: 1_700_001_000)]), true, "inside a running Timeout")
+        XCTAssertNotEqual(prepared([], [author: (from: 1_700_000_000, until: 1_700_000_550)]), true, "a lapsed Timeout")
+    }
+
+    /// A reaction rings only the author it reacts to: one saying `@everyone` is not a
+    /// mass mention, even where every member may mention everyone. Mirrors the web
+    /// worker and the Android service.
+    func testAReactionSayingEveryoneRingsNobodyElse() {
+        let (wrap, stream) = streamWrap(kind: 7, content: "@everyone", tags: [["p", vectorString("bobPk")]], everyoneMayMention: true)
+        let config = PushConfig(policy: .generic, selfPubkey: self_, knownPeers: [], secretKey: nil, nip46: nil, concord: [stream])
+        XCTAssertEqual(PushProcessor(store: nil, config: config, now: 1_700_000_600).prepare(userInfo: napp(wrap))?.drop, true)
+    }
+
+    /// A parity gap, pinned as it stands: in Vector a reaction never rings, even one to the
+    /// viewer's own message (it reaches `on_community_update`, never the notifier); here it
+    /// still does, as in the web worker. Flip the assertion when that changes.
+    func testAReactionToTheViewersMessageStillRingsUnlikeVector() {
+        let (wrap, stream) = streamWrap(kind: 7, content: "🔥", tags: [["e", String(repeating: "ab", count: 32)], ["p", self_]])
+        let config = PushConfig(policy: .generic, selfPubkey: self_, knownPeers: [], secretKey: nil, nip46: nil, concord: [stream])
+        XCTAssertNotEqual(PushProcessor(store: nil, config: config, now: 1_700_000_600).prepare(userInfo: napp(wrap))?.drop, true)
+    }
+
+    /// A malformed `ms` tag makes the rumor malformed, so it is dropped, never announced as
+    /// a wrap that wouldn't open (CORD-02 §5, Vector `resolve_ms_strict`). Mirrors the web
+    /// worker and the Android service.
+    func testDropsAMessageWithAMalformedMsTag() {
+        for ms in ["1000", "05", "x"] {
+            let (wrap, stream) = streamWrap(kind: 9, content: "hi", tags: [["ms", ms]])
+            let config = PushConfig(policy: .generic, selfPubkey: self_, knownPeers: [], secretKey: nil, nip46: nil, concord: [stream])
+            XCTAssertEqual(PushProcessor(store: nil, config: config, now: 1_700_000_600).prepare(userInfo: napp(wrap))?.drop, true, ms)
+        }
+    }
+
+    /// A chat wrap by bob at a fresh stream address, and the stream that opens it.
+    private func streamWrap(kind: Int, content: String, tags: [[String]], everyoneMayMention: Bool = false) -> ([String: Any], ConcordStream) {
+        let streamSk = String(repeating: "03", count: 32)
+        let streamPk = Secp256k1.xonlyPublicKey(secretKey: Hex.decode(streamSk)!)!
+        let convKey = Secp256k1.conversationKey(secretKey: Hex.decode(streamSk)!, peerPubkeyHex: streamPk)!
+        let channel = String(repeating: "cd", count: 32)
+        var rumor: [String: Any] = [
+            "pubkey": vectorString("bobPk"), "created_at": 1_700_000_500, "kind": kind, "content": content,
+            "tags": [["channel", channel], ["epoch", "1"]] + tags,
+        ]
+        rumor["id"] = NostrEvent.parse(rumor)!.computedId
+        func json(_ o: [String: Any]) -> String { String(data: try! JSONSerialization.data(withJSONObject: o), encoding: .utf8)! }
+        let seal = signedEvent(
+            secretKeyHex: vectorString("bobSk"), kind: Concord.kindSealEncrypted, tags: [],
+            content: Nip44.encrypt(conversationKey: convKey, plaintext: json(rumor))!, createdAt: 1_700_000_500
+        )
+        let wrap = signedEvent(
+            secretKeyHex: streamSk, kind: 1059, tags: [["p", vectorString("alicePk")]],
+            content: Nip44.encrypt(conversationKey: convKey, plaintext: json(seal))!, createdAt: 1_700_000_500
+        )
+        let stream = ConcordStream(
+            pubkey: streamPk, conversationKey: Hex.encode(convKey), epoch: "1", communityId: "cc", channelId: channel,
+            banned: [], mentionEveryoneAnyone: everyoneMayMention
+        )
+        return (wrap, stream)
+    }
+
+    /// At a restricted Channel's read address a post rings only from those who manage it (CORD-03 §1 Held posts).
+    func testRingsOnlyManagersInARestrictedChannel() {
+        let concord = vectorObject("concord")
+        let author = vectorString("bobPk")
+        let wrap: [AnyHashable: Any] = napp(concord["wrap"] as! [String: Any])
+        func prepared(_ posters: Set<String>?) -> Bool? {
+            let stream = ConcordStream(
+                pubkey: concord["streamPk"] as! String, conversationKey: concord["convKey"] as! String,
+                epoch: concord["epoch"] as! String, communityId: "cc", channelId: concord["channelId"] as! String,
+                banned: [], postAuthors: posters
+            )
+            let config = PushConfig(policy: .generic, selfPubkey: self_, knownPeers: [], secretKey: nil, nip46: nil, concord: [stream])
+            return PushProcessor(store: nil, config: config, now: 1_700_000_600).prepare(userInfo: wrap)?.drop
+        }
+        XCTAssertNotEqual(prepared(nil), true, "an unrestricted Channel")
+        XCTAssertNotEqual(prepared([author]), true, "a manager's post")
+        XCTAssertEqual(prepared(["00" + String(repeating: "1", count: 62)]), true, "a post nobody vouches for")
+    }
+
+    /// A Community sender is named by the Nickname they go by there (CORD-04 §10, Vector `sender_in`).
+    func testNamesTheSenderByTheirNickname() {
+        let concord = vectorObject("concord")
+        let author = vectorString("bobPk")
+        let stream = ConcordStream(
+            pubkey: concord["streamPk"] as! String, conversationKey: concord["convKey"] as! String,
+            epoch: concord["epoch"] as! String, communityId: "cc", channelId: concord["channelId"] as! String,
+            banned: [], nicknames: [author: "Captain"]
+        )
+        let config = PushConfig(policy: .generic, selfPubkey: self_, knownPeers: [], secretKey: nil, nip46: nil, concord: [stream])
+        let prepared = PushProcessor(store: nil, config: config, now: 1_700_000_600)
+            .prepare(userInfo: napp(concord["wrap"] as! [String: Any]))
+        XCTAssertTrue((prepared?.title ?? "").contains("Captain") || (prepared?.body ?? "").contains("Captain"), "\(String(describing: prepared))")
+    }
+
     func testHoldsAFutureDatedConcordMessage() {
         let concord = vectorObject("concord")
         let stream = ConcordStream(
@@ -368,6 +479,22 @@ final class StorelessTests: XCTestCase {
                 .prepare(userInfo: wrap)?.drop,
             true,
             "a message no longer in the future must notify"
+        )
+        // A device clock behind the relays', corrected by the app's offset, judges it due.
+        let corrected = ConcordStream(
+            pubkey: stream.pubkey, conversationKey: stream.conversationKey, epoch: stream.epoch,
+            communityId: stream.communityId, channelId: stream.channelId, banned: [],
+            clockOffsetMs: 1_001_000_000
+        )
+        let correctedConfig = PushConfig(
+            policy: .generic, selfPubkey: self_, knownPeers: [], secretKey: nil,
+            nip46: nil, concord: [corrected]
+        )
+        XCTAssertNotEqual(
+            PushProcessor(store: nil, config: correctedConfig, now: 1_699_000_000)
+                .prepare(userInfo: wrap)?.drop,
+            true,
+            "the relays' clock decides what's dated ahead"
         )
     }
 
@@ -560,6 +687,13 @@ final class SenderIdentityTests: XCTestCase {
         """)
         XCTAssertEqual(parsed?.concord.first?.mentionEveryoneAuthors, Set([moderator]))
         XCTAssertEqual(parsed?.concord.first?.muted, true)
+        XCTAssertEqual(parsed?.concord.first?.mentionEveryoneAnyone, false)
+        let anyone = PushConfig.parse(json: """
+        {"policy":"generic","self":"\(self_)","knownPeers":[],
+         "concord":[{"pk":"\(peer)","convKey":"\(peer)","epoch":"1",
+         "communityId":"cc","channelId":"dd","mentionEveryoneAnyone":true}]}
+        """)
+        XCTAssertEqual(anyone?.concord.first?.mentionEveryoneAnyone, true)
         XCTAssertTrue(PushProcessor.hasEveryoneMention("Heads up @everyone!"))
         XCTAssertFalse(PushProcessor.hasEveryoneMention("mail@everyone.example"))
         XCTAssertFalse(PushProcessor.hasEveryoneMention("@everyone_else"))

@@ -14,6 +14,8 @@ import { onWireScopes } from "@/wire/bus";
 import { getArmadaDB } from "@/lib/db/armadaDB";
 import {
   ackPendingWraps,
+  heldPostAfter,
+  heldWriterPostSince,
   openedToStored,
   parkPendingWraps,
   peekPendingWraps,
@@ -141,6 +143,40 @@ describe("concord rumor store", () => {
     expect(back.author).toBe(s.pubkey);
     expect(back.epoch).toBe(0n);
     expect(back.channelIdHex).toBe(idHex);
+  });
+
+  it("finds an author's post in any Channel after a time, to the millisecond", async () => {
+    const { channel, idHex } = makeChannel();
+    const alice = signer();
+    writeRumors(CID, await openChatBatch([await wrapChat(chatRumor(idHex, alice, KIND_MESSAGE, "back", 5_000_500), channel, alice)], channel));
+    await eventually(() => queryChannelRumors(CID, idHex, { limit: 10 }), (r) => r.length === 1);
+    expect(await heldPostAfter(CID, alice.pubkey, 5_000_000)).toBe(true);
+    expect(await heldPostAfter(CID, alice.pubkey, 5_000_500)).toBe(false);
+    expect(await heldPostAfter(CID, signer().pubkey, 0)).toBe(false);
+  });
+
+  it("finds a writer post however many ordinary posts its author sent after it (Vector `posts_since_by` is unbounded)", async () => {
+    const { idHex } = makeChannel();
+    const author = signer().pubkey;
+    const row = (i: number, tags: string[][] = []): OpenedChat => {
+      const ms = 6_000_000_000 + i * 1000;
+      const rumor = buildRumor({ kind: KIND_MESSAGE, content: `#${i}`, tags: [...channelBindingTags(idHex, 0n), ...tags], pubkey: author, ms });
+      return { rumorId: rumor.id, author, kind: KIND_MESSAGE, content: rumor.content, tags: rumor.tags, ms, createdAt: rumor.created_at, channelIdHex: idHex, epoch: 0n };
+    };
+    writeRumors(CID, [row(0, [["wepoch", "1"]]), ...Array.from({ length: 60 }, (_, i) => row(i + 1))]);
+    await eventually(() => queryChannelRumors(CID, idHex, { limit: 100 }), (r) => r.length === 61);
+    expect(await heldWriterPostSince(CID, idHex, author, 6_000_000_000)).toBe(true);
+    expect(await heldWriterPostSince(CID, idHex, author, 6_000_000_001)).toBe(false);
+  });
+
+  it("finds a writer post dated ahead that the timeline still holds back (Vector `holds_wraps_at`)", async () => {
+    const { idHex } = makeChannel();
+    const author = signer().pubkey;
+    const ms = Date.now() + 30 * 60_000;
+    const rumor = buildRumor({ kind: KIND_MESSAGE, content: "early", tags: [...channelBindingTags(idHex, 0n), ["wepoch", "1"]], pubkey: author, ms });
+    writeRumors(CID, [{ rumorId: rumor.id, author, kind: KIND_MESSAGE, content: rumor.content, tags: rumor.tags, ms, createdAt: rumor.created_at, channelIdHex: idHex, epoch: 0n }]);
+    await eventually(() => queryChannelRumors(CID, idHex, { limit: 10 }), (r) => r.length === 1);
+    expect(await heldWriterPostSince(CID, idHex, author, Date.now())).toBe(true);
   });
 
   it("queries rumors by channel tag with { kinds, #channel }", async () => {
@@ -537,6 +573,20 @@ describe("concord rumor store", () => {
     ]);
   });
 
+  it("returns anyone's @everyone as a candidate once @everyone may mention everyone", async () => {
+    const { channel, idHex } = makeChannel();
+    const member = signer();
+    const me = signer();
+    const rumors = [
+      chatRumor(idHex, member, KIND_MESSAGE, "Heads up @everyone", 1000),
+      chatRumor(idHex, member, KIND_MESSAGE, "ordinary chatter", 2000),
+    ];
+    writeRumors(CID, await openChatBatch(await Promise.all(rumors.map((r) => wrapChat(r, channel, member))), channel));
+    await eventually(() => queryChannelRumors(CID, idHex, { limit: 10 }), (r) => r.length === 2);
+    const candidates = await queryMentionRumors(CID, [idHex], me.pubkey, { limit: 200, everyoneAnyone: true });
+    expect(candidates.map((r) => r.content)).toContain("Heads up @everyone");
+  });
+
   // ── Cross-plane splice ────────────────────────────────────────────────────
   //
   // The chat decode path proves a rumor's `channel` tag matches the key that
@@ -872,6 +922,18 @@ describe("concord rumor store", () => {
     expect(afterRewrap?.has(rumor.id)).toBe(true);
   });
 
+  it("records every edition of two control batches stored at once (a seen wrap is never offered again)", async () => {
+    const alice = signer();
+    const control = channelGroupKey(new Uint8Array(32).fill(15), new Uint8Array(32).fill(15), 1);
+    const edition = async (eid: string) => {
+      const rumor = buildRumor({ kind: 3308, content: "{}", tags: [["vsk", "0"], ["eid", eid], ["ev", "1"]], pubkey: alice.pubkey, ms: null });
+      return { id: rumor.id, opened: openWrap(await wrapSeal(await sealRumor(rumor, KIND_SEAL_PLAINTEXT, control, alice), control), control) };
+    };
+    const [a, b] = await Promise.all([edition("a1".repeat(32)), edition("b1".repeat(32))]);
+    await Promise.all([writeOpened(CID, [a.opened], "control"), writeOpened(CID, [b.opened], "control")]);
+    expect([...((await readControlSnapshot(CID, control.pk)) ?? [])].sort()).toEqual([a.id, b.id].sort());
+  });
+
   it("keeps no snapshot for a community that has never rotated its root", async () => {
     // Nothing reads the set for such a community — there is no compaction to
     // tell from old-root fragments — so writing one was an id list growing per
@@ -975,6 +1037,27 @@ describe("disappearing messages (CORD-08 §3)", () => {
     // hide a surviving row — the message is gone: deleted, not merely hidden.
     rows = await queryChannelRumors(CID, idHex, { limit: 10 });
     expect(rows.map((r) => r.content)).toEqual(["forever"]);
+  });
+
+  it("runs again at the next open after a sweep was cancelled", async () => {
+    // Its own community: the sweep is self-gated per community.
+    const SWEEP_CID = "ef".repeat(32);
+    const { channel, idHex } = makeChannel();
+    const alice = signer();
+    const realNow = Date.now();
+    const soon = chatRumor(idHex, alice, KIND_MESSAGE, "soon", realNow, [["expiration", String(Math.floor(realNow / 1000) + 30)]]);
+    await writeRumors(SWEEP_CID, await openChatBatch([plain(await wrapChat(soon, channel, alice))], channel));
+
+    const clock = vi.spyOn(Date, "now").mockReturnValue(realNow + 60_000);
+    try {
+      const cancelled = new AbortController();
+      cancelled.abort();
+      await sweepExpiredCommunityRumors(SWEEP_CID, { signal: cancelled.signal }).catch(() => undefined);
+      expect(await sweepExpiredCommunityRumors(SWEEP_CID)).toBe(1);
+    } finally {
+      clock.mockRestore();
+    }
+    expect(await queryChannelRumors(SWEEP_CID, idHex, { limit: 10 })).toEqual([]);
   });
 });
 

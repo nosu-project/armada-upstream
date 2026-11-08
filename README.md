@@ -26,6 +26,11 @@ shadcn/ui + Nostrify), the Capacitor Android project (`android/`), and the
 Electron desktop shell (`electron/`). It does not depend on the backend at build
 time; it talks to relays and voice brokers over runtime-configurable URLs.
 
+The web app and the Android APK are reproducible builds: `node
+scripts/verify-build.mjs` rebuilds the live site (or `--apk` a release APK) from
+the commit it names and compares every file. [docs/trust.md](docs/trust.md)
+covers what that proves and what it doesn't.
+
 ## Concepts
 
 - **Concord communities** — serverless, E2EE. All control/chat/invite/rekey
@@ -80,10 +85,10 @@ in `index.html`, which link-preview crawlers read without running scripts.
   provider by default. Set this to switch GIF search to KLIPY instead; leave it
   empty (the default) to keep GIFverse. KLIPY additionally sends a per-install
   `customer_id` on every request and injects sponsored results, which is why it
-  is opt-in. Set it in CI as the repository secret `KLIPY_API_KEY`, or in
-  `.env.local` for local development. Like every key used by a browser-only API
-  integration, it is embedded in the compiled client bundle; keeping it in a
-  secret keeps it out of source/history, not out of browser developer tools.
+  is opt-in, and Armada's own builds don't set it. Set it in your build's
+  environment, or in `.env.local` for local development. Like every key used by
+  a browser-only API integration, it is embedded in the compiled client bundle,
+  and it is recorded in the build's public `/build.json`.
   Configure any available platform restrictions in KLIPY's partner panel.
 - `RELAYS` — comma-separated: the deployment's own relays, the one relay
   setting. Unset, Armada uses its public relays: `wss://relay.ditto.pub` and

@@ -12,6 +12,7 @@ import {
   isAuthorizedIn,
   moderatorRole,
   normalizeOrder,
+  outranksMember,
   Permissions,
   projectReorder,
   roleFromJSON,
@@ -303,7 +304,7 @@ describe("color <-> u32 (CORD-04 §2)", () => {
     expect(colorToHex(back!.color)).toBe("#3ba55d");
   });
 
-  it("coerces a malformed wire colour to the theme default", () => {
+  it("refuses a Role whose wire colour isn't a u32 (serde, as Vector)", () => {
     const wire = (color: unknown) =>
       JSON.stringify({
         role_id: "a".repeat(64),
@@ -313,11 +314,11 @@ describe("color <-> u32 (CORD-04 §2)", () => {
         scope: { kind: "server" },
         color,
       });
-    expect(roleFromJSON(wire(1.5))?.color).toBe(1);
-    expect(roleFromJSON(wire(-1))?.color).toBe(0);
-    expect(roleFromJSON(wire(0x1_0000_0000))?.color).toBe(0);
-    expect(roleFromJSON(wire("#ff0000"))?.color).toBe(0);
-    expect(roleFromJSON(wire(Number.NaN))?.color).toBe(0);
+    expect(roleFromJSON(wire(0xff0000))?.color).toBe(0xff0000);
+    expect(roleFromJSON(wire(1.5))).toBeUndefined();
+    expect(roleFromJSON(wire(-1))).toBeUndefined();
+    expect(roleFromJSON(wire(0x1_0000_0000))).toBeUndefined();
+    expect(roleFromJSON(wire("#ff0000"))).toBeUndefined();
   });
 
   it("does not write a malformed colour back onto the wire", () => {
@@ -442,5 +443,19 @@ describe("tierMoves (stock Admin/Moderator)", () => {
     expect(tierMoves(tiered, R_ADMIN, R_OWNER, R_OWNER)).toEqual([]);
     expect(tierMoves(tiered, R_MOD, R_OWNER, R_PLAIN)).toEqual([]);
     expect(tierMoves(tiered, R_PLAIN, R_OWNER, R_MOD)).toEqual([]);
+  });
+});
+
+describe("a roleless member sits at u32::MAX (Vector `can_act_on_member`)", () => {
+  // A ranked Role can sit at u32::MAX itself (Vector `parse_role_v2_content`): equal to the
+  // roleless, so it doesn't outrank them.
+  const roster: CommunityRoles = {
+    roles: [mkRole("4".repeat(64), 0xffffffff, Permissions.KICK)],
+    grants: [{ member: R_MOD, roleIds: ["4".repeat(64)] }],
+  };
+
+  it("doesn't let a Role at u32::MAX act on a member who holds none", () => {
+    expect(canActOnMember(roster, R_MOD, R_OWNER, R_PLAIN, Permissions.KICK)).toBe(false);
+    expect(outranksMember(roster, R_MOD, R_OWNER, R_PLAIN)).toBe(false);
   });
 });

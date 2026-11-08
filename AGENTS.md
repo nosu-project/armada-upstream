@@ -47,7 +47,7 @@ needs no Armada-specific server at all: any NIP-29 relay serves it.
 | `ios/ArmadaDB/` | ArmadaDB in Swift: the SQLite engine the iOS build runs, with SQLite vendored. A SwiftPM package so it builds on **Linux**, where its conformance suite runs without a Mac |
 | `ios/ArmadaNotify/` | The decrypt/store/present pipeline the iOS Notification Service Extension runs (NIP-44/NIP-17/Concord, libsecp256k1 vendored). A SwiftPM package for the same reason — its suite runs on **Linux** |
 | `electron/`  | Electron desktop shell (loads the bundled web build; Linux/Windows/macOS installers built in CI) |
-| `docs/`      | Design notes too long for this file — `settings-documents.md` (the NIP-78 settings root, its derived documents, and the split) and `releases.md` (the NIP-82 release and asset events `/downloads` and the desktop updater read) |
+| `docs/`      | Design notes too long for this file — `settings-documents.md` (the NIP-78 settings root, its derived documents, and the split), `trust.md` (which published builds can be reproduced and verified, and what still has to be trusted) and `releases.md` (the NIP-82 release and asset events `/downloads` and the desktop updater read) |
 | `scripts/`   | Repo tooling, incl. two Concord-aware moderation-UX harnesses that mirror the same CORD-01/02/05 derivations: `scripts/spambot.mjs` (WRITES — chat spam with flood-fold evasion, plus kind-3313 direct-invite spam via `--invite-spam`) and `scripts/dump-community.mjs` (READS — resolves an invite and pages the decrypted Chat Plane out of the relays in `OpenedChat` shape, for feeding `floodCluster.ts`); see each file's header comment |
 
 ## Build / test
@@ -99,6 +99,41 @@ Two things that are easy to get wrong here:
   quarter and the workers by a quarter is a wash. `ARMADA_TEST_WORKERS`
   overrides the default (all cores but two) for a machine that wants all of
   itself, or less of it.
+
+### The Vector parity ledger
+
+`scripts/vector-parity/points.json` lists every decision Vector makes, extracted
+from `vector-core/src` outside its tests: each refusal (`Err("…")`, `ok_or("…")`,
+the fold's `refuse(…)`, a vend verdict, a permission gate) and each branch on
+ranked vs legacy roles. `ledger.json` names the Armada test reproducing each one,
+or why it doesn't apply; `vectorParity.test.ts` fails on a point with no entry or
+an entry naming a test that doesn't exist, and lists the `todo`s. Passing Armada
+tests are not parity: a `covered` entry is a test written against Vector's
+behaviour. On a Vector bump, `VECTOR_SRC=<vector>/crates/vector-core/src npm run
+parity:extract`, then give every new point an entry.
+
+### Reproducible web builds
+
+Two builds of one commit with the same config and toolchain are byte-identical,
+and `node scripts/verify-build.mjs` proves a published one is (the live site,
+or `--apk` a release APK): it reads the build's `build.json` (commit, epoch,
+config, toolchain), rebuilds that commit inside `scripts/reproduce/Dockerfile`
+and compares every file. What this does and doesn't cover is in
+`docs/trust.md`. Keep it that way:
+
+- **No wall-clock time in the build.** Use `BUILD_EPOCH` in `vite.config.ts`
+  (`SOURCE_DATE_EPOCH`, else the commit time). Same for randomness, absolute
+  paths and the host's locale.
+- **Every input to the bundle goes through `config()`/`CONFIG_NAMES`**, which
+  `/build.json` records. A value baked in any other way cannot be reproduced
+  by anyone outside CI.
+- The wasm build remaps its source paths (`scripts/build-wasm.mjs`); a new
+  native build step needs the same.
+- **Toolchain versions move together**: Node in `.nvmrc`, Rust in
+  `crates/webxdc-rt/rust-toolchain.toml`, wasm-pack/JDK/Android SDK, each in
+  BOTH `.ngit/ci-image/Dockerfile` and `scripts/reproduce/Dockerfile`.
+- The APK verifier mirrors the android job of `release.yml` (`apkBuildScript`);
+  a change to that job's build steps changes it too.
 
 ### Profiling (never in a shipped build)
 
@@ -745,9 +780,14 @@ Things to know before touching it:
 - **The one exception is worth knowing, because it is the shape of a real
   one.** A compaction re-wraps control editions VERBATIM under the new epoch's
   address (CORD-06 §3), so whether an edition is in the current snapshot is
-  genuinely not in the rumor. It lives in KV as a set of rumor ids per control
-  stream address (`c2snap:<community>:<pk>`, `readControlSnapshot`) — the fact
-  itself, not an event-shaped row impersonating one.
+  genuinely not in the rumor. It lives in KV as one key per (control stream
+  address, rumor) (`c2snap:<community>:<pk>:<rumor>`, `readControlSnapshot`) —
+  the fact itself, not an event-shaped row impersonating one. The Guestbook
+  address a rumor arrived at is the same kind of fact (only the live epoch's
+  Nicknames count, CORD-04 §10): `c2gbaddr:<community>:<rumor>:<pk>`, held in
+  memory once read (`readGuestbookAddresses`). A key per fact, never a merged
+  set: recording one then never reads, so two writes can't lose each other, and
+  a wrap already seen is never offered again to put a lost one back.
 - **Where the derivation is real but unfilterable, index a TERM.** A NIP-01
   filter can only ask about what a rumor literally says, and a NIP-17
   conversation is the SET of its participants — half in `pubkey`, half in the
