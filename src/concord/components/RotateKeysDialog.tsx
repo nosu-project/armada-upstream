@@ -1,4 +1,4 @@
-import { KeyRound, Loader2 } from "lucide-react";
+import { KeyRound, Loader2, ShieldCheck } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -11,6 +11,8 @@ interface RotateKeysDialogProps {
   privateChannelCount: number;
   /** A live invite link belongs to someone else (it goes stale). */
   strandsForeignLinks: boolean;
+  /** Framed as the legacy upgrade (CORD-06 §3): the same Refounding, which mints the split Control Plane. */
+  upgrade?: boolean;
   onClose: () => void;
   onConfirm: () => Promise<void>;
 }
@@ -21,6 +23,7 @@ export function RotateKeysDialog({
   memberCount,
   privateChannelCount,
   strandsForeignLinks,
+  upgrade = false,
   onClose,
   onConfirm,
 }: RotateKeysDialogProps) {
@@ -69,50 +72,61 @@ export function RotateKeysDialog({
   return (
     <Dialog open={open} onOpenChange={(next) => !next && close()}>
       <ChromeDialogContent
-        title={intl.formatMessage({ id: "rotateKeysDialog.title", defaultMessage: "Rotate this community's keys?" })}
+        title={
+          upgrade
+            ? intl.formatMessage({ id: "rotateKeysDialog.upgradeTitle", defaultMessage: "Upgrade security?" })
+            : intl.formatMessage({ id: "rotateKeysDialog.title", defaultMessage: "Rotate this community's keys?" })
+        }
         className="sm:max-w-sm"
       >
         <ChromeDialogHeader
-          icon={KeyRound}
+          icon={upgrade ? ShieldCheck : KeyRound}
           tone="warning"
-          title={intl.formatMessage({ id: "rotateKeysDialog.heading", defaultMessage: "rotate keys?" })}
-          description={intl.formatMessage({
-            id: "rotateKeysDialog.description",
-            defaultMessage:
-              "New messages are encrypted to new keys. Old keys still read the history they already unlocked, and nothing after.",
-          })}
+          title={
+            upgrade
+              ? intl.formatMessage({ id: "rotateKeysDialog.upgradeHeading", defaultMessage: "upgrade security?" })
+              : intl.formatMessage({ id: "rotateKeysDialog.heading", defaultMessage: "rotate keys?" })
+          }
+          description={
+            upgrade
+              ? intl.formatMessage({
+                  id: "rotateKeysDialog.upgradeDescription",
+                  defaultMessage: "This community uses an older, less secure format. Upgrading rotates its keys.",
+                })
+              : intl.formatMessage({
+                  id: "rotateKeysDialog.description",
+                  defaultMessage:
+                    "New messages are encrypted to new keys. Old keys still read the history they already unlocked, and nothing after.",
+                })
+          }
         />
 
-        <ul className="mt-5 space-y-1 text-sm text-muted-foreground">
-          <li>
-            <FormattedMessage
-              id="rotateKeysDialog.members"
-              defaultMessage="{count, plural, one {# member keeps access. Nobody is removed.} other {# members keep access. Nobody is removed.}}"
-              values={{ count: memberCount }}
-            />
-          </li>
-          {privateChannelCount > 0 && (
+        {!upgrade && (
+          <ul className="mt-5 space-y-1 text-sm text-muted-foreground">
             <li>
               <FormattedMessage
-                id="rotateKeysDialog.privateChannels"
-                defaultMessage="{count, plural, one {# private channel is rekeyed alongside it.} other {# private channels are rekeyed alongside it.}}"
-                values={{ count: privateChannelCount }}
+                id="rotateKeysDialog.members"
+                defaultMessage="{count, plural, one {# member keeps access. Nobody is removed.} other {# members keep access. Nobody is removed.}}"
+                values={{ count: memberCount }}
               />
             </li>
-          )}
-          <li>
-            <FormattedMessage
-              id="rotateKeysDialog.offline"
-              defaultMessage="Anyone offline stays out until their app picks up the new keys. Someone who never picks them up needs a fresh invite."
-            />
-          </li>
-        </ul>
+            {privateChannelCount > 0 && (
+              <li>
+                <FormattedMessage
+                  id="rotateKeysDialog.privateChannels"
+                  defaultMessage="{count, plural, one {# private channel is rekeyed alongside it.} other {# private channels are rekeyed alongside it.}}"
+                  values={{ count: privateChannelCount }}
+                />
+              </li>
+            )}
+          </ul>
+        )}
 
         {strandsForeignLinks && (
           <p className="mt-3 text-sm text-destructive">
             <FormattedMessage
               id="rotateKeysDialog.foreignLinks"
-              defaultMessage="Invite links created by other members will hand out dead keys until those members next open the app. Only their creator can refresh them."
+              defaultMessage="Other members' invite links will stop working until they next open the app."
             />
           </p>
         )}
@@ -132,9 +146,15 @@ export function RotateKeysDialog({
             {busy && stuck ? <FormattedMessage {...common.close} /> : <FormattedMessage {...common.cancel} />}
           </Button>
           <Button type="button" variant="destructive" onClick={run} disabled={busy}>
-            {busy ? <Loader2 className="size-4 animate-spin" /> : <KeyRound className="size-4" />}
+            {busy ? <Loader2 className="size-4 animate-spin" /> : upgrade ? <ShieldCheck className="size-4" /> : <KeyRound className="size-4" />}
             {busy ? (
-              <FormattedMessage id="rotateKeysDialog.rotating" defaultMessage="Rotating" />
+              upgrade ? (
+                <FormattedMessage id="rotateKeysDialog.upgrading" defaultMessage="Upgrading" />
+              ) : (
+                <FormattedMessage id="rotateKeysDialog.rotating" defaultMessage="Rotating" />
+              )
+            ) : upgrade ? (
+              <FormattedMessage id="rotateKeysDialog.upgradeConfirm" defaultMessage="Upgrade" />
             ) : (
               <FormattedMessage id="rotateKeysDialog.confirm" defaultMessage="Rotate keys" />
             )}

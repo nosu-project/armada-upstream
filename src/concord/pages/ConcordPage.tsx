@@ -1,4 +1,4 @@
-import { AtSign, Ban, CalendarClock, CheckCheck, ChevronDown, Bell, BellOff, Crown, Folder, FolderGit2, GripVertical, Hash, Headphones, KeyRound, Loader2, Lock, LogOut, Megaphone, MessageSquareText, MessagesSquare, Pause, Phone, Pin, Play, Plus, RefreshCw, Rss, Search, Settings, Shield, ShieldOff, Tag, Timer, Trash2, UserMinus, UserPlus, X, type LucideIcon } from "lucide-react";
+import { AtSign, Ban, CalendarClock, CheckCheck, ChevronDown, Bell, BellOff, Crown, Folder, FolderGit2, GripVertical, Hash, Headphones, KeyRound, Loader2, Lock, LogOut, Megaphone, MessageSquareText, MessagesSquare, Pause, Phone, Pin, Play, Plus, RefreshCw, Rss, Search, Settings, Shield, ShieldAlert, ShieldOff, Tag, Timer, Trash2, UserMinus, UserPlus, X, type LucideIcon } from "lucide-react";
 import { lazy, memo, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, useLocation, useNavigationType, useSearchParams } from "react-router-dom";
 
@@ -47,7 +47,7 @@ import { isGitTimelineEntry, mergeChannelTimeline } from "@/components/chat/chan
 import { TypingIndicator } from "@/components/chat/TypingIndicator";
 import { useVoiceActionsFor } from "@/concord/hooks/useVoiceActions";
 import { VoiceModerationContext } from "@/contexts/VoiceModerationContext";
-import { VoiceParticipantList } from "@/components/VoicePresence";
+import { CallTransportCounts, VoiceParticipantList } from "@/components/VoicePresence";
 import { AddChannelMembersDialog } from "@/concord/components/AddChannelMembersDialog";
 import { ImageLightbox } from "@/concord/components/ImageLightbox";
 import { InviteDialog } from "@/concord/components/InviteDialog";
@@ -161,6 +161,7 @@ import { useCommunityManagement, useStrandedRecovery } from "@/concord/hooks/use
 import { useChannels, useControlFold, useDissolved } from "@/concord/hooks/useControlPlane";
 import { PAUSE_DURATIONS, useCommunityPause } from "@/concord/hooks/usePause";
 import { CommunityPauseBanner } from "@/concord/components/CommunityPauseBanner";
+import { LegacyControlBanner } from "@/concord/components/LegacyControlBanner";
 import { PendingJoinNotice } from "@/concord/components/PendingJoinNotice";
 import { usePendingGuestbookJoin } from "@/concord/hooks/usePendingGuestbookJoin";
 import { usePins } from "@/concord/hooks/usePins";
@@ -586,6 +587,13 @@ export const ChannelRow = memo(function ChannelRow({
     return [...new Set([...voiceRoomPubkeys, ...fold.otherTransport.map((p) => p.author)])];
   }, [inCall, voiceRoomPubkeys, foldedParticipants, fold]);
 
+  // Per transport: the live LiveKit roster while in this call, presence otherwise.
+  const sfuCount = inCall && voiceRoomPubkeys ? voiceRoomPubkeys.length : fold.present.length;
+  const p2pCount = useMemo(
+    () => fold.otherTransport.length + fold.present.filter((p) => p.alsoOn).length,
+    [fold],
+  );
+
   const hasUnread = Boolean(unread);
   const hasMention = Boolean(unread?.mention);
   const callable = channel.view !== "forum";
@@ -630,6 +638,13 @@ export const ChannelRow = memo(function ChannelRow({
                 className={cn("size-4 shrink-0", occupied && !active && "text-success")}
               />
               <span className="truncate flex-1 min-w-0">{channel.name}</span>
+              {occupied && (
+                <CallTransportCounts
+                  sfu={sfuCount}
+                  p2p={p2pCount}
+                  className={cn(active && "[&>span]:text-primary-foreground")}
+                />
+              )}
               {inCall && <Headphones className={cn("size-3.5 shrink-0", !active && "text-success")} />}
               {hasMention ? (
                 <span
@@ -2009,6 +2024,7 @@ function ConcordCommunityPage() {
   const kickTargets = useMemo(() => (kickTarget ? [kickTarget] : null), [kickTarget]);
   const banTargets = useMemo(() => (banTarget ? [banTarget] : null), [banTarget]);
   const [rotateKeysOpen, setRotateKeysOpen] = useState(false);
+  const openRotateKeys = useCallback(() => setRotateKeysOpen(true), []);
   /** Pending "name a category" prompt: create (file one channel) or rename (re-file all). */
   const [categoryPrompt, setCategoryPrompt] = useState<
     { channels: Channel[]; initial: string; categoryId?: string } | null
@@ -2987,12 +3003,21 @@ function ConcordCommunityPage() {
   // A standalone rotation strands other creators' live links; warned, not vetoed.
   const rotateStrandsForeignLinks = Boolean(folded && user && hasForeignLiveLinks(folded, user.pubkey));
 
+  // A pre-split epoch (no control_pk): the next Refounding mints the split (CORD-06 §3).
+  const legacyControl = Boolean(community && !community.controlPk);
+  const offerUpgrade = Boolean(user && legacyControl && moderation.canRotateKeys && !dissolved);
+
   const runRotateKeys = async () => {
+    const upgrading = legacyControl;
     await moderation.rotateKeys();
-    toast({
-      title: t({ id: "concordPage.rotate.done", defaultMessage: "Community keys rotated" }),
-      description: t({ id: "concordPage.rotate.description", defaultMessage: "Everyone still in the community keeps access. The previous keys can't read new messages." }),
-    });
+    toast(
+      upgrading
+        ? { title: t({ id: "concordPage.upgrade.done", defaultMessage: "Security upgraded" }) }
+        : {
+            title: t({ id: "concordPage.rotate.done", defaultMessage: "Community keys rotated" }),
+            description: t({ id: "concordPage.rotate.description", defaultMessage: "Everyone still in the community keeps access. The previous keys can't read new messages." }),
+          },
+    );
   };
 
   const renderChannelRow = (c: Channel, draggable = true) => {
@@ -3163,8 +3188,12 @@ function ConcordCommunityPage() {
                           setCommunityMenuOpen(false);
                         }}
                       >
-                        <KeyRound className="size-4" />
-                        <FormattedMessage id="concordPage.communityMenu.rotateKeys" defaultMessage="Rotate community keys" />
+                        {legacyControl ? <ShieldAlert className="size-4" /> : <KeyRound className="size-4" />}
+                        {legacyControl ? (
+                          <FormattedMessage id="concordPage.communityMenu.upgradeSecurity" defaultMessage="Upgrade security" />
+                        ) : (
+                          <FormattedMessage id="concordPage.communityMenu.rotateKeys" defaultMessage="Rotate community keys" />
+                        )}
                       </button>
                     )}
                     <button
@@ -3210,6 +3239,7 @@ function ConcordCommunityPage() {
         user && community ? (
           <>
             <SuspiciousActivityBanner community={community} channels={channels} folded={folded} onOpen={() => selectPane("suspicious")} />
+            {offerUpgrade && <LegacyControlBanner key={community.idHex} communityIdHex={community.idHex} onUpgrade={openRotateKeys} />}
             <button
               type="button"
               onClick={() => {
@@ -4254,6 +4284,7 @@ function ConcordCommunityPage() {
           memberCount={memberPubkeys.length}
           privateChannelCount={community?.privateChannels.length ?? 0}
           strandsForeignLinks={rotateStrandsForeignLinks}
+          upgrade={legacyControl}
           onClose={() => setRotateKeysOpen(false)}
           onConfirm={runRotateKeys}
         />

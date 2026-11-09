@@ -4,6 +4,53 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.69.1] - 2026-11-09
+
+Staff of older communities can upgrade their security so only staff can change
+community settings, and the Ultra badge now opens a details popover. Composer
+menus scroll properly on touch, and restricted channels and paused communities
+fold hidden posts more consistently.
+
+### Added
+- Staff of communities created in the older format can upgrade them so only staff can change the community's settings, from a banner or the community menu
+- Tapping the Ultra badge opens a popover with details
+
+### Changed
+- The key rotation dialog and the invite link warning are shorter
+
+### Fixed
+- Mention, emoji and command menus in the composer can be scrolled on touch without picking a row
+- Posts in a restricted channel from members without standing are hidden for managers too
+- A single post hidden by the community's permissions or a pause is folded under its own explanation, even with similar-message folding off
+
+## [0.69.0] - 2026-11-09
+
+Communities can switch to ranked roles: roles ordered by rank, permissions set
+per channel and per category, and roles you can delete. Moderators can time
+members out, change nicknames, and server-mute, deafen, move or disconnect
+people in calls. Armada also opens, catches up and loads direct messages
+faster.
+
+### Added
+- Ranked roles for communities, switched on by the owner, carrying every existing role, grant, category and the channel order across
+- A role editor with drag-to-reorder ranks, a full set of permissions, and deletable roles
+- Permissions for each channel and category, for everyone, a role or a single member, with channels able to follow their category's rules
+- Categories you can add, rename, reorder and delete, and pick when creating a channel
+- Time a member out for anywhere from 60 seconds to a week, during which they can read but not post, react or speak
+- Change a member's nickname, or your own, from the member menu
+- Server mute, deafen, move and disconnect for moderators in calls
+- Mentionable roles that notify everyone holding them
+- Channel rows show how many people are in a call on each kind of connection, and a call warns when members are connected peer to peer
+
+### Changed
+- Opening the app, catching up on communities and loading direct messages are faster
+- Rarely used screens load on first use, so channels open sooner
+- Deleting a channel's uploads asks each file server only about its own files
+
+### Fixed
+- Private channel keys from someone not allowed to hand them out are no longer offered to accept
+- Background notifications no longer ping everyone for reactions
+
 ## [0.68.1] - 2026-11-06
 
 Opening Armada no longer gets stuck on a community you've left: the app skips

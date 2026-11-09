@@ -10,7 +10,7 @@ import { timeoutRunning } from "@/concord/lib/guestbook";
 import { heldRoleMentions, pingableRoles, rolePings } from "@/concord/lib/roleMentions";
 import { canScrub, scrubbedDeleteExpiry, scrubOwnWraps, sendWrapOwner } from "@/concord/lib/wrapScrub";
 import { useAccountSecret } from "@/hooks/useAccountSecret";
-import { mayHideIn, restrictedPostersIn, timelineCollapse, writerJudge as writerJudgeOf } from "@/concord/lib/channelJudges";
+import { mayHideIn, restrictedPostersIn, timelineCollapse, timelineRules, writerJudge as writerJudgeOf } from "@/concord/lib/channelJudges";
 import { persistTimelineSnapshot, prewarmTimelineSnapshot, takeSnapshotSeed } from "@/concord/hooks/timelineSnapshot";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useKeyedMemo } from "@/hooks/useKeyedMemo";
@@ -40,6 +40,8 @@ import {
   scheduleExpiredSweep,
   updateStreamCursor,
   writeRumors,
+  onFreshChat,
+  pendingChatRows,
   peekPendingWraps,
   ackPendingWraps,
   removeRumors,
@@ -312,9 +314,10 @@ export function useChannelTimeline(
   const collapse = useMemo(() => timelineCollapse(control, channelIdHex, timeouts, clockNowMs(), publicUntil), [control, channelIdHex, timeouts, publicUntil]);
   // A restricted Channel's posts stand by its Writers ledger (CORD-03 §1).
   const writerJudge = useMemo(
-    () => writerJudgeOf(control, channelIdHex, community?.id, readingUser?.pubkey, history),
-    [control, channelIdHex, community, readingUser?.pubkey, history],
+    () => writerJudgeOf(control, channelIdHex, community?.id, history),
+    [control, channelIdHex, community, history],
   );
+  const rules = useMemo(() => timelineRules(collapse, writerJudge), [collapse, writerJudge]);
   // Cutoffs included: retirement can change without the epoch set changing.
   const epochSig = channel?.streams.map((s) => `${s.epoch}:${s.retiredAt ?? ""}`).join(",") ?? "";
   const queryKey = useMemo(() => channelKey(channelIdHex), [channelIdHex]);
@@ -336,6 +339,8 @@ export function useChannelTimeline(
 
   // Keeps a live re-read from turning `hasMore` back on.
   const endReachedRef = useRef(false);
+  // Rows handed over ahead of their commit (`onFreshChat`), until a store read holds them.
+  const freshRowsRef = useRef(new Map<string, OpenedChat>());
   const [hasMore, setHasMore] = useState(true);
   // Older pages in flight, the present's and a run's alike: the flag clears with the last.
   const olderLoadsRef = useRef(new Set<symbol>());
@@ -463,7 +468,7 @@ export function useChannelTimeline(
         ackPendingWraps(parked.filter((w) => openedWrapIds.has(w.id)).map((w) => w.id));
       };
 
-      const composeFromStore = async (extra?: OpenedChat[]): Promise<OpenedChat[]> => {
+      const composeFromStore = async (): Promise<OpenedChat[]> => {
         // Only the NEWEST page: older pages are already cached, and re-reading them
         // made every live message cost the whole window.
         const [rumors, saved] = await Promise.all([
@@ -473,6 +478,12 @@ export function useChannelTimeline(
           }),
           readStreamCursor(cursorKeyId),
         ]);
+        // Rows already shown whose write landed after this read began, or hasn't yet:
+        // collected now, since a busy boot's read can take seconds.
+        const stored = new Set(rumors.map((r) => r.rumorId));
+        const fresh = freshRowsRef.current;
+        for (const id of stored) fresh.delete(id);
+        const extra = [...fresh.values(), ...pendingChatRows(channelIdHex!)].filter((r) => !stored.has(r.rumorId));
         setHasMore(!endReachedRef.current && (rumors.length >= WINDOW_SIZE || !saved?.exhausted));
         // A snapshot seed is replaced, not merged into: a row only it holds was never stored.
         const prev = takeSnapshotSeed(viewerPubkey, channelIdHex!)
@@ -483,7 +494,7 @@ export function useChannelTimeline(
         noteCursor(cursorKeyId, lowerCursor(cursorHolds(held, prev) ? held : undefined, rumors));
         // Fold in freshly-decrypted events directly (don't race the write). The
         // cutoff filter re-applies to rows stored before a rotation was known.
-        return filterEpochCutoff(upsert(prev, extra ? upsert(rumors, extra) : rumors), channel!);
+        return filterEpochCutoff(upsert(prev, extra.length > 0 ? upsert(rumors, extra) : rumors), channel!);
       };
 
       const existing = queryClient.getQueryData<OpenedChat[]>(queryKey);
@@ -546,6 +557,23 @@ export function useChannelTimeline(
     );
     queryClient.setQueryData<OpenedChat[]>(queryKey, filterEpochCutoff(upsert(prev, rows), channel));
   }, [channel, channelIdHex, queryClient, queryKey]);
+
+  // What a write is about to store shows now; its commit's ring re-reads the store
+  // after. Only into a timeline already showing rows: the first read stays the store's.
+  const mergeRowsRef = useRef(mergeRows);
+  mergeRowsRef.current = mergeRows;
+  useEffect(() => {
+    if (!channelIdHex) return;
+    const fresh = freshRowsRef.current;
+    const off = onFreshChat(channelIdHex, (rows) => {
+      for (const r of rows) fresh.set(r.rumorId, r);
+      if ((queryClient.getQueryData<OpenedChat[]>(channelKey(channelIdHex))?.length ?? 0) > 0) mergeRowsRef.current(rows);
+    });
+    return () => {
+      off();
+      fresh.clear();
+    };
+  }, [channelIdHex, queryClient]);
 
   // One page below the cursor: the rows it shows, and whether any it read were held back.
   const loadOlderPage = useCallback(async (): Promise<{ shown: number; held: boolean }> => {
@@ -948,10 +976,7 @@ export function useChannelTimeline(
       ...(firstSeen ? { firstSeen } : {}),
       ...(establishedSinceMs !== undefined ? { establishedSinceMs } : {}),
       ...(pauseSince !== undefined ? { pauseSince } : {}),
-      ...(collapse || writerJudge?.iManage
-        ? { collapse: (m: OpenedChat) => Boolean(collapse?.(m)) || (writerJudge?.iManage === true && !writerJudge.stands(m)) }
-        : {}),
-      ...(writerJudge && !writerJudge.iManage ? { hold: (m: OpenedChat) => !writerJudge.stands(m) } : {}),
+      ...rules,
     });
     // Past sessions' verdicts keep yesterday's wall folded after a refresh.
     const remembered = community?.idHex && channelIdHex
@@ -971,7 +996,7 @@ export function useChannelTimeline(
       return { ...merged, messages: merged.messages.filter((m) => !hidden.has(m.rumorId)) };
     }
     return merged;
-  }, [moderated, moderation, optimisticDeleted, readingUser?.pubkey, firstSeen, establishedSinceMs, pauseSince, collapse, writerJudge, community?.idHex, channelIdHex, memoryRev, revealTick]);
+  }, [moderated, moderation, optimisticDeleted, readingUser?.pubkey, firstSeen, establishedSinceMs, pauseSince, rules, community?.idHex, channelIdHex, memoryRev, revealTick]);
 
   // A removed message's media leaves this device too: a moderator deleting it
   // (abuse, CSAM) shouldn't leave its plaintext in the decrypt cache.
@@ -1001,17 +1026,17 @@ export function useChannelTimeline(
     return () => clearTimeout(t);
   }, [nextRevealMs]);
 
-  // Persist verdicts (merge-only) whose evidence won't reload. PAUSE-collapsed
-  // ids are excluded: a merge-only memory would make a transient pause
-  // permanent (violating CORD-04 §8 "MUST NOT drop").
+  // Persist verdicts (merge-only) whose evidence won't reload. PAUSE- and
+  // Roster-collapsed ids are excluded: a merge-only memory would outlast the
+  // pause, Timeout or permission that collapsed them (CORD-04 §8 "MUST NOT drop").
   useEffect(() => {
     if (!community?.idHex || !channelIdHex || folded.quarantined.size === 0) return;
     const entries: Array<[string, number]> = [];
     for (const m of moderated) {
-      if (folded.quarantined.has(m.rumorId) && !folded.paused.has(m.rumorId)) entries.push([m.rumorId, m.ms]);
+      if (folded.quarantined.has(m.rumorId) && !folded.paused.has(m.rumorId) && !folded.ruled.has(m.rumorId)) entries.push([m.rumorId, m.ms]);
     }
     if (entries.length > 0) rememberQuarantined(community.idHex, channelIdHex, entries);
-  }, [folded.quarantined, folded.paused, moderated, community?.idHex, channelIdHex]);
+  }, [folded.quarantined, folded.paused, folded.ruled, moderated, community?.idHex, channelIdHex]);
 
   // Who this client has seen speak, and since when — the media hold's probation
   // clock (mediaTrust.ts). After the local read, so a channel isn't seeded empty.

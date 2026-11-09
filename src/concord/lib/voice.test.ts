@@ -6,6 +6,7 @@ import { KIND_VOICE_PRESENCE } from "@/concord/lib/kinds";
 import type { OpenedEvent } from "@/concord/lib/stream";
 import { MAX_COMMUNITY_AV_BROKERS } from "@/concord/lib/types";
 import {
+  directivesToReassert,
   brokerRank,
   canonicalOrigin,
   communityAvBrokers,
@@ -35,6 +36,7 @@ import {
   VOICE_BEHIND_MS,
   VOICE_STALE_MS,
   type VoicePresenceEntry,
+  type VoiceDirectiveVerb,
 } from "@/concord/lib/voice";
 
 const A = new Uint8Array(32).fill(1);
@@ -479,6 +481,73 @@ describe("foldVoicePresence (§4)", () => {
     expect([...fold.claims.keys()]).toEqual(["id-1"]);
     expect(foldVoicePresence([entry({ transport: "iroh", ms: now - VOICE_STALE_MS - 1 })], now).otherTransport).toEqual([]);
   });
+
+  describe("a member on both transports (a bot simulcasting to Vector and the SFU)", () => {
+    const iroh = (o: Partial<VoicePresenceEntry>) => entry({ identity: undefined, broker: undefined, transport: "iroh", ...o });
+    const fold = (latest: Map<string, VoicePresenceEntry>, at: number) => foldVoicePresence([...latest.values()], at);
+
+    it("stays present on its SFU identity whichever heartbeat came last", () => {
+      const latest = new Map<string, VoicePresenceEntry>();
+      notePresence(latest, entry({ ms: now - 2000, rumorId: "b1" }), now - 2000);
+      notePresence(latest, iroh({ ms: now - 1000, rumorId: "i1" }), now - 1000);
+      const both = fold(latest, now);
+      expect(verifiedAuthorOf(both, "id-1")).toBe("a".repeat(64));
+      expect(both.present.map((p) => p.author)).toEqual(["a".repeat(64)]);
+      expect(both.otherTransport).toEqual([]);
+    });
+
+    it("renews the brokered half from a joined dated under the iroh one", () => {
+      const latest = new Map<string, VoicePresenceEntry>();
+      notePresence(latest, entry({ ms: now - 60_000, rumorId: "b1" }), now - 60_000);
+      notePresence(latest, iroh({ ms: now - 1000, rumorId: "i1" }), now - 1000);
+      // Sent in the same heartbeat, arriving after the iroh one.
+      expect(notePresence(latest, entry({ ms: now - 1001, rumorId: "b2" }), now)).toBe(true);
+      expect(fold(latest, now + 70_000).present).toHaveLength(1);
+      // Not a stale copy, nor one from before this stay.
+      expect(notePresence(latest, entry({ ms: now - 1001, rumorId: "b2" }), now)).toBe(false);
+      expect(notePresence(latest, entry({ ms: now - 61_000, rumorId: "b0" }), now)).toBe(false);
+    });
+
+    it("falls back to the other transport when its brokered heartbeats stop, and a left ends both", () => {
+      const latest = new Map<string, VoicePresenceEntry>();
+      notePresence(latest, entry({ ms: now - 80_000, rumorId: "b1" }), now - 80_000);
+      notePresence(latest, iroh({ ms: now - 1000, rumorId: "i1" }), now - 1000);
+      const later = fold(latest, now + 20_000);
+      expect(later.present).toEqual([]);
+      expect(later.otherTransport.map((p) => p.author)).toEqual(["a".repeat(64)]);
+
+      notePresence(latest, entry({ ms: now, rumorId: "b2" }), now);
+      notePresence(latest, entry({ status: "left", identity: undefined, ms: now + 1, rumorId: "l" }), now + 1);
+      expect(notePresence(latest, entry({ ms: now - 500, rumorId: "b3" }), now + 2)).toBe(false);
+      expect(fold(latest, now + 2).present).toEqual([]);
+    });
+
+    it("counts on both transports whichever heartbeat came last, in either order of arrival", () => {
+      const latest = new Map<string, VoicePresenceEntry>();
+      notePresence(latest, iroh({ ms: now - 3000, rumorId: "i1" }), now - 3000);
+      notePresence(latest, entry({ ms: now - 2000, rumorId: "b1" }), now - 2000);
+      expect(fold(latest, now).present.map((p) => p.alsoOn)).toEqual(["iroh"]);
+      // Without a renewal the iroh half ages out under the brokered one.
+      expect(fold(latest, now + 87_500).present.map((p) => p.alsoOn)).toEqual([undefined]);
+      // An iroh joined dated under the brokered one renews it.
+      expect(notePresence(latest, iroh({ ms: now - 2500, rumorId: "i2" }), now + 80_000)).toBe(true);
+      expect(fold(latest, now + 85_000).present.map((p) => p.alsoOn)).toEqual(["iroh"]);
+      notePresence(latest, entry({ ms: now + 85_000, rumorId: "b2" }), now + 86_000);
+      expect(fold(latest, now + 86_000).present.map((p) => p.alsoOn)).toEqual(["iroh"]);
+      notePresence(latest, iroh({ ms: now + 86_500, rumorId: "i3" }), now + 87_000);
+      expect(fold(latest, now + 87_000).present.map((p) => p.alsoOn)).toEqual(["iroh"]);
+    });
+
+    it("is not a newcomer each time it alternates", () => {
+      const latest = new Map<string, VoicePresenceEntry>();
+      notePresence(latest, entry({ ms: now - 2000, rumorId: "b1" }), now - 2000);
+      const held = () => latest.get("a".repeat(64));
+      expect(isNewcomer(held(), iroh({ ms: now - 1000 }), now - 1000)).toBe(false);
+      notePresence(latest, iroh({ ms: now - 1000, rumorId: "i1" }), now - 1000);
+      expect(isNewcomer(held(), entry({ ms: now }), now)).toBe(false);
+      expect(isNewcomer(held(), entry({ ms: now, identity: "id-2" }), now)).toBe(true);
+    });
+  });
 });
 
 describe("rendezvous (config, not the §5 hint)", () => {
@@ -634,5 +703,22 @@ describe("moderator directives (CORD-07 §7, Vector `apply_directive`)", () => {
     expect(directiveInWindow(stay, now - 1000 - 10_000, now)).toBe(true);
     expect(directiveInWindow(stay, now + 60_001, now)).toBe(false);
     expect(directiveInWindow(undefined, now, now)).toBe(false);
+  });
+});
+
+describe("directivesToReassert (CORD-07 §7)", () => {
+  const target = "ab".repeat(32);
+
+  it("re-sends what this member may still sign, and drops what it no longer may", () => {
+    const standing = new Set<VoiceDirectiveVerb>(["mute", "deafen"]);
+    expect(directivesToReassert(standing, target, (_, verb) => verb === "mute")).toEqual(["mute"]);
+    expect([...standing]).toEqual(["mute"]);
+  });
+
+  it("re-sends nothing once this member is demoted, and holds nothing for later", () => {
+    const standing = new Set<VoiceDirectiveVerb>(["mute", "deafen"]);
+    expect(directivesToReassert(standing, target, () => false)).toEqual([]);
+    expect(standing.size).toBe(0);
+    expect(directivesToReassert(undefined, target, () => true)).toEqual([]);
   });
 });
