@@ -2,7 +2,7 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
-const h = vi.hoisted(() => ({ reorders: [] as string[][] }));
+const h = vi.hoisted(() => ({ reorders: [] as string[][], activationLeft: 0, activations: 0 }));
 const roles = [
   { roleId: "a".repeat(64), name: "Admins", position: 0, permissions: 0n, color: 0, scope: { kind: "server" } },
   { roleId: "b".repeat(64), name: "Mods", position: 1, permissions: 0n, color: 0, scope: { kind: "server" } },
@@ -13,6 +13,11 @@ vi.mock("@/concord/hooks/useRankedRoles", () => ({
     folded: { roster: { roles, grants: [] } },
     reorderRoles: async ({ ordered }: { ordered: string[] }) => void h.reorders.push(ordered),
     isSaving: false,
+    activationLeft: h.activationLeft,
+    activate: async () => {
+      h.activations++;
+      return [];
+    },
   }),
 }));
 vi.mock("@/concord/lib/rankedWrites", async (orig) => ({
@@ -24,6 +29,7 @@ vi.mock("@/concord/lib/rankedWrites", async (orig) => ({
 vi.mock("@/hooks/useCurrentUser", () => ({ useCurrentUser: () => ({ user: { pubkey: "e".repeat(64) } }) }));
 
 const { RankedRolesBody } = await import("./RankedRolesView");
+const { WriteProgress } = await import("./WriteProgress");
 
 beforeAll(() => {
   // jsdom has no PointerEvent, and a plain Event drops `clientY`.
@@ -59,5 +65,27 @@ describe("dragging a Role", () => {
     h.reorders = [];
     await drag(10);
     for (const ordered of h.reorders) expect(ordered[0]).toBe("a".repeat(64));
+  });
+});
+
+describe("a write in progress", () => {
+  it("says it is waiting before anything is planned, then which change of how many, with a bar that fills", () => {
+    const { rerender } = render(<WriteProgress published={0} planned={0} />);
+    expect(screen.getByRole("status")).toHaveTextContent(/waiting for your signer/);
+    expect(screen.getByRole("progressbar")).not.toHaveAttribute("aria-valuenow");
+    rerender(<WriteProgress published={2} planned={4} />);
+    expect(screen.getByRole("status")).toHaveTextContent("change 3 of 4");
+    expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "50");
+  });
+});
+
+describe("a switch to ranked roles cut short", () => {
+  it("offers the owner to finish it", async () => {
+    h.activationLeft = 3;
+    render(<RankedRolesBody community={{ idHex: "cc".repeat(32) } as never} />);
+    expect(screen.getByText(/didn't finish: 3 changes are still to publish/)).toBeInTheDocument();
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: /Finish now/ })));
+    expect(h.activations).toBe(1);
+    h.activationLeft = 0;
   });
 });

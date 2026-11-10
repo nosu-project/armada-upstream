@@ -1,4 +1,7 @@
-import { AtSign, Ban, CalendarClock, CheckCheck, ChevronDown, Bell, BellOff, Crown, Folder, FolderGit2, GripVertical, Hash, Headphones, KeyRound, Loader2, Lock, LogOut, Megaphone, MessageSquareText, MessagesSquare, Pause, Phone, Pin, Play, Plus, RefreshCw, Rss, Search, Settings, Shield, ShieldAlert, ShieldOff, Tag, Timer, Trash2, UserMinus, UserPlus, X, type LucideIcon } from "lucide-react";
+import { channelDisplayName } from "@/concord/lib/community";
+import { observedAuthors } from "@/concord/lib/observedAuthors";
+import { useCommunityRumors } from "@/concord/hooks/useCommunityRumors";
+import { AtSign, Ban, CalendarClock, CheckCheck, ChevronDown, Bell, BellOff, Crown, Folder, FolderGit2, GripVertical, Hash, Headphones, KeyRound, Loader2, Lock, LogOut, Megaphone, Gem, MessageSquareText, MessagesSquare, Pause, Phone, Pin, Play, Plus, RefreshCw, Rss, Search, Settings, Shield, ShieldAlert, ShieldOff, Tag, Timer, Trash2, UserMinus, UserPlus, X, type LucideIcon } from "lucide-react";
 import { lazy, memo, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, useLocation, useNavigationType, useSearchParams } from "react-router-dom";
 
@@ -13,6 +16,8 @@ import { useConcordReplyParents } from "@/concord/hooks/useReplyParents";
 import { LoginArea } from "@/components/auth/LoginArea";
 import { JoinButton } from "@/components/auth/JoinButton";
 import { MemberList } from "@/components/chat/MemberList";
+import { CommunityBoosters } from "@/concord/components/CommunityBoosters";
+import { useCommunityDiscoverListings } from "@/concord/hooks/useDiscoverListings";
 import type { RolePickerOption } from "@/components/chat/RolePickerItems";
 import { ProfileRelayHints } from "@/components/ProfileRelayHints";
 import { ChannelCategoryHeading } from "@/concord/components/ChannelCategoryHeading";
@@ -52,6 +57,7 @@ import { AddChannelMembersDialog } from "@/concord/components/AddChannelMembersD
 import { ImageLightbox } from "@/concord/components/ImageLightbox";
 import { InviteDialog } from "@/concord/components/InviteDialog";
 import { ShareToDiscoverDialog } from "@/concord/components/ShareToDiscoverDialog";
+import { CommunityDiscoverDialog } from "@/concord/components/CommunityDiscoverDialog";
 import { ModerationView } from "@/concord/components/ModerationView";
 import {
   MODERATION_TABS,
@@ -176,9 +182,9 @@ import { scheduleExpiredSweep } from "@/concord/lib/rumorStore";
 import { useDecryptedImage } from "@/concord/hooks/useDecryptedImage";
 import { useCarryMyNickname, useGuestbook, useHealBanDepartures, useMemberStanding, useRestoreJoin } from "@/concord/hooks/useGuestbook";
 import { useModeration, useReadCutRetry } from "@/concord/hooks/useModeration";
-import { useChannelRekey, useChannelRekeyWatch, useLinkRefreshWatch, useRekeyWatch } from "@/concord/hooks/useRekey";
+import { useChannelRekey, useChannelRekeyWatch, useLinkRefreshWatch, useRefoundResume, useRekeyWatch, type RefoundProgress } from "@/concord/hooks/useRekey";
 import { useCanPost } from "@/concord/hooks/useWriterAccess";
-import { clockNowMs } from "@/lib/relayClock";
+import { clockNowMs, nowSecs } from "@/lib/relayClock";
 import { CommunityNicknamesContext } from "@/contexts/CommunityNicknamesContext";
 import { useInviteActions } from "@/concord/hooks/useInvites";
 import { channelsHingingOn, isEntitled } from "@/concord/lib/channelAccess";
@@ -198,7 +204,7 @@ import { EMPTY_SEARCH_FILTERS, resolveTypedTokens, searchText, type SearchFilter
 import { useConcordThreads, type ConcordThread } from "@/concord/hooks/useConcordThreads";
 import { useTyping, useTypingPublisher } from "@/concord/hooks/useTyping";
 import { resolveVoiceBroker, useVoiceBroker, useVoicePresence } from "@/concord/hooks/useVoice";
-import { communityAvBrokers } from "@/concord/lib/voice";
+import { communityAvBrokers, voiceRowTransports } from "@/concord/lib/voice";
 import { useRegisterChannelStreamKeys } from "@/concord/hooks/useStreamAuth";
 import { completeMemberlist, timeoutRunning } from "@/concord/lib/guestbook";
 import { badgeOf, byDisplayOrder, canActOnMember, canActOnPosition, channelPermissions, isAuthorized, isAuthorizedIn, MAX_ROLES_PER_MEMBER, Permissions, stockTierOf, tierMoves } from "@/concord/lib/roles";
@@ -499,6 +505,7 @@ export const ChannelRow = memo(function ChannelRow({
   muted: mutedVoice,
   unread,
   onSelect,
+  onOpenChat,
   onJoinVoice,
   categories,
   onSetCategory,
@@ -518,6 +525,8 @@ export const ChannelRow = memo(function ChannelRow({
   muted?: ReadonlySet<string>;
   unread?: ConcordUnread;
   onSelect: (channelIdHex: string) => void;
+  /** Opens a voice channel's text chat without joining its call. */
+  onOpenChat?: (channelIdHex: string) => void;
   onJoinVoice: (channel: Channel, broker: string | null) => void;
   /** Category names already in use, offered so near-duplicates aren't retyped. */
   categories?: string[];
@@ -565,14 +574,19 @@ export const ChannelRow = memo(function ChannelRow({
     () => new Set(fold.present.filter((p) => p.noRecord).map((p) => p.author)),
     [fold],
   );
-  const otherTransportVoice = useMemo(() => new Set(fold.otherTransport.map((p) => p.author)), [fold]);
+  const voiceTransports = useMemo(() => voiceRowTransports(fold), [fold]);
   // A moderator acts on a call's participants from the roster too, joined or not (CORD-07 §7).
-  const voiceActionsFor = useVoiceActionsFor(community, channel, fold.present);
+  const voiceMembers = useMemo(() => [...fold.present, ...fold.otherTransport], [fold]);
+  const voiceActionsFor = useVoiceActionsFor(community, channel, voiceMembers);
   // Off the presence flags (CORD-07 §4) outside the call; a moderator's mute shows either way.
+  // LiveKit's live state doesn't cover a member it can't see, so peer-to-peer ones always read presence.
   const rosterMuted = useMemo(() => {
     const out = new Set<string>(inCall ? mutedVoice ?? [] : []);
     for (const p of fold.present) {
       if (p.serverMuted || p.serverDeafened || (!inCall && (p.muted || p.deafened))) out.add(p.author);
+    }
+    for (const p of fold.otherTransport) {
+      if (p.serverMuted || p.serverDeafened || p.muted || p.deafened) out.add(p.author);
     }
     return out;
   }, [fold, inCall, mutedVoice]);
@@ -604,6 +618,7 @@ export const ChannelRow = memo(function ChannelRow({
   const callLabel = occupied
     ? intl.formatMessage({ id: "concordPage.channelRow.joinCall", defaultMessage: "Join call" })
     : intl.formatMessage({ id: "concordPage.channelRow.startCall", defaultMessage: "Start call" });
+  const openChatLabel = intl.formatMessage({ id: "concordPage.channelRow.openChat", defaultMessage: "Open chat" });
   // A live call swaps the row's glyph for a speaker.
   return (
     <ContextMenu>
@@ -655,6 +670,25 @@ export const ChannelRow = memo(function ChannelRow({
                 </span>
               ) : null}
             </button>
+            {onOpenChat && channel.view === "voice" && !active && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onOpenChat(channel.idHex);
+                }}
+                aria-label={openChatLabel}
+                title={openChatLabel}
+                className={cn(
+                  "shrink-0 flex items-center justify-center size-7 mr-2 clip-corner transition-opacity",
+                  "opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100 touch:opacity-100",
+                  hasUnread && !muted && "opacity-100",
+                  "text-muted-foreground hover:text-foreground hover:bg-foreground/10",
+                )}
+              >
+                <MessageSquareText className="size-3.5" />
+              </button>
+            )}
             {offersCall && !inCall && (
               <button
                 type="button"
@@ -691,7 +725,7 @@ export const ChannelRow = memo(function ChannelRow({
                 raised={raisedVoice}
                 recording={recordingVoice}
                 refusing={refusingVoice}
-                otherTransport={otherTransportVoice}
+                transports={voiceTransports}
               />
             </VoiceModerationContext.Provider>
           )}
@@ -872,6 +906,7 @@ function AllMessagesView({
   onLoadOlder,
   onJump,
   mentionsEveryone,
+  onMarkAllRead,
 }: {
   channels: Channel[];
   messages: ChatMsg[];
@@ -881,6 +916,8 @@ function AllMessagesView({
   onLoadOlder: () => void;
   onJump: (channelIdHex: string, message: ChatMsg) => void;
   mentionsEveryone: (message: ChatMsg) => boolean;
+  /** Set while any channel has unread messages. */
+  onMarkAllRead?: () => void;
 }) {
   const channelById = useMemo(() => {
     const m = new Map<string, Channel>();
@@ -914,6 +951,14 @@ function AllMessagesView({
 
   return (
     <div className="flex flex-col py-2 px-2">
+      {onMarkAllRead ? (
+        <div className="flex justify-end px-1 pb-1">
+          <Button variant="secondary" size="sm" className="clip-corner-lg" onClick={onMarkAllRead}>
+            <CheckCheck className="size-4" />
+            {intl.formatMessage({ id: "concordPage.communityMenu.markAllRead", defaultMessage: "Mark all as read" })}
+          </Button>
+        </div>
+      ) : null}
       {rows.map(({ msg, channelIdHex, newDay, newChannel }) => {
         const ch = channelById.get(channelIdHex);
         return (
@@ -1100,6 +1145,9 @@ function TimerNotice({ author, seconds, self }: { author: string; seconds: numbe
  * {@link CommunityBlocked} for one on the blocklist, checked before the
  * community page mounts so none of its hooks read, sync or announce anything.
  */
+/** No extra link signers: the community menu reads only its registry's. */
+const NO_SIGNERS: string[] = [];
+
 export function ConcordPage() {
   const { pathname } = useLocation();
   const isBlocked = useIsBlocked();
@@ -1108,6 +1156,9 @@ export function ConcordPage() {
   if (communityId && isBlocked(communityId)) return <Suspense fallback={null}><CommunityBlocked /></Suspense>;
   return <ConcordCommunityPage />;
 }
+
+/** Communities last left from the All messages pane, this session. */
+const lastAllPaneCommunities = new Set<string>();
 
 /**
  * A Concord community rehydrated from the Community List and rendered through
@@ -1290,7 +1341,7 @@ function ConcordCommunityPage() {
     hasNew: hasUnreadMention,
     markRead: markMentionsRead,
     markAllRead: markAllMentionsRead,
-  } = useConcordMentions(community, channels);
+  } = useConcordMentions(community, channels, true);
 
   // "All messages" reads the store only while open (see `useCommunityFeed`).
   const feed = useCommunityFeed(community, channels, routePane === "all");
@@ -1302,7 +1353,7 @@ function ConcordCommunityPage() {
     hasNew: hasNewThreadReplies,
     markRead: markThreadRead,
     markAllRead: markAllThreadsRead,
-  } = useConcordThreads(community, channels);
+  } = useConcordThreads(community, channels, true);
 
   // NIP-42 auth as per-channel stream keys (plane keys are registered in MainLayout).
   useRegisterChannelStreamKeys(communityId);
@@ -1324,6 +1375,8 @@ function ConcordCommunityPage() {
   useLinkFreshnessWatch(baseCommunity);
   // Durable read-cut: finish a rotating ban dropped by a relay outage. Mounted ONCE here.
   useReadCutRetry(baseCommunity);
+  // An interrupted Refounding of mine: finished at its own epoch. Mounted ONCE here.
+  useRefoundResume(baseCommunity);
   // Stranded self-heal: re-resolve our invite link until its bundle is refreshed.
   const { canRecover, checking: recoveryChecking, checkNow: recoveryCheckNow } = useStrandedRecovery(baseCommunity, stranded);
 
@@ -1542,7 +1595,18 @@ function ConcordCommunityPage() {
   // copied links are accurate. `replace` so Back doesn't bounce. Pane routes are
   // left alone.
   useEffect(() => {
-    if (!communityId || routeChannelId || routePane || !channel) return;
+    if (!communityId) return;
+    if (routePane === "all") lastAllPaneCommunities.add(communityId);
+    else if (routeChannelId || routePane) lastAllPaneCommunities.delete(communityId);
+  }, [communityId, routeChannelId, routePane]);
+  useEffect(() => {
+    if (!communityId || routeChannelId || routePane) return;
+    // Left from All messages: a bare `/c/<id>` (the rail) goes back there, not to a channel.
+    if (lastAllPaneCommunities.has(communityId)) {
+      navigateTo(chatRoute({ kind: "concord", communityId, pane: "all" }), { replace: true });
+      return;
+    }
+    if (!channel) return;
     navigateTo(chatRoute({ kind: "concord", communityId, channelId: channel.idHex }), {
       replace: true,
     });
@@ -2014,6 +2078,7 @@ function ConcordCommunityPage() {
   const [inviteOpen, setInviteOpen] = useState(false);
   const [addMembersOpen, setAddMembersOpen] = useState(false);
   const [shareDiscoverOpen, setShareDiscoverOpen] = useState(false);
+  const [communityDiscoverOpen, setCommunityDiscoverOpen] = useState(false);
   const [banTarget, setBanTarget] = useState<string | null>(null);
   const [kickTarget, setKickTarget] = useState<string | null>(null);
   const [nicknameTarget, setNicknameTarget] = useState<string | null>(null);
@@ -2212,28 +2277,30 @@ function ConcordCommunityPage() {
     return out;
   }, [community, folded]);
 
-  // Observed authors: newest ms each pubkey published (seconds scaled to ms to
-  // match Guestbook kick/leave times), so stale chat doesn't resurrect a kicked member.
-  const observed = useMemo(() => {
-    const out = new Map<string, number>();
-    for (const m of allMessages) {
-      const seenMs = m.created_at * 1000;
-      const prev = out.get(m.pubkey);
-      if (prev === undefined || seenMs > prev) out.set(m.pubkey, seenMs);
-    }
-    return out;
-  }, [allMessages]);
+  // Observed authors across every held channel (the shared read the unread badges
+  // already hold), not only the open one's.
+  const channelIdsHere = useMemo(() => channels.map((c) => c.idHex), [channels]);
+  const { byChannel: communityRumors } = useCommunityRumors(community?.idHex, channelIdsHere);
+  const observed = useMemo(() => observedAuthors(communityRumors, allMessages), [communityRumors, allMessages]);
   // The owner writes the departures of Bans lifted before un-bans wrote their own (Vector).
   useHealBanDepartures(community, observed);
   // Each member carries their own Nickname across a Refounding (CORD-04 §10).
   useCarryMyNickname(community);
+  // `observed` changes with every message in any channel while the set almost never
+  // does: the previous array is kept while its members are the same, so the member
+  // panel, composers and everything else handed it don't re-render per message.
+  const memberPubkeysRef = useRef<string[]>([]);
   const memberPubkeys = useMemo(() => {
     const banned = folded?.banned ?? new Set<string>();
     const set = completeMemberlist(coalesced, observed, banned, folded?.bannedAt, refound);
     for (const g of roster?.grants ?? []) if (g.roleIds.length > 0 && !banned.has(g.member)) set.add(g.member);
     if (ownerHex) set.add(ownerHex);
     if (user && !banned.has(user.pubkey)) set.add(user.pubkey);
-    return [...set];
+    const next = [...set];
+    const prev = memberPubkeysRef.current;
+    if (prev.length === next.length && next.every((pk, i) => prev[i] === pk)) return prev;
+    memberPubkeysRef.current = next;
+    return next;
   }, [coalesced, observed, roster, ownerHex, user, folded, refound]);
 
   // One Set identity per member-list change, shared by memoized git rows and the ticket panel.
@@ -2283,6 +2350,12 @@ function ConcordCommunityPage() {
     `${communityId ?? ""}|${channel?.idHex ?? ""}`,
     channelsOpen,
   );
+  // Read only while something shows it: the menu (Boost appears only for a listed
+  // community), the member list's booster badges, or the boost dialog.
+  const discoverListingsWanted = !!user && !dissolved
+    && (communityMenuOpen || communityDiscoverOpen || membersVisible || membersOpen);
+  const { listings: discoverListings } = useCommunityDiscoverListings(community, NO_SIGNERS, { enabled: discoverListingsWanted });
+  const discoverListed = discoverListings.length > 0;
 
   const newChannelCategories = useMemo(
     () => (folded?.rankedRoster ? categoryOrder(folded).map((c) => ({ idHex: c.idHex, name: c.name })) : []),
@@ -2358,7 +2431,7 @@ function ConcordCommunityPage() {
     return m;
   }, [allMessages]);
   // Parents older than the loaded window come from the store.
-  const olderReplyParents = useConcordReplyParents(community, channel?.idHex, allMessages, messagesById);
+  const olderReplyParents = useConcordReplyParents(community, channel, allMessages, messagesById);
 
   const closeSearch = useCallback(() => {
     setSearchOpen(false);
@@ -2721,6 +2794,13 @@ function ConcordCommunityPage() {
     },
     [suppressChannelClick, selectChannel],
   );
+  const handleOpenChannelChat = useCallback(
+    (idHex: string) => {
+      selectChannel(idHex);
+      setChannelsOpen(false);
+    },
+    [selectChannel],
+  );
   const handleSetCategory = useCallback(
     (idHex: string, category: string | undefined) => void fileChannel(idHex, category),
     [fileChannel],
@@ -2828,7 +2908,7 @@ function ConcordCommunityPage() {
     // change overlaid since the fold lags.
     if (!roster) return;
     const affected = channelsHingingOn(roster, ownerHex, pubkey, roleId, privateChannelsHere);
-    const nameOf = (idHex: string) => folded?.channels.get(idHex)?.name ?? idHex.slice(0, 8);
+    const nameOf = (idHex: string) => channelDisplayName(community, folded, idHex);
     const listNames = (ids: string[]) => ids.map((id) => `#${nameOf(id)}`).join(", ");
 
     if (on) {
@@ -2974,8 +3054,13 @@ function ConcordCommunityPage() {
     banTarget !== null && !!folded && !!user && !hasForeignLiveLinks(folded, user.pubkey, banTarget) &&
     moderation.canRekey;
 
-  const runBan = async (targets: string[], onPhase: (phase: BanPhase) => void) => {
-    const { rekeyed, publicBan } = await moderation.banMany({ targets, onPhase });
+  const runBan = async (
+    targets: string[],
+    onPhase: (phase: BanPhase) => void,
+    onStripProgress: (done: number, total: number) => void,
+    onRekeyProgress: (progress: RefoundProgress) => void,
+  ) => {
+    const { rekeyed, publicBan } = await moderation.banMany({ targets, onPhase, onStripProgress, onRekeyProgress });
     if (rekeyed || publicBan) {
       toast({
         title: t({ id: "concordPage.ban.done", defaultMessage: "Member banned" }),
@@ -3005,11 +3090,13 @@ function ConcordCommunityPage() {
 
   // A pre-split epoch (no control_pk): the next Refounding mints the split (CORD-06 §3).
   const legacyControl = Boolean(community && !community.controlPk);
-  const offerUpgrade = Boolean(user && legacyControl && moderation.canRotateKeys && !dissolved);
+  // The banner asks the owner alone: two staff upgrading at once each keep their own new
+  // root and split the community. Other staff still have the menu's Upgrade security.
+  const offerUpgrade = Boolean(user && user.pubkey === ownerHex && legacyControl && moderation.canRotateKeys && !dissolved);
 
-  const runRotateKeys = async () => {
+  const runRotateKeys = async (onProgress: (progress: RefoundProgress) => void) => {
     const upgrading = legacyControl;
-    await moderation.rotateKeys();
+    await moderation.rotateKeys({ onProgress });
     toast(
       upgrading
         ? { title: t({ id: "concordPage.upgrade.done", defaultMessage: "Security upgraded" }) }
@@ -3048,6 +3135,7 @@ function ConcordCommunityPage() {
         muted={inCall ? mutedPubkeys : undefined}
         unread={unreadByChannel[c.idHex]}
         onSelect={handleSelectChannel}
+        onOpenChat={handleOpenChannelChat}
         onJoinVoice={handleJoinVoice}
         categories={categoryPicklist}
         onSetCategory={canManageChannels ? handleSetCategory : undefined}
@@ -3126,6 +3214,13 @@ function ConcordCommunityPage() {
                     icon: <UserPlus className="size-4" />,
                     label: intl.formatMessage({ id: "concordPage.communityMenu.invitePeople", defaultMessage: "Invite people" }),
                     onClick: () => setInviteOpen(true),
+                  },
+                  {
+                    // Only a listed community has anything to boost.
+                    show: !!user && !dissolved && discoverListed,
+                    icon: <Gem className="size-4" />,
+                    label: intl.formatMessage({ id: "concordPage.communityMenu.boost", defaultMessage: "Boost" }),
+                    onClick: () => setCommunityDiscoverOpen(true),
                   },
                   {
                     // Listing publishes the secret link, so owner/admin only.
@@ -3618,7 +3713,7 @@ function ConcordCommunityPage() {
                                   setPaused.mutate(
                                     d.secs === undefined
                                       ? {}
-                                      : { untilSecs: Math.floor(Date.now() / 1000) + d.secs },
+                                      : { untilSecs: nowSecs() + d.secs },
                                   )
                                 }
                               >
@@ -3684,6 +3779,7 @@ function ConcordCommunityPage() {
                     onLoadOlder={feed.loadOlder}
                     onJump={jumpToMention}
                     mentionsEveryone={messageMentionsEveryone}
+                    onMarkAllRead={Object.keys(unreadByChannel).length > 0 ? markAllChannelsRead : undefined}
                   />
                 </div>
               ) : view === "mentions" ? (
@@ -3905,6 +4001,9 @@ function ConcordCommunityPage() {
                       onOpen={openPost}
                       isNew={isPostNew}
                       onNewPost={canWrite ? () => setNewPostOpen(true) : undefined}
+                      viewer={user?.pubkey}
+                      canModerate={transport.canModerate}
+                      onDelete={transport.deleteMessage}
                       banner={
                         <>
                           {communityPause && channel && (
@@ -4200,6 +4299,7 @@ function ConcordCommunityPage() {
               >
                 <div aria-hidden className="absolute inset-0 -z-10 bg-background sidebar:hidden" />
                 {membersVisible && <PaneResizeHandle pane="member" />}
+                <CommunityBoosters listings={discoverListings} members={memberSet} enabled={membersVisible || membersOpen}>
                 <MemberList
                   admins={panelAdmins}
                   members={panelMembers}
@@ -4210,6 +4310,7 @@ function ConcordCommunityPage() {
                   onAddMembers={addableChannelRoles.length > 0 ? openAddMembers : undefined}
                   onClose={closeMembers}
                 />
+                </CommunityBoosters>
               </div>
             </div>
           </div>
@@ -4234,6 +4335,14 @@ function ConcordCommunityPage() {
           />
         </MountWhenOpened>
       )}
+      <MountWhenOpened open={communityDiscoverOpen}>
+        <CommunityDiscoverDialog
+          open={communityDiscoverOpen}
+          onOpenChange={setCommunityDiscoverOpen}
+          community={community}
+          members={memberSet}
+        />
+      </MountWhenOpened>
       <MountWhenOpened open={shareDiscoverOpen}>
         <ShareToDiscoverDialog
           open={shareDiscoverOpen}

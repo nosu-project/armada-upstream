@@ -1,4 +1,4 @@
-import { cleanup, render, waitFor } from "@testing-library/react";
+import { act, cleanup, render, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -26,6 +26,7 @@ vi.mock("@/hooks/useCustomEmojis", () => ({
 }));
 
 import { ChatContent } from "@/components/chat/ChatContent";
+import { findSlashCommand, type SlashCommandContext } from "@/lib/slashCommands";
 
 afterEach(cleanup);
 
@@ -123,6 +124,64 @@ describe("ChatContent chat markdown", () => {
     expect(container.textContent).not.toContain("**");
   });
 
+  it("renders a [text](url) link in a chat message", () => {
+    const { container } = renderContent("see [the docs](https://example.com/docs) and [github.com/x](https://github.com/x)");
+    const links = Array.from(container.querySelectorAll("a"));
+    expect(links.map((a) => a.getAttribute("href"))).toEqual(["https://example.com/docs", "https://github.com/x"]);
+    expect(links[0].textContent).toBe("the docs (example.com)");
+    expect(links[0].querySelector(".touch\\:inline")?.textContent).toBe(" (example.com)");
+    expect(links[1].textContent).toBe("github.com/x");
+    expect(container.textContent).not.toContain("](");
+  });
+
+  it("keeps a link literal when its label names another host, linking each URL to itself", () => {
+    const src = "[https://claim.example/free/nitro](https://nyan.cat/)";
+    const { container } = renderContent(src);
+    const links = Array.from(container.querySelectorAll("a"));
+    expect(links.map((a) => a.getAttribute("href"))).toEqual(["https://claim.example/free/nitro", "https://nyan.cat/"]);
+    for (const a of links) expect(a.textContent).toBe(a.getAttribute("href"));
+    expect(container.textContent).toBe(src);
+  });
+
+  it("keeps a spoof of the app's own origin literal, with the real link visible", () => {
+    const { container } = renderContent("[https://armada.buzz/free/nitro/claim](https://nyan.cat/)");
+    const nyan = Array.from(container.querySelectorAll("a")).find((a) => a.getAttribute("href") === "https://nyan.cat/");
+    expect(nyan?.textContent).toBe("https://nyan.cat/");
+    expect(container.textContent).toContain("](https://nyan.cat/)");
+    expect(container.querySelector(".animate-pulse")).toBeNull();
+  });
+
+  it("masks a link labelled with a file name", () => {
+    const { container } = renderContent("[package.json](https://github.com/x/package.json)");
+    const links = Array.from(container.querySelectorAll("a"));
+    expect(links.map((a) => a.getAttribute("href"))).toEqual(["https://github.com/x/package.json"]);
+    expect(links[0].querySelector(".font-medium")?.textContent).toBe("package.json");
+  });
+
+  it("keeps a bare-domain spoof literal", () => {
+    const { container } = renderContent("[github.com](https://evil.example/x)");
+    const links = Array.from(container.querySelectorAll("a"));
+    expect(links.map((a) => a.getAttribute("href"))).toEqual(["https://evil.example/x"]);
+    expect(container.textContent).toBe("[github.com](https://evil.example/x)");
+  });
+
+  it("shows a [text](url) link's full URL in a tooltip on focus", async () => {
+    const { container, findByRole } = renderContent("[click](https://evil.example/claim?x=1)");
+    act(() => container.querySelector("a")!.focus());
+    expect((await findByRole("tooltip")).textContent).toBe("https://evil.example/claim?x=1");
+  });
+
+  it("renders a table with aligned cells and inline formatting", () => {
+    const { container } = renderContent("| Name | Score |\n|------|------:|\n| **ann** | 10 |\n| [bob](https://example.com/bob) | 7 |");
+    const table = container.querySelector("table")!;
+    expect(Array.from(table.querySelectorAll("th")).map((th) => th.textContent)).toEqual(["Name", "Score"]);
+    const rows = Array.from(table.querySelectorAll("tbody tr"));
+    expect(rows).toHaveLength(2);
+    expect(rows[0].querySelector("strong")?.textContent).toBe("ann");
+    expect(rows[1].querySelector("a")?.getAttribute("href")).toBe("https://example.com/bob");
+    expect(rows[0].querySelectorAll("td")[1].className).toContain("text-right");
+  });
+
   it("renders blocks inside a quote, nested quotes, and a divider", () => {
     const { container } = renderContent("> ## Inside\n> - item\n>> deeper\n\n---\nafter");
     const quote = container.querySelector("blockquote");
@@ -136,5 +195,13 @@ describe("ChatContent chat markdown", () => {
     const { container } = renderContent("\\*not italic\\*");
     expect(container.querySelector("em")).toBeNull();
     expect(container.textContent).toBe("*not italic*");
+  });
+
+  it("renders /shrug's output as the face, backslash included", () => {
+    const sent = findSlashCommand("shrug")!.run("I give up", {} as SlashCommandContext);
+    if (sent.type !== "send") throw new Error(sent.type);
+    const { container } = renderContent(sent.text);
+    expect(container.querySelector("em")).toBeNull();
+    expect(container.textContent).toBe("I give up \u00af\\_(\u30c4)_/\u00af");
   });
 });

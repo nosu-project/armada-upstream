@@ -1,6 +1,6 @@
 import { Check, KeyRound, Loader2, Minus, Shield, User, Users, X } from "lucide-react";
 import { nip19 } from "nostr-tools";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { DisplayName } from "@/components/DisplayName";
 import { Button } from "@/components/ui/button";
@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useGuestbook } from "@/concord/hooks/useGuestbook";
+import { WriteProgress } from "@/concord/components/WriteProgress";
 import { useRankedRoles } from "@/concord/hooks/useRankedRoles";
 import { categoryOrder, rankedOrder, sameTarget } from "@/concord/lib/rankedWrites";
 import { colorToHex, OVERWRITABLE, PERMISSION_LABELS, type OverwriteTarget } from "@/concord/lib/roles";
@@ -64,7 +65,7 @@ export function ChannelPermissionsDialog({
   onOpenChange: (open: boolean) => void;
 }) {
   const intl = useIntl();
-  const { folded, setOverwrite, setSync, isSaving } = useRankedRoles(community);
+  const { folded, setOverwrite, setSync, isSaving, published, planned } = useRankedRoles(community);
   const { coalesced } = useGuestbook(community);
   const [typed, setTyped] = useState("");
   const roster = folded?.roster;
@@ -78,6 +79,8 @@ export function ChannelPermissionsDialog({
   const [selected, setSelected] = useState<string>("everyone");
   const [draft, setDraft] = useState<{ allow: bigint; deny: bigint }>({ allow: 0n, deny: 0n });
   const [error, setError] = useState<string | null>(null);
+  const openRef = useRef(Boolean(scope));
+  openRef.current = Boolean(scope);
 
   const current = rules.find((o) => sameTarget(o.target, targetOf(selected)));
   useEffect(() => {
@@ -116,7 +119,10 @@ export function ChannelPermissionsDialog({
       await setOverwrite({ scope: scopeHex, target: targetOf(selected), allow, deny });
       toast({ title: t({ id: "channelPermissions.saved", defaultMessage: "Permissions saved" }) });
     } catch (e) {
-      setError(e instanceof Error ? e.message : t({ id: "channelPermissions.saveFailed", defaultMessage: "Couldn't save the permissions." }));
+      const message = e instanceof Error ? e.message : t({ id: "channelPermissions.saveFailed", defaultMessage: "Couldn't save the permissions." });
+      // Closed while it saved: the save went on, and its failure would go unseen.
+      if (openRef.current) setError(message);
+      else toast({ title: t({ id: "channelPermissions.saveFailed", defaultMessage: "Couldn't save the permissions." }), description: message, variant: "destructive" });
     }
   };
 
@@ -308,6 +314,7 @@ export function ChannelPermissionsDialog({
         </div>
 
         {error && <p className="text-sm text-destructive">{error}</p>}
+        {isSaving && <WriteProgress published={published} planned={planned} />}
 
         <ChromeDialogFooter className="mt-2">
           <Button type="button" variant="ghost" onClick={() => onOpenChange(false)} disabled={isSaving}>

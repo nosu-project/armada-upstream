@@ -1,5 +1,5 @@
 import { useNostr } from "@nostrify/react";
-import { clockNowMs } from "@/lib/relayClock";
+import { clockNowMs, nowSecs } from "@/lib/relayClock";
 import { sendsIn, sendTarget, writerGroup, writerKeyAt } from "@/concord/lib/writerKeys";
 import { hashKey, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
@@ -10,7 +10,7 @@ import { timeoutRunning } from "@/concord/lib/guestbook";
 import { heldRoleMentions, pingableRoles, rolePings } from "@/concord/lib/roleMentions";
 import { canScrub, scrubbedDeleteExpiry, scrubOwnWraps, sendWrapOwner } from "@/concord/lib/wrapScrub";
 import { useAccountSecret } from "@/hooks/useAccountSecret";
-import { mayHideIn, restrictedPostersIn, timelineCollapse, timelineRules, writerJudge as writerJudgeOf } from "@/concord/lib/channelJudges";
+import { channelRules, mayHideIn, restrictedPostersIn } from "@/concord/lib/channelJudges";
 import { persistTimelineSnapshot, prewarmTimelineSnapshot, takeSnapshotSeed } from "@/concord/hooks/timelineSnapshot";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useKeyedMemo } from "@/hooks/useKeyedMemo";
@@ -69,6 +69,7 @@ import {
   subscribeQuarantineMemory,
 } from "@/concord/lib/quarantineMemory";
 import { recordSightings, sightingsRevision, subscribeSightings } from "@/concord/lib/mediaTrust";
+import { useFloodPolicy } from "@/concord/hooks/useFloodPolicy";
 import { citationToTag, type AuthorityCitation } from "@/concord/lib/edition";
 import { citationSatisfied } from "@/concord/lib/control";
 import { whenAuthSettled } from "@/concord/lib/planeSync";
@@ -108,6 +109,7 @@ const FLOOD_HISTORY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 const FLOOD_HISTORY_MAX_ROWS = 4000;
 
 const EMPTY_RAW: OpenedChat[] = [];
+const NO_RULES: ReturnType<typeof channelRules> = {};
 
 export interface ChannelTimelineFocus {
   messageId?: string;
@@ -311,13 +313,11 @@ export function useChannelTimeline(
   const { data: control } = useControlFold(community);
   const { timeouts, history } = useGuestbook(control ? community : undefined);
   const publicUntil = channel?.publicUntil;
-  const collapse = useMemo(() => timelineCollapse(control, channelIdHex, timeouts, clockNowMs(), publicUntil), [control, channelIdHex, timeouts, publicUntil]);
   // A restricted Channel's posts stand by its Writers ledger (CORD-03 §1).
-  const writerJudge = useMemo(
-    () => writerJudgeOf(control, channelIdHex, community?.id, history),
-    [control, channelIdHex, community, history],
+  const rules = useMemo(
+    () => (channelIdHex ? channelRules(control, channelIdHex, community?.id, timeouts, history, clockNowMs(), publicUntil) : NO_RULES),
+    [control, channelIdHex, community?.id, timeouts, history, publicUntil],
   );
-  const rules = useMemo(() => timelineRules(collapse, writerJudge), [collapse, writerJudge]);
   // Cutoffs included: retirement can change without the epoch set changing.
   const epochSig = channel?.streams.map((s) => `${s.epoch}:${s.retiredAt ?? ""}`).join(",") ?? "";
   const queryKey = useMemo(() => channelKey(channelIdHex), [channelIdHex]);
@@ -817,7 +817,7 @@ export function useChannelTimeline(
       const saved = await readStreamCursor(cursorKeyId);
       for (let pass = 0; pass < NEWER_PASSES; pass++) {
         // The present's floor, or (an empty present) the clock plus publisher skew.
-        const ceiling = pageCursors.get(cursorKeyId)?.until ?? Math.floor(Date.now() / 1000) + 600;
+        const ceiling = pageCursors.get(cursorKeyId)?.until ?? nowSecs() + 600;
         const res = await readForward<OpenedChat>({
           from: top + 1,
           ceiling,
@@ -944,6 +944,7 @@ export function useChannelTimeline(
     refetchInterval: 5 * 60_000,
   }).data;
 
+  const floodPolicy = useFloodPolicy();
   // Re-fold when the persisted quarantine warms or grows (see quarantineMemory.ts).
   const memoryRev = useSyncExternalStore(subscribeQuarantineMemory, quarantineMemoryRevision);
 
@@ -976,9 +977,11 @@ export function useChannelTimeline(
       ...(firstSeen ? { firstSeen } : {}),
       ...(establishedSinceMs !== undefined ? { establishedSinceMs } : {}),
       ...(pauseSince !== undefined ? { pauseSince } : {}),
+      policy: floodPolicy,
       ...rules,
     });
-    // Past sessions' verdicts keep yesterday's wall folded after a refresh.
+    // Past sessions' verdicts keep yesterday's wall folded after a refresh
+    // (none under a policy the reader relaxed; see quarantineMemory.ts).
     const remembered = community?.idHex && channelIdHex
       ? recallQuarantined(community.idHex, channelIdHex)
       : undefined;
@@ -996,7 +999,7 @@ export function useChannelTimeline(
       return { ...merged, messages: merged.messages.filter((m) => !hidden.has(m.rumorId)) };
     }
     return merged;
-  }, [moderated, moderation, optimisticDeleted, readingUser?.pubkey, firstSeen, establishedSinceMs, pauseSince, rules, community?.idHex, channelIdHex, memoryRev, revealTick]);
+  }, [moderated, moderation, optimisticDeleted, readingUser?.pubkey, firstSeen, establishedSinceMs, pauseSince, rules, floodPolicy, community?.idHex, channelIdHex, memoryRev, revealTick]);
 
   // A removed message's media leaves this device too: a moderator deleting it
   // (abuse, CSAM) shouldn't leave its plaintext in the decrypt cache.
@@ -1567,9 +1570,9 @@ export function useMessageActions(community: Community | undefined, channel: Cha
             [id, ...edits.map((e) => e.rumorId)],
             secret,
           ).catch(() => ({ byOwner: false, byPlane: false }));
-          const nowSecs = Math.floor(Date.now() / 1000);
+          const scrubAt = nowSecs();
           const exp = target.tags.find((t) => t[0] === "expiration")?.[1];
-          expiration = scrubbedDeleteExpiry(scrubbed, exp && /^[0-9]+$/.test(exp) ? Number(exp) : undefined, nowSecs);
+          expiration = scrubbedDeleteExpiry(scrubbed, exp && /^[0-9]+$/.test(exp) ? Number(exp) : undefined, scrubAt);
         }
         await send({
           content: "",

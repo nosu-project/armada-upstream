@@ -49,6 +49,7 @@ import type { OpenedChat } from "@/concord/lib/chat";
 import { currentGuestbookGroup, guestbookGroups } from "@/concord/lib/guestbook";
 import type { Community } from "@/concord/lib/types";
 import { confirmOutgoing } from "@/concord/lib/outgoing";
+import { nowSecs } from "@/lib/relayClock";
 
 /** The chat plane's channel binding (CORD-03 §3) — the tag chat reads index. */
 const TAG_CHANNEL = "channel";
@@ -338,7 +339,7 @@ const SPEECH_KINDS = [9, 1068, 1111];
  * this, since {@link sweepExpiredCommunityRumors} only removes them eventually.
  */
 function notExpired(events: NostrRumor[]): NostrRumor[] {
-  const now = Math.floor(Date.now() / 1000);
+  const now = nowSecs();
   return events.filter((ev) => !isExpired(ev.tags, now));
 }
 
@@ -1114,7 +1115,7 @@ export function writeRumors(
   // or a channel key-holder could inject a kind-3308 that {@link queryPlane} serves
   // as a control edition. A denylist, so new chat kinds aren't silently dropped.
   // Already-expired rumors are refused at ingest (CORD-08 §3).
-  const now = Math.floor(Date.now() / 1000);
+  const now = nowSecs();
   const chat = withoutBannedChat(opened.filter((o) => !PLANE_KINDS.has(o.kind) && !isExpired(o.tags, now)));
   if (chat.length === 0) return Promise.resolve(true);
   const channels = new Set(chat.map((o) => o.channelIdHex).filter(Boolean));
@@ -1207,7 +1208,7 @@ export async function sweepExpiredCommunityRumors(
   lastSweepAt.set(communityIdHex, Date.now());
 
   const s = rumorStore(communityIdHex);
-  const now = Math.floor(Date.now() / 1000);
+  const now = nowSecs();
   // WebXDC state rides outside CHAT_KINDS but expires with the plane.
   const kinds = [...CHAT_KINDS, KIND_WEBXDC];
   let until: number | undefined;
@@ -1386,6 +1387,12 @@ export interface StreamCursor {
    * re-reading its top every time.
    */
   bridge?: StreamBridge;
+  /**
+   * The stream addresses `newest`..`oldest` was read over (a channel's, as
+   * `streamSetSig`). A cursor knows nothing of an address added since, so a changed
+   * set starts the read over; absent on cursors older than the field.
+   */
+  streams?: string;
 }
 
 export interface StreamBridge {
@@ -1443,10 +1450,20 @@ export function updateStreamCursor(
           : (prev?.oldest ?? 0),
       exhausted: patch.exhausted ?? prev?.exhausted ?? false,
     };
+    const streams = patch.streams ?? prev?.streams;
+    if (streams !== undefined) next.streams = streams;
     const bridge = patch.bridge === null ? undefined : (patch.bridge ?? prev?.bridge);
     if (bridge && next.newest > 0 && bridge.until > next.newest) next.bridge = bridge;
     await writeFolded(cursorKey(scope), next);
   });
+}
+
+/**
+ * Start a scope's read over from the top, over `streams`: what the cursor claimed to
+ * have read can't be trusted (its address set changed, or the store lost the rows).
+ */
+export function resetStreamCursor(scope: string, streams: string): Promise<void> {
+  return withCursorLock(scope, () => writeFolded(cursorKey(scope), { newest: 0, oldest: 0, exhausted: false, streams } satisfies StreamCursor));
 }
 
 /** Clear the exhausted flag (e.g. after a rekey catch-up unlocks older history). */

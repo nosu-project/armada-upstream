@@ -1,13 +1,16 @@
+import { settleAccepted } from "@/concord/lib/settleAccepted";
 import { clockNowMs } from "@/lib/relayClock";
 import { useNostr } from "@nostrify/react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useIsMutating, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 
 import { useCommunityEntry, useUpdateCommunityList } from "@/concord/hooks/useCommunityList";
 import { citationFor, foldStoredControl, publishEdition, useControlFold, useDissolved, withControlWrite } from "@/concord/hooks/useControlPlane";
 import { resealedChannelContent } from "@/concord/lib/channelSeal";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
-import { channelKeysToWire, heldChannelKeys, toJoinMaterial } from "@/concord/lib/communityList";
+import { channelKeysToWire, heldChannelKeys, toJoinMaterial, type JoinMaterial } from "@/concord/lib/communityList";
+import { clearReadCutPending, readCutPending, readCutPendingReady } from "@/concord/lib/readCutPending";
+import { clearRefoundJournal, refoundJournal, refoundJournalReady, writeRefoundJournal, type RefoundJournal } from "@/concord/lib/refoundJournal";
 import { currentControlGroup, foldControlState, openControlEditions, storedControlOf, type FoldedControl } from "@/concord/lib/control";
 import type { AuthorityCitation, ParsedEdition } from "@/concord/lib/edition";
 import { VSK_SYNC } from "@/concord/lib/roster";
@@ -193,6 +196,119 @@ function standingNicknames(opened: OpenedEvent[], folded: FoldedControl, communi
  *     removes an icon). A missing chunk is never an exclusion, and a rotation
  *     predating my join is history (see `stranded`).
  */
+/**
+ * The complete-or-not base rotations off `(prevEpoch, prevRoot)` a reader honors.
+ * Authority is the roster, never key possession (CORD-06); banned rotators are
+ * dropped outright (CORD-04 §4), and the cited Grant must be satisfied (CORD-04 §5),
+ * so a just-demoted admin's Refounding isn't honored.
+ */
+function honoredRootRotations(
+  parsed: ParsedRekey[],
+  folded: FoldedControl,
+  communityId: Uint8Array,
+  prevEpoch: bigint,
+  prevRoot: Uint8Array,
+): ReturnType<typeof groupRotations> {
+  return groupRotations(parsed).filter(
+    (set) =>
+      set.scopeIdHex === "0".repeat(64) &&
+      !folded.banned.has(set.rotator) &&
+      (set.rotator === folded.ownerHex || hasPermission(folded.roster, set.rotator, Permissions.BAN)) &&
+      citationSatisfied(folded, communityId, set.rotator, set.authority) &&
+      checkContinuity(set, prevEpoch, prevRoot).ok,
+  );
+}
+
+/**
+ * This rotator's set rotating `ch` one epoch on, off its current key, as the relays
+ * hold it: what a second rotation at that epoch would merge with.
+ */
+async function myRotationAt(
+  nostr: ReturnType<typeof useNostr>["nostr"],
+  community: Community,
+  ch: PrivateChannelKey,
+  me: string,
+): Promise<ReturnType<typeof groupRotations>[number] | undefined> {
+  const next = ch.epoch + 1n;
+  const address = channelRekeyGroupKey(community.root, ch.id, next);
+  const filter = { kinds: [KIND_WRAP], authors: [address.pk], limit: 200 };
+  const results = await Promise.all(
+    community.relays.map((url) =>
+      nostr.relay(url).query([filter], { signal: AbortSignal.timeout(5000) }).catch(() => [] as NostrEvent[]),
+    ),
+  );
+  const parsed: ParsedRekey[] = [];
+  const seen = new Set<string>();
+  for (const wrap of results.flat()) {
+    if (seen.has(wrap.id)) continue;
+    seen.add(wrap.id);
+    try {
+      parsed.push(parseRekey(openWrap(wrap, address)));
+    } catch {
+      // not a rekey at this address
+    }
+  }
+  const prevCommit = bytesToHex(epochKeyCommitment(ch.epoch, ch.key));
+  return groupRotations(parsed).find((set) => set.rotator === me && set.newEpoch === next && set.prevCommit === prevCommit);
+}
+
+/** How long after a rotation its epoch is still checked for a racing one. */
+const CONVERGE_WINDOW_SECS = 24 * 3600;
+
+/**
+ * Racing Refoundings converge on the lowest new base key (CORD-06 §3), but the forward
+ * walk only breaks the tie stepping INTO an epoch: a member that adopted the higher key
+ * first — or the losing rotator, who recorded its own — would stay on a forked root.
+ * So the epoch I'm on is read again for a while (in `useRekeyWatch`'s own REQ, as
+ * Vector's current-head heal rides its catch-up), and this is the community moved onto
+ * a lower key I hold a blob for, at the same epoch, or undefined.
+ */
+async function convergeOnLowerKey(
+  rounds: OpenedEvent[],
+  community: Community,
+  prior: HeldRoot,
+  folded: FoldedControl,
+  me: string,
+  nip44: { decrypt: (pubkey: string, ciphertext: string) => Promise<string> },
+): Promise<Community | undefined> {
+  const parsed: ParsedRekey[] = [];
+  for (const opened of rounds) {
+    try {
+      parsed.push(parseRekey(opened));
+    } catch {
+      // not a rekey
+    }
+  }
+  let lowest: { key: Uint8Array; rotator: string; controlPk?: string; controlRoot?: Uint8Array } | undefined;
+  for (const set of honoredRootRotations(parsed, folded, community.id, prior.epoch, prior.key)) {
+    if (!set.complete) continue;
+    const blob = findBlob(set, myLocator(set.rotator, me, set.scopeIdHex, set.newEpoch));
+    if (!blob) continue;
+    try {
+      const w = decodeWrappedBaseKey(base64ToBytes(await nip44.decrypt(set.rotator, blob.wrapped)), community.id, set.newEpoch);
+      if (!lowest || lowerKeyWins(lowest.key, w.newRoot) === w.newRoot) {
+        lowest = { key: w.newRoot, rotator: set.rotator, ...(w.controlPk ? { controlPk: w.controlPk } : {}), ...(w.controlRoot ? { controlRoot: w.controlRoot } : {}) };
+      }
+    } catch {
+      // undecryptable: not mine to adopt
+    }
+  }
+  if (!lowest || bytesToHex(lowest.key) === bytesToHex(community.root) || lowerKeyWins(community.root, lowest.key) !== lowest.key) return undefined;
+  const winner = lowest;
+  return {
+    ...community,
+    root: winner.key,
+    controlPk: winner.controlPk,
+    controlRoot: winner.controlRoot,
+    heldRoots: community.heldRoots.map((r) =>
+      r.epoch === community.rootEpoch
+        ? { epoch: r.epoch, key: winner.key, refounder: winner.rotator, ...(winner.controlPk ? { controlPk: winner.controlPk } : {}) }
+        : r,
+    ),
+    refounder: winner.rotator,
+  };
+}
+
 export function useRekeyWatch(community: Community | undefined): { stranded: boolean } {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
@@ -216,8 +332,14 @@ export function useRekeyWatch(community: Community | undefined): { stranded: boo
   }, [heldId, heldEpoch]);
 
   const nextEpoch = community ? community.rootEpoch + 1n : 0n;
-  const query = useQuery<OpenedEvent[]>({
-    queryKey: ["concord", "rekey", community?.idHex ?? null, nextEpoch.toString()],
+  // A racing Refounding at the epoch I'm on (see `convergeOnLowerKey`): read in the same
+  // REQ, for a while after the rotation, since the forward walk never looks back at it.
+  const prior = community && community.rootEpoch > 0n
+    ? community.heldRoots.find((r) => r.epoch === community.rootEpoch - 1n)
+    : undefined;
+  const converging = prior?.retiredAt !== undefined && Date.now() / 1000 - prior.retiredAt < CONVERGE_WINDOW_SECS;
+  const query = useQuery<{ next: OpenedEvent[]; current: OpenedEvent[] }>({
+    queryKey: ["concord", "rekey", community?.idHex ?? null, nextEpoch.toString(), converging],
     enabled: Boolean(community),
     staleTime: 30_000,
     // Rekeys are rare and this runs only for the open community; per-relay cursors
@@ -226,31 +348,32 @@ export function useRekeyWatch(community: Community | undefined): { stranded: boo
     refetchIntervalInBackground: false,
     queryFn: async ({ signal }) => {
       const address = baseRekeyGroupKey(community!.root, community!.id, nextEpoch);
-      const base: { kinds: number[]; authors: string[]; limit: number } = {
-        kinds: [KIND_WRAP],
-        authors: [address.pk],
-        limit: 50,
-      };
+      const currentAddress = converging ? baseRekeyGroupKey(prior!.key, community!.id, community!.rootEpoch) : undefined;
+      const base = { kinds: [KIND_WRAP], limit: 50 };
 
       // PER-RELAY `since` cursors, so a fast relay can't advance past a chunk a
       // lagging one still owes; a skipped chunk would block adoption forever.
       const results = await Promise.all(
         community!.relays.map(async (url) => {
-          const scope = `rekey:${community!.idHex}:${nextEpoch}|${url}`;
-          const cursor = await readStreamCursor(scope);
-          const filter = cursor?.newest ? { ...base, since: cursor.newest } : base;
+          const scopes = [
+            { scope: `rekey:${community!.idHex}:${nextEpoch}|${url}`, pk: address.pk },
+            ...(currentAddress ? [{ scope: `rekey:${community!.idHex}:${community!.rootEpoch}|${url}`, pk: currentAddress.pk }] : []),
+          ];
+          const filters = await Promise.all(scopes.map(async ({ scope, pk }) => {
+            const cursor = await readStreamCursor(scope);
+            return cursor?.newest ? { ...base, authors: [pk], since: cursor.newest } : { ...base, authors: [pk] };
+          }));
           try {
             const events = await nostr
               .relay(url)
-              .query([filter], { signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]) });
-            if (events.length > 0) {
-              await updateStreamCursor(scope, {
-                newest: Math.max(...events.map((e) => e.created_at)),
-              });
+              .query(filters, { signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]) });
+            for (const { scope, pk } of scopes) {
+              const mine = events.filter((e) => e.pubkey === pk);
+              if (mine.length > 0) await updateStreamCursor(scope, { newest: Math.max(...mine.map((e) => e.created_at)) });
             }
             return events;
           } catch {
-            // Failed/aborted — the cursor stays put.
+            // Failed/aborted — the cursors stay put.
             return [] as NostrEvent[];
           }
         }),
@@ -258,26 +381,52 @@ export function useRekeyWatch(community: Community | undefined): { stranded: boo
       // Decrypt the stream layer once and persist, so a seen round is never refetched.
       const fresh: OpenedWireEvent[] = [];
       for (const wrap of results.flat()) {
+        const at = wrap.pubkey === address.pk ? address : wrap.pubkey === currentAddress?.pk ? currentAddress : undefined;
+        if (!at) continue;
         try {
-          fresh.push(openWrap(wrap, address));
+          fresh.push(openWrap(wrap, at));
         } catch {
           // not this address / malformed
         }
       }
       if (fresh.length > 0) writeOpened(community!.idHex, fresh, "rekey");
       // Match rounds by their own `scope` + `newepoch`, not the arrival address.
-      const stored = await queryRekeyRounds(community!.idHex, [
-        { scopeIdHex: bytesToHex(community!.id), newEpoch: nextEpoch },
-      ]);
-      const byId = new Map<string, OpenedEvent>();
-      for (const e of stored) byId.set(e.rumorId, e);
-      for (const e of fresh) byId.set(e.rumorId, e);
-      return [...byId.values()];
+      const rounds = async (epoch: bigint) => {
+        const stored = await queryRekeyRounds(community!.idHex, [{ scopeIdHex: bytesToHex(community!.id), newEpoch: epoch }]);
+        const byId = new Map<string, OpenedEvent>();
+        for (const e of stored) byId.set(e.rumorId, e);
+        for (const e of fresh) byId.set(e.rumorId, e);
+        return [...byId.values()];
+      };
+      return { next: await rounds(nextEpoch), current: converging ? await rounds(community!.rootEpoch) : [] };
     },
   });
 
+  // A lower key at the epoch I'm on, from a racing Refounding: step down to it.
   useEffect(() => {
-    if (!community || !user || !folded || !query.data || query.data.length === 0) return;
+    if (!community || !prior || !user || !folded || !entry || !query.data?.current.length) return;
+    const nip44 = user.signer.nip44;
+    if (!nip44) return;
+    let cancelled = false;
+    void (async () => {
+      const converged = await convergeOnLowerKey(query.data.current, community, prior, folded, user.pubkey, nip44);
+      if (cancelled || !converged) return;
+      // The epoch belongs to the winner now: an unfinished carry of my own key is moot.
+      clearRefoundJournal(user.pubkey, community.idHex);
+      await updateList({
+        type: "refresh-current",
+        current: toJoinMaterial(converged, { prior: entry.current, relays: entry.current.relays }),
+      }).catch(() => undefined);
+      queryClient.invalidateQueries({ queryKey: ["concord", "list"] });
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [community?.idHex, community?.rootEpoch, community?.root, user?.pubkey, folded, query.data, entry?.added_at]);
+
+  useEffect(() => {
+    if (!community || !user || !folded || !query.data || query.data.next.length === 0) return;
     // The removal decision needs my join time; wait rather than risk a false removal.
     if (!entry) return;
     // Death wins every race (CORD-02 §9): no epoch advance past the tombstone.
@@ -290,7 +439,7 @@ export function useRekeyWatch(community: Community | undefined): { stranded: boo
     let cancelled = false;
     void (async () => {
       const parsed: ParsedRekey[] = [];
-      for (const opened of query.data!) {
+      for (const opened of query.data!.next) {
         try {
           parsed.push(parseRekey(opened));
         } catch {
@@ -300,16 +449,7 @@ export function useRekeyWatch(community: Community | undefined): { stranded: boo
 
       // Authority is the roster, never key possession (CORD-06); banned rotators are
       // dropped outright (CORD-04 §4).
-      const rotations = groupRotations(parsed).filter(
-        (set) =>
-          set.scopeIdHex === "0".repeat(64) &&
-          !folded.banned.has(set.rotator) &&
-          (set.rotator === folded.ownerHex || hasPermission(folded.roster, set.rotator, Permissions.BAN)) &&
-          // CORD-04 §5 / CORD-06 §Authority: the cited Grant must be satisfied, so a
-          // just-demoted admin's Refounding isn't honored.
-          citationSatisfied(folded, community.id, set.rotator, set.authority) &&
-          checkContinuity(set, community.rootEpoch, community.root).ok,
-      );
+      const rotations = honoredRootRotations(parsed, folded, community.id, community.rootEpoch, community.root);
       if (rotations.length === 0) return;
 
       // A rotation predating my join isn't an exclusion.
@@ -839,14 +979,44 @@ export function useChannelRekey(community: Community | undefined) {
         }
       }
 
-      const chEpoch = ch.epoch + 1n;
-      const chPrevCommit = bytesToHex(epochKeyCommitment(ch.epoch, ch.key));
-      const chKey = await mintOrReuseRotationKey(
-        community.idHex,
-        { kind: "channel", channelId: ch.id },
-        chEpoch,
-        chPrevCommit,
-      );
+      // A rotation of mine already out at the next epoch, off the same key (another
+      // surface, a duty with an older roster, an earlier try), merges with this one
+      // (`groupRotations`): if it handed any of the cut a key, this one can't take it
+      // back. Step past it instead: hold its key, and rotate from there.
+      let from: PrivateChannelKey = ch;
+      const earlier = await myRotationAt(nostr, community, ch, user.pubkey);
+      if (earlier && removedTargets.some((pk) => findBlob(earlier, myLocator(user.pubkey, pk, channelIdHex, earlier.newEpoch)))) {
+        // Half out, nobody adopts it, so there is nothing to step past yet; adding to it would finish it.
+        if (!earlier.complete) throw new Error(t({ id: "useRekey.earlierRotationLanding", defaultMessage: "An earlier rotation of this channel is still landing; try again in a moment." }));
+        // Its key from my own blob in it: another device of mine may have minted it.
+        const mine = findBlob(earlier, myLocator(user.pubkey, user.pubkey, channelIdHex, earlier.newEpoch));
+        const heldKey = mine
+          ? decodeWrappedKey(base64ToBytes(await nip44.decrypt(user.pubkey, mine.wrapped)), ch.id, earlier.newEpoch)
+          : undefined;
+        if (!heldKey) throw new Error(t({ id: "useRekey.earlierRotationLanding", defaultMessage: "An earlier rotation of this channel is still landing; try again in a moment." }));
+        from = {
+          ...ch,
+          key: heldKey,
+          epoch: ch.epoch + 1n,
+          priors: [{ key: ch.key, epoch: ch.epoch, retiredAt: Math.floor(rotationPublishedAtMs(earlier) / 1000) }, ...(ch.priors ?? [])],
+        };
+      }
+
+      const chEpoch = from.epoch + 1n;
+      const chPrevCommit = bytesToHex(epochKeyCommitment(from.epoch, from.key));
+      // Joining an earlier set of mine carries ITS key: one epoch, one key, whichever
+      // device minted it.
+      const joined = from === ch && earlier
+        ? findBlob(earlier, myLocator(user.pubkey, user.pubkey, channelIdHex, earlier.newEpoch))
+        : undefined;
+      const chKey = joined
+        ? decodeWrappedKey(base64ToBytes(await nip44.decrypt(user.pubkey, joined.wrapped)), ch.id, chEpoch)
+        : await mintOrReuseRotationKey(
+          community.idHex,
+          { kind: "channel", channelId: ch.id },
+          chEpoch,
+          chPrevCommit,
+        );
       const chPlain = bytesToBase64(encodeWrappedKey(ch.id, chEpoch, chKey));
       const recipients = [...new Set([user.pubkey, ...keepRecipients])];
       const chBlobs: RekeyBlob[] = [];
@@ -858,7 +1028,7 @@ export function useChannelRekey(community: Community | undefined) {
       const rotatedAtMs = clockNowMs();
       const chRumors = buildRekeyRumors(
         user.pubkey,
-        { scope: { kind: "channel", channelId: ch.id }, newEpoch: chEpoch, prevEpoch: ch.epoch, prevCommit: chPrevCommit },
+        { scope: { kind: "channel", channelId: ch.id }, newEpoch: chEpoch, prevEpoch: from.epoch, prevCommit: chPrevCommit },
         chBlobs,
         rotatedAtMs,
         // Cite the Grant (CORD-06 §Authority / CORD-04 §5); without it every receiver
@@ -867,11 +1037,11 @@ export function useChannelRekey(community: Community | undefined) {
       );
       for (const rumor of chRumors) {
         const wrap = await wrapSeal(await sealRumor(rumor, KIND_SEAL_ENCRYPTED, chAddress, user.signer), chAddress);
-        const results = await Promise.allSettled(
+        const results = await settleAccepted(
           community.relays.map((url) => nostr.relay(url).event(wrap, { signal: AbortSignal.timeout(8000) })),
         );
         if (!results.some((r) => r.status === "fulfilled")) {
-          throw new Error(t({ id: "useRekey.noRelayAcceptedChannelRotation", defaultMessage: "No relay accepted the #{channel} channel key rotation." }, { channel: ch.name }));
+          throw new Error(t({ id: "useRekey.noRelayAcceptedChannelRotation", defaultMessage: "No relay accepted the #{channel} channel key rotation." }, { channel: ch.name || channelIdHex.slice(0, 8) }));
         }
       }
 
@@ -879,21 +1049,25 @@ export function useChannelRekey(community: Community | undefined) {
       const rotated = community.privateChannels.map((c) =>
         bytesToHex(c.id) === channelIdHex
           ? {
-              ...c,
+              ...from,
               key: chKey,
               epoch: chEpoch,
               priors: [
-                { key: c.key, epoch: c.epoch, retiredAt: Math.floor(rotatedAtMs / 1000) },
-                ...(c.priors ?? []),
+                { key: from.key, epoch: from.epoch, retiredAt: Math.floor(rotatedAtMs / 1000) },
+                ...(from.priors ?? []),
               ],
             }
           : c,
       );
+      // Only the rotated channel, merged at write time: the rest of `community` was read
+      // before the signing run and may have gained a key since. A failed write isn't a
+      // failed rotation: it is on the wire, and the rotator's own watch adopts it.
       await updateList({
         type: "refresh-channels",
         communityId: community.idHex,
-        channels: channelKeysToWire(rotated),
-      });
+        channels: channelKeysToWire(rotated.filter((c) => bytesToHex(c.id) === channelIdHex)),
+        upsert: true,
+      }).catch(() => undefined);
       queryClient.invalidateQueries({ queryKey: ["concord", "list"] });
 
       // The rotator's duty: the details sealed again under the key just minted (CORD-03 §2,
@@ -946,6 +1120,50 @@ export function useChannelRekey(community: Community | undefined) {
 }
 
 /**
+ * Where a Refounding is, for its dialog. Most steps are a signer round-trip or a relay
+ * acceptance each, so a long one (one NIP-44 encryption per member, on a bunker) is
+ * counted where its length is known.
+ */
+export type RefoundStep = "reading" | "encrypting" | "rolling" | "carrying" | "guestbook" | "channels" | "links" | "saving";
+export interface RefoundProgress {
+  step: RefoundStep;
+  done?: number;
+  total?: number;
+}
+
+interface RefoundCarry {
+  /** The community at the epoch the roll left. */
+  prior: Community;
+  folded: FoldedControl;
+  stored: OpenedEvent[];
+  newRoot: Uint8Array;
+  newEpoch: bigint;
+  newControlRoot: Uint8Array;
+  newControlPk: string;
+  journal: RefoundJournal;
+  onProgress?: (progress: RefoundProgress) => void;
+}
+
+/** The held roots with the one the roll left given its read cutoff. */
+function retirePrior(heldRoots: HeldRoot[], priorEpoch: bigint, rotatedAtMs: number): HeldRoot[] {
+  return heldRoots.map((r) =>
+    r.epoch === priorEpoch && r.retiredAt === undefined ? { ...r, retiredAt: Math.floor(rotatedAtMs / 1000) } : r,
+  );
+}
+
+function privateChannelFromWire(c: JoinMaterial["channels"][number]): PrivateChannelKey {
+  return {
+    id: hexToBytes(c.id),
+    key: hexToBytes(c.key),
+    epoch: BigInt(c.epoch),
+    name: c.name,
+    ...(c.priors?.length
+      ? { priors: c.priors.map((p) => ({ key: hexToBytes(p.key), epoch: BigInt(p.epoch), ...(p.retired_at !== undefined ? { retiredAt: p.retired_at } : {}) })) }
+      : {}),
+  };
+}
+
+/**
  * A Refounding (CORD-06 §3): roll the community_root to sever the excluded,
  * re-anchor the Control Plane by compaction, and seed the new Guestbook.
  * Requires BAN (or ownership) and a NIP-44 signer (bunkers can rotate too).
@@ -959,21 +1177,313 @@ export function useRefound(community: Community | undefined) {
   const entry = useCommunityEntry(community?.idHex);
   const queryClient = useQueryClient();
 
-  const refound = useMutation<void, Error, { keep: string[]; exclude: string[] }>({
+  /**
+   * Everything a Refounding owes after its root roll (CORD-06 §3), each step recorded
+   * in the journal as it completes so an interrupted run resumes after it: the Control
+   * Plane's heads carried to the new address, the new Guestbook, each held Private
+   * Channel rotated under the PRIOR root, invite links, and the list written forward.
+   */
+  const carry = async (ctx: RefoundCarry) => {
+    if (!user || !entry) throw new Error(t({ id: "useRekey.notReady", defaultMessage: "Not ready." }));
+    const nip44 = user.signer.nip44;
+    if (!nip44) throw new Error(t({ id: "useRekey.signerCantRotate", defaultMessage: "This signer can't rotate keys (NIP-44 unsupported)." }));
+    const { prior: community, folded, stored, newRoot, newEpoch, newControlRoot, newControlPk, journal } = ctx;
+    const report = ctx.onProgress ?? (() => undefined);
+    const { recipients, exclude, rotatedAtMs } = journal;
+    const save = () => writeRefoundJournal(user.pubkey, community.idHex, journal);
+
+    // 2. Compaction: re-wrap each current head under the new epoch;
+    // plaintext seals keep signatures verifiable. Each head is ack-gated (readers
+    // sweep only the current epoch). The new Control address is SPLIT: sign with the
+    // control_root-derived signer, encrypt under the community_root-derived read
+    // key, and never mirror to the legacy address. A head landed twice is one rumor.
+    if (!journal.carried) {
+      const newControlRead = controlGroupKey(newRoot, community.id, newEpoch);
+      const newControl = {
+        sk: controlSignerGroupKey(newControlRoot, community.id, newEpoch).sk,
+        pk: newControlPk,
+        get convKey() {
+          return newControlRead.convKey;
+        },
+      };
+      const heads = compactionEditions(folded, openControlEditions(stored));
+      report({ step: "carrying", done: 0, total: heads.length });
+      for (const [i, head] of heads.entries()) {
+        // Store rows keep seals in KV, so fall back to a keyed read; a missing seal
+        // aborts (fold-all-or-abort) rather than dropping the entity.
+        const seal =
+          head.opened.seal ?? (await readStoredSeal(community.idHex, head.opened.rumorId));
+        if (!seal) {
+          throw new Error(t({ id: "useRekey.missingHistory", defaultMessage: "Missing the signed history needed to carry this community's state into the new epoch; nothing was lost, try again after a resync." }));
+        }
+        let rewrapped: NostrEvent;
+        try {
+          rewrapped = await rewrapSeal(seal, newControl);
+        } catch {
+          // Defensive only: control heads are plaintext by construction.
+          continue;
+        }
+        const results = await settleAccepted(
+          community.relays.map((url) => nostr.relay(url).event(rewrapped, { signal: AbortSignal.timeout(8000) })),
+        );
+        // The epoch is already announced: a head that fails to land is carried again
+        // when the journal resumes.
+        if (!results.some((r) => r.status === "fulfilled")) {
+          throw new Error(t({ id: "useRekey.noRelayAcceptedState", defaultMessage: "No relay accepted the community's state during rotation; nothing was lost, try again." }));
+        }
+        report({ step: "carrying", done: i + 1, total: heads.length });
+      }
+      journal.carried = true;
+      save();
+    }
+
+    // 3. Guestbook snapshot: best-effort, non-gating (CORD-02 §5). Before the channels,
+    // which can throw: an epoch with no snapshot builds its next keep-list from a thin roster.
+    if (!journal.guestbook) {
+      report({ step: "guestbook" });
+      try {
+        const newGuestbook = guestbookGroupKey(newRoot, community.id, newEpoch);
+        const snapId = bytesToHex(random32());
+        for (const rumor of buildSnapshotRumors(user.pubkey, recipients, snapId, clockNowMs())) {
+          const wrap = await sealGuestbook(rumor, newGuestbook, user.signer);
+          await settleAccepted(
+            community.relays.map((url) => nostr.relay(url).event(wrap, { signal: AbortSignal.timeout(8000) })),
+          );
+        }
+        // The Refounder's duties to the new Guestbook (CORD-04 §8, §10): each running
+        // Timeout and each Nickname set for a re-keyed member, that it could issue itself,
+        // re-issued in its own name dated as first issued.
+        const reissued = await reissuedGuestbook(community, folded, user.pubkey, recipients, citationFor(community, folded, user.pubkey), exclude);
+        for (const rumor of reissued) {
+          const wrap = await sealGuestbook(rumor, newGuestbook, user.signer);
+          await settleAccepted(
+            community.relays.map((url) => nostr.relay(url).event(wrap, { signal: AbortSignal.timeout(8000) })),
+          );
+        }
+        journal.guestbook = true;
+        save();
+      } catch { /* ignore */ }
+    }
+
+    // 2b. Rotate every held Private Channel (CORD-06 §3), each with its own fresh
+    // key via a channel-scoped rekey under the PRIOR root. Each channel's keep-list
+    // is its OWN entitled set (channelAccess.ts): the community-wide list would hand
+    // every member every private channel's key. So a Refounding also re-syncs
+    // entitlements, and a channel with no scoped Role rotates to the owner alone.
+    const done = new Map(journal.channels.map((c) => [c.id.toLowerCase(), c] as const));
+    const rotatedChannels: PrivateChannelKey[] = [];
+    const channelTotal = community.privateChannels.length;
+    for (const [i, ch] of community.privateChannels.entries()) {
+      if (channelTotal > 0) report({ step: "channels", done: i, total: channelTotal });
+      const chIdHex = bytesToHex(ch.id);
+      const finished = done.get(chIdHex);
+      if (finished) {
+        rotatedChannels.push(privateChannelFromWire(finished));
+        continue;
+      }
+      // Already past its pre-Refounding epoch: its rotation landed and was adopted.
+      const base = journal.channelBase[chIdHex];
+      if (base === undefined || ch.epoch > BigInt(base)) {
+        rotatedChannels.push(ch);
+        continue;
+      }
+      const chEpoch = ch.epoch + 1n;
+      const chPrevCommit = bytesToHex(epochKeyCommitment(ch.epoch, ch.key));
+      const chKey = await mintOrReuseRotationKey(
+        community.idHex,
+        { kind: "channel", channelId: ch.id },
+        chEpoch,
+        chPrevCommit,
+      );
+      // The rotator keeps every key, or nobody could rotate this channel next time.
+      const chRecipients = recipients.filter(
+        (pk) => pk === user.pubkey || isEntitled(folded.roster, folded.ownerHex, pk, chIdHex),
+      );
+      const chPlain = bytesToBase64(encodeWrappedKey(ch.id, chEpoch, chKey));
+      const chBlobs: RekeyBlob[] = [];
+      for (const pk of chRecipients) {
+        chBlobs.push({ locator: myLocator(user.pubkey, pk, chIdHex, chEpoch), wrapped: await nip44.encrypt(pk, chPlain) });
+      }
+      const chAddress = channelRekeyGroupKey(community.root, ch.id, chEpoch);
+      const chRotatedAtMs = clockNowMs();
+      const chRumors = buildRekeyRumors(
+        user.pubkey,
+        {
+          scope: { kind: "channel", channelId: ch.id },
+          newEpoch: chEpoch,
+          prevEpoch: ch.epoch,
+          prevCommit: chPrevCommit,
+        },
+        chBlobs,
+        chRotatedAtMs,
+        citationFor(community, folded, user.pubkey),
+      );
+      for (const rumor of chRumors) {
+        const wrap = await wrapSeal(await sealRumor(rumor, KIND_SEAL_ENCRYPTED, chAddress, user.signer), chAddress);
+        const results = await settleAccepted(
+          community.relays.map((url) => nostr.relay(url).event(wrap, { signal: AbortSignal.timeout(8000) })),
+        );
+        if (!results.some((r) => r.status === "fulfilled")) {
+          // Gating like the root roll: an unrotated channel leaves the removed member
+          // reading it. The journal resumes from here.
+          throw new Error(t({ id: "useRekey.noRelayAcceptedChannelRotation", defaultMessage: "No relay accepted the #{channel} channel key rotation." }, { channel: ch.name || chIdHex.slice(0, 8) }));
+        }
+      }
+      // Retain the stepped-off key (CORD-03 §3), or every ban truncates private history.
+      const rotated: PrivateChannelKey = {
+        ...ch,
+        key: chKey,
+        epoch: chEpoch,
+        priors: [
+          { key: ch.key, epoch: ch.epoch, retiredAt: Math.floor(chRotatedAtMs / 1000) },
+          ...(ch.priors ?? []),
+        ],
+      };
+      rotatedChannels.push(rotated);
+      journal.channels.push(...channelKeysToWire([rotated]));
+      save();
+    }
+
+    // 3b. Refresh my live invite links to the new epoch (CORD-05 §2), with the
+    // post-rotation channel keys; other creators refresh on adoption. Retried
+    // (mirrors Vector): a stranded link lands joiners on the dead epoch.
+    //
+    // NOT when this rotation EXCLUDED somebody: the URL is a bearer credential, so
+    // refreshing would hand the excluded member the new keys, indistinguishably
+    // from the cut epoch. Per spec a ban-Refounding is Private and has no links;
+    // Armada allows the refounder's own links, so leaving them dead is the safe half.
+    if (exclude.length > 0) {
+      toast({
+        title: t({ id: "useRekey.linksDead.title", defaultMessage: "Your invite links no longer work" }),
+        description:
+          t({ id: "useRekey.linksDead.description", defaultMessage: "The keys rotated to cut off the removed member. Your links stay on the old keys, because refreshing them would give the new keys to anyone holding the URL. Revoke them and make new ones." }),
+      });
+    } else {
+      report({ step: "links" });
+      const fresh = {
+        ...community,
+        root: newRoot,
+        rootEpoch: newEpoch,
+        controlPk: newControlPk,
+        privateChannels: rotatedChannels,
+      };
+
+      let refreshed = false;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          await refreshInviteBundlesFor(nostr, user, fresh, folded.metadata);
+          refreshed = true;
+          break;
+        } catch {
+          // transient — retry
+        }
+      }
+      if (!refreshed) {
+        toast({
+          title: t({ id: "useRekey.linksStale.title", defaultMessage: "Live invite links may serve the old keys" }),
+          description:
+            t({ id: "useRekey.linksStale.description", defaultMessage: "Key rotation succeeded, but refreshing your invite links failed. Reopen the community to retry, or new joiners on those links could land on the previous epoch." }),
+          variant: "destructive",
+        });
+      }
+    }
+
+    // 4. Follow our own rotation forward.
+    report({ step: "saving" });
+    const rotated: Community = {
+      ...community,
+      root: newRoot,
+      rootEpoch: newEpoch,
+      controlPk: newControlPk,
+      controlRoot: newControlRoot,
+      heldRoots: [
+        { epoch: newEpoch, key: newRoot, refounder: user.pubkey, controlPk: newControlPk },
+        ...retirePrior(community.heldRoots.filter((r) => r.epoch !== newEpoch), community.rootEpoch, rotatedAtMs),
+      ],
+      privateChannels: rotatedChannels,
+      refounder: user.pubkey,
+    };
+    await updateList({
+      type: "refresh-current",
+      current: toJoinMaterial(rotated, { prior: entry.current, relays: entry.current.relays }),
+    });
+    clearRefoundJournal(user.pubkey, community.idHex);
+    // A ban's read-cut this run performed is owed no longer (`useReadCutRetry` would
+    // otherwise rotate again, for nobody).
+    await readCutPendingReady();
+    const owed = readCutPending(user.pubkey, community.idHex);
+    if (owed && owed.targets.every((pk) => exclude.includes(pk))) clearReadCutPending(user.pubkey, community.idHex);
+    queryClient.invalidateQueries({ queryKey: ["concord", "list"] });
+  };
+
+  /**
+   * The state a journaled Refounding resumes from, on a device that already moved to
+   * its epoch: the prior epoch as it was, and its Control Plane folded from the store
+   * within the prior snapshot, since the new address may hold none of it yet.
+   */
+  const resumeContext = async (c: Community, journal: RefoundJournal): Promise<RefoundCarry> => {
+    const priorEpoch = BigInt(journal.priorEpoch);
+    const priorRoot = c.heldRoots.find((r) => r.epoch === priorEpoch)?.key;
+    if (!priorRoot || !c.controlRoot || !c.controlPk) {
+      throw new Error(t({ id: "useRekey.cantResume", defaultMessage: "This device no longer holds what it needs to finish the earlier key rotation." }));
+    }
+    const prior: Community = {
+      ...c,
+      root: priorRoot,
+      rootEpoch: priorEpoch,
+      ...(journal.priorControlPk ? { controlPk: journal.priorControlPk } : { controlPk: undefined }),
+      controlRoot: undefined,
+    };
+    const stored = await queryPlane(c.idHex, "control");
+    const snap = journal.priorSnapPk ? await readControlSnapshot(c.idHex, journal.priorSnapPk) : undefined;
+    const folded = foldControlState(openControlEditions(stored), c.id, c.owner, new Map(), snap ? new Set(snap) : undefined, {
+      heldChannels: c.privateChannels,
+    });
+    if (folded.incomplete.length > 0) {
+      throw new Error(t({ id: "useRekey.stateUnreachable", defaultMessage: "Part of the community's state isn't reachable right now; rotation aborted so nothing is lost." }));
+    }
+    return { prior, folded, stored, newRoot: c.root, newEpoch: c.rootEpoch, newControlRoot: c.controlRoot, newControlPk: c.controlPk, journal };
+  };
+
+  /** Resolves false when a `resumeOnly` call found nothing to finish. */
+  const refound = useMutation<boolean, Error, {
+    keep: string[];
+    exclude: string[];
+    onProgress?: (progress: RefoundProgress) => void;
+    /** Only finish a journaled run at the current epoch; never roll a new one. */
+    resumeOnly?: boolean;
+  }>({
     // Serialize every refound for this community (a ban racing the durable retry
     // must queue, not mint sibling epochs); named for useIsMutating.
     mutationKey: ["concord-refound", community?.idHex],
     scope: { id: `concord-refound:${community?.idHex}` },
-    mutationFn: async ({ keep, exclude }) => {
+    mutationFn: async ({ keep, exclude, onProgress, resumeOnly }) => {
+      const report = onProgress ?? (() => undefined);
       if (!user || !community) throw new Error(t({ id: "useRekey.notReady", defaultMessage: "Not ready." }));
       if (dissolved) throw new Error(t({ id: "useRekey.dissolvedNoAdvance", defaultMessage: "This community was dissolved; no epoch advance past the tombstone is honored." }));
       const nip44 = user.signer.nip44;
       if (!nip44) throw new Error(t({ id: "useRekey.signerCantRotate", defaultMessage: "This signer can't rotate keys (NIP-44 unsupported)." }));
+      // A Refounding this device committed and didn't finish is finished first, at its
+      // own epoch: retrying it as a new one would roll again off a half-carried plane.
+      await refoundJournalReady();
+      const pending = refoundJournal(user.pubkey, community.idHex);
+      if (pending && BigInt(pending.newEpoch) === community.rootEpoch) {
+        await carry({ ...(await resumeContext(community, pending)), onProgress });
+        if (exclude.every((pk) => pending.exclude.includes(pk))) return true;
+        throw new Error(t({ id: "useRekey.finishedEarlier", defaultMessage: "An earlier key rotation was still unfinished, and has now been completed. Try again to remove the rest." }));
+      }
+      if (pending && BigInt(pending.newEpoch) < community.rootEpoch) clearRefoundJournal(user.pubkey, community.idHex);
+      // A queued resume can run after the run it saw journaled finished on its own.
+      if (resumeOnly) return false;
+
       const rendered = control.data;
-      if (!rendered || control.isLoading || control.isFetching) {
+      // Not `isFetching`: background refetches made that refuse most attempts, and the
+      // sweep below reads the plane whole anyway; the last fold is still a valid floor.
+      if (!rendered || control.isLoading) {
         throw new Error(t({ id: "useRekey.stillSyncing", defaultMessage: "Still syncing the community's control plane; try again shortly." }));
       }
 
+      report({ step: "reading" });
       // Fold-all-or-abort (CORD-06 §3): one forced whole-plane sweep, then a
       // verification fold floored at every accepted head; any unserved or gapped
       // entity ABORTS. Tallied from this sweep's own callbacks, not the shared
@@ -1071,16 +1581,31 @@ export function useRefound(community: Community | undefined) {
       );
       const blobs: RekeyBlob[] = [];
       for (const pk of recipients) {
+        report({ step: "encrypting", done: blobs.length, total: recipients.length });
         const staff = pk === user.pubkey ? true : isStaff(folded.roster, pk, folded.ownerHex);
         const wrapped = await nip44.encrypt(pk, staff ? staffPlain : memberPlain);
         blobs.push({ locator: myLocator(user.pubkey, pk, "0".repeat(64), newEpoch), wrapped });
       }
 
+      // The retired root's hard read cutoff, as every adopter derives it.
+      const rotatedAtMs = clockNowMs();
+      // Journaled before the roll: once it lands, the rest is owed at THIS epoch.
+      const journal: RefoundJournal = {
+        newEpoch: newEpoch.toString(),
+        priorEpoch: community.rootEpoch.toString(),
+        ...(community.rootEpoch > 0n ? { priorSnapPk: currentControlGroup(community).pk } : {}),
+        ...(community.controlPk ? { priorControlPk: community.controlPk } : {}),
+        recipients,
+        exclude,
+        rotatedAtMs,
+        channelBase: Object.fromEntries(community.privateChannels.map((c) => [bytesToHex(c.id), c.epoch.toString()])),
+        channels: [],
+      };
+      writeRefoundJournal(user.pubkey, community.idHex, journal);
+
       // 1. The root roll: rekey blobs at the base address under the PRIOR root, FIRST
       // (CORD-06 §3); compaction republishes only after it's confirmed.
       const address = baseRekeyGroupKey(community.root, community.id, newEpoch);
-      // The retired root's hard read cutoff, as every adopter derives it.
-      const rotatedAtMs = clockNowMs();
       const rumors = buildRekeyRumors(
         user.pubkey,
         { scope: { kind: "root" }, newEpoch, prevEpoch: community.rootEpoch, prevCommit },
@@ -1088,9 +1613,10 @@ export function useRefound(community: Community | undefined) {
         rotatedAtMs,
         citationFor(community, folded, user.pubkey),
       );
-      for (const rumor of rumors) {
+      for (const [i, rumor] of rumors.entries()) {
+        report({ step: "rolling", done: i, total: rumors.length });
         const wrap = await wrapSeal(await sealRumor(rumor, KIND_SEAL_ENCRYPTED, address, user.signer), address);
-        const results = await Promise.allSettled(
+        const results = await settleAccepted(
           community.relays.map((url) => nostr.relay(url).event(wrap, { signal: AbortSignal.timeout(8000) })),
         );
         if (!results.some((r) => r.status === "fulfilled")) {
@@ -1102,11 +1628,6 @@ export function useRefound(community: Community | undefined) {
       // leaves us at the prior epoch, and a retry at the same (newEpoch, prevCommit)
       // merges with attempt one in `groupRotations`, re-including the removed member.
       // Private channels stay put; §3 addresses their rekeys under the PRIOR root.
-      const retiredPriorRoots: HeldRoot[] = community.heldRoots.map((r) =>
-        r.epoch === community.rootEpoch && r.retiredAt === undefined
-          ? { ...r, retiredAt: Math.floor(rotatedAtMs / 1000) }
-          : r,
-      );
       await updateList({
         type: "refresh-current",
         current: toJoinMaterial(
@@ -1118,7 +1639,7 @@ export function useRefound(community: Community | undefined) {
             controlRoot: newControlRoot,
             heldRoots: [
               { epoch: newEpoch, key: newRoot, refounder: user.pubkey, controlPk: newControlPk },
-              ...retiredPriorRoots,
+              ...retirePrior(community.heldRoots, community.rootEpoch, rotatedAtMs),
             ],
             refounder: user.pubkey,
           },
@@ -1126,189 +1647,9 @@ export function useRefound(community: Community | undefined) {
         ),
       });
 
-      // 2. Compaction (CORD-06 §3): re-wrap each current head under the new epoch;
-      // plaintext seals keep signatures verifiable. Each head is ack-gated (readers
-      // sweep only the current epoch). The new Control address is SPLIT: sign with the
-      // control_root-derived signer, encrypt under the community_root-derived read
-      // key, and never mirror to the legacy address.
-      const newControlRead = controlGroupKey(newRoot, community.id, newEpoch);
-      const newControl = {
-        sk: controlSignerGroupKey(newControlRoot, community.id, newEpoch).sk,
-        pk: newControlPk,
-        get convKey() {
-          return newControlRead.convKey;
-        },
-      };
-      for (const head of compactionEditions(folded, openControlEditions(stored))) {
-        // Store rows keep seals in KV, so fall back to a keyed read; a missing seal
-        // aborts (fold-all-or-abort) rather than dropping the entity.
-        const seal =
-          head.opened.seal ?? (await readStoredSeal(community.idHex, head.opened.rumorId));
-        if (!seal) {
-          throw new Error(t({ id: "useRekey.missingHistory", defaultMessage: "Missing the signed history needed to carry this community's state into the new epoch; nothing was lost, try again after a resync." }));
-        }
-        let rewrapped: NostrEvent;
-        try {
-          rewrapped = await rewrapSeal(seal, newControl);
-        } catch {
-          // Defensive only: control heads are plaintext by construction.
-          continue;
-        }
-        const results = await Promise.allSettled(
-          community.relays.map((url) => nostr.relay(url).event(rewrapped, { signal: AbortSignal.timeout(8000) })),
-        );
-        // A head that fails to land is unrecoverable; abort while the epoch is unannounced.
-        if (!results.some((r) => r.status === "fulfilled")) {
-          throw new Error(t({ id: "useRekey.noRelayAcceptedState", defaultMessage: "No relay accepted the community's state during rotation; nothing was lost, try again." }));
-        }
-      }
-
-      // 2b. Rotate every held Private Channel (CORD-06 §3), each with its own fresh
-      // key via a channel-scoped rekey under the PRIOR root. Each channel's keep-list
-      // is its OWN entitled set (channelAccess.ts): the community-wide list would hand
-      // every member every private channel's key. So a Refounding also re-syncs
-      // entitlements, and a channel with no scoped Role rotates to the owner alone.
-      const rotatedChannels: PrivateChannelKey[] = [];
-      for (const ch of community.privateChannels) {
-        const chEpoch = ch.epoch + 1n;
-        const chPrevCommit = bytesToHex(epochKeyCommitment(ch.epoch, ch.key));
-        const chKey = await mintOrReuseRotationKey(
-          community.idHex,
-          { kind: "channel", channelId: ch.id },
-          chEpoch,
-          chPrevCommit,
-        );
-        const chIdHex = bytesToHex(ch.id);
-        // The rotator keeps every key, or nobody could rotate this channel next time.
-        const chRecipients = recipients.filter(
-          (pk) => pk === user.pubkey || isEntitled(folded.roster, folded.ownerHex, pk, chIdHex),
-        );
-        const chPlain = bytesToBase64(encodeWrappedKey(ch.id, chEpoch, chKey));
-        const chBlobs: RekeyBlob[] = [];
-        for (const pk of chRecipients) {
-          chBlobs.push({ locator: myLocator(user.pubkey, pk, chIdHex, chEpoch), wrapped: await nip44.encrypt(pk, chPlain) });
-        }
-        const chAddress = channelRekeyGroupKey(community.root, ch.id, chEpoch);
-        const chRotatedAtMs = clockNowMs();
-        const chRumors = buildRekeyRumors(
-          user.pubkey,
-          {
-            scope: { kind: "channel", channelId: ch.id },
-            newEpoch: chEpoch,
-            prevEpoch: ch.epoch,
-            prevCommit: chPrevCommit,
-          },
-          chBlobs,
-          chRotatedAtMs,
-          citationFor(community, folded, user.pubkey),
-        );
-        for (const rumor of chRumors) {
-          const wrap = await wrapSeal(await sealRumor(rumor, KIND_SEAL_ENCRYPTED, chAddress, user.signer), chAddress);
-          const results = await Promise.allSettled(
-            community.relays.map((url) => nostr.relay(url).event(wrap, { signal: AbortSignal.timeout(8000) })),
-          );
-          if (!results.some((r) => r.status === "fulfilled")) {
-            // Gating like the root roll: an unrotated channel leaves the removed member
-            // reading it. Resumable, not atomic.
-            throw new Error(t({ id: "useRekey.noRelayAcceptedChannelRotation", defaultMessage: "No relay accepted the #{channel} channel key rotation." }, { channel: ch.name }));
-          }
-        }
-        // Retain the stepped-off key (CORD-03 §3), or every ban truncates private history.
-        rotatedChannels.push({
-          ...ch,
-          key: chKey,
-          epoch: chEpoch,
-          priors: [
-            { key: ch.key, epoch: ch.epoch, retiredAt: Math.floor(chRotatedAtMs / 1000) },
-            ...(ch.priors ?? []),
-          ],
-        });
-      }
-
-      // 3. Guestbook snapshot: best-effort, non-gating (CORD-02 §5).
-      try {
-        const newGuestbook = guestbookGroupKey(newRoot, community.id, newEpoch);
-        const snapId = bytesToHex(random32());
-        for (const rumor of buildSnapshotRumors(user.pubkey, recipients, snapId, clockNowMs())) {
-          const wrap = await sealGuestbook(rumor, newGuestbook, user.signer);
-          await Promise.allSettled(
-            community.relays.map((url) => nostr.relay(url).event(wrap, { signal: AbortSignal.timeout(8000) })),
-          );
-        }
-        // The Refounder's duties to the new Guestbook (CORD-04 §8, §10): each running
-        // Timeout and each Nickname set for a re-keyed member, that it could issue itself,
-        // re-issued in its own name dated as first issued.
-        const reissued = await reissuedGuestbook(community, folded, user.pubkey, recipients, citationFor(community, folded, user.pubkey), exclude);
-        for (const rumor of reissued) {
-          const wrap = await sealGuestbook(rumor, newGuestbook, user.signer);
-          await Promise.allSettled(
-            community.relays.map((url) => nostr.relay(url).event(wrap, { signal: AbortSignal.timeout(8000) })),
-          );
-        }
-      } catch { /* ignore */ }
-
-      // 3b. Refresh my live invite links to the new epoch (CORD-05 §2), with the
-      // post-rotation channel keys; other creators refresh on adoption. Retried
-      // (mirrors Vector): a stranded link lands joiners on the dead epoch.
-      //
-      // NOT when this rotation EXCLUDED somebody: the URL is a bearer credential, so
-      // refreshing would hand the excluded member the new keys, indistinguishably
-      // from the cut epoch. Per spec a ban-Refounding is Private and has no links;
-      // Armada allows the refounder's own links, so leaving them dead is the safe half.
-      if (exclude.length > 0) {
-        toast({
-          title: t({ id: "useRekey.linksDead.title", defaultMessage: "Your invite links no longer work" }),
-          description:
-            t({ id: "useRekey.linksDead.description", defaultMessage: "The keys rotated to cut off the removed member. Your links stay on the old keys, because refreshing them would give the new keys to anyone holding the URL. Revoke them and make new ones." }),
-        });
-      } else {
-        const fresh = {
-          ...community,
-          root: newRoot,
-          rootEpoch: newEpoch,
-          controlPk: newControlPk,
-          privateChannels: rotatedChannels,
-        };
-
-        let refreshed = false;
-        for (let attempt = 0; attempt < 3; attempt++) {
-          try {
-            await refreshInviteBundlesFor(nostr, user, fresh, folded.metadata);
-            refreshed = true;
-            break;
-          } catch {
-            // transient — retry
-          }
-        }
-        if (!refreshed) {
-          toast({
-            title: t({ id: "useRekey.linksStale.title", defaultMessage: "Live invite links may serve the old keys" }),
-            description:
-              t({ id: "useRekey.linksStale.description", defaultMessage: "Key rotation succeeded, but refreshing your invite links failed. Reopen the community to retry, or new joiners on those links could land on the previous epoch." }),
-            variant: "destructive",
-          });
-        }
-      }
-
-      // 4. Follow our own rotation forward.
-      const rotated: Community = {
-        ...community,
-        root: newRoot,
-        rootEpoch: newEpoch,
-        controlPk: newControlPk,
-        controlRoot: newControlRoot,
-        heldRoots: [
-          { epoch: newEpoch, key: newRoot, refounder: user.pubkey, controlPk: newControlPk },
-          ...retiredPriorRoots,
-        ],
-        privateChannels: rotatedChannels,
-        refounder: user.pubkey,
-      };
-      await updateList({
-        type: "refresh-current",
-        current: toJoinMaterial(rotated, { prior: entry?.current, relays: entry?.current.relays }),
-      });
+      await carry({ prior: community, folded, stored, newRoot, newEpoch, newControlRoot, newControlPk, journal, onProgress });
       queryClient.invalidateQueries({ queryKey: ["concord", "list"] });
+      return true;
     },
   });
 
@@ -1318,4 +1659,43 @@ export function useRefound(community: Community | undefined) {
     /** Rotations need only a NIP-44 signer (bunker-friendly). */
     canRefound: Boolean(user?.signer.nip44),
   };
+}
+
+/**
+ * Finish a Refounding this device committed and didn't complete (`refoundJournal.ts`),
+ * once per visit. Mount ONCE per community (ConcordPage). Unlike most duties it needs
+ * no rendered fold: an interrupted carry is exactly what leaves the new epoch without one.
+ */
+export function useRefoundResume(community: Community | undefined): void {
+  const { user } = useCurrentUser();
+  const { refound, canRefound } = useRefound(community);
+  // A run in flight journals its epoch before it records it, so its journal is no sign of an interruption.
+  const refoundsInFlight = useIsMutating({ mutationKey: ["concord-refound", community?.idHex] });
+  const tried = useRef<string | undefined>(undefined);
+
+  useEffect(() => {
+    if (!user || !community || !canRefound || refoundsInFlight > 0) return;
+    const key = `${community.idHex}:${community.rootEpoch}`;
+    if (tried.current === key) return;
+    let cancelled = false;
+    void (async () => {
+      await refoundJournalReady();
+      if (cancelled || tried.current === key) return;
+      const pending = refoundJournal(user.pubkey, community.idHex);
+      if (!pending || BigInt(pending.newEpoch) !== community.rootEpoch) return;
+      tried.current = key;
+      refound({ keep: pending.recipients, exclude: pending.exclude, resumeOnly: true }).then(
+        (resumed) => resumed && toast({ title: t({ id: "useRekey.resumed.title", defaultMessage: "Key rotation completed" }), description: t({ id: "useRekey.resumed.description", defaultMessage: "An earlier key rotation that was interrupted has now finished." }) }),
+        (e: unknown) => toast({
+          title: t({ id: "useRekey.resumeFailed.title", defaultMessage: "An earlier key rotation is still unfinished" }),
+          description: e instanceof Error ? e.message : undefined,
+          variant: "destructive",
+        }),
+      );
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user, community?.idHex, community?.rootEpoch, canRefound, refoundsInFlight]);
 }

@@ -4,6 +4,7 @@ import { APP_RELAYS, BROADCAST_RELAYS, COMMUNITY_RELAYS, normalizeRelayUrl, SEAR
 import { DEFAULT_PUSH_PREFS, type PushPrefs } from "@/lib/pushPrefs";
 import { getPreferredVoiceServer } from "@/lib/voiceDevices";
 
+import type { FloodSensitivity } from "@/concord/lib/floodPolicy";
 import type { MediaAutoload } from "@/concord/lib/mediaTrust";
 import type { BlossomServerMetadata } from "@/lib/blossom";
 import type { PaymentTargetType } from "@/lib/paymentTargets";
@@ -212,9 +213,16 @@ export interface AppConfig {
   showRecentRailDms: boolean;
   /**
    * Override for Discover's curated author source (`BUILD_DISCOVER_CURATION`):
-   * an `naddr` list, an npub/hex (their follows), or `none`. Empty = build default. Synced.
+   * curators, comma-separated: `naddr` lists, npub/hex seeds (the account and its
+   * follows), `armada-developers`, or `none` (only the viewer's network). Empty =
+   * build default. Synced.
    */
   discoverCuration: string;
+  /**
+   * Read Discover unvetted (`lib/discoverSource.ts`), turned on behind a warning.
+   * Per-device, and ignored in store installs.
+   */
+  discoverUnfiltered: boolean;
   /**
    * Strip tracking parameters (`si=`, `fbclid`, `utm_*`…) from sent and rendered
    * links (default on); see `lib/trackingParams.ts`. Synced.
@@ -264,6 +272,10 @@ export interface AppConfig {
    * message; a community pause still collapses. Synced.
    */
   foldSimilarMessages: boolean;
+  /** How readily that folding fires (`FloodSensitivity`, default standard). Synced. */
+  spamSensitivity: FloodSensitivity;
+  /** Never fold messages bridged from another network (NIP-48 `proxy`; default off). Synced. */
+  spamExemptBridged: boolean;
   /** Whether message headers show the clock time instead of "2h" (default off). Synced. */
   absoluteTimestamps: boolean;
   /** Whether the rail shows the Discover button (default on). Display only; /discover still opens. Synced. */
@@ -348,6 +360,8 @@ export const METADATA_CONFIG_KEYS = [
   "messageHoverActions",
   "replyGestures",
   "foldSimilarMessages",
+  "spamSensitivity",
+  "spamExemptBridged",
   "absoluteTimestamps",
   "showDiscover",
   "currencyDisplay",
@@ -404,6 +418,7 @@ export const PER_DEVICE_CONFIG_KEYS = [
   "meshEnabled",
   "androidBackLeavesApp",
   "powDifficulty",
+  "discoverUnfiltered",
 ] as const satisfies ReadonlyArray<keyof AppConfig>;
 
 export const defaultConfig: AppConfig = {
@@ -440,6 +455,7 @@ export const defaultConfig: AppConfig = {
   mutedWords: [],
   showRecentRailDms: true,
   discoverCuration: "",
+  discoverUnfiltered: false,
   stripTrackingParams: true,
   mediaProxies: [],
   communityMediaAutoload: "trusted",
@@ -448,6 +464,8 @@ export const defaultConfig: AppConfig = {
   messageHoverActions: true,
   replyGestures: "swipe",
   foldSimilarMessages: true,
+  spamSensitivity: "standard",
+  spamExemptBridged: false,
   absoluteTimestamps: false,
   showDiscover: true,
   meshIncognito: true,

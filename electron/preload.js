@@ -164,12 +164,17 @@ contextBridge.exposeInMainWorld("armadaDesktop", {
   /** Linux WebRTC encoder policy. Changes take effect after an app restart. */
   /** `{ type, data }` of a public https image the page can't read for want of CORS, or null. */
   fetchImage: (url) => ipcRenderer.invoke("armada:fetch-image", String(url)),
+  /** `{ date, age }` headers of an https answer, which the page can't read cross-origin, or null. */
+  httpDate: (url) => ipcRenderer.invoke("armada:http-date", String(url)),
   /** Bytes in Chromium's HTTP cache, and clearing it. */
   getWebCacheSize: () => ipcRenderer.invoke("armada:web-cache-size"),
   clearWebCache: () => ipcRenderer.invoke("armada:clear-web-cache"),
   /** Low memory mode: { active, configured, restartRequired }. Applies from the next launch. */
   getLowMemoryMode: () => ipcRenderer.invoke("armada:low-memory-mode"),
   setLowMemoryMode: (on) => ipcRenderer.invoke("armada:set-low-memory-mode", on === true),
+  /** The web track: { channel: "latest"|"release"|"off", serving, pending }, or null without one. */
+  getWebUpdateChannel: () => ipcRenderer.invoke("armada:web-update-channel"),
+  setWebUpdateChannel: (channel) => ipcRenderer.invoke("armada:set-web-update-channel", String(channel)),
   /** Restart the app, e.g. to apply low memory mode. */
   relaunch: () => ipcRenderer.invoke("armada:relaunch"),
   getVideoEncoderMode: () => ipcRenderer.invoke("armada:video-encoder-mode"),

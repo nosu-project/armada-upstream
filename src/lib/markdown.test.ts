@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { parseInline, parseInlineRun, splitInlineCode, splitMarkdownBlocks, splitMarkdownLinks, withoutCode } from "./markdown";
+import { linkLabelSpoofs, parseInline, parseInlineRun, splitInlineCode, splitMarkdownBlocks, splitMarkdownLinks, withoutCode } from "./markdown";
 
 describe("splitMarkdownBlocks", () => {
   it("passes plain text through as one block", () => {
@@ -110,6 +110,18 @@ describe("parseInline escapes and emphasis guards", () => {
 
   it("keeps escaped characters inside formatting", () => {
     expect(parseInline("**a\\*b**")).toEqual([{ type: "strong", children: [{ type: "text", value: "a*b" }] }]);
+  });
+
+  it("keeps a shrug's backslash, and reads Discord's escaped shrug as the same face", () => {
+    const shrug = "\u00af\\_(\u30c4)_/\u00af";
+    expect(parseInline(shrug)).toEqual([{ type: "text", value: shrug }]);
+    expect(parseInline("\u00af\\\\_(\u30c4)_/\u00af")).toEqual([{ type: "text", value: shrug }]);
+    expect(parseInline(`I give up ${shrug}`)).toEqual([{ type: "text", value: `I give up ${shrug}` }]);
+    expect(parseInline(`**ok ${shrug}**`)).toEqual([{ type: "strong", children: [{ type: "text", value: `ok ${shrug}` }] }]);
+    expect(parseInline(`${shrug} _yes_`)).toEqual([
+      { type: "text", value: `${shrug} ` },
+      { type: "em", children: [{ type: "text", value: "yes" }] },
+    ]);
   });
 
   it("round-trips a literal private-use placeholder character", () => {
@@ -390,6 +402,73 @@ describe("splitMarkdownBlocks (document mode)", () => {
   });
 });
 
+describe("splitMarkdownBlocks (tables)", () => {
+  it("parses a GFM table with alignment between text", () => {
+    expect(splitMarkdownBlocks("prices:\n| Item | Qty | Cost |\n|:-----|:---:|-----:|\n| tea | 2 | $4 |\n| cake | 1 | $6 |\nthanks")).toEqual([
+      { type: "text", text: "prices:" },
+      {
+        type: "table",
+        align: ["left", "center", "right"],
+        header: ["Item", "Qty", "Cost"],
+        rows: [["tea", "2", "$4"], ["cake", "1", "$6"]],
+      },
+      { type: "text", text: "thanks" },
+    ]);
+  });
+
+  it("takes outer pipes as optional and pads or truncates rows to the header", () => {
+    expect(splitMarkdownBlocks("a | b\n--- | ---\n1 |\n1 | 2 | 3")).toEqual([
+      { type: "table", align: [undefined, undefined], header: ["a", "b"], rows: [["1", ""], ["1", "2"]] },
+    ]);
+  });
+
+  it("ends at a blank line or a line without a pipe", () => {
+    expect(splitMarkdownBlocks("| a |\n| - |\n| 1 |\n\nafter")).toEqual([
+      { type: "table", align: [undefined], header: ["a"], rows: [["1"]] },
+      { type: "text", text: "after" },
+    ]);
+    expect(splitMarkdownBlocks("| a |\n| - |\n| 1 |\nafter")).toEqual([
+      { type: "table", align: [undefined], header: ["a"], rows: [["1"]] },
+      { type: "text", text: "after" },
+    ]);
+  });
+
+  it("keeps escaped pipes and pipes in inline code inside a cell", () => {
+    expect(splitMarkdownBlocks("| op | means |\n|---|---|\n| `a | b` | a or b \\| c |")).toEqual([
+      { type: "table", align: [undefined, undefined], header: ["op", "means"], rows: [["`a | b`", "a or b | c"]] },
+    ]);
+  });
+
+  it("splits on a pipe after an unclosed backtick", () => {
+    expect(splitMarkdownBlocks("| a | b |\n|---|---|\n| `x | y |")).toEqual([
+      { type: "table", align: [undefined, undefined], header: ["a", "b"], rows: [["`x", "y"]] },
+    ]);
+  });
+
+  it("needs a delimiter row whose cells match the header", () => {
+    const literal = ["a | b\nc | d", "a | b\n--- | --- | ---", "a | b\n--- | x", "a\n|---|"];
+    for (const src of literal) {
+      expect(splitMarkdownBlocks(src)).toEqual([{ type: "text", text: src }]);
+    }
+  });
+
+  it("caps a message's table cells, leaving the rows past the cap as text", () => {
+    const head = "|a|b|c|d|\n|-|-|-|-|\n";
+    const blocks = splitMarkdownBlocks(`${head}${"|\n".repeat(600)}\n${head}|\n`);
+    const tables = blocks.filter((b) => b.type === "table");
+    expect(tables).toHaveLength(1);
+    expect(tables[0].rows).toHaveLength(499);
+    const text = blocks.filter((b) => b.type === "text").map((b) => b.text).join("\n");
+    expect(text.match(/^\|$/gm)).toHaveLength(102);
+  });
+
+  it("parses a table inside a quote", () => {
+    expect(splitMarkdownBlocks("> | a |\n> |---|\n> | 1 |")).toEqual([
+      { type: "quote", blocks: [{ type: "table", align: [undefined], header: ["a"], rows: [["1"]] }] },
+    ]);
+  });
+});
+
 describe("splitMarkdownLinks", () => {
   it("splits [text](url) links out of a run", () => {
     expect(splitMarkdownLinks("see [F-Droid](https://f-droid.org) today")).toEqual([
@@ -409,6 +488,45 @@ describe("splitMarkdownLinks", () => {
     expect(splitMarkdownLinks("[x](javascript:alert(1))")).toEqual([
       { type: "text", value: "[x](javascript:alert(1))" },
     ]);
+  });
+
+  it("leaves a link literal when its label names another host", () => {
+    const src = "[https://armada.buzz/free/nitro/claim](https://nyan.cat/)";
+    expect(splitMarkdownLinks(`go ${src}`)).toEqual([
+      { type: "text", value: "go " },
+      { type: "spoof", text: "https://armada.buzz/free/nitro/claim", url: "https://nyan.cat/" },
+    ]);
+  });
+});
+
+describe("linkLabelSpoofs", () => {
+  it("allows plain words and the link's own host", () => {
+    expect(linkLabelSpoofs("the docs", "https://example.com/docs")).toBe(false);
+    expect(linkLabelSpoofs("github.com/foo", "https://github.com/foo")).toBe(false);
+    expect(linkLabelSpoofs("www.GitHub.com", "https://github.com/x")).toBe(false);
+    expect(linkLabelSpoofs("see https://example.com/a", "https://www.example.com/b")).toBe(false);
+  });
+
+  it("refuses a label naming another host anywhere in it", () => {
+    expect(linkLabelSpoofs("https://armada.buzz/free/nitro/claim", "https://nyan.cat/")).toBe(true);
+    expect(linkLabelSpoofs("github.com", "https://evil.example/x")).toBe(true);
+    expect(linkLabelSpoofs("claim it at armada.buzz now", "https://nyan.cat/")).toBe(true);
+    expect(linkLabelSpoofs("evil.github.com", "https://github.com/")).toBe(true);
+    expect(linkLabelSpoofs("armada.buzz and nyan.cat", "https://nyan.cat/")).toBe(true);
+  });
+
+  it("reads a name as a domain only under a real ICANN suffix", () => {
+    expect(linkLabelSpoofs("package.json", "https://github.com/x/package.json")).toBe(false);
+    expect(linkLabelSpoofs("edit index.html and app.ts", "https://evil.example/")).toBe(false);
+    expect(linkLabelSpoofs("a.zip", "https://evil.example/")).toBe(true);
+    expect(linkLabelSpoofs("nyan.cat", "https://evil.example/")).toBe(true);
+    expect(linkLabelSpoofs("https://claim.example/x", "https://evil.example/")).toBe(true);
+  });
+
+  it("refuses lookalike scripts and compares fullwidth dots as dots", () => {
+    expect(linkLabelSpoofs("\u0430rmada.buzz", "https://armada.buzz/")).toBe(true);
+    expect(linkLabelSpoofs("armada\uFF0Ebuzz", "https://nyan.cat/")).toBe(true);
+    expect(linkLabelSpoofs("armada\uFF0Ebuzz", "https://armada.buzz/")).toBe(false);
   });
 });
 

@@ -1,3 +1,4 @@
+import { useState, useSyncExternalStore } from "react";
 import { useNostr } from "@nostrify/react";
 
 type NostrClient = ReturnType<typeof useNostr>["nostr"];
@@ -28,8 +29,22 @@ import { rolesMakeStaff, type OverwriteTarget } from "@/concord/lib/roles";
 import { planTenure, tenureRefusal } from "@/concord/lib/tenure";
 import type { Community } from "@/concord/lib/types";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { activationPending, activationPendingReady, setActivationPending, subscribeActivationPending } from "@/concord/lib/activationPending";
 import { t } from "@/i18n";
 import type { NostrRumor } from "@/lib/nostrRumor";
+
+/** How long a write that seals nothing waits for the plane read whole before planning on the store. */
+const WHOLE_READ_BUDGET_MS = 6000;
+
+/** A write that must read the plane whole couldn't: a network problem, not a refusal. */
+const needsWhole = () =>
+  t({ id: "useRankedRoles.switchNeedsWhole", defaultMessage: "The community couldn't be read in full; try again once the relays answer." });
+
+/** Told how many editions a write will publish as it learns, and each one as it lands. */
+export interface WriteProgressSink {
+  planned: (count: number) => void;
+  published: () => void;
+}
 
 /**
  * Publish the switch to the vsk-13 Roster planned on `folded` (CORD-04 §2), the
@@ -41,10 +56,34 @@ export async function publishActivation(
   user: { pubkey: string; signer: Parameters<typeof publishEdition>[2] },
   folded: FoldedControl,
   everyone?: bigint,
+  progress?: WriteProgressSink,
 ): Promise<string[]> {
   const { rumors, unfiled } = planActivation(folded, community.id, user.pubkey, everyone, community.privateChannels);
-  for (const rumor of rumors) await publishEdition(nostr, community, user.signer, rumor);
+  await activationPendingReady();
+  setActivationPending(user.pubkey, community.idHex, rumors);
+  await publishPendingActivation(nostr, community, user, progress);
   return unfiled;
+}
+
+/**
+ * Publish what is left of a switch cut short (`activationPending.ts`), one edition at
+ * a time, recording each as it lands so a second interruption resumes after it.
+ */
+export async function publishPendingActivation(
+  nostr: NostrClient,
+  community: Community,
+  user: { pubkey: string; signer: Parameters<typeof publishEdition>[2] },
+  progress?: WriteProgressSink,
+): Promise<void> {
+  await activationPendingReady();
+  let left = activationPending(user.pubkey, community.idHex) ?? [];
+  progress?.planned(left.length);
+  while (left.length > 0) {
+    await publishEdition(nostr, community, user.signer, left[0]);
+    left = left.slice(1);
+    setActivationPending(user.pubkey, community.idHex, left);
+    progress?.published();
+  }
 }
 
 /**
@@ -60,6 +99,9 @@ export function useRankedRoles(community: Community | undefined) {
   const { user } = useCurrentUser();
   const queryClient = useQueryClient();
   const { data: held } = useControlFold(community);
+  const activationLeft = useSyncExternalStore(subscribeActivationPending, () =>
+    user && community ? activationPending(user.pubkey, community.idHex)?.length ?? 0 : 0,
+  );
 
   const ready = () => {
     if (!user || !community) throw new Error(t({ id: "useRoles.notReady", defaultMessage: "Not ready." }));
@@ -68,33 +110,60 @@ export function useRankedRoles(community: Community | undefined) {
 
   const heldKeys = (c: Community) => new Set(c.privateChannels.map((k) => bytesToHex(k.id)));
 
-  /** The fold to plan on: the plane read whole when the change needs it. */
+  /**
+   * The fold to plan on: the plane read whole when the change needs it. A change that
+   * needn't seal anything waits at most {@link WHOLE_READ_BUDGET_MS} for one: the store
+   * holds every edition the live subscription brought, and one hung relay would
+   * otherwise hold the save for its query timeout, twice. The read runs on regardless.
+   */
   const read = async (c: Community, strict: boolean): Promise<{ folded: FoldedControl; served?: Set<string>; whole: boolean }> => {
-    const whole = await readControlWhole(nostr, c);
+    const reading = readControlWhole(nostr, c);
+    const whole = strict
+      ? await reading
+      : await Promise.race([reading, new Promise<undefined>((resolve) => setTimeout(resolve, WHOLE_READ_BUDGET_MS))]);
     if (whole) return { ...whole, whole: true };
-    if (strict) throw new Error(tenureRefusal());
+    if (strict) throw new Error(needsWhole());
     // The store's fold, not the rendered one: it holds this device's last write.
     const stored = await foldStoredControl(c).catch(() => held);
-    if (!stored) throw new Error(tenureRefusal());
+    if (!stored) throw new Error(needsWhole());
     return { folded: stored, whole: false };
   };
 
+  /** Editions the running write has published, for its progress line. */
+  const [published, setPublished] = useState(0);
+  /** Editions the running write knows it will publish; grows as it plans more. */
+  const [planned, setPlanned] = useState(0);
+  const notePublished = () => setPublished((n) => n + 1);
+  const notePlanned = (count: number) => setPlanned((n) => n + count);
+  const progress: WriteProgressSink = { planned: notePlanned, published: notePublished };
+
   /** One write at a time per community (Vector `follow_lock`). */
-  const write = <T,>(run: () => Promise<T>): Promise<T> => (community ? withControlWrite(community.idHex, run) : run());
+  const write = <T,>(run: () => Promise<T>): Promise<T> => {
+    setPublished(0);
+    setPlanned(0);
+    return community ? withControlWrite(community.idHex, run) : run();
+  };
 
   const publish = async (c: Community, rumors: NostrRumor[]) => {
     const { user } = ready();
-    for (const rumor of rumors) await publishEdition(nostr, c, user.signer, rumor);
+    notePlanned(rumors.length);
+    for (const rumor of rumors) {
+      await publishEdition(nostr, c, user.signer, rumor);
+      notePublished();
+    }
   };
 
   /** Seal each holder's Tenure before a Role they hold loses authority (Vector `Seal::Strict`). */
   const sealHolders = async (c: Community, folded: FoldedControl, served: Set<string> | undefined, holders: string[]) => {
     const { user } = ready();
+    // Planned whole first: a refusal publishes none of them, and the count is known up front.
+    const writes: NostrRumor[] = [];
     for (const member of holders) {
       const plan = planTenure(folded, c.id, user.pubkey, member, false, citationFor(c, folded, user.pubkey), served);
       if (plan.kind === "refuse") throw new Error(tenureRefusal());
-      if (plan.kind === "write") await publishEdition(nostr, c, user.signer, plan.rumor);
+      if (plan.kind === "write") writes.push(plan.rumor);
     }
+    await publish(c, writes);
   };
 
   const done = () => {
@@ -119,7 +188,7 @@ export function useRankedRoles(community: Community | undefined) {
       const { folded, served, whole } = await read(community, current !== undefined && (current.permissions & ~fields.permissions) !== 0n);
       const plan = planEditRole(folded, community.id, user.pubkey, roleId, fields, citationFor(community, folded, user.pubkey));
       if (plan.reduces) {
-        if (!whole) throw new Error(tenureRefusal());
+        if (!whole) throw new Error(needsWhole());
         await sealHolders(community, folded, served, plan.holders);
       }
       await publish(community, [plan.rumor]);
@@ -136,10 +205,13 @@ export function useRankedRoles(community: Community | undefined) {
     const authority = citationFor(c, view, user.pubkey);
     const plan = planMoveRole(view, c.id, user.pubkey, roleId, index, authority);
     if (plan.lowers) {
-      if (!whole) throw new Error(tenureRefusal());
+      if (!whole) throw new Error(needsWhole());
       await sealHolders(c, view, served, plan.holders);
     }
-    await publish(c, [plan.rumor]);
+    // The Grants go first: signed by the mover they stand with the Role where it is and
+    // where it goes, so a run that stops partway orphans nobody, and a retry plans only
+    // what is left. Published after the move, a failure stripped the Role from the rest
+    // and a retry, finding the order already right, never signed them again.
     const grants: NostrRumor[] = [];
     for (const g of plan.resign) {
       const head = view.heads.get(bytesToHex(grantLocator(c.id, hex32(g.member))));
@@ -153,6 +225,7 @@ export function useRankedRoles(community: Community | undefined) {
       await publish(c, [rumor]);
       grants.push(rumor);
     }
+    await publish(c, [plan.rumor]);
     return carryForward(view, [plan.rumor, ...grants], { roleId, rank: plan.rank });
   };
 
@@ -259,9 +332,15 @@ export function useRankedRoles(community: Community | undefined) {
   const activate = useMutation<string[], Error, { everyone?: bigint }>({
     mutationFn: ({ everyone }) => write(async () => {
       const { user, community } = ready();
+      await activationPendingReady();
+      // A switch cut short finishes the plan it made rather than planning another.
+      if (activationPending(user.pubkey, community.idHex)) {
+        await publishPendingActivation(nostr, community, user, progress);
+        return [];
+      }
       const whole = await readControlWhole(nostr, community);
-      if (!whole) throw new Error(t({ id: "useRankedRoles.switchNeedsWhole", defaultMessage: "The community couldn't be read in full; try again once the relays answer." }));
-      return publishActivation(nostr, community, user, whole.folded, everyone);
+      if (!whole) throw new Error(needsWhole());
+      return publishActivation(nostr, community, user, whole.folded, everyone, progress);
     }),
     onSuccess: done,
   });
@@ -282,6 +361,11 @@ export function useRankedRoles(community: Community | undefined) {
     deleteCategory: deleteCategory.mutateAsync,
     activate: activate.mutateAsync,
     isActivating: activate.isPending,
+    /** Editions of this owner's switch still unpublished (`activationPending.ts`). */
+    activationLeft,
+    /** Editions the running write has published so far, of the `planned` it knows of. */
+    published,
+    planned,
     isSaving:
       createRole.isPending || editRole.isPending || moveRole.isPending || reorderRoles.isPending || deleteRole.isPending || setEveryone.isPending || setOverwrite.isPending || setSync.isPending ||
       createCategory.isPending || renameCategory.isPending || moveCategory.isPending || deleteCategory.isPending,

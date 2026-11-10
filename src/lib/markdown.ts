@@ -1,8 +1,10 @@
 /**
  * Discord-flavored markdown parsing for chat (rendering: `components/chat/Markdown.tsx`).
- * Document mode (git content) adds heading levels 4–6 and `[text](url)` links.
+ * Document mode (git content) adds heading levels 4–6.
  * Blocks are split BEFORE the URL/nostr tokenizer so code isn't linkified.
  */
+
+import { parse as parseDomain } from "tldts";
 
 /** A top-level block of message content. */
 export type MdBlock =
@@ -11,6 +13,7 @@ export type MdBlock =
   | { type: "heading"; level: number; text: string }
   | { type: "subtext"; text: string }
   | MdList
+  | MdTable
   | { type: "rule" }
   | { type: "text"; text: string };
 
@@ -24,6 +27,16 @@ export interface MdList {
   start: number;
   items: string[];
   children?: (MdList | undefined)[];
+}
+
+export type MdAlign = "left" | "center" | "right" | undefined;
+
+/** A GFM table; every row has exactly `header.length` cells. */
+export interface MdTable {
+  type: "table";
+  align: MdAlign[];
+  header: string[];
+  rows: string[][];
 }
 
 export type InlineCodeSegment = { code: boolean; value: string };
@@ -56,31 +69,37 @@ const MAX_QUOTE_DEPTH = 8;
 
 /**
  * Split text into top-level blocks: fenced code, quotes (whose content is itself
- * split into blocks), headings, `-#` subtext, lists, thematic breaks, and plain text.
+ * split into blocks), headings, `-#` subtext, lists, GFM tables, thematic breaks, and plain text.
  * Chat headings stop at level 3; `document` allows 4–6.
  */
 export function splitMarkdownBlocks(src: string, document = false): MdBlock[] {
-  return splitBlocks(src, document, 0);
+  return splitBlocks(src, document, 0, { cells: TABLE_MAX_CELLS });
 }
 
-function splitBlocks(src: string, document: boolean, depth: number): MdBlock[] {
+/**
+ * Table cells left to a whole message. Short rows are padded to the header, so
+ * without it `|` lines under a wide header would cost a cell per byte or more.
+ */
+type TableBudget = { cells: number };
+
+function splitBlocks(src: string, document: boolean, depth: number, budget: TableBudget): MdBlock[] {
   if (depth === 0) {
     const fences = [...src.matchAll(FENCE_RE)].map((m) => [m.index, m.index + m[0].length]);
     for (const m of src.matchAll(REST_QUOTE_RE)) {
       const at = m.index;
       if (fences.some(([s, e]) => at >= s && at < e)) continue;
-      const before = at > 0 ? splitFencedBlocks(src.slice(0, at), document, depth) : [];
-      return [...before, { type: "quote", blocks: splitBlocks(src.slice(at + m[0].length), document, 1) }];
+      const before = at > 0 ? splitFencedBlocks(src.slice(0, at), document, depth, budget) : [];
+      return [...before, { type: "quote", blocks: splitBlocks(src.slice(at + m[0].length), document, 1, budget) }];
     }
   }
-  return splitFencedBlocks(src, document, depth);
+  return splitFencedBlocks(src, document, depth, budget);
 }
 
-function splitFencedBlocks(src: string, document: boolean, depth: number): MdBlock[] {
+function splitFencedBlocks(src: string, document: boolean, depth: number, budget: TableBudget): MdBlock[] {
   const blocks: MdBlock[] = [];
   let last = 0;
   for (const m of src.matchAll(FENCE_RE)) {
-    if (m.index > last) blocks.push(...splitQuoteBlocks(src.slice(last, m.index), document, depth));
+    if (m.index > last) blocks.push(...splitQuoteBlocks(src.slice(last, m.index), document, depth, budget));
     const lang = m[1] ?? m[3];
     const code = (m[2] ?? m[4]).replace(/\n$/, "");
     if (code.trim() !== "") {
@@ -91,11 +110,11 @@ function splitFencedBlocks(src: string, document: boolean, depth: number): MdBlo
     }
     last = m.index + m[0].length;
   }
-  if (last < src.length) blocks.push(...splitQuoteBlocks(src.slice(last), document, depth));
+  if (last < src.length) blocks.push(...splitQuoteBlocks(src.slice(last), document, depth, budget));
   return blocks;
 }
 
-function splitQuoteBlocks(src: string, document: boolean, depth: number): MdBlock[] {
+function splitQuoteBlocks(src: string, document: boolean, depth: number, budget: TableBudget): MdBlock[] {
   const blocks: MdBlock[] = [];
   const lines = src.split("\n");
   let textLines: string[] = [];
@@ -104,7 +123,7 @@ function splitQuoteBlocks(src: string, document: boolean, depth: number): MdBloc
   const flushText = () => {
     if (textLines.length > 0) {
       const text = textLines.join("\n");
-      if (text !== "") blocks.push(...splitHeadingListBlocks(text, document));
+      if (text !== "") blocks.push(...splitHeadingListBlocks(text, document, budget));
       textLines = [];
     }
   };
@@ -113,7 +132,7 @@ function splitQuoteBlocks(src: string, document: boolean, depth: number): MdBloc
       const text = quoteLines.join("\n");
       blocks.push({
         type: "quote",
-        blocks: depth < MAX_QUOTE_DEPTH ? splitBlocks(text, document, depth + 1) : [{ type: "text", text }],
+        blocks: depth < MAX_QUOTE_DEPTH ? splitBlocks(text, document, depth + 1, budget) : [{ type: "text", text }],
       });
       quoteLines = null;
     }
@@ -161,11 +180,88 @@ function indentWidth(lead: string): number {
   return width;
 }
 
+/** A delimiter-row cell: `---`, `:--`, `--:` or `:-:`. */
+const TABLE_DELIM_CELL_RE = /^:?-+:?$/;
+/** A delimiter row's characters; a cheap test before splitting it. */
+const TABLE_DELIM_ROW_RE = /^[ \t]*\|?[ \t:|-]*-[ \t:|-]*$/;
+const TABLE_MAX_COLUMNS = 32;
+/** Cells, headers included, across every table in one message. */
+const TABLE_MAX_CELLS = 2000;
+
 /**
- * Split into headings, list runs and remaining text. Boundary newlines fold
+ * A row's cells, split on pipes outside inline code; `\|` is a literal pipe.
+ * Undefined for a line with no splitting pipe. Outer pipes are optional.
+ */
+function splitTableRow(line: string): string[] | undefined {
+  const cells: string[] = [];
+  let cell = "";
+  let pipes = 0;
+  /** Length of the backtick run that opened the current code span, or 0. */
+  let code = 0;
+  const lastRun = lastBacktickRuns(line);
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (c === "\\" && line[i + 1] === "|") {
+      cell += "|";
+      i++;
+    } else if (c === "`") {
+      let run = 1;
+      while (line[i + run] === "`") run++;
+      if (code === run) code = 0;
+      else if (code === 0 && (lastRun.get(run) ?? -1) > i) code = run;
+      cell += line.slice(i, i + run);
+      i += run - 1;
+    } else if (c === "|" && code === 0) {
+      pipes++;
+      cells.push(cell);
+      cell = "";
+    } else {
+      cell += c;
+    }
+  }
+  cells.push(cell);
+  if (pipes === 0) return undefined;
+  if (line.trimStart().startsWith("|")) cells.shift();
+  if (cells.length > 1 && cells[cells.length - 1].trim() === "" && line.trimEnd().endsWith("|")) cells.pop();
+  return cells.map((s) => s.trim());
+}
+
+/**
+ * Start of the last backtick run of each length, so whether a run has a closer
+ * is one lookup rather than a scan per opener (quadratic on hostile input).
+ */
+function lastBacktickRuns(line: string): Map<number, number> {
+  const last = new Map<number, number>();
+  for (let i = 0; i < line.length; i++) {
+    if (line[i] !== "`") continue;
+    let n = 1;
+    while (line[i + n] === "`") n++;
+    last.set(n, i);
+    i += n - 1;
+  }
+  return last;
+}
+
+/** A table's empty shell when `line` is a header row and `next` its delimiter row (GFM). */
+function tableHead(line: string, next: string): MdTable | undefined {
+  if (!line.includes("|") || !TABLE_DELIM_ROW_RE.test(next) || !next.includes("|")) return undefined;
+  const delims = splitTableRow(next);
+  if (!delims || !delims.every((d) => TABLE_DELIM_CELL_RE.test(d))) return undefined;
+  const header = splitTableRow(line);
+  if (!header || header.length !== delims.length || header.length > TABLE_MAX_COLUMNS) return undefined;
+  const align = delims.map((d): MdAlign => {
+    const left = d.startsWith(":");
+    const right = d.endsWith(":");
+    return left && right ? "center" : right ? "right" : left ? "left" : undefined;
+  });
+  return { type: "table", align, header, rows: [] };
+}
+
+/**
+ * Split into headings, list runs, tables and remaining text. Boundary newlines fold
  * into the extracted block's margin; chunks without blocks pass through unchanged.
  */
-function splitHeadingListBlocks(src: string, document: boolean): MdBlock[] {
+function splitHeadingListBlocks(src: string, document: boolean, budget: TableBudget): MdBlock[] {
   const blocks: MdBlock[] = [];
   const maxHeading = document ? 6 : CHAT_HEADING_MAX_LEVEL;
   let textLines: string[] = [];
@@ -187,7 +283,9 @@ function splitHeadingListBlocks(src: string, document: boolean): MdBlock[] {
   };
   const newList = (ordered: boolean, start: number): MdList => ({ type: "list", ordered, start, items: [] });
 
-  for (const line of src.split("\n")) {
+  const lines = src.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
     // Before the rule check: `---` under a paragraph underlines it (CommonMark).
     const setext = SETEXT_RE.exec(line);
     if (setext) {
@@ -245,6 +343,23 @@ function splitHeadingListBlocks(src: string, document: boolean): MdBlock[] {
       continue;
     }
     flushList();
+    const table = i + 1 < lines.length ? tableHead(line, lines[i + 1]) : undefined;
+    if (table && budget.cells >= table.header.length) {
+      flushText();
+      const width = table.header.length;
+      budget.cells -= width;
+      let j = i + 2;
+      // Rows past the budget stay text.
+      for (; j < lines.length && lines[j].trim() !== "" && budget.cells >= width; j++) {
+        const cells = splitTableRow(lines[j]);
+        if (!cells) break;
+        table.rows.push(table.header.map((_, c) => cells[c] ?? ""));
+        budget.cells -= width;
+      }
+      blocks.push(table);
+      i = j - 1;
+      continue;
+    }
     textLines.push(line);
   }
   flushText();
@@ -257,12 +372,50 @@ function splitHeadingListBlocks(src: string, document: boolean): MdBlock[] {
 
 export type MdLinkSegment =
   | { type: "text"; value: string }
-  | { type: "link"; text: string; url: string };
+  | { type: "link"; text: string; url: string }
+  /** A link whose label names another host: shown as its literal source, never masked. */
+  | { type: "spoof"; text: string; url: string };
 
 /** `[text](url)` / `![alt](url)`, http(s) only so pseudo-scheme URLs stay literal. */
 const MD_LINK_RE = /(!?)\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g;
 
-/** Split on markdown links. `![alt](url)` yields the bare URL so it embeds like a pasted image. */
+/** A domain-like token, with or without a scheme, in any script and with fullwidth/ideographic dots. */
+const LABEL_DOMAIN_RE = /(?:https?:\/\/)?((?:[\p{L}\p{N}-]+[.．。｡])+\p{L}{2,})/giu;
+
+/** Whether a scheme-less host reads as a domain: its suffix is a real ICANN one, so `package.json` is a file name. */
+export function isIcannHost(host: string): boolean {
+  return parseDomain(host).isIcann === true;
+}
+
+function hostOf(url: string): string | undefined {
+  try {
+    return new URL(url).hostname.toLowerCase().replace(/^www\./, "");
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Whether a link label names a host other than the link's own, so masking it
+ * would show one destination and open another.
+ */
+export function linkLabelSpoofs(text: string, url: string): boolean {
+  const real = hostOf(url);
+  if (!real) return true;
+  for (const m of text.matchAll(LABEL_DOMAIN_RE)) {
+    const host = hostOf(`http://${m[1]}`);
+    const schemed = m[0].length > m[1].length;
+    if (host === real || (host && !schemed && !isIcannHost(host))) continue;
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Split on markdown links. `![alt](url)` yields the bare URL so it embeds like a
+ * pasted image. A link whose label names another host is a `spoof`, rendered as
+ * its source so every URL in it is linked to where it says.
+ */
 export function splitMarkdownLinks(src: string): MdLinkSegment[] {
   const out: MdLinkSegment[] = [];
   let last = 0;
@@ -271,6 +424,7 @@ export function splitMarkdownLinks(src: string): MdLinkSegment[] {
   while ((m = MD_LINK_RE.exec(src)) !== null) {
     if (m.index > last) out.push({ type: "text", value: src.slice(last, m.index) });
     if (m[1]) out.push({ type: "text", value: m[3] });
+    else if (linkLabelSpoofs(m[2], m[3])) out.push({ type: "spoof", text: m[2], url: m[3] });
     else out.push({ type: "link", text: m[2], url: m[3] });
     last = m.index + m[0].length;
   }
@@ -336,8 +490,14 @@ const INLINE_PATTERNS: ReadonlyArray<{
  * delimiters are matched: neither a word character nor whitespace.
  */
 const ATOM = "\uE000";
-/** `\*` etc.: the markdown punctuation a backslash makes literal. */
-const ESCAPE_RE = /\\([\\`*_~|#>\-+=.!()[\]])|\uE000/g;
+/** The shrug as `/shrug` sends it. */
+const SHRUG = "\u00af\\_(\u30c4)_/\u00af";
+/**
+ * `\*` etc.: the markdown punctuation a backslash makes literal. A shrug, also
+ * Discord's `¯\\_(ツ)_/¯`, is a face rather than an escape and emphasis, as in
+ * Vector's `shrugExtension`.
+ */
+const ESCAPE_RE = /(\u00af\\{1,2}_\(\u30c4\)_\/\u00af)|\\([\\`*_~|#>\-+=.!()[\]])|\uE000/g;
 
 export type InlineAtom<A> = { atom: A };
 
@@ -356,8 +516,8 @@ export function parseInlineRun<A>(parts: ReadonlyArray<string | InlineAtom<A>>):
       src += ATOM;
       continue;
     }
-    src += part.replace(ESCAPE_RE, (m: string, ch: string | undefined) => {
-      slots.push({ text: ch ?? m });
+    src += part.replace(ESCAPE_RE, (m: string, shrug: string | undefined, ch: string | undefined) => {
+      slots.push({ text: shrug ? SHRUG : ch ?? m });
       return ATOM;
     });
   }

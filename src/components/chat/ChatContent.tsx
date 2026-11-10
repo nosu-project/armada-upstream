@@ -48,12 +48,13 @@ import { parseGiftUrl } from "@/lib/ultraGift";
 import { EVERYONE_MENTION_PATTERN } from "@/concord/lib/everyoneMention";
 import { parseFileMessageTags, parseImetaMap } from "@/lib/imeta";
 import { KIND_DM_FILE } from "@/lib/nip17/protocol";
-import { parseInlineRun, splitInlineCode, splitMarkdownBlocks, splitMarkdownLinks } from "@/lib/markdown";
+import { isIcannHost, parseInlineRun, splitInlineCode, splitMarkdownBlocks, splitMarkdownLinks } from "@/lib/markdown";
 import { filenameFromUrl } from "@/lib/fileBytes";
 import { AUDIO_EXTS, EMBED_MEDIA_URL_REGEX, IMAGE_URL_REGEX, isGifLikeUrl, isUnplayableVideo, mimeFromExt } from "@/lib/mediaUrls";
 import { KIND_GROUP_METADATA, nip29GroupPath, parseGroupAddress, type GroupAddress } from "@/lib/nip29";
 import { normalizeRelayUrl, relayToRouteParam } from "@/lib/platform";
-import { isMagnetUri, sanitizeUrl } from "@/lib/sanitizeUrl";
+import { displayHost, isMagnetUri, sanitizeUrl } from "@/lib/sanitizeUrl";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { isNsiteUrl } from "@/lib/nsiteUrl";
 import { parseSelfLink } from "@/lib/selfLink";
 import { stripTrackingParams } from "@/lib/trackingParams";
@@ -78,7 +79,7 @@ import type { CharaCard } from "@/lib/characterCard";
 import type { ChatRoute } from "@/lib/routes";
 import type { MessageActionItem } from "@/components/chat/messageActions";
 import type { ImetaEncryption, ImetaEntry } from "@/lib/imeta";
-import type { MdBlock, MdList } from "@/lib/markdown";
+import type { MdAlign, MdBlock, MdList } from "@/lib/markdown";
 import { cacheTokens, TOKEN_CACHE } from "@/components/chat/tokenCache";
 import type { EncryptedRef } from "@/hooks/useResolvedMediaSrc";
 import type { ReactNode } from "react";
@@ -207,6 +208,7 @@ export type ContentToken =
   | { type: "heading"; level: number; tokens: ContentToken[] }
   | { type: "subtext"; tokens: ContentToken[] }
   | ListToken
+  | { type: "table"; align: MdAlign[]; header: ContentToken[][]; rows: ContentToken[][][] }
   | { type: "rule" };
 
 /** `children[i]`, when present, is the list nested under `items[i]`. */
@@ -354,6 +356,12 @@ function applyEveryoneMentions(tokens: ContentToken[]): ContentToken[] {
       out.push({ ...token, tokens: applyEveryoneMentions(token.tokens) });
     } else if (token.type === "list") {
       out.push(mapList(token, applyEveryoneMentions));
+    } else if (token.type === "table") {
+      out.push({
+        ...token,
+        header: token.header.map(applyEveryoneMentions),
+        rows: token.rows.map((row) => row.map(applyEveryoneMentions)),
+      });
     } else {
       out.push(token);
     }
@@ -596,6 +604,13 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
             }
           }
 
+          // A bare `name.ext/…` is a link only under a real suffix (`package.json/x` is a path).
+          if (!/^(?:https?|wss?):\/\//i.test(url) && !isIcannHost(url.slice(0, url.indexOf("/")).toLowerCase())) {
+            out.push({ type: "text", value: fullMatch });
+            lastIndex = index + fullMatch.length;
+            continue;
+          }
+
           // Discord's `<url>`: a plain link with its embed suppressed, brackets hidden.
           const bracketed = !forceImage && index > lastIndex && segment[index - 1] === "<" &&
             segment[index + fullMatch.length] === ">";
@@ -824,23 +839,30 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
       return out;
     };
 
-    // Extract `inline code` first so code is never linkified. Document mode splits
+    // Extract `inline code` first so code is never linkified, then split
     // `[text](url)` before URL tokenizing.
     const tokenizeRun = (run: string): ContentToken[] => {
       const out: ContentToken[] = [];
       for (const seg of splitInlineCode(run)) {
         if (seg.code) {
           out.push({ type: "inline-code", code: seg.value });
-        } else if (documentMarkdown) {
-          for (const part of splitMarkdownLinks(seg.value)) {
-            if (part.type === "link") {
-              out.push({ type: "md-link", text: part.text, url: cleanUrl(part.url) });
-            } else {
-              out.push(...tokenizeSegment(part.value));
+          continue;
+        }
+        for (const part of splitMarkdownLinks(seg.value)) {
+          if (part.type === "link") {
+            out.push({ type: "md-link", text: part.text, url: cleanUrl(part.url) });
+          } else if (part.type === "spoof") {
+            // Its source, with each URL an inline link: the label is tokenized apart so a
+            // URL in it can't run on into `](`, and nothing in it unfurls into a card.
+            out.push({ type: "text", value: "[" });
+            for (const t of tokenizeSegment(part.text)) {
+              const url = t.type.endsWith("-embed") && "url" in t ? t.url : undefined;
+              out.push(url ? { type: "inline-link", url } : t);
             }
+            out.push({ type: "text", value: "](" }, { type: "inline-link", url: cleanUrl(part.url) }, { type: "text", value: ")" });
+          } else {
+            out.push(...tokenizeSegment(part.value));
           }
-        } else {
-          out.push(...tokenizeSegment(seg.value));
         }
       }
       return out;
@@ -860,6 +882,13 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
           out.push({ type: "subtext", tokens: tokenizeRun(block.text) });
         } else if (block.type === "list") {
           out.push(listToken(block, tokenizeRun));
+        } else if (block.type === "table") {
+          out.push({
+            type: "table",
+            align: block.align,
+            header: block.header.map(tokenizeRun),
+            rows: block.rows.map((row) => row.map(tokenizeRun)),
+          });
         } else if (block.type === "rule") {
           out.push({ type: "rule" });
         } else {
@@ -1212,21 +1241,7 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
       case "md-link": {
         const safe = sanitizeUrl(token.url);
         if (!safe) return <span key={key}>{token.text}</span>;
-        // Anti-spoof: [github.com/x](https://evil.example) shows the real host.
-        const spoofedHost = mdLinkSpoofHost(token.text, safe);
-        return (
-          <a
-            key={key}
-            href={safe}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-primary hover:underline break-words"
-            onClick={(e) => e.stopPropagation()}
-          >
-            {token.text}
-            {spoofedHost && <span className="text-muted-foreground"> ({spoofedHost})</span>}
-          </a>
-        );
+        return <MdLink key={key} text={token.text} href={safe} />;
       }
       case "heading":
         return (
@@ -1266,6 +1281,39 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
             : <ul key={listKey} className={cn(depth % 2 ? "list-[circle]" : "list-disc", className)}>{items}</ul>;
         };
         return renderList(token, String(key), 0);
+      }
+      case "table": {
+        const cellClass = (c: number) => cn(
+          "border border-border px-2 py-1 align-top",
+          token.align[c] === "center" ? "text-center" : token.align[c] === "right" ? "text-right" : "text-left",
+        );
+        // whitespace-normal: pre-wrap would render markup line breaks between cells.
+        return (
+          <div key={key} className="my-1 max-w-full overflow-x-auto whitespace-normal">
+            <table className="border-collapse">
+              <thead>
+                <tr className="bg-muted/50">
+                  {token.header.map((cell, c) => (
+                    <th key={c} className={cn(cellClass(c), "font-semibold")}>
+                      {renderTokens(cell, `${key}-h${c}-`, false, true)}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {token.rows.map((row, r) => (
+                  <tr key={r}>
+                    {row.map((cell, c) => (
+                      <td key={c} className={cellClass(c)}>
+                        {renderTokens(cell, `${key}-r${r}c${c}-`, false, true)}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        );
       }
       case "rule":
         return <hr key={key} className="my-2 border-border" />;
@@ -1640,17 +1688,34 @@ function CollapsibleContent({ children }: { children: ReactNode }) {
   );
 }
 
-/** The real host when a markdown link's TEXT reads as a different URL/domain. */
-function mdLinkSpoofHost(text: string, href: string): string | undefined {
-  const match = text.trim().toLowerCase().match(/^(?:https?:\/\/)?((?:[\w-]+\.)+[a-z]{2,})(?:[/:?#]|$)/i);
-  const textHost = match?.[1]?.replace(/^www\./, "");
-  if (!textHost) return undefined;
-  try {
-    const realHost = new URL(href).hostname.toLowerCase().replace(/^www\./, "");
-    return realHost === textHost ? undefined : realHost;
-  } catch {
-    return undefined;
-  }
+/**
+ * A `[text](url)` link, whose destination the sender hides: the full URL is a
+ * tooltip on hover/focus, and touch (no hover) shows the host unless the text names it.
+ */
+function MdLink({ text, href }: { text: string; href: string }) {
+  // A label naming another host never reaches here (splitMarkdownLinks keeps it literal).
+  const host = displayHost(href);
+  const touchHost = !text.toLowerCase().includes(host.toLowerCase());
+  return (
+    <TooltipProvider delayDuration={300}>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <a
+            href={href}
+            target="_blank"
+            rel="noopener noreferrer"
+            data-copy-url={href}
+            className="text-primary hover:underline break-words"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <span className="font-medium">{text}</span>
+            {touchHost && <span className="hidden text-muted-foreground touch:inline"> ({host})</span>}
+          </a>
+        </TooltipTrigger>
+        <TooltipContent className="max-w-sm break-all text-xs">{href}</TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  );
 }
 
 /** In-app link label: the path with opaque segments shortened. Full URL in `title`. */

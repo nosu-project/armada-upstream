@@ -1,7 +1,9 @@
-import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { useCallback, useContext, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { useChatModeration } from "@/concord/hooks/useChannel";
+import { useChannelRules } from "@/concord/hooks/useChannelRules";
+import { useFloodPolicy } from "@/concord/hooks/useFloodPolicy";
 import { openedToChatMsg } from "@/concord/hooks/useTransport";
 import { foldTimeline } from "@/concord/lib/chat";
 import {
@@ -10,6 +12,7 @@ import {
   subscribeQuarantineMemory,
 } from "@/concord/lib/quarantineMemory";
 import { CHAT_ROW_KINDS, queryRumorsByChannel } from "@/concord/lib/rumorStore";
+import { AppContext } from "@/contexts/AppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useMutedPubkeys } from "@/hooks/useMuteList";
 import { STORE_READ } from "@/lib/storeQuery";
@@ -52,8 +55,9 @@ export interface CommunityFeed {
  * the window so that watermark recedes; `hasMore` means "a channel was truncated".
  *
  * Each channel is folded on its own before the merge, since the flood detector
- * judges a batch as a cohort. Quarantined messages are dropped (as in Mentions),
- * not collapsed: this is an aggregate catch-up surface.
+ * judges a batch as a cohort, under the Channel's own rules (`useChannelRules`).
+ * Quarantined messages are dropped (as in Mentions), not collapsed: this is an
+ * aggregate catch-up surface.
  */
 export function useCommunityFeed(
   community: Community | undefined,
@@ -64,6 +68,7 @@ export function useCommunityFeed(
   const { user } = useCurrentUser();
   const { mutedPubkeys } = useMutedPubkeys();
   const moderation = useChatModeration(community, active);
+  const rulesFor = useChannelRules(community, channels, active);
   const communityIdHex = community?.idHex;
 
   // Recomputed only when the channel SET changes, so the query key doesn't churn.
@@ -91,6 +96,8 @@ export function useCommunityFeed(
 
   // Re-fold when the persisted quarantine memory warms or grows.
   const memoryRev = useSyncExternalStore(subscribeQuarantineMemory, quarantineMemoryRevision);
+  const floodPolicy = useFloodPolicy();
+  const foldSimilar = useContext(AppContext)?.config.foldSimilarMessages ?? true;
 
   // Kept outside the query so a mute/fold/roster change re-derives without re-scanning.
   const { messages, hasMore } = useMemo(() => {
@@ -105,9 +112,12 @@ export function useCommunityFeed(
     for (const [idHex, rows] of byChannel) {
       const folded = foldTimeline(rows, moderation, {
         ...(user?.pubkey !== undefined ? { self: user.pubkey } : {}),
+        policy: floodPolicy,
+        ...rulesFor(idHex),
       });
-      const dropped = new Set(folded.quarantined);
-      const remembered = communityIdHex ? recallQuarantined(communityIdHex, idHex) : undefined;
+      // With folding off, only a pause and the Roster still hide rows (as in the channel).
+      const dropped = new Set(foldSimilar ? folded.quarantined : [...folded.paused, ...folded.ruled]);
+      const remembered = foldSimilar && communityIdHex ? recallQuarantined(communityIdHex, idHex) : undefined;
       if (remembered) for (const id of remembered) dropped.add(id);
       for (const m of folded.messages) if (!dropped.has(m.rumorId)) merged.push(m);
 
@@ -133,7 +143,7 @@ export function useCommunityFeed(
       messages: list.map(openedToChatMsg),
       hasMore: completeSince > 0 && windowSize < MAX_WINDOW,
     };
-  }, [byChannel, moderation, user?.pubkey, mutedPubkeys, communityIdHex, windowSize, memoryRev]);
+  }, [byChannel, moderation, user?.pubkey, mutedPubkeys, communityIdHex, windowSize, memoryRev, floodPolicy, foldSimilar, rulesFor]);
 
   // Full re-scan rather than a per-channel delta patch: the fold needs each
   // channel's whole window, and this only runs while the pane is open.

@@ -1,10 +1,11 @@
+import { channelDisplayName } from "@/concord/lib/community";
 import { useNostr } from "@nostrify/react";
 import { useIsMutating, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
 
 import { useControlFold, citationFor, foldStoredControl, invalidateControl, publishEdition, readControlWhole, withControlWrite } from "@/concord/hooks/useControlPlane";
-import { useGuestbook, useGuestbookPublisher } from "@/concord/hooks/useGuestbook";
-import { useChannelRekey, useRefound } from "@/concord/hooks/useRekey";
+import { guestbookWalked, useGuestbook, useGuestbookPublisher } from "@/concord/hooks/useGuestbook";
+import { useChannelRekey, useRefound, type RefoundProgress } from "@/concord/hooks/useRekey";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { banChannelCuts } from "@/concord/lib/channelAccess";
 import { banShouldRotateMany, buildBanlistEdition, buildGrantEdition, hasForeignLiveLinks } from "@/concord/lib/control";
@@ -149,7 +150,7 @@ export function useModeration(community: Community | undefined, recipients: stri
   const cutChannels = async (cuts: ReturnType<typeof banChannelCuts>, targets: string[]) => {
     const leaked: string[] = [];
     for (const cut of cuts) {
-      const name = `#${folded?.channels.get(cut.channelIdHex)?.name ?? cut.channelIdHex.slice(0, 8)}`;
+      const name = `#${channelDisplayName(community, folded, cut.channelIdHex)}`;
       if (!cut.heldByMe || !canSeverChannel) {
         leaked.push(name);
         continue;
@@ -182,10 +183,12 @@ export function useModeration(community: Community | undefined, recipients: stri
       targets: string[];
       onPhase?: (phase: BanPhase) => void;
       onStripProgress?: (done: number, total: number) => void;
+      /** Where the rotating ban's Refounding is (the `rekey` phase's detail). */
+      onRekeyProgress?: (progress: RefoundProgress) => void;
       forceRotate?: boolean;
     }
   >({
-    mutationFn: async ({ targets, onPhase, onStripProgress, forceRotate }) => {
+    mutationFn: async ({ targets, onPhase, onStripProgress, onRekeyProgress, forceRotate }) => {
       if (!user || !community) throw new Error(t({ id: "useModeration.notReady", defaultMessage: "Not ready." }));
       const unique = [...new Set(targets)];
       const eligible = unique.filter((t) => canActOn(t, Permissions.BAN));
@@ -207,6 +210,9 @@ export function useModeration(community: Community | undefined, recipients: stri
           t({ id: "useModeration.banNeedsEncryption", defaultMessage: "Banning from a private community rotates the community keys, which your signer can't do. Ask an admin whose signer supports encryption to carry out the ban." }),
         );
       }
+      // The keep-list is whoever the Guestbook says is here: read before it's walked, it
+      // is thin, and the rotation would cut every member it misses (and persist them cut).
+      if (willRotate && !guestbookWalked(community)) throw new Error(memberListUnread());
 
       // Judged on the pre-strip roster: once the Grants land, nobody holds the role to cut.
       const joined = [...coalesced].filter(([, m]) => m.state === "join").map(([pk]) => pk);
@@ -248,7 +254,7 @@ export function useModeration(community: Community | undefined, recipients: stri
       const keep = recipients.filter((pk) => !excluded.has(pk));
       for (const t of eligible) await addReadCutPending(user.pubkey, community.idHex, t, keep);
       try {
-        await refound({ keep, exclude: eligible });
+        await refound({ keep, exclude: eligible, ...(onRekeyProgress ? { onProgress: onRekeyProgress } : {}) });
         clearReadCutPending(user.pubkey, community.idHex);
         return { rekeyed: true, publicBan: false, banned: eligible, skipped };
       } catch {
@@ -267,8 +273,8 @@ export function useModeration(community: Community | undefined, recipients: stri
    * the suspect key live; the caller warns), and no read-cut intent is persisted
    * (nothing is severed, so the staffer can just retry).
    */
-  const rotateKeys = useMutation<void, Error, void>({
-    mutationFn: async () => {
+  const rotateKeys = useMutation<void, Error, { onProgress?: (progress: RefoundProgress) => void } | void>({
+    mutationFn: async (opts) => {
       if (!user || !community) throw new Error(t({ id: "useModeration.notReady", defaultMessage: "Not ready." }));
       // An unsettled fold would rotate to a THIN recipient set and cut live members.
       if (!folded) throw new Error(t({ id: "useModeration.stillSyncing", defaultMessage: "Still syncing this community; try again shortly." }));
@@ -277,12 +283,13 @@ export function useModeration(community: Community | undefined, recipients: stri
       if (!isAuthorized(folded.roster, user.pubkey, folded.ownerHex, Permissions.BAN)) {
         throw new Error(t({ id: "useModeration.rotateNoPermission", defaultMessage: "You don't have permission to rotate this community's keys." }));
       }
+      if (!guestbookWalked(community)) throw new Error(memberListUnread());
       if (!canRefound) {
         throw new Error(
           t({ id: "useModeration.rotateNeedsEncryption", defaultMessage: "Rotating the community keys needs a signer that supports encryption, which yours doesn't. Ask an admin whose signer does." }),
         );
       }
-      await refound({ keep: recipients, exclude: [] });
+      await refound({ keep: recipients, exclude: [], ...(opts?.onProgress ? { onProgress: opts.onProgress } : {}) });
     },
     onSuccess: invalidate,
   });
@@ -360,7 +367,7 @@ export function useModeration(community: Community | undefined, recipients: stri
       banMany.mutateAsync({ targets: [input.target], onPhase: input.onPhase, forceRotate: input.forceRotate }),
     banMany: banMany.mutateAsync,
     isBanning: banMany.isPending,
-    rotateKeys: () => rotateKeys.mutateAsync(),
+    rotateKeys: (opts?: { onProgress?: (progress: RefoundProgress) => void }) => rotateKeys.mutateAsync(opts),
     isRotatingKeys: rotateKeys.isPending,
     /** Gate for the standalone rotation's UI; the mutation re-checks it. */
     canRotateKeys: Boolean(
@@ -379,6 +386,10 @@ export function useModeration(community: Community | undefined, recipients: stri
     canKick: (target: string) => canActOn(target, Permissions.KICK),
   };
 }
+
+/** A rotation's keep-list would be read off a Guestbook not yet read whole. */
+const memberListUnread = () =>
+  t({ id: "useModeration.memberListUnread", defaultMessage: "Still reading this community's member list, so rotating the keys now could cut members off. Try again in a moment." });
 
 /**
  * Retry an outstanding read-cut (a ban's Refounding lost to an outage) once per

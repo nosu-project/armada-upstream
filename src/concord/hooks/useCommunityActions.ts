@@ -1,13 +1,13 @@
 import { isRootKeyed } from "@/concord/lib/directInvite";
 import { useNostr } from "@nostrify/react";
-import { clockNowMs } from "@/lib/relayClock";
+import { clockNowMs, nowSecs } from "@/lib/relayClock";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { removeCommunityLocally, useCommunityEntry, useUpdateCommunityList } from "@/concord/hooks/useCommunityList";
 import { useControlFold, citationFor, foldStoredControl, invalidateControl, markDissolvedLocally, probeCommunityDissolved, publishEdition, withControlWrite } from "@/concord/hooks/useControlPlane";
 import type { FoldedControl } from "@/concord/lib/control";
-import { publishActivation } from "@/concord/hooks/useRankedRoles";
+import { publishActivation, publishPendingActivation } from "@/concord/hooks/useRankedRoles";
 import { useGuestbookPublisher } from "@/concord/hooks/useGuestbook";
 import { attemptGuestbookJoin, forgetGuestbookJoin, queueGuestbookJoin } from "@/concord/lib/pendingGuestbookJoin";
 import { useAppContext } from "@/hooks/useAppContext";
@@ -536,6 +536,7 @@ export function useCommunityActions() {
         try {
           const stored = await foldStoredControl(community);
           if (!stored.rankedRoster) await publishActivation(nostr, community, user, stored);
+          else await publishPendingActivation(nostr, community, user);
           ranked = true;
         } catch (e) {
           logSync("control", `${community.idHex.slice(0, 8)}: the new community's switch to ranked roles failed: ${e instanceof Error ? e.message : String(e)}`);
@@ -618,7 +619,7 @@ export function useCommunityActions() {
         }).catch(() => undefined);
       }
 
-      queueGuestbookJoin({ viewer: user.pubkey, communityIdHex: community.idHex, ms: Date.now() });
+      queueGuestbookJoin({ viewer: user.pubkey, communityIdHex: community.idHex, ms: clockNowMs() });
       void attemptGuestbookJoin(nostr, community, user.signer, user.pubkey);
 
       return { communityId: community.idHex, name: trimmed };
@@ -1063,7 +1064,7 @@ export function useCommunityManagement(community: Community | undefined) {
         if (!address) throw new Error(t({ id: "useCommunityActions.repositoryAddressInvalid", defaultMessage: "Repository address must be a canonical 30617 coordinate." }));
         metadata = withChannelGitRepositoryAttachments(
           metadata,
-          attachGitRepository([], address, repository.relayHints, Math.floor(Date.now() / 1000)),
+          attachGitRepository([], address, repository.relayHints, nowSecs()),
         );
       }
 
@@ -1531,7 +1532,7 @@ export function useCommunityManagement(community: Community | undefined) {
       const address = parseGitRepositoryAddress(rawAddress);
       if (!address) throw new Error(t({ id: "useCommunityActions.repositoryAddressInvalid", defaultMessage: "Repository address must be a canonical 30617 coordinate." }));
       const current = readableChannelMetadata(channelIdHex);
-      const createdAtSecs = Math.floor(Date.now() / 1000);
+      const createdAtSecs = nowSecs();
       // Preserve the original active interval (and its hints) on repeat requests.
       const attachments = channelGitRepositoryAttachments(current);
       if (attachments.some((attachment) => attachment.address.coordinate === address.coordinate && attachment.detachedAt === undefined)) return;
@@ -1553,7 +1554,7 @@ export function useCommunityManagement(community: Community | undefined) {
       const address = parseGitRepositoryAddress(rawAddress);
       if (!address) throw new Error(t({ id: "useCommunityActions.repositoryAddressInvalid", defaultMessage: "Repository address must be a canonical 30617 coordinate." }));
       readableChannelMetadata(channelIdHex);
-      const createdAtSecs = Math.floor(Date.now() / 1000);
+      const createdAtSecs = nowSecs();
       await writeChannel(
         channelIdHex,
         (meta) => withChannelGitRepositoryAttachments(meta, detachGitRepository(channelGitRepositoryAttachments(meta), address, createdAtSecs)),
