@@ -29,6 +29,8 @@ import { clearOutgoingVerifyMemory } from "@/concord/lib/outgoingVerify";
 import { clearPendingGuestbookJoinMemory } from "@/concord/lib/pendingGuestbookJoin";
 import { clearPendingJoins } from "@/concord/lib/pendingJoins";
 import { clearRumorStoreMemory } from "@/concord/lib/rumorStore";
+import { clearGuestbookExtrasMemory } from "@/concord/lib/guestbookExtras";
+import { clearGuestbookParseMemory } from "@/concord/lib/guestbook";
 import { clearCommunityListMemory } from "@/concord/hooks/useCommunityList";
 import { clearControlPlaneMemory } from "@/concord/hooks/useControlPlane";
 import { clearGuestbookSessionMemory } from "@/concord/hooks/useGuestbook";
@@ -213,6 +215,8 @@ export async function purgeClientStorage(): Promise<void> {
   clearRecentDecrypts();
   clearFoldedMemory();
   clearRumorStoreMemory();
+  clearGuestbookExtrasMemory();
+  clearGuestbookParseMemory();
   clearDeferredFoldMemory();
   clearIconThumbMemory();
   clearAudioMetadata();
@@ -251,6 +255,8 @@ export async function purgeClientStorage(): Promise<void> {
   clearRecentDecrypts();
   clearFoldedMemory();
   clearRumorStoreMemory();
+  clearGuestbookExtrasMemory();
+  clearGuestbookParseMemory();
   clearDeferredFoldMemory();
   clearIconThumbMemory();
   clearAudioMetadata();

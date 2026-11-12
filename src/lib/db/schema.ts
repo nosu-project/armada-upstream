@@ -5,7 +5,8 @@
  * {@link SchemaMigration} and bump {@link ARMADA_DB_VERSION} — don't make readers
  * cope with two shapes.
  */
-import { guestbookAddrKey, SNAPSHOT_PREFIX, snapshotKey } from "@/concord/lib/rumorStore";
+import { KIND_SEAL_PLAINTEXT } from "@/concord/lib/kinds";
+import { guestbookAddrKey, SEAL_PREFIX, SNAPSHOT_PREFIX, snapshotKey } from "@/concord/lib/rumorStore";
 
 import { getArmadaDB } from "./armadaDB";
 
@@ -18,8 +19,12 @@ import { getArmadaDB } from "./armadaDB";
  * 5 — likewise a Control snapshot entry (`c2snap:<community>:<address>:<rumor>`), not an id in `c2snap:<community>:<address>`.
  * 6 — the plane sweeps' wrap memos and Guestbook cursors start over: builds before
  *     the Guestbook took Timeouts and Nicknames (v0.69.0) memoized and read past them.
+ * 7 — a Guestbook relay's read state is `folded:plane-read:<scope>` (`planeRead.ts`);
+ *     the forward cursors written since v6 say nothing about how deep a read went.
+ * 8 — a chat message's seal is held for the session, not stored (`c2seal:` keeps only
+ *     plaintext control seals); the ones stored before grew without bound.
  */
-export const ARMADA_DB_VERSION = 6;
+export const ARMADA_DB_VERSION = 8;
 
 export const SCHEMA_VERSION_KEY = "db:version";
 
@@ -90,7 +95,42 @@ export const SCHEMA_MIGRATIONS: SchemaMigration[] = [
       }
     },
   },
+  {
+    to: 7,
+    label: "Guestbook read state",
+    needed: async () => (await getArmadaDB().kv.list({ prefix: GUESTBOOK_CURSOR_PREFIX }, { limit: 1 })).length > 0,
+    async run() {
+      // A cursor vouches for the newest page only, so none becomes a read state:
+      // each relay starts with a whole read.
+      const kv = getArmadaDB().kv;
+      for (const { key } of await kv.list({ prefix: GUESTBOOK_CURSOR_PREFIX })) await kv.delete(key);
+    },
+  },
+  {
+    to: 8,
+    label: "Chat seals",
+    needed: async () => (await getArmadaDB().kv.list({ prefix: SEAL_PREFIX }, { limit: 1 })).length > 0,
+    async run() {
+      // Paged: on Android every page crosses the bridge, and the oldest installs hold
+      // tens of thousands. A compaction still republishes the plaintext ones.
+      const kv = getArmadaDB().kv;
+      let start: string | undefined;
+      for (;;) {
+        const page = await kv.list<{ kind?: unknown } | undefined>(
+          start === undefined ? { prefix: SEAL_PREFIX } : { prefix: SEAL_PREFIX, start },
+          { limit: SEAL_PAGE },
+        );
+        await Promise.all(page.filter(({ value }) => value?.kind !== KIND_SEAL_PLAINTEXT).map(({ key }) => kv.delete(key)));
+        if (page.length < SEAL_PAGE) break;
+        start = `${page[page.length - 1].key}\u0000`;
+      }
+    },
+  },
 ];
+
+const SEAL_PAGE = 500;
+
+const GUESTBOOK_CURSOR_PREFIX = "folded:concord2-cursor:guestbook:";
 
 /** What v6 clears: the seen/junk wrap logs and their legacy values, the complete floors, and Guestbook cursors. */
 const SWEEP_MEMO_PREFIXES = [
@@ -99,7 +139,7 @@ const SWEEP_MEMO_PREFIXES = [
   "folded:plane-seen-wraps",
   "folded:plane-junk-wraps",
   "folded:plane-complete-floors",
-  "folded:concord2-cursor:guestbook:",
+  GUESTBOOK_CURSOR_PREFIX,
 ];
 
 /** The `c2snap:<community>:<address>` id arrays, which the per-entry keys sharing their prefix never are. */

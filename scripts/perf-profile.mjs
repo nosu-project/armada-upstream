@@ -125,7 +125,7 @@ const OUT = resolve(root, "perf-reports");
 /** Messages in the seeded community's #general. */
 const CONCORD_BIG = 3000;
 
-const LIVE = ["live-switch", "live-boot", "live-idle"];
+const LIVE = ["live-switch", "live-boot", "live-idle", "account-hop", "account-storage"];
 const wants = (name) => (ONLY.length === 0 && !LIVE.includes(name)) || ONLY.includes(name);
 
 // ─── Build + serve ──────────────────────────────────────────────────────────
@@ -892,6 +892,79 @@ async function scrollBack() {
 
 // ─── Scenarios ──────────────────────────────────────────────────────────────
 
+/** The real account in ARMADA_PERF_NSEC (never read from a file here), or undefined. */
+function accountFromEnv() {
+  const secret = process.env.ARMADA_PERF_NSEC ?? "";
+  if (!secret) return undefined;
+  const sk = secret.startsWith("nsec1") ? nip19.decode(secret).data : Uint8Array.from(Buffer.from(secret, "hex"));
+  return { sk, pubkey: getPublicKey(sk) };
+}
+
+/**
+ * Sign `who` in and let the account sync for --settle seconds. From the seed page,
+ * which doesn't run the app: a booting app saves its own empty login list over one
+ * written under it. Publishes are swallowed in the page like every scenario's.
+ */
+async function signInAndSettle(who) {
+  await page.goto("/e2e/screenshotSeed.html");
+  await login(who);
+  await page.goto("/");
+  await perfReady(page);
+  const settleSec = Number(opt("settle", "60"));
+  console.log(`  settling ${settleSec}s (first sync of the account)`);
+  await page.waitForTimeout(settleSec * 1000);
+  const stored = await page.evaluate(() => (localStorage.getItem("armada:login") ?? "").length).catch(() => -1);
+  if (stored <= 2) console.log(`  ⚠ not signed in after settling (at ${new URL(page.url()).pathname})`);
+}
+
+/** The ArmadaDB KV and localStorage, sized per key prefix (two segments under `folded:`). */
+function storageByPrefix() {
+  return page.evaluate(async () => {
+    const out = {};
+    const add = (where, key, bytes) => {
+      const parts = key.split(":");
+      const prefix = `${where} ${parts[0] === "folded" || parts[0] === "armada" ? parts.slice(0, 2).join(":") : parts[0]}`;
+      const row = (out[prefix] ??= { keys: 0, bytes: 0 });
+      row.keys++;
+      row.bytes += bytes;
+    };
+    const sizeOf = (v) => {
+      if (typeof v === "string") return v.length * 2;
+      if (v instanceof ArrayBuffer || ArrayBuffer.isView(v)) return v.byteLength;
+      try {
+        return JSON.stringify(v, (_k, x) => (typeof x === "bigint" ? x.toString() : x instanceof Map ? [...x] : x instanceof Set ? [...x] : x))?.length ?? 0;
+      } catch {
+        return 0;
+      }
+    };
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key) add("ls", key, (key.length + (localStorage.getItem(key)?.length ?? 0)) * 2);
+    }
+    const name = (await indexedDB.databases()).map((d) => d.name).find((n) => n?.endsWith(":kv"));
+    if (name) {
+      const db = await new Promise((ok, fail) => {
+        const req = indexedDB.open(name);
+        req.onsuccess = () => ok(req.result);
+        req.onerror = () => fail(req.error);
+      });
+      await new Promise((done) => {
+        const req = db.transaction("kv").objectStore("kv").openCursor();
+        req.onsuccess = () => {
+          const cursor = req.result;
+          if (!cursor) return done();
+          add("kv", String(cursor.key), String(cursor.key).length * 2 + sizeOf(cursor.value));
+          cursor.continue();
+        };
+        req.onerror = () => done();
+      });
+      db.close();
+    }
+    return out;
+  });
+}
+
+
 await waitForServer();
 const world = buildWorld();
 const big = world.peers[0];
@@ -908,6 +981,132 @@ try {
     await page.waitForTimeout(5000);
     const idle = await measureIdle(page, cdp, IDLE_SEC);
     save("landing", { idle, errors: errorsSince(mark), report: await report(page) });
+  }
+
+  if (wants("account-hop")) {
+    // A real account (ARMADA_PERF_NSEC, never read from a file here) hopping between two
+    // of its rail communities, named by --hop-names "A,B". Publishes are swallowed in the
+    // page like every scenario's, and the context is ephemeral.
+    const who = accountFromEnv();
+    const names = opt("hop-names", "").split(",").map((s) => s.trim()).filter(Boolean);
+    if (!who || names.length < 2) {
+      console.log("\n▶ account-hop skipped: set ARMADA_PERF_NSEC and pass --hop-names 'A,B'");
+    } else {
+      console.log(`\n▶ account-hop as ${nip19.npubEncode(who.pubkey).slice(0, 16)}… between ${names.join(" ↔ ")}`);
+      const mark = errors.length;
+      await signInAndSettle(who);
+      const railButton = (name) => page.locator(`[aria-label="${name.replace(/"/g, '\\"')}"]`).first();
+      /** Click a rail community; ms until its own timeline rows paint, and the long tasks meanwhile. */
+      const hop = (name) =>
+        page.evaluate((label) => new Promise((done) => {
+          const before = location.pathname;
+          const busy = [];
+          const obs = new PerformanceObserver((list) => { for (const e of list.getEntries()) busy.push(Math.round(e.duration)); });
+          obs.observe({ type: "longtask" });
+          const target = document.querySelector(`[aria-label="${CSS.escape(label)}"]`);
+          const start = performance.now();
+          target?.click();
+          let shown = -1;
+          const check = () => {
+            const now = performance.now();
+            const moved = location.pathname !== before;
+            if (shown < 0 && moved && document.querySelector("main [data-scroll-anchor]")) shown = Math.round(now - start);
+            if ((shown >= 0 && now - start > shown + 1500) || now - start > 20_000) {
+              obs.disconnect();
+              done({ to: label, path: location.pathname.slice(0, 12), shownMs: shown, busyMs: busy.reduce((a, b) => a + b, 0), longTasks: busy.length, maxTaskMs: Math.max(0, ...busy) });
+            } else requestAnimationFrame(check);
+          };
+          requestAnimationFrame(check);
+        }), name);
+      for (const name of names) {
+        if (!(await railButton(name).count())) {
+          console.log(`  ⚠ no rail item labelled "${name}" at ${new URL(page.url()).pathname} (perf-reports/account-hop-missing.png)`);
+          await page.screenshot({ path: resolve(OUT, "account-hop-missing.png") });
+        }
+      }
+      // One untimed round, so both are mounted once as a member would have them.
+      for (const name of names) {
+        await hop(name);
+        await page.waitForTimeout(3000);
+      }
+      await resetCounters(page);
+      await page.evaluate(() => window.__armadaPerf?.renders?.(true));
+      const a = await metrics(cdp);
+      const t = Date.now();
+      const rounds = Number(opt("rounds", "4"));
+      const hops = [];
+      const { hot } = await cpuProfile("account-hop", async () => {
+        for (let r = 0; r < rounds; r++) {
+          for (const name of names) {
+            const h = await hop(name);
+            hops.push(h);
+            if (h.shownMs < 0) await page.screenshot({ path: resolve(OUT, "account-hop-stuck.png") });
+            await page.waitForTimeout(2500);
+          }
+        }
+      });
+      const b = await metrics(cdp);
+      for (const h of hops) console.log(`  → ${h.to}: shown ${h.shownMs}ms, long tasks ${h.busyMs}ms (${h.longTasks}, max ${h.maxTaskMs})`);
+      save("account-hop", { hops, hot, cost: cost(a, b, (Date.now() - t) / 1000), errors: errorsSince(mark), report: await report(page) });
+      // Nothing of this account outlives the scenario on this origin.
+      await page.evaluate(() => localStorage.clear());
+    }
+  }
+
+  if (wants("account-storage")) {
+    // What a real account's settings and sync state (KV + localStorage) grows by while
+    // it reads: every channel of every rail community, then every DM.
+    const who = accountFromEnv();
+    if (!who) {
+      console.log("\n▶ account-storage skipped: set ARMADA_PERF_NSEC");
+    } else {
+      console.log(`\n▶ account-storage as ${nip19.npubEncode(who.pubkey).slice(0, 16)}…`);
+      const mark = errors.length;
+      await signInAndSettle(who);
+      await resetCounters(page);
+      const before = await storageByPrefix();
+      const dwell = Number(opt("dwell", "1500"));
+      const visited = { channels: 0, dms: 0 };
+      const communities = await page.evaluate(() =>
+        [...new Set([...document.querySelectorAll('a[href^="/c/"]')].map((a) => a.getAttribute("href")).filter((h) => /^\/c\/[^/]+$/.test(h)))]);
+      for (const path of communities) {
+        await softNavigate(page, path);
+        await page.waitForTimeout(dwell);
+        const channels = await page.evaluate(() => [...new Set([...document.querySelectorAll("[data-channel]")].map((b) => b.getAttribute("data-channel")))]);
+        for (const id of channels) {
+          await page.evaluate((c) => document.querySelector(`[data-channel="${c}"]`)?.click(), id);
+          await page.waitForTimeout(dwell);
+          visited.channels++;
+        }
+      }
+      await softNavigate(page, "/dm");
+      await page.waitForTimeout(dwell);
+      const dms = await page.evaluate(() => [...new Set([...document.querySelectorAll("[data-conversation]")].map((b) => b.getAttribute("data-conversation")))]);
+      for (const key of dms) {
+        await page.evaluate((c) => document.querySelector(`[data-conversation="${CSS.escape(c)}"]`)?.click(), key);
+        await page.waitForTimeout(dwell);
+        visited.dms++;
+      }
+      await page.waitForTimeout(5000);
+      const after = await storageByPrefix();
+      const rows = [...new Set([...Object.keys(before), ...Object.keys(after)])].map((prefix) => ({
+        prefix,
+        keys: after[prefix]?.keys ?? 0,
+        bytes: after[prefix]?.bytes ?? 0,
+        grewKeys: (after[prefix]?.keys ?? 0) - (before[prefix]?.keys ?? 0),
+        grewBytes: (after[prefix]?.bytes ?? 0) - (before[prefix]?.bytes ?? 0),
+      }));
+      const total = (o) => Object.values(o).reduce((n, r) => n + r.bytes, 0);
+      console.log(`  visited ${communities.length} communities, ${visited.channels} channels, ${visited.dms} DMs`);
+      console.log(`  settings and sync state: ${(total(before) / 1e6).toFixed(2)} MB → ${(total(after) / 1e6).toFixed(2)} MB`);
+      for (const r of [...rows].sort((x, y) => y.grewBytes - x.grewBytes).slice(0, 15)) {
+        console.log(`  ${(r.grewBytes / 1e3).toFixed(0).padStart(7)} KB (+${r.grewKeys} keys)  now ${(r.bytes / 1e3).toFixed(0)} KB in ${r.keys}  ${r.prefix}`);
+      }
+      const kvWrites = (await report(page)).boot.aggregates.filter((a) => a.label.startsWith("kv.set")).slice(0, 20)
+        .map((a) => `${a.count}× ${a.units ?? "?"} ${a.unitName ?? ""} ${a.label}`);
+      save("account-storage", { visited, communities: communities.length, before, after, rows, kvWrites, errors: errorsSince(mark) });
+      await page.evaluate(() => localStorage.clear());
+    }
   }
 
   // Seed through the production writers, on the app's own origin.
@@ -1246,7 +1445,7 @@ try {
   }
 
 
-  if (wants("concord-many")) {
+  if (wants("concord-many") || wants("concord-hop")) {
     // Many joined communities with real Guestbooks: how long a boot takes to paint
     // the open channel, and to subscribe every community's chat on the wire.
     const MANY = Number(opt("communities", "20"));
@@ -1364,6 +1563,60 @@ try {
     relayBody = JSON.stringify([...many.wraps, ...many.laterWraps]);
     const warm = await bootOnce("warm (reload)", LATER > 0 ? `(#c0-later-${LATER - 1})` : undefined);
     if (LATER > 0) warm.missedStored = await storedBeyond(200 + MISSED, LATER);
+    if (wants("concord-hop")) {
+      // Hopping between the joined communities, each already on disk: how long until the
+      // new community's #general shows its rows, and how long the main thread stays busy.
+      const HOPS = Number(opt("hops", "8"));
+      const ring = many.communities.slice(0, Math.min(4, many.communities.length));
+      console.log(`▶ concord-hop (${HOPS} hops over ${ring.length} communities)`);
+      await page.goto(`/c/${ring[0].communityId}/${ring[0].channelIds[0]}`);
+      await perfReady(page);
+      await page.waitForTimeout(10_000);
+      const hopMark = errors.length;
+      await resetCounters(page);
+      const a = await metrics(cdp);
+      const t = Date.now();
+      const hops = [];
+      const { hot } = await cpuProfile("concord-hop", async () => {
+        for (let i = 1; i <= HOPS; i++) {
+          const ci = i % ring.length;
+          const c = ring[ci];
+          const index = many.communities.indexOf(c);
+          hops.push(await page.evaluate(
+            ([path, needle]) =>
+              new Promise((done) => {
+                const busy = [];
+                const obs = new PerformanceObserver((list) => {
+                  for (const e of list.getEntries()) busy.push(Math.round(e.duration));
+                });
+                obs.observe({ type: "longtask" });
+                const start = performance.now();
+                history.pushState({}, "", path);
+                dispatchEvent(new PopStateEvent("popstate"));
+                let shown = -1;
+                let lastBusyEnd = start;
+                const check = () => {
+                  const now = performance.now();
+                  if (shown < 0 && document.querySelector("main")?.textContent?.includes(needle)) shown = Math.round(now - start);
+                  // Settled: the rows are up and no frame took longer than 50ms for a second.
+                  if (now - lastBusyEnd > 50) lastBusyEnd = now;
+                  if ((shown >= 0 && now - start > 1000 + shown) || now - start > 15_000) {
+                    obs.disconnect();
+                    done({ shownMs: shown, busyMs: busy.reduce((x, y) => x + y, 0), longTasks: busy.length, maxTaskMs: Math.max(0, ...busy) });
+                  } else requestAnimationFrame(check);
+                };
+                requestAnimationFrame(check);
+              }),
+            [`/c/${c.communityId}/${c.channelIds[0]}`, `(#c${index}-`],
+          ));
+          await page.waitForTimeout(2000);
+        }
+      });
+      const b = await metrics(cdp);
+      const shown = hops.map((h) => h.shownMs);
+      console.log(`  shown ms: ${shown.join(" ")}; long-task ms per hop: ${hops.map((h) => h.busyMs).join(" ")}`);
+      save("concord-hop", { hops, hot, cost: cost(a, b, (Date.now() - t) / 1000), errors: errorsSince(hopMark), report: await report(page) });
+    }
     const span = (ws) => (ws.length ? `${Math.min(...ws.map((w) => w.created_at))}..${Math.max(...ws.map((w) => w.created_at))}` : "none");
     const relaySpans = { later: span(many.laterWraps), planes: span(many.wraps.filter((w) => !many.communities.some((c) => c.chatPks.includes(w.pubkey)))) };
     save("concord-many", { communities: MANY, members: MEMBERS, windowSec: WINDOW_SEC, relaySpans, cold, warm });

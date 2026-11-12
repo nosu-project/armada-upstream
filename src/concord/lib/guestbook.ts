@@ -35,11 +35,15 @@ export function currentGuestbookGroup(community: Community): GroupKey {
 }
 
 /**
- * The npubs whose Refoundings minted the held epochs — snapshot authorities
- * (CORD-02 §5). Genesis and epochs with no recorded refounder contribute none:
- * accepting no snapshot is the safe miss (§5 heals by observation), whereas
- * falling back to the owner would let a non-minter seed members.
+ * Whose snapshot an epoch takes (CORD-02 §5, Vector `snapshot_authority_for`): the
+ * npub recorded as its minter when its rotation was adopted, else the owner, since
+ * a member who joined after the Refounding was never told who minted it. Nobody's
+ * at genesis.
  */
+function epochMinter(community: Community, epoch: bigint, refounder: string | undefined): string | undefined {
+  return epoch > 0n ? refounder ?? community.owner : undefined;
+}
+
 /**
  * Each held epoch's Guestbook address → the npub whose Refounding minted it, and
  * the live epoch's: a snapshot counts only from its own epoch's minter (CORD-02 §5).
@@ -47,21 +51,19 @@ export function currentGuestbookGroup(community: Community): GroupKey {
 export function snapshotEpochs(community: Community): { authorityOf: Map<string, string>; live: { pk: string; refounder?: string } } {
   const authorityOf = new Map<string, string>();
   for (const r of community.heldRoots) {
-    if (r.epoch > 0n && r.refounder) authorityOf.set(guestbookGroupKey(r.key, community.id, r.epoch).pk, r.refounder);
+    const minter = epochMinter(community, r.epoch, r.refounder);
+    if (minter) authorityOf.set(guestbookGroupKey(r.key, community.id, r.epoch).pk, minter);
   }
   const live = currentGuestbookGroup(community).pk;
-  const refounder = community.rootEpoch > 0n ? community.refounder : undefined;
+  const recorded = community.refounder ?? community.heldRoots.find((r) => r.epoch === community.rootEpoch)?.refounder;
+  const refounder = epochMinter(community, community.rootEpoch, recorded);
   if (refounder) authorityOf.set(live, refounder);
   return { authorityOf, live: { pk: live, ...(refounder ? { refounder } : {}) } };
 }
 
+/** Every {@link epochMinter} over the held epochs, for a snapshot whose own epoch isn't known. */
 export function snapshotAuthorities(community: Community): Set<string> {
-  const out = new Set<string>();
-  for (const r of community.heldRoots) {
-    if (r.epoch > 0n && r.refounder) out.add(r.refounder);
-  }
-  if (community.rootEpoch > 0n && community.refounder) out.add(community.refounder);
-  return out;
+  return new Set(snapshotEpochs(community).authorityOf.values());
 }
 
 /** A self-signed Join, optionally attributing the invite link used (CORD-05 §1). */
@@ -303,16 +305,31 @@ function snapTag(tags: string[][]): { id: string; i: number; n: number } | undef
   return { id: snaps[0][1].toLowerCase(), i, n };
 }
 
-/** A Snapshot's members, each a public key; malformed entries are dropped alone. */
-function snapshotMembers(content: string): string[] {
+/** A Snapshot's members, each a public key; malformed entries are dropped alone. Shared: callers only read it. */
+function snapshotMembers(content: string): readonly string[] {
+  const known = snapshotParsed.get(content);
+  if (known) return known;
   let members: unknown;
   try {
     members = JSON.parse(content);
   } catch {
-    return [];
+    members = undefined;
   }
-  if (!Array.isArray(members)) return [];
-  return members.filter((pk): pk is string => typeof pk === "string" && isPubkey(pk.toLowerCase())).map((pk) => pk.toLowerCase());
+  const out = Array.isArray(members)
+    ? members.filter((pk): pk is string => typeof pk === "string" && isPubkey(pk.toLowerCase())).map((pk) => pk.toLowerCase())
+    : [];
+  remember(snapshotParsed, content, out, SNAPSHOT_PARSED_CAP);
+  return out;
+}
+
+/** Parsed snapshot chunks by content; a few Refoundings' worth across the joined communities. */
+const SNAPSHOT_PARSED_CAP = 256;
+const snapshotParsed = new Map<string, readonly string[]>();
+
+/** Forget parsed snapshots and checked keys on logout: they are decrypted membership. */
+export function clearGuestbookParseMemory(): void {
+  snapshotParsed.clear();
+  pubkeyChecked.clear();
 }
 
 /** Every member's Guestbook entries in order of time (`ms`, then rumor id): what a departure window reads. */
@@ -567,12 +584,26 @@ const U64_DECIMAL = /^[0-9]+$/;
 /** A target that is a public key: 64 hex digits naming a point on the curve (Vector `PublicKey::from_hex`). */
 export function isPubkey(hex: string): boolean {
   if (!/^[0-9a-f]{64}$/.test(hex)) return false;
+  // A point decompression each: a Refounding snapshot names every member, and each fold reads it.
+  const known = pubkeyChecked.get(hex);
+  if (known !== undefined) return known;
+  let ok: boolean;
   try {
     schnorr.utils.lift_x(BigInt(`0x${hex}`));
-    return true;
+    ok = true;
   } catch {
-    return false;
+    ok = false;
   }
+  remember(pubkeyChecked, hex, ok, PUBKEY_CHECKED_CAP);
+  return ok;
+}
+
+const PUBKEY_CHECKED_CAP = 50_000;
+const pubkeyChecked = new Map<string, boolean>();
+
+function remember<K, V>(map: Map<K, V>, key: K, value: V, cap: number): void {
+  map.set(key, value);
+  if (map.size > cap) map.delete(map.keys().next().value as K);
 }
 
 /**
