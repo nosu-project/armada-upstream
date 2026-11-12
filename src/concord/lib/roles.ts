@@ -393,7 +393,7 @@ export interface Role {
   rank?: string;
   /** Any member may @mention it (CORD-03 §3, vsk 13). */
   mentionable?: boolean;
-  /** Unknown fields, round-tripped by an editor (CORD-02 §6, vsk 13). */
+  /** Unknown fields, round-tripped by an editor (CORD-02 §6). */
   extra?: Record<string, unknown>;
   permissions: bigint;
   scope: RoleScope;
@@ -459,6 +459,7 @@ export function roleToJSON(role: Role): string {
   const scope: RoleWire["scope"] =
     role.scope.kind === "channel" ? { kind: "channel", channel_id: role.scope.channelId } : { kind: "server" };
   const wire: RoleWire = {
+    ...(role.extra ?? {}),
     role_id: role.roleId,
     name: role.name,
     position: role.position,
@@ -494,6 +495,8 @@ export function roleFromJSON(json: string): Role | undefined {
   if (sc && typeof sc === "object" && sc.kind === "server") scope = { kind: "server" };
   else if (sc && typeof sc === "object" && sc.kind === "channel" && typeof sc.channel_id === "string") scope = { kind: "channel", channelId: sc.channel_id };
   else return undefined;
+  const extra: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(w)) if (!LEGACY_ROLE_FIELDS.has(k)) extra[k] = v;
   return {
     roleId: w.role_id.toLowerCase(),
     name: cutName(w.name),
@@ -502,8 +505,12 @@ export function roleFromJSON(json: string): Role | undefined {
     scope,
     color: Number(color),
     ...(w.display === true ? { display: true } : {}),
+    ...(Object.keys(extra).length > 0 ? { extra } : {}),
   };
 }
+
+/** The vsk-1 Role fields Armada reads; the rest round-trip through {@link Role.extra} (CORD-02 §6). */
+const LEGACY_ROLE_FIELDS: ReadonlySet<string> = new Set(["role_id", "name", "position", "permissions", "scope", "color", "display"]);
 
 /** Cut a name past 64 bytes to the last whole character within it (CORD-03 §2, CORD-04 §2). */
 export function cutName(name: string): string {
@@ -951,11 +958,52 @@ export function canActOnMember(
 
 export type StockTier = "admin" | "moderator";
 
+/** The stock Roles' names: what finds them, so never translated. */
+export const STOCK_TIER_NAMES: Record<StockTier, string> = { admin: "Admin", moderator: "Moderator" };
+
+export function isStockRole(role: Role): boolean {
+  return role.scope.kind === "server" && (role.name === STOCK_TIER_NAMES.admin || role.name === STOCK_TIER_NAMES.moderator);
+}
+
 /** The member's STOCK tier, by the stock role names (never permission-bit inference, unlike {@link badgeOf}). */
 export function stockTierOf(roles: CommunityRoles, memberHex: string): StockTier | undefined {
   const held = new Set(roles.grants.find((g) => g.member === memberHex)?.roleIds ?? []);
   const has = (name: string) => roles.roles.some((r) => r.name === name && r.scope.kind === "server" && held.has(r.roleId));
-  return has("Admin") ? "admin" : has("Moderator") ? "moderator" : undefined;
+  return has(STOCK_TIER_NAMES.admin) ? "admin" : has(STOCK_TIER_NAMES.moderator) ? "moderator" : undefined;
+}
+
+/** The highest-ranked Role standing for a stock tier, if one exists. */
+export function stockRoleOf(roles: CommunityRoles, tier: StockTier): Role | undefined {
+  return roles.roles.filter((r) => r.name === STOCK_TIER_NAMES[tier] && r.scope.kind === "server").sort(byDisplayOrder)[0];
+}
+
+/** Every bit a ranked Role can carry: a ranked Admin's, so it manages channel access too. */
+export const RANKED_ADMIN_ALL = PERMISSION_LABELS.reduce((acc, p) => acc | p.bit, 0n);
+
+/** A ranked Moderator: the stock moderation bits, plus keeping order in calls and timeouts. */
+export const RANKED_MODERATOR_ALL =
+  MODERATOR_ALL | Permissions.MUTE_MEMBERS | Permissions.DEAFEN_MEMBERS | Permissions.MOVE_MEMBERS | Permissions.MODERATE_MEMBERS;
+
+/** The fields a stock tier's Role is minted with on the vsk-13 Roster; holders listed apart. */
+export function rankedTierTemplate(tier: StockTier): { name: string; color: number; permissions: bigint; display: boolean; mentionable: boolean } {
+  return {
+    name: STOCK_TIER_NAMES[tier],
+    color: 0,
+    permissions: tier === "admin" ? RANKED_ADMIN_ALL : RANKED_MODERATOR_ALL,
+    display: true,
+    mentionable: false,
+  };
+}
+
+/**
+ * The position a stock tier's Role is minted at on the vsk-13 Roster: just beneath
+ * the actor's own top Role (the very top for the owner), and a Moderator beneath
+ * any Admin as well, so Admins outrank it.
+ */
+export function stockTierPosition(roles: CommunityRoles, actorHex: string, ownerHex: string | undefined, tier: StockTier): number {
+  const own = actorHex === ownerHex ? 0 : highestPosition(roles, actorHex) ?? BENEATH_EVERY_ROLE;
+  const admin = tier === "moderator" ? stockRoleOf(roles, "admin") : undefined;
+  return Math.max(own, admin?.position ?? 0) + 1;
 }
 
 /**
@@ -968,14 +1016,36 @@ export function tierMoves(
   ownerHex: string | undefined,
   memberHex: string,
 ): Array<StockTier | null> {
-  // On the vsk-13 Roster the stock tiers are vsk-1 Roles, which stand for nothing (CORD-04 §2).
-  if (onRankedRoles(roles)) return [];
+  if (onRankedRoles(roles)) return rankedTierMoves(roles, actorHex, ownerHex, memberHex);
   if (!canActOnMember(roles, actorHex, ownerHex, memberHex, Permissions.MANAGE_ROLES)) return [];
   const current = stockTierOf(roles, memberHex);
   const may = (position: number) => canActOnPosition(roles, actorHex, ownerHex, position, Permissions.MANAGE_ROLES);
   const out: Array<StockTier | null> = [];
   if (current !== "admin" && may(adminRole("").position)) out.push("admin");
   if (current !== "moderator" && may(moderatorRole("").position)) out.push("moderator");
+  if (current) out.push(null);
+  return out;
+}
+
+/**
+ * {@link tierMoves} on the vsk-13 Roster, judged as `planStockTier` judges them:
+ * Manage Roles held from Roles strictly above the member and the tier's Role, and
+ * to mint that Role, every bit of its template too (CORD-04 §3).
+ */
+function rankedTierMoves(roles: CommunityRoles, actorHex: string, ownerHex: string | undefined, memberHex: string): Array<StockTier | null> {
+  if (memberHex === ownerHex || memberHex === actorHex) return [];
+  const isOwner = actorHex === ownerHex;
+  const reaches = (position: number, bits = 0n) => isOwner || permsContain(permissionsAbove(roles, actorHex, position), Permissions.MANAGE_ROLES | bits);
+  if (!reaches(highestPosition(roles, memberHex) ?? BENEATH_EVERY_ROLE)) return [];
+  const may = (tier: StockTier) => {
+    const existing = stockRoleOf(roles, tier);
+    if (existing) return reaches(existing.position);
+    return roles.roles.length < MAX_ROLES_PER_COMMUNITY && reaches(stockTierPosition(roles, actorHex, ownerHex, tier), rankedTierTemplate(tier).permissions);
+  };
+  const current = stockTierOf(roles, memberHex);
+  const out: Array<StockTier | null> = [];
+  if (current !== "admin" && may("admin")) out.push("admin");
+  if (current !== "moderator" && may("moderator")) out.push("moderator");
   if (current) out.push(null);
   return out;
 }

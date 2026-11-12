@@ -15,6 +15,7 @@ import { bytesToHex, random32 } from "@/concord/lib/derive";
 import { isRankKey } from "@/concord/lib/rankKey";
 import { arrangedBefore, dropChanges, planChannelDrop } from "@/concord/lib/channelArrangement";
 import { Permissions } from "@/concord/lib/roles";
+import { overwriteLocator, overwriteToJSON } from "@/concord/lib/roster";
 import type { Community, PrivateChannelKey } from "@/concord/lib/types";
 import type { NostrRumor } from "@/lib/nostrRumor";
 import { encrypt as nip44Encrypt, getConversationKey } from "nostr-tools/nip44";
@@ -464,6 +465,71 @@ describe("reducing a member's authority (CORD-04 §6, §9)", () => {
     const { result } = renderHook(() => useRoles(community), { wrapper });
     await attempt(() => result.current.setTier({ member: hexKey(), tier: "moderator" }));
     expect(env.published.filter((r) => vskOf(r) === "1")).toEqual([]);
+  });
+
+  it("the owner's first Make admin mints a ranked Admin at the top, then grants it", async () => {
+    const { c, community } = withModerator();
+    env.user = { pubkey: c.owner, signer: {} };
+    const member = hexKey();
+    const { result } = renderHook(() => useRoles(community), { wrapper });
+    await act(async () => {
+      await result.current.setTier({ member, tier: "admin" });
+    });
+    expect(env.published.map(vskOf)).toEqual(["13", "3"]);
+    const role = JSON.parse(env.published[0].content);
+    expect(role.name).toBe("Admin");
+    expect(role.display).toBe(true);
+    // Above the existing "a" and "m" ranks: it outranks every Role there was.
+    expect(role.rank < "a").toBe(true);
+    expect(JSON.parse(env.published[1].content)).toMatchObject({ member, role_ids: [role.role_id] });
+  });
+});
+
+describe("filing a Channel into a Category (CORD-04 §8)", () => {
+  it("syncs a public Channel with no rules of its own to the Category it's filed into", async () => {
+    const { community, publicId, cat } = setup();
+    const { result } = renderHook(() => useCommunityManagement(community), { wrapper });
+    await act(async () => {
+      await result.current.setChannelCategory({ channelIdHex: publicId, category: cat });
+    });
+    expect(env.published.map(vskOf)).toEqual(["2", "17"]);
+    expect(JSON.parse(env.published[1].content)).toEqual({ channel: publicId, sync: cat });
+  });
+
+  it("leaves a Channel with rules of its own on them", async () => {
+    const { c, base, community, publicId, cat } = setup();
+    const rule = { scope: publicId, target: { kind: "everyone" as const }, allow: 0n, deny: Permissions.ATTACH_FILES };
+    const ow = c.edition({ vsk: "14", eid: overwriteLocator(c.id, rule), author: c.owner, content: overwriteToJSON(rule) });
+    const heads = [...env.folded!.headEditions.values()].filter((e) => e.vsk === "2" || e.vsk === "15");
+    env.folded = foldControlState([...base, ...heads, ow], c.id, c.owner);
+    expect(env.folded.roster.overwrites?.some((o) => o.scope === publicId)).toBe(true);
+    const { result } = renderHook(() => useCommunityManagement(community), { wrapper });
+    await act(async () => {
+      await result.current.setChannelCategory({ channelIdHex: publicId, category: cat });
+    });
+    expect(env.published.map(vskOf)).toEqual(["2"]);
+  });
+});
+
+describe("syncing a Category's Channels at once (CORD-04 §8)", () => {
+  it("publishes one sync edition per Channel, the sealed one included", async () => {
+    const { community, sealedId, publicId, cat } = setup();
+    const { result } = renderHook(() => useRankedRoles(community), { wrapper });
+    await act(async () => {
+      await result.current.syncChannels({ channelIds: [publicId, sealedId], category: cat });
+    });
+    expect(env.published.map(vskOf)).toEqual(["17", "17"]);
+    expect(env.published.map((r) => JSON.parse(r.content))).toEqual([
+      { channel: publicId, sync: cat },
+      { channel: sealedId, sync: cat },
+    ]);
+  });
+
+  it("publishes nothing when one Channel can't be synced", async () => {
+    const { community, publicId, cat } = setup();
+    const { result } = renderHook(() => useRankedRoles(community), { wrapper });
+    await attempt(() => result.current.syncChannels({ channelIds: [publicId, hexKey()], category: cat }));
+    expect(env.published).toEqual([]);
   });
 });
 
