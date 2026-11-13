@@ -105,6 +105,12 @@ describe("ChatContent link canonicalization", () => {
     expect(hrefs(container)).toEqual(["https://youtu.be/dQw4w9WgXcQ?si=aBcDeFgH"]);
   });
 
+  it("ends a quoted URL at its closing quote", () => {
+    const { container } = renderContent('he said "https://example.com/post" twice');
+    expect(hrefs(container)).toEqual(["https://example.com/post"]);
+    expect(container.textContent).toContain('/post" twice');
+  });
+
   it("keeps the surrounding text and the sentence's punctuation", () => {
     const { container } = renderContent("watch https://youtu.be/abc12345678?si=xy, then reply");
     expect(container.textContent).toContain("watch ");
@@ -185,5 +191,29 @@ describe("ChatContent nsite links", () => {
     const { container } = renderContent("see github.com/x/y and package.json/scripts and nyan.cat/a too");
     expect(hrefs(container)).toEqual(["https://github.com/x/y", "https://nyan.cat/a"]);
     expect(container.textContent).toContain("package.json/scripts");
+  });
+});
+
+describe("ChatContent payment links", () => {
+  const BITCOIN = "bitcoin:1111111111111111111114oLvT2";
+  const LIGHTNING = "lightning:stl1988@blink.sv";
+
+  it("links bitcoin: and lightning: addresses as top-frame navigations, leaving trailing punctuation as text", () => {
+    const { container } = renderContent(`Bitcoin\n${BITCOIN}\n\nLightning\n${LIGHTNING}.`);
+    expect(hrefs(container)).toEqual([BITCOIN, LIGHTNING]);
+    for (const link of container.querySelectorAll("a")) expect(link.hasAttribute("target")).toBe(false);
+    expect(container.textContent).toContain(`${LIGHTNING}.`);
+  });
+
+  it("links a BIP-21 URI with parameters", () => {
+    const withAmount = "bitcoin:bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq?amount=0.001&label=Tip";
+    const { container } = renderContent(`pay ${withAmount} please`);
+    expect(hrefs(container)).toEqual([withAmount]);
+  });
+
+  it("leaves a malformed address and a bare email address as text", () => {
+    const { container } = renderContent("bitcoin:nope and lightning:nope and me@example.com");
+    expect(hrefs(container)).toEqual([]);
+    expect(container.textContent).toBe("bitcoin:nope and lightning:nope and me@example.com");
   });
 });

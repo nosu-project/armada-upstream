@@ -56,6 +56,7 @@ import { normalizeRelayUrl, relayToRouteParam } from "@/lib/platform";
 import { displayHost, isMagnetUri, sanitizeUrl } from "@/lib/sanitizeUrl";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { isNsiteUrl } from "@/lib/nsiteUrl";
+import { isPaymentUri } from "@/lib/paymentTargets";
 import { parseSelfLink } from "@/lib/selfLink";
 import { stripTrackingParams } from "@/lib/trackingParams";
 import { WEBXDC_MIME, isWebxdcMime } from "@/lib/webxdcMime";
@@ -187,6 +188,8 @@ export type ContentToken =
   | { type: "magnet-link"; url: string }
   /** An `nsite://` URL, handed to the OS's nsite handler (Din, Tenna) on click. */
   | { type: "nsite-link"; url: string }
+  /** A `bitcoin:` or `lightning:` address, handed to the OS's wallet app on click. */
+  | { type: "payment-link"; url: string }
   /** An own-origin chat link alone on its line — the in-app preview card. */
   | { type: "self-chat-embed"; url: string; route: ChatRoute; path: string }
   /** An own-origin chat link mid-sentence — an internal router link. */
@@ -261,6 +264,7 @@ function isSpannable(token: ContentToken): boolean {
     case "inline-link":
     case "magnet-link":
     case "nsite-link":
+    case "payment-link":
     case "self-link":
     case "md-link":
       return true;
@@ -467,8 +471,8 @@ function usableMime(m: string | undefined): string | undefined {
 
 /**
  * The body tokenizer's alternation: markdown image | BOLT11 | URL |
- * `nostr:` NIP-19 | bare/`@` NIP-19 | hashtag | Cashu | magnet | nsite. Compiled once; shared
- * `lastIndex` is reset by {@link tokenizeSegment} (synchronous, non-reentrant).
+ * `nostr:` NIP-19 | bare/`@` NIP-19 | hashtag | Cashu | magnet | nsite | payment URI.
+ * Compiled once; shared `lastIndex` is reset by {@link tokenizeSegment} (synchronous, non-reentrant).
  */
 const SEGMENT_RE = new RegExp(
   // Markdown image `![alt](url)` first, so its wrapper is consumed.
@@ -479,15 +483,17 @@ const SEGMENT_RE = new RegExp(
   // Repetitions are BOUNDED (DNS limits) to keep the scan linear: unbounded
   // is O(n²) on attacker-controlled content.
   // `<`, `>` and `|` are never literal in a URL (RFC 3986), so `<https://…>`
-  // ends at the `>` and `||https://…||` at the spoiler's closing bars.
-  "|((?:(?:https?|wss?):\\/\\/|(?:[\\w-]{1,63}\\.){1,10}[a-z]{2,24}\\/)[^\\s<>|]+)" +
+  // ends at the `>` and `||https://…||` at the spoiler's closing bars; nor is
+  // `"`, so a quoted URL ends at its closing quote.
+  "|((?:(?:https?|wss?):\\/\\/|(?:[\\w-]{1,63}\\.){1,10}[a-z]{2,24}\\/)[^\\s<>|\"]+)" +
   "|nostr:(npub1|note1|nprofile1|nevent1|naddr1)([023456789acdefghjklmnpqrstuvwxyz]+)" +
   "|@?(npub1|note1|nprofile1|nevent1|naddr1)([023456789acdefghjklmnpqrstuvwxyz]+)" +
   `|(${HASHTAG_PATTERN})` +
   // New alternatives go last so the group numbers above are untouched.
   `|(${CASHU_TOKEN_PATTERN})` +
   "|(magnet:\\?[^\\s<>|]+)" +
-  "|(nsite:\\/\\/[^\\s<>|]+)",
+  "|(nsite:\\/\\/[^\\s<>|]+)" +
+  "|((?:bitcoin|lightning):[^\\s<>|\"]+)",
   "giu",
 );
 
@@ -559,6 +565,7 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
         const cashu = match[9];
         const magnet = match[10];
         const nsite = match[11];
+        const payment = match[12];
         const { 4: nostrPrefix, 5: nostrData, 6: barePrefix, 7: bareData } = match;
         const index = match.index;
 
@@ -576,6 +583,11 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
         } else if (nsite) {
           const trimmed = nsite.replace(/[.,;:!?)\]"']+$/, "");
           out.push(isNsiteUrl(trimmed) ? { type: "nsite-link", url: trimmed } : { type: "text", value: trimmed });
+          lastIndex = index + trimmed.length;
+          continue;
+        } else if (payment) {
+          const trimmed = payment.replace(/[.,;:!?)\]"']+$/, "");
+          out.push(isPaymentUri(trimmed) ? { type: "payment-link", url: trimmed } : { type: "text", value: trimmed });
           lastIndex = index + trimmed.length;
           continue;
         } else if (cashu) {
@@ -1390,6 +1402,7 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
         return inlineLink(key, token.url);
       case "magnet-link":
       case "nsite-link":
+      case "payment-link":
         return (
           <a
             key={key}
