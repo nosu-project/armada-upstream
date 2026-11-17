@@ -6,7 +6,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 import { citationFor, foldStoredControl, invalidateControl, publishEdition, readControlWhole, useControlFold, withControlWrite } from "@/concord/hooks/useControlPlane";
 import { controlWrapOwed } from "@/concord/hooks/useRoles";
-import { settledWrite } from "@/concord/hooks/rosterSettle";
+import { settledWrite, type SettleFollow } from "@/concord/hooks/rosterSettle";
 import { buildGrantEdition, type FoldedControl } from "@/concord/lib/control";
 import { bytesToHex, grantLocator, hex32 } from "@/concord/lib/derive";
 import {
@@ -140,10 +140,10 @@ export function useRankedRoles(community: Community | undefined) {
   const progress: WriteProgressSink = { planned: notePlanned, published: notePublished };
 
   /** One write at a time per community (Vector `follow_lock`), settled with the Channel keys it moves. */
-  const write = <T,>(run: () => Promise<T>): Promise<T> => {
+  const write = <T,>(run: () => Promise<T>, follow?: SettleFollow): Promise<T> => {
     setPublished(0);
     setPlanned(0);
-    return community ? settledWrite(community, () => withControlWrite(community.idHex, run)) : run();
+    return community ? settledWrite(community, () => withControlWrite(community.idHex, run), follow) : run();
   };
 
   const publish = async (c: Community, rumors: NostrRumor[]) => {
@@ -305,6 +305,32 @@ export function useRankedRoles(community: Community | undefined) {
     onSuccess: done,
   });
 
+  /** A scope's sync and overwrites in one write: planned whole first, so a refusal publishes none, and keys settle once. */
+  const applyRules = useMutation<
+    void,
+    Error,
+    {
+      scope: string;
+      sync?: { category: string | undefined };
+      overwrites: Array<{ target: OverwriteTarget; allow: bigint; deny: bigint }>;
+      /** Whoever is showing the key settle as it runs; without one it reports as toasts. */
+      follow?: SettleFollow;
+    }
+  >({
+    mutationFn: ({ scope, sync, overwrites, follow }) => write(async () => {
+      const { user, community } = ready();
+      const { folded } = await read(community, false);
+      const authority = citationFor(community, folded, user.pubkey);
+      const held = heldKeys(community);
+      const rumors = [
+        ...(sync ? [planSync(folded, community.id, user.pubkey, held, scope, sync.category, authority)] : []),
+        ...overwrites.map((o) => planOverwrite(folded, community.id, user.pubkey, held, scope, o.target, o.allow, o.deny, authority)),
+      ];
+      await publish(community, rumors);
+    }, follow),
+    onSuccess: done,
+  });
+
   const createCategory = useMutation<string, Error, { name: string }>({
     mutationFn: ({ name }) => write(async () => {
       const { user, community } = ready();
@@ -372,6 +398,7 @@ export function useRankedRoles(community: Community | undefined) {
     setOverwrite: setOverwrite.mutateAsync,
     setSync: setSync.mutateAsync,
     syncChannels: syncChannels.mutateAsync,
+    applyRules: applyRules.mutateAsync,
     createCategory: createCategory.mutateAsync,
     renameCategory: renameCategory.mutateAsync,
     moveCategory: moveCategory.mutateAsync,
@@ -384,7 +411,7 @@ export function useRankedRoles(community: Community | undefined) {
     published,
     planned,
     isSaving:
-      createRole.isPending || editRole.isPending || moveRole.isPending || reorderRoles.isPending || deleteRole.isPending || setEveryone.isPending || setOverwrite.isPending || setSync.isPending || syncChannels.isPending ||
+      createRole.isPending || editRole.isPending || moveRole.isPending || reorderRoles.isPending || deleteRole.isPending || setEveryone.isPending || setOverwrite.isPending || setSync.isPending || syncChannels.isPending || applyRules.isPending ||
       createCategory.isPending || renameCategory.isPending || moveCategory.isPending || deleteCategory.isPending,
   };
 }

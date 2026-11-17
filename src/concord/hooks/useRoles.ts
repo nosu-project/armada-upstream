@@ -3,7 +3,8 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
 
 import { useControlFold, citationFor, foldStoredControl, invalidateControl, publishEdition, readControlWhole, withControlWrite } from "@/concord/hooks/useControlPlane";
-import { settledWrite } from "@/concord/hooks/rosterSettle";
+import { settledWrite, type SettleFollow } from "@/concord/hooks/rosterSettle";
+import type { WriteProgressSink } from "@/concord/hooks/useRankedRoles";
 import type { FoldedControl } from "@/concord/lib/control";
 import { useUpdateCommunityList } from "@/concord/hooks/useCommunityList";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
@@ -133,10 +134,10 @@ export function useRoles(community: Community | undefined) {
    * write, and settled with the Channel keys it moves (`settledWrite`) unless the caller
    * settles a batch of writes itself.
    */
-  const write = <T,>(run: (folded: FoldedControl | undefined) => Promise<T>, unsettled?: boolean): Promise<T> => {
+  const write = <T,>(run: (folded: FoldedControl | undefined) => Promise<T>, unsettled?: boolean, follow?: SettleFollow): Promise<T> => {
     if (!community) return run(rendered);
     const once = () => withControlWrite(community.idHex, async () => run(await foldStoredControl(community).catch(() => rendered)));
-    return unsettled ? once() : settledWrite(community, once);
+    return unsettled ? once() : settledWrite(community, once, follow);
   };
 
   const saveRole = useMutation<string, Error, { role: Role; unsettled?: boolean }>({
@@ -161,14 +162,16 @@ export function useRoles(community: Community | undefined) {
     onSuccess: invalidate,
   });
 
-  const setMemberRoles = useMutation<void, Error, { member: string; roleIds: string[]; unsettled?: boolean }>({
-    mutationFn: ({ member, roleIds: asked, unsettled }) => write(async (folded) => {
+  const setMemberRoles = useMutation<void, Error, { member: string; roleIds: string[]; unsettled?: boolean; follow?: SettleFollow; progress?: WriteProgressSink }>({
+    mutationFn: ({ member, roleIds: asked, unsettled, follow, progress }) => write(async (folded) => {
       let roleIds = asked;
       if (!user || !community) throw new Error(t({ id: "useRoles.notReady", defaultMessage: "Not ready." }));
       // The fold's gate (CORD-04 §2/§3), checked before publishing so a doomed grant
       // fails with a reason instead of being silently dropped.
       if (!folded) throw new Error(t({ id: "useRoles.notReady", defaultMessage: "Not ready." }));
       roleIds = planMemberRoles(folded, community.id, user.pubkey, member, roleIds);
+      // Counted with its Tenure when it writes one, so the total is whole before the first signature.
+      let counted = false;
       // A Grant that drops a Role writes the member's Tenure first, or waits (CORD-04 §9).
       const current = folded?.roster.grants.find((g) => g.member === member)?.roleIds ?? [];
       if (folded?.rankedRoster && current.some((id) => !roleIds.includes(id))) {
@@ -177,8 +180,14 @@ export function useRoles(community: Community | undefined) {
         if (!whole) throw new Error(tenureRefusal());
         const plan = planTenure(whole.folded, community.id, user.pubkey, member, false, citationFor(community, whole.folded, user.pubkey), whole.served);
         if (plan.kind === "refuse") throw new Error(tenureRefusal());
-        if (plan.kind === "write") await publishEdition(nostr, community, user.signer, plan.rumor);
+        if (plan.kind === "write") {
+          progress?.planned(2);
+          counted = true;
+          await publishEdition(nostr, community, user.signer, plan.rumor);
+          progress?.published();
+        }
       }
+      if (!counted) progress?.planned(1);
       const head = folded.heads.get(bytesToHex(grantLocator(community.id, hex32(member))));
       // A staff-making grant carries the staff write key itself (CORD-04 §3).
       const controlWrap = await controlWrapOwed(
@@ -199,7 +208,8 @@ export function useRoles(community: Community | undefined) {
           authority: citationFor(community, folded, user.pubkey),
         }),
       );
-    }, unsettled),
+      progress?.published();
+    }, unsettled, follow),
     onSuccess: invalidate,
   });
 

@@ -1,6 +1,6 @@
 import { observedAuthors } from "@/concord/lib/observedAuthors";
 import { useCommunityRumors } from "@/concord/hooks/useCommunityRumors";
-import { AtSign, Ban, CalendarClock, CheckCheck, ChevronDown, Bell, BellOff, Crown, Folder, FolderGit2, GripVertical, Hash, Headphones, KeyRound, Loader2, Lock, LogOut, Megaphone, Gem, MessageSquareText, MessagesSquare, Pause, Phone, Pin, Play, Plus, RefreshCw, Rss, Search, Settings, Shield, ShieldAlert, ShieldOff, Tag, Timer, Trash2, UserMinus, UserPlus, X, type LucideIcon } from "lucide-react";
+import { AtSign, Ban, CalendarClock, CheckCheck, ChevronDown, Bell, BellOff, Crown, Folder, FolderGit2, GripVertical, Hash, Headphones, KeyRound, Loader2, Lock, LogOut, Megaphone, Gem, MessageSquareText, MessagesSquare, Pause, Pencil, Phone, Pin, Play, Plus, RefreshCw, Rss, Search, Settings, Shield, ShieldAlert, ShieldOff, Tag, Timer, Trash2, UserMinus, UserPlus, X, type LucideIcon } from "lucide-react";
 import { lazy, memo, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, useLocation, useNavigationType, useSearchParams } from "react-router-dom";
 
@@ -38,7 +38,8 @@ import {
   type PendingArrangement,
 } from "@/concord/lib/channelArrangement";
 import { useChannelDrag, type ChannelDrop, type ChannelDropSlot } from "@/concord/hooks/useChannelDrag";
-import { DateSeparator, isSameDay, MessageTimeline } from "@/components/chat/MessageTimeline";
+import { isSameDay } from "@/components/chat/dayLabel";
+import { DateSeparator, MessageTimeline } from "@/components/chat/MessageTimeline";
 import { ThreadPanelSlot } from "@/components/chat/ThreadPanelSlot";
 import { useThreadPanel } from "@/hooks/useThreadPanel";
 import { useTimelineFocus } from "@/hooks/useTimelineFocus";
@@ -103,6 +104,7 @@ import {
   ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
+import { MenuSheetTile } from "@/components/ui/menu-sheet";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -190,6 +192,7 @@ import { withKeySettle } from "@/concord/lib/keySettle";
 import { bytesToHex } from "@/concord/lib/derive";
 import { useRelayFollow } from "@/concord/hooks/useRelayFollow";
 import { useMemberPanelScope } from "@/concord/hooks/useMemberPanelScope";
+import { useGrantReview } from "@/concord/components/accessReview/useGrantReview";
 import { useRoleIntent } from "@/concord/hooks/useRoleIntent";
 import { useRoles, useStaffKeyWatch } from "@/concord/hooks/useRoles";
 import { useSendMessage } from "@/concord/hooks/useChannel";
@@ -510,6 +513,7 @@ export const ChannelRow = memo(function ChannelRow({
   onSetCategory,
   onNewCategory,
   onMove,
+  onEdit,
   onPermissions,
   voiceOnlyCalls,
 }: {
@@ -535,7 +539,9 @@ export const ChannelRow = memo(function ChannelRow({
   onNewCategory?: (channel: Channel) => void;
   /** Touch reordering: arms the row so the next drag on it moves it. */
   onMove?: (channelIdHex: string) => void;
-  /** The vsk-13 permissions dialog (CORD-04 §8); undefined without MANAGE_ROLES. */
+  /** Opens the Channel editor; undefined without MANAGE_CHANNELS. */
+  onEdit?: (channel: Channel) => void;
+  /** The editor on its permissions (CORD-04 §8); undefined without MANAGE_ROLES on the vsk-13 Roster. */
   onPermissions?: (channel: Channel) => void;
   /** On ranked roles a row offers a call only for one running in a text Channel; a voice Channel joins on click. */
   voiceOnlyCalls?: boolean;
@@ -731,7 +737,18 @@ export const ChannelRow = memo(function ChannelRow({
           )}
         </div>
       </ContextMenuTrigger>
-      <ContextMenuContent className="w-52">
+      <ContextMenuContent
+        className="w-52"
+        sheetIdentity={{
+          lead: (
+            <MenuSheetTile>
+              <ChannelGlyph isPrivate={channel.isPrivate} view={channel.view} className="size-5" />
+            </MenuSheetTile>
+          ),
+          title: channel.name,
+          sub: channel.category,
+        }}
+      >
         {onMove && (
           <ContextMenuItem onSelect={() => onMove(channel.idHex)}>
             <GripVertical className="mr-2 size-4" />
@@ -746,6 +763,12 @@ export const ChannelRow = memo(function ChannelRow({
               setNotifLevel(concordChannelScopeKey("c2", community.idHex, channel.idHex), lvl)
             }
           />
+        )}
+        {onEdit && (
+          <ContextMenuItem onSelect={() => onEdit(channel)}>
+            <Pencil className="mr-2 size-4" />
+            <FormattedMessage id="concordPage.channelRow.edit" defaultMessage="Edit channel" />
+          </ContextMenuItem>
         )}
         {onPermissions && (
           <ContextMenuItem onSelect={() => onPermissions(channel)}>
@@ -1869,9 +1892,8 @@ function ConcordCommunityPage() {
     return () => document.removeEventListener("visibilitychange", stamp);
   }, [readerPubkey, channelIdForRead, mixedEntries, allMessages, threads, markChannelRead, markMentionsRead, markThreadRead, covered]);
 
-  const { leave, isLeaving, dissolve, createChannel, privatiseChannel, mintAccessRole, setChannelCategory, arrangeChannels, nameCategory } =
+  const { leave, isLeaving, dissolve, createChannel, mintAccessRole, setChannelCategory, arrangeChannels, nameCategory } =
     useCommunityManagement(community);
-  const rankedControls = useRankedCategoryControls(community, canManageChannels);
   const retireLinks = useRetireCommunityLinks(community);
   /** Dissolve toast Retry: runs the retirement's own `retry` with what missed. */
   const showRetirementMiss = (outcome: RetirementOutcome) => {
@@ -2370,9 +2392,9 @@ function ConcordCommunityPage() {
       category: opts?.category,
     });
     // A newborn Private Channel's Role is held by nobody; access is granted via the
-    // Role (see handleToggleRole).
-    selectChannel(created);
-  }, [createChannel, selectChannel]);
+    // Role (see handleToggleRole). Created from the settings list, it shows up there.
+    if (view !== "settings") selectChannel(created);
+  }, [createChannel, selectChannel, view]);
 
   /**
    * Re-key a private channel to exactly the members entitled TODAY — repairs
@@ -2390,25 +2412,6 @@ function ConcordCommunityPage() {
     await (community ? withKeySettle(community.idHex, run) : run());
   }, [roster, memberPubkeys, ownerHex, rekeyChannel, community]);
 
-  /** Convert a public channel to private (CORD-03 §2); its permissions decide who may read it. */
-  const handlePrivatiseChannel = useCallback(async (channelIdHex: string) => {
-    const def = folded?.channels.get(channelIdHex);
-    if (!def) throw new Error(t({ id: "concordPage.channel.notFound", defaultMessage: "Channel not found in the control fold yet; try again shortly." }));
-    const ok = confirm(
-      t(
-        {
-          id: "concordPage.privatise.confirmRanked",
-          defaultMessage:
-            "Make #{channel} private?\n\nIt gets its own key from here on, and its permissions decide who may read it. Messages already posted stay readable to everyone in the community; a restriction can't be applied backwards.",
-        },
-        { channel: def.name },
-      ),
-    );
-    if (!ok) return;
-    await privatiseChannel({ channelIdHex });
-    toast({ title: t({ id: "concordPage.privatise.done", defaultMessage: "Channel is now private" }) });
-  }, [folded, privatiseChannel]);
-
   /**
    * Mint another access Role for a private channel. Entitlement is any-of, so this
    * widens who CAN be let in; it vends on its first grant.
@@ -2424,6 +2427,26 @@ function ConcordCommunityPage() {
     });
   }, [mintAccessRole]);
 
+  const rotateChannelKey = canRekeyChannel ? handleRotateChannelKey : undefined;
+  const mintChannelAccessRole = canManageRoles && !folded?.rankedRoster ? handleMintAccessRole : undefined;
+  const editorOps = useMemo(
+    () => ({ channelRoles: channelRoleCatalog, onRotateChannelKey: rotateChannelKey, onMintAccessRole: mintChannelAccessRole }),
+    [channelRoleCatalog, rotateChannelKey, mintChannelAccessRole],
+  );
+  const rankedControls = useRankedCategoryControls(community, canManageChannels, editorOps);
+
+  const toastRoleToggled = (on: boolean) =>
+    toast({ title: on ? t({ id: "concordPage.roles.granted", defaultMessage: "Role granted" }) : t({ id: "concordPage.roles.removed", defaultMessage: "Role removed" }) });
+  const grantReview = useGrantReview({
+    community,
+    folded,
+    me: user?.pubkey,
+    rolesFor: roleIntent.rolesFor,
+    toggle: async (member, roleId, on, follow, progress) =>
+      (await roleIntent.toggle(member, roleId, on, (args) => setMemberRoles({ ...args, follow, progress }))) !== undefined,
+    rotate: rotateChannelKey,
+    onDone: toastRoleToggled,
+  });
 
   // By-id lookup over the decoded set, for resolving inline-reply parents locally.
   const messagesById = useMemo(() => {
@@ -2894,12 +2917,14 @@ function ConcordCommunityPage() {
       });
       return;
     }
+    // A toggle that changes what the member can see or do is reviewed first, and written from there.
+    if (grantReview.ask(pubkey, roleId, on)) return;
     try {
       // Composes on this client's last intent and ignores repeats in flight. The
       // Grant settles the Channel keys it moves before it resolves (`settledWrite`).
       const published = await roleIntent.toggle(pubkey, roleId, on);
       if (!published) return; // already in flight
-      toast({ title: on ? t({ id: "concordPage.roles.granted", defaultMessage: "Role granted" }) : t({ id: "concordPage.roles.removed", defaultMessage: "Role removed" }) });
+      toastRoleToggled(on);
     } catch (e) {
       toast({ title: t({ id: "concordPage.roles.changeFailed", defaultMessage: "Couldn't change roles" }), description: e instanceof Error ? e.message : undefined, variant: "destructive" });
     }
@@ -3023,6 +3048,7 @@ function ConcordCommunityPage() {
         onSetCategory={canManageChannels ? handleSetCategory : undefined}
         onNewCategory={handleNewCategory}
         onMove={draggable && canManageChannels && isTouchDevice ? channelDrag.arm : undefined}
+        onEdit={rankedControls.editChannel}
         onPermissions={rankedControls.openChannelPermissions}
         voiceOnlyCalls={rankedControls.ranked}
       />
@@ -3525,7 +3551,7 @@ function ConcordCommunityPage() {
                 />
               )}
 
-              <DropdownMenu>
+              <DropdownMenu touchSheet>
                 <ChatHeaderMenuTrigger />
                 <DropdownMenuContent align="end" className="w-52" onCloseAutoFocus={keepItemFocus}>
                   <ChatHeaderViewItems
@@ -3700,10 +3726,8 @@ function ConcordCommunityPage() {
                       memberCount={memberPubkeys.length}
                       canManageMetadata={canManageMetadata}
                       canManageChannels={canManageChannels}
-                      channelRoles={channelRoleCatalog}
-                      onPrivatiseChannel={canManageChannels && folded?.rankedRoster ? handlePrivatiseChannel : undefined}
-                      onRotateChannelKey={canRekeyChannel ? handleRotateChannelKey : undefined}
-                      onMintAccessRole={canManageRoles && !folded?.rankedRoster ? handleMintAccessRole : undefined}
+                      editorOps={editorOps}
+                      onNewChannel={canManageChannels ? () => setCreatingChannel(true) : undefined}
                       onOpenInvites={() => selectPane("invites")}
                     />
                     </Suspense>
@@ -4214,6 +4238,7 @@ function ConcordCommunityPage() {
           </div>
       </ChatShell>
 
+      {grantReview.dialog}
       {/* Dialogs are built on first open (MountWhenOpened). */}
       <MountWhenOpened open={inviteOpen}>
         <InviteDialog community={community} open={inviteOpen} onOpenChange={setInviteOpen} canCreateLink={iAmAdminOrOwner} />
