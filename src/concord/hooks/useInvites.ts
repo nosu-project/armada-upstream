@@ -11,7 +11,7 @@ import { useAppContext } from "@/hooks/useAppContext";
 import { selfStateRelays } from "@/contexts/AppContext";
 import { buildRegistryEdition } from "@/concord/lib/control";
 import { vendableChannels, type VendAudience } from "@/concord/lib/channelAccess";
-import { isAuthorized, Permissions } from "@/concord/lib/roles";
+import { isAuthorized, Permissions, type CommunityRoles } from "@/concord/lib/roles";
 import { bytesToHex, grantLocator, hexToBytes, inviteLinksLocator, hex32 } from "@/concord/lib/derive";
 import {
   buildDirectInviteRumor,
@@ -468,10 +468,12 @@ export function useInviteActions(community: Community | undefined) {
       label?: string;
       /** Narrow further (a role-grant vend hands over just that role's channels). */
       onlyChannelIdHexes?: ReadonlySet<string>;
+      /** The snapshot to vend from, when the caller holds a fresher one than the render. */
+      source?: Community;
     },
   ): InviteBundle => {
     if (!user) throw new Error(t({ id: "useInvites.notReady", defaultMessage: "Not ready." }));
-    const src = bundleSource();
+    const src = opts?.source ?? bundleSource();
     if (!src) throw new Error(t({ id: "useInvites.notReady", defaultMessage: "Not ready." }));
     const vendable = vendableChannels(src.privateChannels, audience, {
       only: opts?.onlyChannelIdHexes,
@@ -505,9 +507,15 @@ export function useInviteActions(community: Community | undefined) {
 
   /**
    * Publish my registry (vsk 8) with these live links, pruning expired ones so
-   * they don't keep the community Public (CORD-05 §5).
+   * they don't keep the community Public (CORD-05 §5). `minted` is a link this
+   * call just made, live whether or not its Invite List write has landed;
+   * `onlyIfChanged` publishes nothing when the registry already lists exactly these.
    */
-  const publishRegistry = async (change: (mine: Set<string>) => string[]) => {
+  const publishRegistry = async (
+    change: (mine: Set<string>) => string[],
+    opts?: { minted?: string; onlyIfChanged?: boolean },
+  ) => {
+    const minted = opts?.minted;
     if (!user || !community) return;
     const c = community;
     const u = user;
@@ -515,8 +523,13 @@ export function useInviteActions(community: Community | undefined) {
     // rendered fold lags its own last registry, and a stale one would delist a link.
     await withControlWrite(c.idHex, async () => {
       const now = await foldStoredControl(c).catch(() => folded);
-      const linkSigners = change(new Set(now?.registriesByCreator.get(u.pubkey) ?? []));
-      const live = liveRegistrySigners(linkSigners, inviteList.data?.entries, c.idHex, nowSecs());
+      const held = now?.registriesByCreator.get(u.pubkey) ?? [];
+      const linkSigners = change(new Set(held));
+      // The list as cached now, not as this render saw it, which predates any mint since.
+      const entries = queryClient.getQueryData<InviteList>(inviteListKey(u.pubkey))?.entries ?? inviteList.data?.entries;
+      const live = liveRegistrySigners(linkSigners, entries, c.idHex, nowSecs());
+      if (minted && linkSigners.includes(minted) && !live.includes(minted)) live.push(minted);
+      if (opts?.onlyIfChanged && live.length === held.length && live.every((s) => held.includes(s))) return;
       const eid = bytesToHex(inviteLinksLocator(c.id, hex32(u.pubkey)));
       const head = now?.heads.get(eid);
       await publishEdition(
@@ -627,7 +640,7 @@ export function useInviteActions(community: Community | undefined) {
       });
 
       // Neither gates the link working.
-      void publishRegistry((mine) => [...mine, link.pk]).catch(() => undefined);
+      void publishRegistry((mine) => [...mine, link.pk], { minted: link.pk }).catch(() => undefined);
       if (announcement) void publishEvent(announcement).catch(() => undefined);
 
       return url;
@@ -742,9 +755,14 @@ export function useInviteActions(community: Community | undefined) {
        * grant-driven vend would otherwise find the recipient unentitled.
        */
       entitlementOverlay?: { withRoleIds?: string[]; withoutRoleIds?: string[] };
+      /** A role change's settle vends from the state it just wrote, not the render's. */
+      source?: Community;
+      roster?: CommunityRoles;
+      /** Also published here: a member's catch-up goes to the Community's relays, as Vector's does. */
+      alsoRelays?: string[];
     }
   >({
-    mutationFn: async ({ recipientPubkey, expiresAtMs, onlyChannelIdHexes, entitlementOverlay }) => {
+    mutationFn: async ({ recipientPubkey, expiresAtMs, onlyChannelIdHexes, entitlementOverlay, source, roster, alsoRelays }) => {
       if (!user || !community) throw new Error(t({ id: "useInvites.notReady", defaultMessage: "Not ready." }));
       if (!user.signer.nip44) throw new Error(t({ id: "useInvites.signerCantSendDirect", defaultMessage: "This signer can't send direct invites (NIP-44 unsupported)." }));
 
@@ -752,12 +770,12 @@ export function useInviteActions(community: Community | undefined) {
       const bundle = buildBundle(
         {
           kind: "member",
-          roster: folded?.roster,
+          roster: roster ?? folded?.roster,
           ownerHex: folded?.ownerHex ?? community.owner,
           memberHex: recipientPubkey,
           overlay: entitlementOverlay,
         },
-        { expiresAtMs, onlyChannelIdHexes },
+        { expiresAtMs, onlyChannelIdHexes, ...(source ? { source } : {}) },
       );
       const rumor = buildDirectInviteRumor(bundle, user.pubkey);
       const seal = await sealDirectInvite(rumor, recipientPubkey, user.signer);
@@ -768,7 +786,7 @@ export function useInviteActions(community: Community | undefined) {
       const inbox = await recipientInboxRelays(nostr, recipientPubkey);
       // A FAILED lookup isn't "no list"; falling back to stock could misdeliver.
       if (inbox === null) throw new Error(t({ id: "useInvites.networkUnreachable", defaultMessage: "Couldn't reach the network to send the invite. Please try again." }));
-      const relays = inviteDeliveryRelays(inbox);
+      const relays = [...new Set([...inviteDeliveryRelays(inbox), ...(alsoRelays ?? [])])];
       await publishToAnyRelay(nostr, relays, wrap, t({ id: "useInvites.noRelayAcceptedInvite", defaultMessage: "No relay accepted the invite." }));
     },
   });
@@ -829,6 +847,18 @@ export function useInviteActions(community: Community | undefined) {
   };
 
   /**
+   * Re-list in my registry (vsk 8) every live link my Invite List holds for this
+   * community and the registry leaves out (CORD-05 §5). Only ever adds: a link the
+   * registry names and the list doesn't is left to revocation.
+   */
+  const repairRegistry = async (): Promise<void> => {
+    if (!user || !community || !inviteList.data) return;
+    const held = myLinks.map((e) => parseInviteLink(e.url)?.linkSigner).filter((s): s is string => !!s);
+    if (held.length === 0) return;
+    await publishRegistry((mine) => [...new Set([...mine, ...held])], { onlyIfChanged: true });
+  };
+
+  /**
    * Whether revoking this link would flip the community Private (CORD-05 §2);
    * callers should warn, since bans start rotating keys past it.
    */
@@ -854,6 +884,7 @@ export function useInviteActions(community: Community | undefined) {
     /** True until the Invite List has loaded — `myLinks` is blind before then. */
     linksLoading: inviteList.isLoading,
     refreshMyLinks,
+    repairRegistry,
     /** Whether ANY live public link exists — the community's Public/Private flag. */
     isPublic: (folded?.liveInviteLinks.size ?? 0) > 0,
     revokeWouldPrivatize,
@@ -863,14 +894,15 @@ export function useInviteActions(community: Community | undefined) {
 /**
  * Self-healing link freshness: on their community page, a link creator
  * re-posts the CURRENT bundle at each live link coordinate (once per community
- * per session). Unconditional: resolveBundle's persisted newest-copy floor
- * hides relay staleness, and the re-post is cheap and self-replacing.
+ * per session), and re-lists in their registry any of those links it leaves out.
+ * Unconditional: resolveBundle's persisted newest-copy floor hides relay
+ * staleness, and the re-post is cheap and self-replacing.
  */
 export function useLinkFreshnessWatch(community: Community | undefined): void {
   const { user } = useCurrentUser();
   const control = useControlFold(community);
   const folded = control.data;
-  const { myLinks, refreshMyLinks } = useInviteActions(community);
+  const { myLinks, refreshMyLinks, repairRegistry } = useInviteActions(community);
   const { data: dissolved } = useDissolved(community);
   const attempted = useRef(new Set<string>());
 
@@ -892,7 +924,8 @@ export function useLinkFreshnessWatch(community: Community | undefined): void {
     refreshMyLinks().catch(() => {
       attempted.current.delete(community.idHex); // retry on a later mount
     });
-  }, [user, community, folded, dissolved, control.isLoading, control.isFetching, myLinks, refreshMyLinks]);
+    void repairRegistry().catch(() => undefined);
+  }, [user, community, folded, dissolved, control.isLoading, control.isFetching, myLinks, refreshMyLinks, repairRegistry]);
 }
 
 /** What a dissolve's retirement of the owner's links took down. */

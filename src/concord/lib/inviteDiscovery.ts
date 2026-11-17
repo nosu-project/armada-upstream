@@ -27,6 +27,20 @@ export interface DiscoveredInvite {
    */
   linkSigner: string;
   source: NostrRumor;
+  /** Older standing announcements of the same link: boosts name announcements, so theirs count here. */
+  copies?: string[];
+}
+
+/** An invite with another announcement of its link folded in as a copy. */
+export function withCopy(invite: DiscoveredInvite, other: DiscoveredInvite): DiscoveredInvite {
+  const ids = new Set([...(invite.copies ?? []), other.source.id, ...(other.copies ?? [])]);
+  ids.delete(invite.source.id);
+  return ids.size === (invite.copies?.length ?? 0) ? invite : { ...invite, copies: [...ids].sort() };
+}
+
+/** Every announcement id an invite stands for: its own and its copies'. */
+export function listingIdsOf(invite: DiscoveredInvite): string[] {
+  return invite.copies?.length ? [invite.source.id, ...invite.copies] : [invite.source.id];
 }
 
 /**
@@ -70,6 +84,85 @@ export function listingAuthorized(bundle: Pick<InviteBundle, "owner" | "creator_
   return !!bundle.creator_npub && creatorHex(bundle.creator_npub) === sharer;
 }
 
+/** What a resolved, authorized Discover listing reports, so one card stands per community. */
+export interface ListingStanding {
+  communityId: string;
+  owner: string;
+  /** The bundle's root epoch. */
+  epoch: number;
+  /** Who shared it: 0 the owner, 1 staff, 2 any other link creator. */
+  sharerRank: number;
+  /** Rotated out: its epoch was refounded past. */
+  retired: boolean;
+}
+
+/**
+ * The listings Discover hides: every retired one, and all but one per community.
+ * The one shown is on the newest epoch (a sibling on an older one is rotated out
+ * whether or not that is known yet), then shared by the most senior sharer, then
+ * the newest announcement. Listings not yet resolved aren't judged.
+ */
+export function suppressedListings(
+  invites: readonly DiscoveredInvite[],
+  standings: Readonly<Record<string, ListingStanding>>,
+): Set<string> {
+  const suppressed = new Set<string>();
+  const best = new Map<string, { invite: DiscoveredInvite; standing: ListingStanding }>();
+  const outranks = (a: { invite: DiscoveredInvite; standing: ListingStanding }, b: typeof a) =>
+    a.standing.epoch !== b.standing.epoch
+      ? a.standing.epoch > b.standing.epoch
+      : a.standing.sharerRank !== b.standing.sharerRank
+        ? a.standing.sharerRank < b.standing.sharerRank
+        : a.invite.source.created_at > b.invite.source.created_at;
+  for (const invite of invites) {
+    const standing = standings[invite.linkSigner];
+    if (!standing) continue;
+    if (standing.retired) {
+      suppressed.add(invite.linkSigner);
+      continue;
+    }
+    const candidate = { invite, standing };
+    const held = best.get(standing.communityId);
+    if (!held) best.set(standing.communityId, candidate);
+    else if (outranks(candidate, held)) {
+      suppressed.add(held.invite.linkSigner);
+      best.set(standing.communityId, candidate);
+    } else suppressed.add(invite.linkSigner);
+  }
+  return suppressed;
+}
+
+/**
+ * The announcements whose boosts count for each listing: its own and its copies,
+ * and those of every listing resolving to the same community, since a boost vouches
+ * for the community whichever of its links it was cast on. Unresolved listings
+ * keep their own.
+ */
+export function boostListingsBySigner(
+  invites: readonly DiscoveredInvite[],
+  standings: Readonly<Record<string, Pick<ListingStanding, "communityId">>>,
+): Map<string, string[]> {
+  const byCommunity = new Map<string, Set<string>>();
+  for (const invite of invites) {
+    const communityId = standings[invite.linkSigner]?.communityId;
+    if (!communityId) continue;
+    const ids = byCommunity.get(communityId) ?? byCommunity.set(communityId, new Set()).get(communityId)!;
+    for (const id of listingIdsOf(invite)) ids.add(id);
+  }
+  const out = new Map<string, string[]>();
+  for (const invite of invites) {
+    const communityId = standings[invite.linkSigner]?.communityId;
+    const shared = communityId ? byCommunity.get(communityId) : undefined;
+    out.set(invite.linkSigner, shared ? [...shared].sort() : listingIdsOf(invite));
+  }
+  return out;
+}
+
+/** The hex pubkey of a link's creator, as its bundle names it. */
+export function linkCreator(bundle: Pick<InviteBundle, "creator_npub">): string | undefined {
+  return bundle.creator_npub ? creatorHex(bundle.creator_npub) : undefined;
+}
+
 function creatorHex(creator: string): string | undefined {
   if (/^[0-9a-f]{64}$/.test(creator)) return creator;
   try {
@@ -102,6 +195,9 @@ export function buildAnnouncementDeletion(announcementIds: string[]): EventTempl
   };
 }
 
+/** Every link, for reads that narrow by author alone. */
+export const ANY_LINK = "any";
+
 /**
  * Standing announcements (not deleted by their own author) whose link is in
  * `linkSigners`, newest first. Keeps EVERY copy, since un-listing must delete
@@ -109,7 +205,7 @@ export function buildAnnouncementDeletion(announcementIds: string[]): EventTempl
  */
 export function announcementsForLinks(
   events: NostrRumor[],
-  linkSigners: ReadonlySet<string>,
+  linkSigners: ReadonlySet<string> | typeof ANY_LINK,
 ): DiscoveredInvite[] {
   const byId = new Map<string, NostrRumor>();
   for (const e of events) if (e.kind === KIND_COMMUNITY_ANNOUNCEMENT) byId.set(e.id, e);
@@ -124,7 +220,7 @@ export function announcementsForLinks(
   for (const e of byId.values()) {
     if (deleted.has(e.id)) continue;
     const invite = announcementFromEvent(e);
-    if (invite && linkSigners.has(invite.linkSigner)) out.push(invite);
+    if (invite && (linkSigners === ANY_LINK || linkSigners.has(invite.linkSigner))) out.push(invite);
   }
   return out.sort((a, b) => b.source.created_at - a.source.created_at);
 }

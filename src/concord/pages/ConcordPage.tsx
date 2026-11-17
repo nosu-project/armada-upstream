@@ -1,4 +1,3 @@
-import { channelDisplayName } from "@/concord/lib/community";
 import { observedAuthors } from "@/concord/lib/observedAuthors";
 import { useCommunityRumors } from "@/concord/hooks/useCommunityRumors";
 import { AtSign, Ban, CalendarClock, CheckCheck, ChevronDown, Bell, BellOff, Crown, Folder, FolderGit2, GripVertical, Hash, Headphones, KeyRound, Loader2, Lock, LogOut, Megaphone, Gem, MessageSquareText, MessagesSquare, Pause, Phone, Pin, Play, Plus, RefreshCw, Rss, Search, Settings, Shield, ShieldAlert, ShieldOff, Tag, Timer, Trash2, UserMinus, UserPlus, X, type LucideIcon } from "lucide-react";
@@ -186,8 +185,8 @@ import { useChannelRekey, useChannelRekeyWatch, useLinkRefreshWatch, useRefoundR
 import { useCanPost } from "@/concord/hooks/useWriterAccess";
 import { clockNowMs, nowSecs } from "@/lib/relayClock";
 import { CommunityNicknamesContext } from "@/contexts/CommunityNicknamesContext";
-import { useInviteActions } from "@/concord/hooks/useInvites";
-import { channelsHingingOn, isEntitled } from "@/concord/lib/channelAccess";
+import { isEntitled } from "@/concord/lib/channelAccess";
+import { withKeySettle } from "@/concord/lib/keySettle";
 import { bytesToHex } from "@/concord/lib/derive";
 import { useRelayFollow } from "@/concord/hooks/useRelayFollow";
 import { useMemberPanelScope } from "@/concord/hooks/useMemberPanelScope";
@@ -1616,7 +1615,6 @@ function ConcordCommunityPage() {
   }, [communityId, routeChannelId, routePane, channel, navigateTo]);
 
   const { setTier, setMemberRoles } = useRoles(community);
-  const { sendDirectInvite } = useInviteActions(community);
   const { rekeyChannel, canRekeyChannel } = useChannelRekey(community);
   const { pause: communityPause, setPaused, clearPause } = useCommunityPause(community);
   const pendingJoin = usePendingGuestbookJoin(baseCommunity);
@@ -2267,9 +2265,7 @@ function ConcordCommunityPage() {
     [roster, user, ownerHex],
   );
 
-  // EVERY live Private Channel, flagged by whether I hold its key: a revoke must see
-  // channels I lack too, or it reports success while the target keeps reading
-  // (`channelsHingingOn` splits the two).
+  // EVERY live Private Channel, flagged by whether I hold its key.
   const privateChannelsHere = useMemo(() => {
     if (!community || !folded) return [] as Array<{ idHex: string; heldByMe: boolean }>;
     const heldIds = new Set(community.privateChannels.map((ch) => bytesToHex(ch.id)));
@@ -2386,12 +2382,13 @@ function ConcordCommunityPage() {
     if (!roster) throw new Error(t({ id: "concordPage.notReady", defaultMessage: "Not ready." }));
     const keep = memberPubkeys.filter((pk) => isEntitled(roster, ownerHex, pk, channelIdHex));
     const keepSet = new Set(keep);
-    await rekeyChannel({
+    const run = () => rekeyChannel({
       channelIdHex,
       keepRecipients: keep,
       removedTargets: memberPubkeys.filter((pk) => !keepSet.has(pk)),
     });
-  }, [roster, memberPubkeys, ownerHex, rekeyChannel]);
+    await (community ? withKeySettle(community.idHex, run) : run());
+  }, [roster, memberPubkeys, ownerHex, rekeyChannel, community]);
 
   /** Convert a public channel to private (CORD-03 §2); its permissions decide who may read it. */
   const handlePrivatiseChannel = useCallback(async (channelIdHex: string) => {
@@ -2898,132 +2895,13 @@ function ConcordCommunityPage() {
       return;
     }
     try {
-      // Composes on this client's last intent and ignores repeats in flight: a
-      // Grant replaces the whole role list, so racing toggles would clobber.
+      // Composes on this client's last intent and ignores repeats in flight. The
+      // Grant settles the Channel keys it moves before it resolves (`settledWrite`).
       const published = await roleIntent.toggle(pubkey, roleId, on);
       if (!published) return; // already in flight
       toast({ title: on ? t({ id: "concordPage.roles.granted", defaultMessage: "Role granted" }) : t({ id: "concordPage.roles.removed", defaultMessage: "Role removed" }) });
     } catch (e) {
       toast({ title: t({ id: "concordPage.roles.changeFailed", defaultMessage: "Couldn't change roles" }), description: e instanceof Error ? e.message : undefined, variant: "destructive" });
-      return;
-    }
-
-    // Role-gated channel keys follow the grant (channelAccess.ts), judged with the
-    // change overlaid since the fold lags.
-    if (!roster) return;
-    const affected = channelsHingingOn(roster, ownerHex, pubkey, roleId, privateChannelsHere);
-    const nameOf = (idHex: string) => channelDisplayName(community, folded, idHex);
-    const listNames = (ids: string[]) => ids.map((id) => `#${nameOf(id)}`).join(", ");
-
-    if (on) {
-      if (affected.held.length > 0) {
-        try {
-          await sendDirectInvite({
-            recipientPubkey: pubkey,
-            onlyChannelIdHexes: new Set(affected.held),
-            // Overlay the just-published Grant, or the recipient reads as unentitled.
-            entitlementOverlay: { withRoleIds: [roleId] },
-          });
-          toast({
-            title: t({ id: "concordPage.keys.sent", defaultMessage: "Channel keys sent" }),
-            description: t(
-              {
-                id: "concordPage.keys.sentDescription",
-                defaultMessage: "The member received {count, plural, one {# private channel key} other {# private channel keys}}.",
-              },
-              { count: affected.held.length },
-            ),
-          });
-        } catch (e) {
-          toast({
-            title: t({ id: "concordPage.keys.sendFailed", defaultMessage: "Couldn't send the channel keys" }),
-            description:
-              e instanceof Error
-                ? t(
-                    {
-                      id: "concordPage.keys.sendFailedDetail",
-                      defaultMessage:
-                        "The role was granted, but delivering its private channel keys failed: {error} Toggle the role off and on to retry.",
-                    },
-                    { error: e.message },
-                  )
-                : t({
-                    id: "concordPage.keys.sendFailedDescription",
-                    defaultMessage:
-                      "The role was granted, but delivering its private channel keys failed. Toggle the role off and on to retry.",
-                  }),
-            variant: "destructive",
-          });
-        }
-      }
-      // Only a key holder can vend; the grantee waits until one does.
-      if (affected.unheld.length > 0) {
-        toast({
-          title: t({ id: "concordPage.keys.someUnsent", defaultMessage: "Some channel keys weren't sent" }),
-          description: t(
-            {
-              id: "concordPage.keys.someUnsentDescription",
-              defaultMessage:
-                "You don't hold the key to {channels}, so a member who does has to share it before they can read {count, plural, one {that channel} other {those channels}}.",
-            },
-            { channels: listNames(affected.unheld), count: affected.unheld.length },
-          ),
-        });
-      }
-      return;
-    }
-
-    if (affected.held.length === 0 && affected.unheld.length === 0) return;
-    // Report the un-rotatable part first: a revoke that cuts nobody is the failure to hear about.
-    if (affected.unheld.length > 0) {
-      toast({
-        title: t({ id: "concordPage.keys.notRevoked", defaultMessage: "Channel access not revoked" }),
-        description: t(
-          {
-            id: "concordPage.keys.notRevokedDescription",
-            defaultMessage: "You don't hold the key to {channels}, so they keep reading until a member who does rotates it.",
-          },
-          { channels: listNames(affected.unheld) },
-        ),
-        variant: "destructive",
-      });
-    }
-    if (affected.held.length === 0) return;
-    if (!canRekeyChannel) {
-      toast({
-        title: t({ id: "concordPage.keys.notRotated", defaultMessage: "Channel keys not rotated" }),
-        description: t({
-          id: "concordPage.keys.notRotatedDescription",
-          defaultMessage:
-            "They lost access to a private channel, but rotating its key needs the Manage channels permission. Ask an admin to rotate it.",
-        }),
-        variant: "destructive",
-      });
-      return;
-    }
-    for (const idHex of affected.held) {
-      const keep = memberPubkeys.filter(
-        (pk) => pk !== pubkey && isEntitled(roster, ownerHex, pk, idHex),
-      );
-      try {
-        // Everyone else entitled is kept, so this member is the whole removed set (CORD-06).
-        await rekeyChannel({ channelIdHex: idHex, keepRecipients: keep, removedTargets: [pubkey] });
-      } catch (e) {
-        toast({
-          title: t({ id: "concordPage.keys.rotationFailed", defaultMessage: "Channel key rotation failed" }),
-          description:
-            e instanceof Error
-              ? t(
-                  { id: "concordPage.keys.rotationFailedDetail", defaultMessage: "They may still read #{channel} until it succeeds: {error}" },
-                  { channel: nameOf(idHex), error: e.message },
-                )
-              : t(
-                  { id: "concordPage.keys.rotationFailedDescription", defaultMessage: "They may still read #{channel} until it succeeds." },
-                  { channel: nameOf(idHex) },
-                ),
-          variant: "destructive",
-        });
-      }
     }
   };
 
