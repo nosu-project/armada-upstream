@@ -306,8 +306,6 @@ async function present(
   policy: MediaPolicy,
   /** Relays to ask for a kind 0 this device doesn't hold. */
   profileRelays: string[],
-  /** Show the sender's avatar; false = the room icon or the app's. */
-  showAvatar = true,
   /** The name the sender goes by in this Community (CORD-04 §10), over their profile's. */
   nickname?: string,
 ): Promise<PreparedPush> {
@@ -324,7 +322,7 @@ async function present(
   const full: NotificationMessage = {
     ...msg,
     authorName: name,
-    authorAvatar: showAvatar ? avatar : undefined,
+    authorAvatar: avatar,
     roomTitle: room.title,
     roomImage: room.image,
     mentionNames,
@@ -414,7 +412,7 @@ async function prepareDm(
   const unwrapped = await openDm(wrap, cfg.sk, cfg.self);
   if (!unwrapped) return undefined;
   // A push is delivered as the message is published: time it by its arrival where the sender's clock was off.
-  const opened = withArrival(unwrapped, Math.floor(Date.now() / 1000));
+  const opened = withArrival(unwrapped, Math.floor(Date.now() / 1000), cfg.self);
 
   // Persist first (including own sent copies from other devices).
   await writeDm17Rumors(cfg.self, [opened]).catch(() => undefined);
@@ -561,20 +559,8 @@ async function prepareConcord(
     },
     policy,
     profileRelaysFor(cfg, relays),
-    communityAvatarShown(opened.author, cfg),
     stream.nicknames?.[opened.author],
   );
-}
-
-/**
- * Whether a community sender's avatar may be the notification icon. Anyone with
- * the key can post (CORD-04 §1), so unless the reader loads everyone's media only
- * a known peer's face reaches the lock screen — the worker has no view of the
- * in-app trust graph (`mediaTrust.ts`).
- */
-export function communityAvatarShown(author: string, cfg: SwPushConfig | null): boolean {
-  if (cfg?.mediaPolicy?.allCommunityAvatars === true) return true;
-  return Boolean(cfg?.knownPeers?.includes(author));
 }
 
 /**
