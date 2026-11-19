@@ -1,11 +1,10 @@
 import { Reply } from "lucide-react";
-import { memo, useContext, useEffect, useMemo, useState } from "react";
+import { memo, useContext, useEffect, useState } from "react";
 
 import { ExpirationTimerIcon } from "@/components/chat/ExpirationTimerIcon";
 import { MeshProfilePreviewCard } from "@/components/chat/MeshProfilePreviewCard";
 import { ProfilePreviewCard } from "@/components/chat/ProfilePreviewCard";
 import { BotPill } from "@/components/BotPill";
-import { UltraPill } from "@/components/UltraPill";
 import { DisplayName } from "@/components/DisplayName";
 import { ProxyPill } from "@/components/ProxyPill";
 import { StaffPill } from "@/components/StaffPill";
@@ -15,10 +14,10 @@ import { AppContext } from "@/contexts/AppContext";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useScopedIdentity } from "@/hooks/useScopedDisplayName";
 import { getAvatarShape } from "@/lib/avatarShape";
-import { fullDateTime, isoDateTime, shortClockTime, shortTimeAgo } from "@/lib/formatTime";
+import { isoDateTime, shortClockTime, shortTimeAgo } from "@/lib/formatTime";
 import { formatTimeLeft } from "@/lib/nip17/disappearing";
-import { useFrameCss, nameStyleCss, readUltra, ULTRA_LIST_NAME_CLASS } from "@/lib/ultra";
 import { cn } from "@/lib/utils";
+import { sentLabel } from "@/components/chat/sentLabel";
 import { FormattedMessage, useIntl } from "@/i18n";
 import { useDoubleTap } from "@/hooks/useDoubleTap";
 import { useLongPress } from "@/hooks/useLongPress";
@@ -26,7 +25,7 @@ import { useSwipeToReply } from "@/hooks/useSwipeToReply";
 
 import type { ProxyInfo } from "@/lib/nip48";
 import type { ReactNode } from "react";
-import { AvatarInitial } from "@/components/AvatarInitial";
+import { UserAvatar } from "@/components/UserAvatar";
 import { nowSecs } from "@/lib/relayClock";
 
 const NO_TAGS: string[][] = [];
@@ -99,6 +98,8 @@ interface MessageRowProps {
     onMention?: (peerID: string) => void;
   };
   createdAt: number;
+  /** NIP-89 client the message names; shown beside the header's timestamp. */
+  client?: string;
   children: ReactNode;
   pending?: boolean;
   edited?: boolean;
@@ -136,6 +137,7 @@ export const MessageRow = memo(function MessageRow({
   identityOverride,
   meshActions,
   createdAt,
+  client,
   children,
   pending,
   edited,
@@ -155,6 +157,8 @@ export const MessageRow = memo(function MessageRow({
   const longPress = useLongPress(onLongPress);
   const doubleTap = useDoubleTap(onDoubleTapReply);
   const absoluteTime = useContext(AppContext)?.config.absoluteTimestamps ?? false;
+  const intl = useIntl();
+  const timeTitle = sentLabel(intl, createdAt, client);
   // The toolbar is built only once hovered/focused (it's heavy per row), then latched.
   const [actionsArmed, setActionsArmed] = useState(false);
   const armActions = actions ? () => setActionsArmed(true) : undefined;
@@ -165,8 +169,6 @@ export const MessageRow = memo(function MessageRow({
   const displayName = identityOverride?.name ?? scoped.displayName;
   const color = identityOverride?.color ?? scoped.color;
   const label = identityOverride ? undefined : scoped.label;
-  const ultra = useMemo(() => readUltra(metadata), [metadata]);
-  const frameStyle = useFrameCss(ultra?.frame);
   const suffix = identityOverride?.suffix;
 
   const swipe = useSwipeToReply(
@@ -254,7 +256,7 @@ export const MessageRow = memo(function MessageRow({
       {continuation ? (
         <time
           dateTime={isoDateTime(createdAt)}
-          title={fullDateTime(createdAt)}
+          title={timeTitle}
           className="shrink-0 w-10 self-stretch flex items-start justify-end pr-0.5 pt-0.5 text-3xs leading-none text-muted-foreground/60 opacity-0 group-hover:opacity-100 transition-opacity tabular-nums select-none"
         >
           {shortClockTime(createdAt)}
@@ -277,13 +279,15 @@ export const MessageRow = memo(function MessageRow({
         )
       ) : (
         <ProfilePreviewCard pubkey={pubkey}>
-          <button type="button" className="shrink-0 mt-0.5 rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-ring" style={frameStyle}>
-            <Avatar shape={getAvatarShape(metadata)} className="size-10 cursor-pointer transition-opacity hover:opacity-90">
-              <AvatarImage src={metadata?.picture} imeta={author.data?.imeta?.picture} alt={displayName} />
-              <AvatarFallback className="bg-primary/20 text-primary text-sm">
-                <AvatarInitial name={displayName} pubkey={pubkey} />
-              </AvatarFallback>
-            </Avatar>
+          <button type="button" className="shrink-0 mt-0.5 rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+            <UserAvatar
+              pubkey={pubkey}
+              metadata={metadata}
+              imeta={author.data?.imeta?.picture}
+              name={displayName}
+              className="size-10 cursor-pointer transition-opacity hover:opacity-90"
+              fallbackClassName="text-sm"
+            />
           </button>
         </ProfilePreviewCard>
       )}
@@ -329,16 +333,16 @@ export const MessageRow = memo(function MessageRow({
               <ProfilePreviewCard pubkey={pubkey}>
                 <button
                   type="button"
-                  className={cn("text-chat font-name font-semibold text-primary truncate min-w-0 hover:underline focus:outline-none", !color && ultra?.name && ULTRA_LIST_NAME_CLASS)}
-                  style={color ? { color } : nameStyleCss(ultra?.name)}
+                  className="text-chat font-name font-semibold text-primary truncate min-w-0 hover:underline focus:outline-none"
+                  style={color ? { color } : undefined}
                 >
-                  <DisplayName pubkey={pubkey} name={displayName} tags={author.data?.event?.tags ?? NO_TAGS} />
+                  {/* A Concord role colour outranks the Ultra name style. */}
+                  <DisplayName pubkey={pubkey} name={displayName} tags={author.data?.event?.tags ?? NO_TAGS} metadata={metadata} ultra={color ? false : "list"} />
                 </button>
               </ProfilePreviewCard>
             )}
             {!identityOverride && <StaffPill pubkey={pubkey} />}
             <BotPill metadata={metadata} />
-            {ultra && <UltraPill force />}
             <ProxyPill proxy={proxy} />
             {nameBadge}
             {label && (
@@ -348,12 +352,18 @@ export const MessageRow = memo(function MessageRow({
             )}
             <time
               dateTime={isoDateTime(createdAt)}
-              title={fullDateTime(createdAt)}
+              title={timeTitle}
               className="text-2xs text-muted-foreground/70 shrink-0 tabular-nums"
             >
               {/* The day dividers carry the date, so the clock time is exact. */}
               {absoluteTime ? shortClockTime(createdAt) : shortTimeAgo(createdAt)}
             </time>
+            {client && (
+              // Sender-controlled text: it shrinks and truncates before the name does.
+              <span className="-ml-1 text-2xs text-muted-foreground/70 truncate min-w-0 max-w-40 shrink-[2]">
+                <span aria-hidden>·</span> {client}
+              </span>
+            )}
             {edited && (
               <EditedMark />
             )}

@@ -3,19 +3,16 @@ import { nip19 } from "nostr-tools";
 import { useState } from "react";
 
 import { BotPill } from "@/components/BotPill";
-import { UltraPill } from "@/components/UltraPill";
 import { DisplayName } from "@/components/DisplayName";
 import { SearchField } from "@/components/ui/search-field";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Popover, PopoverAnchor, PopoverContent } from "@/components/ui/popover";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useSearchProfiles, type SearchProfile } from "@/hooks/useSearchProfiles";
-import { getAvatarShape } from "@/lib/avatarShape";
 import { resolvePastedPubkey } from "@/lib/selfLink";
 import { cn } from "@/lib/utils";
 import { parseProfileImeta } from "@/lib/profileImeta";
 import { useIntl } from "@/i18n";
-import { AvatarInitial } from "@/components/AvatarInitial";
+import { UserAvatar } from "@/components/UserAvatar";
 
 /**
  * Single-select user picker on NIP-50 profile search (follows first). Inline,
@@ -159,12 +156,7 @@ function ProfileRow({
       )}
     >
       <div className="relative shrink-0">
-        <Avatar shape={getAvatarShape(metadata)} className="size-9">
-          <AvatarImage src={metadata.picture} imeta={parseProfileImeta(profile.event.tags, metadata)?.picture} alt={displayName} />
-          <AvatarFallback className="bg-primary/20 text-primary text-xs">
-            <AvatarInitial name={displayName} pubkey={pubkey} />
-          </AvatarFallback>
-        </Avatar>
+        <UserAvatar pubkey={pubkey} metadata={metadata} imeta={parseProfileImeta(profile.event.tags, metadata)?.picture} name={displayName} className="size-9" fallbackClassName="text-xs" />
         {isFollowed && (
           <span
             title={intl.formatMessage({ id: "profileSearchSelect.following", defaultMessage: "Following" })}
@@ -178,10 +170,9 @@ function ProfileRow({
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-1.5 min-w-0">
           <div className="truncate text-sm font-semibold">
-            <DisplayName pubkey={pubkey} name={displayName} tags={profile.event.tags} />
+            <DisplayName pubkey={pubkey} name={displayName} tags={profile.event.tags} metadata={metadata} />
           </div>
           <BotPill metadata={metadata} />
-          <UltraPill metadata={metadata} interactive={false} />
         </div>
         <div className="truncate font-mono text-2xs text-muted-foreground">{identifier}</div>
       </div>

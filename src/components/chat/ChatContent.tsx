@@ -11,6 +11,7 @@ import { rememberImageDim, seenImageDim } from "@/components/chat/imageDims";
 import { emojify } from "@/components/chat/emojify";
 import { EmbeddedNaddr, EmbeddedNote } from "@/components/chat/EmbeddedNote";
 import { FileAttachment } from "@/components/chat/FileAttachment";
+import { MagnetAttachment } from "@/components/chat/TorrentAttachment";
 import { HeldMedia, HeldPreviews } from "@/components/chat/HeldMedia";
 import { revealMessageMedia, useAuthorBlocked, useMediaHeld, useMediaUrlHold, useMessageRevealed } from "@/components/chat/mediaHold";
 import { mediaHost } from "@/lib/mediaPolicy";
@@ -50,7 +51,7 @@ import { parseFileMessageTags, parseImetaMap } from "@/lib/imeta";
 import { KIND_DM_FILE } from "@/lib/nip17/protocol";
 import { isIcannHost, parseInlineRun, splitInlineCode, splitMarkdownBlocks, splitMarkdownLinks } from "@/lib/markdown";
 import { filenameFromUrl } from "@/lib/fileBytes";
-import { AUDIO_EXTS, EMBED_MEDIA_URL_REGEX, IMAGE_URL_REGEX, isGifLikeUrl, isUnplayableVideo, mimeFromExt } from "@/lib/mediaUrls";
+import { AUDIO_EXTS, EMBED_MEDIA_URL_REGEX, IMAGE_URL_REGEX, isGifLikeUrl, isTorrentAttachment, isUnplayableVideo, mimeFromExt } from "@/lib/mediaUrls";
 import { KIND_GROUP_METADATA, nip29GroupPath, parseGroupAddress, type GroupAddress } from "@/lib/nip29";
 import { normalizeRelayUrl, relayToRouteParam } from "@/lib/platform";
 import { displayHost, isMagnetUri, sanitizeUrl } from "@/lib/sanitizeUrl";
@@ -186,6 +187,8 @@ export type ContentToken =
   | { type: "inline-link"; url: string }
   /** A BitTorrent `magnet:` URI, handed to the OS's torrent client on click. */
   | { type: "magnet-link"; url: string }
+  /** A magnet alone on its line — the torrent card. */
+  | { type: "magnet-embed"; url: string }
   /** An `nsite://` URL, handed to the OS's nsite handler (Din, Tenna) on click. */
   | { type: "nsite-link"; url: string }
   /** A `bitcoin:` or `lightning:` address, handed to the OS's wallet app on click. */
@@ -232,6 +235,7 @@ function collapseAroundBlocks(tokens: ContentToken[]): ContentToken[] {
     const token = tokens[i];
     const isBlock = token.type === "image-embed" || token.type === "media-embed"
       || token.type === "file-embed"
+      || token.type === "magnet-embed"
       || token.type === "nevent-embed"
       || (token.type === "naddr-embed" && (!token.url || token.addr.kind === 30030))
       || token.type === "lightning-invoice"
@@ -577,7 +581,12 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
           out.push({ type: "lightning-invoice", invoice: bolt11.toLowerCase() });
         } else if (magnet) {
           const trimmed = magnet.replace(/[.,;:!?)\]"']+$/, "");
-          out.push(isMagnetUri(trimmed) ? { type: "magnet-link", url: trimmed } : { type: "text", value: trimmed });
+          const lineRest = segment.substring(index + trimmed.length).split("\n", 1)[0];
+          out.push(
+            !isMagnetUri(trimmed) ? { type: "text", value: trimmed }
+              : lineRest.trim() === "" ? { type: "magnet-embed", url: trimmed }
+              : { type: "magnet-link", url: trimmed },
+          );
           lastIndex = index + trimmed.length;
           continue;
         } else if (nsite) {
@@ -664,8 +673,11 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
           // Images by extension or imeta MIME (extension-less/encrypted Blossom URLs).
           const inlineImeta = imetaByUrl.get(url);
           const inlineImetaMime = inlineImeta ? imageMimeFor(inlineImeta) : undefined;
+          // A pasted .torrent link is a card only alone on its line, like any preview.
+          const torrent = !forceImage && isTorrentAttachment(url, inlineImetaMime, inlineImeta?.name)
+            && (Boolean(inlineImeta) || segment.substring(index + fullMatch.length).split("\n", 1)[0].trim() === "");
           const isImetaImage = inlineImetaMime?.startsWith("image/") ?? false;
-          if (forceImage || IMAGE_URL_REGEX.test(url) || isImetaImage) {
+          if (!torrent && (forceImage || IMAGE_URL_REGEX.test(url) || isImetaImage)) {
             if (out.length > 0) {
               const prev = out[out.length - 1];
               if (prev.type === "text") {
@@ -696,7 +708,7 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
           // Armada's webxdc URLs end `.xdc`; Vector's are extension-less, known only by
           // imeta MIME or `webxdc` uuid.
           const isInlineWebxdc = isWebxdcMime(imetaMime) || Boolean(inlineImeta?.webxdc);
-          if (EMBED_MEDIA_URL_REGEX.test(url) || isImetaMedia || isInlineWebxdc) {
+          if (!torrent && (EMBED_MEDIA_URL_REGEX.test(url) || isImetaMedia || isInlineWebxdc)) {
             if (out.length > 0) {
               const prev = out[out.length - 1];
               if (prev.type === "text") {
@@ -716,8 +728,7 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
             continue;
           }
 
-          // imeta but not image/audio/video: a download card. Plain pasted links stay link cards.
-          if (inlineImeta && !inlineImeta.webxdc && !isWebxdcMime(imetaMime)) {
+          if (torrent || (inlineImeta && !inlineImeta.webxdc && !isWebxdcMime(imetaMime))) {
             if (out.length > 0) {
               const prev = out[out.length - 1];
               if (prev.type === "text") {
@@ -727,12 +738,12 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
             out.push({
               type: "file-embed",
               url,
-              encryption: inlineImeta.encryption,
-              mime: imetaMime ?? inlineImeta.mime,
-              name: inlineImeta.name,
-              size: inlineImeta.size ? Number(inlineImeta.size) : undefined,
-              thumbnail: inlineImeta.thumbnail,
-              fallbacks: inlineImeta.fallbacks,
+              encryption: inlineImeta?.encryption,
+              mime: imetaMime ?? inlineImeta?.mime,
+              name: inlineImeta?.name ?? (torrent ? filenameFromUrl(url, imetaMime) : undefined),
+              size: inlineImeta?.size ? Number(inlineImeta.size) : undefined,
+              thumbnail: inlineImeta?.thumbnail,
+              fallbacks: inlineImeta?.fallbacks,
             });
             lastIndex = index + fullMatch.length;
             const leadingWs = segment.substring(lastIndex).match(/^\s+/);
@@ -944,13 +955,14 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
         const url = sanitizeUrl(rawUrl);
         if (!url || renderedUrls.has(url)) continue;
         const mime = imageMimeFor(entry);
-        if (mime?.startsWith("image/")) {
+        const torrent = isTorrentAttachment(url, mime, entry.name);
+        if (!torrent && mime?.startsWith("image/")) {
           result.push({ type: "image-embed", url, encryption: entry.encryption, mime, dim: entry.dim, blurhash: entry.blurhash, fallbacks: entry.fallbacks, alt: entry.alt, spoiler: entry.spoiler, thumb: previewOf(url, entry.thumbnail) });
           renderedUrls.add(url);
-        } else if (mime?.startsWith("audio/") || mime?.startsWith("video/")) {
+        } else if (!torrent && (mime?.startsWith("audio/") || mime?.startsWith("video/"))) {
           result.push({ type: "media-embed", url, encryption: entry.encryption, mime, fallbacks: entry.fallbacks });
           renderedUrls.add(url);
-        } else if (isWebxdcMime(mime) || entry.webxdc) {
+        } else if (!torrent && (isWebxdcMime(mime) || entry.webxdc)) {
           // imeta-only webxdc (Vector): becomes an XdcAttachment card via isXdc; MIME
           // normalized for the uuid-only case.
           result.push({
@@ -1377,7 +1389,7 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
         return <InviteEmbed key={key} url={token.url} className="my-1.5" />;
       case "gift-embed":
         if (inQuote || holdMedia) return inlineLink(key, token.url);
-        return <GiftEmbed key={key} from={token.from} className="my-1.5" />;
+        return <GiftEmbed key={key} from={token.from} url={token.url} className="my-1.5" />;
       case "buzz-invite-embed":
         if (inQuote || holdMedia) return inlineLink(key, token.url);
         return <BuzzInviteEmbed key={key} url={token.url} className="my-1.5" />;
@@ -1400,6 +1412,15 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
         return selfLink(key, token.url, token.path);
       case "inline-link":
         return inlineLink(key, token.url);
+      case "magnet-embed":
+        if (disableNoteEmbeds || inQuote) {
+          return (
+            <a key={key} href={token.url} rel="noopener noreferrer" className="text-primary hover:underline break-all" onClick={(e) => e.stopPropagation()}>
+              {token.url}
+            </a>
+          );
+        }
+        return <MagnetAttachment key={key} uri={token.url} />;
       case "magnet-link":
       case "nsite-link":
       case "payment-link":
@@ -1493,6 +1514,7 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
             size={token.size}
             encryption={token.encryption}
             fallbacks={token.fallbacks}
+            torrentHeld={isTorrentAttachment(token.url, token.mime, token.name) && heldReason(token.url) !== undefined}
             thumbnail={thumbnail && heldReason(thumbnail) === undefined ? thumbnail : undefined}
           />
         );
@@ -2198,6 +2220,8 @@ function fitImageBox(
   return { aspectRatio: `${w} / ${h}`, maxWidth: Math.round(w * scale) };
 }
 
+const NO_MENTION_TAGS: string[][] = [];
+
 function NostrMention({ pubkey, noAtPrefix = false }: { pubkey: string; noAtPrefix?: boolean }) {
   const author = useAuthor(pubkey);
   const scopedName = useScopedDisplayName(pubkey, author.data?.metadata);
@@ -2217,7 +2241,8 @@ function NostrMention({ pubkey, noAtPrefix = false }: { pubkey: string; noAtPref
         onClick={(e) => e.stopPropagation()}
       >
         {noAtPrefix ? "" : "@"}
-        <DisplayName pubkey={pubkey} name={displayName} />
+        {/* A mention is part of the sentence, so it reads as a link, not a byline. */}
+        <DisplayName pubkey={pubkey} name={displayName} tags={author.data?.event?.tags ?? NO_MENTION_TAGS} ultra={false} />
       </button>
     </ProfilePreviewCard>
   );

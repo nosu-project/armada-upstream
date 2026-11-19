@@ -1,5 +1,5 @@
 import { useCommunityNickname } from "@/contexts/CommunityNicknamesContext";
-import { AtSign, Check, Copy, Globe, MessageSquare, MoreHorizontal, Music, UserCog, UserMinus } from "lucide-react";
+import { AtSign, Check, Copy, MessageSquare, MoreHorizontal, Music, UserCog, UserMinus } from "lucide-react";
 import { Slot } from "@radix-ui/react-slot";
 import { useCallback, useEffect, useRef, useState, type MouseEvent } from "react";
 import { useNavigate } from "react-router-dom";
@@ -13,7 +13,6 @@ import { EmojifiedText } from "@/components/chat/CustomEmoji";
 import { UserModerationMenuSection } from "@/components/chat/ModerationMenuSection";
 import { RolePickerItems } from "@/components/chat/RolePickerItems";
 import { ProfileImageLightbox } from "@/components/profile/ProfileImageLightbox";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { FallbackImage } from "@/components/ui/FallbackImage";
 import {
@@ -29,7 +28,6 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useAuthor } from "@/hooks/useAuthor";
-import { useNsite } from "@/hooks/useNsite";
 import { useOpenProfile } from "@/hooks/useOpenProfile";
 import { useCheckUserBan } from "@/hooks/useUserBan";
 import { usePrefetchProfile } from "@/hooks/usePrefetchProfile";
@@ -42,20 +40,19 @@ import { useProfileTheme, usePrefetchProfileTheme } from "@/hooks/useProfileThem
 import { isStatusExpired, useUserStatus } from "@/hooks/useUserStatus";
 import { useUserModeration, type UserModeration } from "@/hooks/useUserModeration";
 import { toast } from "@/hooks/useToast";
-import { getAvatarShape } from "@/lib/avatarShape";
 import { dittoProfileUrl } from "@/lib/dittoUrl";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { tryNpubEncode } from "@/lib/safeNip19";
 import { useIsUserBanned } from "@/lib/blocklistStore";
 import { getPronouns } from "@/lib/pronouns";
-import { useFrameCss, nameStyleCss, readUltra, ULTRA_NAME_CLASS } from "@/lib/ultra";
+import { useFrameCss, useUltra } from "@/lib/ultra";
 import { sanitizeImageSrc } from "@/lib/sanitizeUrl";
 import { cn } from "@/lib/utils";
 import { writeClipboardText } from "@/lib/clipboard";
 import type { ImetaEntry } from "@/lib/imeta";
 import { buildThemeVarStyle } from "@/themes";
 import { FormattedMessage, t, useIntl } from "@/i18n";
-import { AvatarInitial } from "@/components/AvatarInitial";
+import { UserAvatar } from "@/components/UserAvatar";
 
 const NO_TAGS: string[][] = [];
 
@@ -105,8 +102,8 @@ function ProfilePreviewBody({
   const displayName = getDisplayName(metadata, pubkey);
   // A Community Nickname names them here, their profile name beside it (CORD-04 §10).
   const nickname = useCommunityNickname(pubkey);
-  const avatarShape = getAvatarShape(metadata);
-  const ultra = readUltra(metadata);
+  const ultra = useUltra(metadata);
+  // On the round button: a drop-shadow on the bordered avatar itself draws square.
   const frameStyle = useFrameCss(ultra?.frame);
   const pronouns = getPronouns(metadata);
   const picture = sanitizeImageSrc(metadata?.picture);
@@ -139,7 +136,6 @@ function ProfilePreviewBody({
 
   const shortNpub = npub ? `${npub.slice(0, 12)}…${npub.slice(-6)}` : "";
   const dittoProfileHref = dittoProfileUrl(pubkey);
-  const nsite = useNsite(pubkey).data;
 
   const viewProfile = () => {
     onAction?.();
@@ -212,18 +208,21 @@ function ProfilePreviewBody({
             className="block rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-ring enabled:cursor-zoom-in"
             style={frameStyle}
           >
-            <Avatar shape={avatarShape} className="size-16 border-[3px] border-background">
-              <AvatarImage src={metadata?.picture} imeta={author.data?.imeta?.picture} alt={displayName} />
-              <AvatarFallback className="bg-primary/20 text-primary text-lg">
-                <AvatarInitial name={displayName} pubkey={pubkey} />
-              </AvatarFallback>
-            </Avatar>
+            <UserAvatar
+              pubkey={pubkey}
+              metadata={metadata}
+              imeta={author.data?.imeta?.picture}
+              name={displayName}
+              className="size-16 border-[3px] border-background"
+              frame={false}
+              fallbackClassName="text-lg"
+            />
           </button>
         </div>
 
         <div className="flex items-center gap-1.5 min-w-0">
-          <div className={cn("font-bold text-chat truncate", ultra?.name && ULTRA_NAME_CLASS)} style={nameStyleCss(ultra?.name)}>
-            <DisplayName pubkey={pubkey} name={nickname || displayName} tags={nickname ? NO_TAGS : author.data?.event?.tags ?? NO_TAGS} />
+          <div className="font-bold text-chat truncate">
+            <DisplayName pubkey={pubkey} name={nickname || displayName} tags={nickname ? NO_TAGS : author.data?.event?.tags ?? NO_TAGS} metadata={metadata} ultra="hero" />
           </div>
           <BotPill metadata={metadata} />
           {ultra && <UltraPill force />}
@@ -347,7 +346,7 @@ function ProfilePreviewBody({
           </div>
         )}
 
-        {/* Full profile, plus ditto.pub and the person's nsite when published. */}
+        {/* Full profile, plus ditto.pub. */}
         <div className="mt-2 flex items-center gap-2">
           <Button
             size="sm"
@@ -370,20 +369,6 @@ function ProfilePreviewBody({
                 aria-label={intl.formatMessage({ id: "profilePreviewCard.viewOnDitto", defaultMessage: "View on Ditto" })}
               >
                 <DittoIcon className="size-3.5" />
-              </a>
-            </Button>
-          )}
-          {nsite && (
-            <Button size="icon" variant="secondary" className="size-8 touch:size-11 clip-corner-lg shrink-0" asChild>
-              <a
-                href={nsite.url}
-                target="_blank"
-                rel="noopener noreferrer"
-                onClick={() => onAction?.()}
-                title={nsite.title ?? intl.formatMessage({ id: "profilePreviewCard.viewWebsite", defaultMessage: "View website" })}
-                aria-label={intl.formatMessage({ id: "profilePreviewCard.viewWebsite", defaultMessage: "View website" })}
-              >
-                <Globe className="size-3.5" />
               </a>
             </Button>
           )}

@@ -3,18 +3,15 @@ import { AtSign, UsersRound } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { BotPill } from "@/components/BotPill";
-import { UltraPill } from "@/components/UltraPill";
 import { DisplayName } from "@/components/DisplayName";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { usePortalDropdown } from "@/hooks/usePortalDropdown";
 import { useSearchProfiles, useMemberProfiles, type SearchProfile } from "@/hooks/useSearchProfiles";
-import { getAvatarShape } from "@/lib/avatarShape";
 import { getCaretCoordinates } from "@/lib/caretCoordinates";
 import { menuPickHandlers } from "@/lib/menuPick";
 import { cn } from "@/lib/utils";
 import { FormattedMessage, useIntl } from "@/i18n";
 import { parseProfileImeta } from "@/lib/profileImeta";
-import { AvatarInitial } from "@/components/AvatarInitial";
+import { UserAvatar } from "@/components/UserAvatar";
 
 interface MentionAutocompleteProps {
   textareaRef: React.RefObject<HTMLTextAreaElement | null>;
@@ -362,20 +359,14 @@ function MentionItem({
       )}
       {...menuPickHandlers(onSelect)}
     >
-      <Avatar shape={getAvatarShape(metadata)} className="size-8 shrink-0">
-        <AvatarImage src={metadata.picture} imeta={parseProfileImeta(profile.event.tags, metadata)?.picture} alt={displayName} />
-        <AvatarFallback className="bg-primary/20 text-primary text-xs">
-          <AvatarInitial name={displayName} pubkey={pubkey} />
-        </AvatarFallback>
-      </Avatar>
+      <UserAvatar pubkey={pubkey} metadata={metadata} imeta={parseProfileImeta(profile.event.tags, metadata)?.picture} name={displayName} className="size-8 shrink-0" fallbackClassName="text-xs" />
 
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-1.5 min-w-0">
           <div className="font-semibold text-sm truncate">
-            <DisplayName pubkey={pubkey} name={displayName} tags={profile.event.tags} />
+            <DisplayName pubkey={pubkey} name={displayName} tags={profile.event.tags} metadata={metadata} />
           </div>
           <BotPill metadata={metadata} />
-          <UltraPill metadata={metadata} interactive={false} />
         </div>
         <div className="text-xs text-muted-foreground truncate font-mono text-2xs">
           {identifier}

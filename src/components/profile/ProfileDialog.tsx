@@ -29,7 +29,6 @@ import { DisplayName } from "@/components/DisplayName";
 import { EmojifiedText } from "@/components/chat/CustomEmoji";
 import { ProfileImageLightbox } from "@/components/profile/ProfileImageLightbox";
 import { UserBanned } from "@/components/profile/UserBanned";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { BlurhashCanvas } from "@/components/BlurhashCanvas";
 import { FallbackImage } from "@/components/ui/FallbackImage";
@@ -65,15 +64,13 @@ import { useFollowToggle } from "@/hooks/useFollowToggle";
 import { useMediaPolicy, useMediaSrc } from "@/hooks/useMediaPolicy";
 import { useUserModeration } from "@/hooks/useUserModeration";
 import { UserModerationMenuSection } from "@/components/chat/ModerationMenuSection";
-import { useNsite } from "@/hooks/useNsite";
 import { useOpenProfile } from "@/hooks/useOpenProfile";
 import { useProfileBadges, type ProfileBadge } from "@/hooks/useProfileBadges";
 import { useProfileTheme } from "@/hooks/useProfileTheme";
 import { useStartedDms } from "@/hooks/useStartedDms";
 import { isStatusExpired, useUserStatus } from "@/hooks/useUserStatus";
-import { getAvatarShape } from "@/lib/avatarShape";
 import { getPronouns } from "@/lib/pronouns";
-import { useFrameCss, nameStyleCss, readUltra, ULTRA_NAME_CLASS } from "@/lib/ultra";
+import { useFrameCss, useUltra } from "@/lib/ultra";
 import { dittoNip19Url, dittoProfileUrl } from "@/lib/dittoUrl";
 import { faviconUrl } from "@/lib/faviconUrl";
 import { loadThemeFont } from "@/lib/fontLoader";
@@ -88,9 +85,10 @@ import { buildThemeVarStyle } from "@/themes";
 
 import type { CSSProperties } from "react";
 import type { ThemeBackground } from "@/lib/themeEvent";
-import { AvatarInitial } from "@/components/AvatarInitial";
+import { UserAvatar } from "@/components/UserAvatar";
 
 const NO_TAGS: string[][] = [];
+const TITLE_FONT = { fontFamily: "var(--title-font-family, inherit)" };
 
 /** Lazy: only reachable from the viewer's own profile, behind a click. */
 const ProfileSettings = lazy(
@@ -213,14 +211,14 @@ function ProfileView({ pubkey, onClose }: { pubkey: string; onClose: () => void 
   const { config } = useAppContext();
   const author = useAuthor(pubkey);
   const metadata = author.data?.metadata;
-  const ultra = readUltra(metadata);
+  const ultra = useUltra(metadata);
+  // On the round button: a drop-shadow on the bordered avatar itself draws square.
   const frameStyle = useFrameCss(ultra?.frame);
   const pronouns = getPronouns(metadata);
   // kind-0 is author-controlled.
   const banner = sanitizeImageSrc(metadata?.banner);
   const bannerImeta = imetaFor(banner, author.data?.imeta?.banner);
   const theme = useProfileTheme(pubkey).data?.theme;
-  const nsite = useNsite(pubkey).data;
   const badgesQuery = useProfileBadges(pubkey);
   const sharedQuery = useSharedCommunities(pubkey);
   const badges = badgesQuery.data ?? [];
@@ -245,7 +243,7 @@ function ProfileView({ pubkey, onClose }: { pubkey: string; onClose: () => void 
   const { start } = useStartedDms();
   const { sendToPeer: giftUltra } = useUltraGift();
   // Pointless for someone who already has it; the gift travels as a DM.
-  const canGift = !!user && !isSelf && !!npub && !config.dmsDisabled && !ultra;
+  const canGift = !!user && !isSelf && !!npub && !config.dmsDisabled && config.showUltra && !ultra;
 
   // Followers come from the NIP-85 stats provider (Ditto's source).
   const followingQuery = useFollowingOf(pubkey);
@@ -371,12 +369,15 @@ function ProfileView({ pubkey, onClose }: { pubkey: string; onClose: () => void 
                     className="block rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-ring enabled:cursor-zoom-in"
                     style={frameStyle}
                   >
-                    <Avatar shape={getAvatarShape(metadata)} className="size-20 md:size-24 border-4 border-background">
-                      <AvatarImage src={metadata?.picture} imeta={author.data?.imeta?.picture} alt={displayName} />
-                      <AvatarFallback className="bg-primary/20 text-primary text-2xl">
-                        <AvatarInitial name={displayName} pubkey={pubkey} />
-                      </AvatarFallback>
-                    </Avatar>
+                    <UserAvatar
+                      pubkey={pubkey}
+                      metadata={metadata}
+                      imeta={author.data?.imeta?.picture}
+                      name={displayName}
+                      className="size-20 md:size-24 border-4 border-background"
+                      frame={false}
+                      fallbackClassName="text-2xl"
+                    />
                   </button>
                 </div>
 
@@ -464,33 +465,15 @@ function ProfileView({ pubkey, onClose }: { pubkey: string; onClose: () => void 
                       </a>
                     </Button>
                   )}
-                  {nsite && (
-                    <Button
-                      size="icon"
-                      variant="secondary"
-                      className="size-9 touch:size-11 clip-corner-lg"
-                      asChild
-                    >
-                      <a
-                        href={nsite.url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        title={nsite.title ?? intl.formatMessage({ id: "profileDialog.siteTitle", defaultMessage: "{name}'s site" }, { name: displayName })}
-                        aria-label={intl.formatMessage({ id: "profileDialog.viewWebsite", defaultMessage: "View website" })}
-                      >
-                        <Globe className="size-4" />
-                      </a>
-                    </Button>
-                  )}
                 </div>
               </div>
 
               <div className="mt-2 flex items-center gap-2 min-w-0">
                 <h1
-                  className={cn("text-xl md:text-2xl font-bold truncate", ultra?.name && ULTRA_NAME_CLASS)}
-                  style={{ fontFamily: "var(--title-font-family, inherit)", ...nameStyleCss(ultra?.name) }}
+                  className="text-xl md:text-2xl font-bold truncate"
+                  style={TITLE_FONT}
                 >
-                  <DisplayName pubkey={pubkey} name={displayName} tags={author.data?.event?.tags ?? NO_TAGS} />
+                  <DisplayName pubkey={pubkey} name={displayName} tags={author.data?.event?.tags ?? NO_TAGS} metadata={metadata} ultra="hero" />
                 </h1>
                 <BotPill metadata={metadata} />
                 {ultra && <UltraPill force />}
@@ -852,13 +835,8 @@ function PersonRow({ pubkey }: { pubkey: string }) {
         onClick={() => openProfile(npub ?? pubkey)}
         className="flex w-full items-center gap-2 clip-corner px-2 py-1.5 touch:py-2.5 hover:bg-secondary transition-colors min-w-0 text-left"
       >
-        <Avatar shape={getAvatarShape(metadata)} className="size-7 shrink-0">
-          <AvatarImage src={metadata?.picture} imeta={author.data?.imeta?.picture} alt="" />
-          <AvatarFallback className="bg-primary/20 text-primary text-xs">
-            <AvatarInitial name={name} pubkey={pubkey} />
-          </AvatarFallback>
-        </Avatar>
-        <span className="text-sm truncate">{name}</span>
+        <UserAvatar pubkey={pubkey} metadata={metadata} imeta={author.data?.imeta?.picture} name={name} alt="" className="size-7 shrink-0" fallbackClassName="text-xs" />
+        <span className="text-sm truncate"><DisplayName pubkey={pubkey} name={name} tags={author.data?.event?.tags ?? NO_TAGS} metadata={metadata} /></span>
       </button>
     </li>
   );

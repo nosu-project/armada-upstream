@@ -24,7 +24,6 @@ import {
   Waypoints,
   Zap,
 } from "lucide-react";
-import { nip19 } from "nostr-tools";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useLocation } from "react-router-dom";
 
@@ -66,11 +65,13 @@ import {
 import { useSettingsFilter } from "@/components/settings/settingsSearch";
 import { StorageSettings } from "@/components/settings/StorageSettings";
 import { UltraSettings } from "@/components/settings/UltraSettings";
+import { UltraVisibilitySettings } from "@/components/settings/UltraVisibilitySettings";
 import { VoiceSettings } from "@/components/settings/VoiceSettings";
 import { WalletSettings } from "@/components/settings/WalletSettings";
 import { ThemeSelector } from "@/components/ThemeSelector";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
+import { UserAvatar } from "@/components/UserAvatar";
 import { useAndroidBack } from "@/hooks/useAndroidBack";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useBackOrHome } from "@/hooks/useBackOrHome";
@@ -79,9 +80,9 @@ import { useInstallPrompt } from "@/hooks/useInstallPrompt";
 import { useMyUltra } from "@/hooks/useUltra";
 import { common, useIntl } from "@/i18n";
 import { appVersionLabel } from "@/lib/appVersion";
-import { getAvatarShape } from "@/lib/avatarShape";
 import { isDesktop } from "@/lib/desktop";
 import { isIosApp } from "@/lib/platform";
+import { useUltraShown } from "@/lib/ultra";
 import { cn } from "@/lib/utils";
 
 import type { LucideIcon } from "lucide-react";
@@ -104,6 +105,7 @@ function useSettingsPages(): { pages: Partial<Record<SettingsPageId, PageDef>>; 
   const { user } = useCurrentUser();
   const intl = useIntl();
   const ultra = !!useMyUltra().ultra;
+  const ultraShown = useUltraShown();
   return useMemo(() => {
     const profiling = import.meta.env.VITE_PROFILE === "1";
     const pages: Partial<Record<SettingsPageId, PageDef>> = {
@@ -151,6 +153,9 @@ function useSettingsPages(): { pages: Partial<Record<SettingsPageId, PageDef>>; 
             <SettingsGroup title={intl.formatMessage({ id: "settingsPage.appearance.motion", defaultMessage: "Effects" })}>
               <MotionSettings />
             </SettingsGroup>
+            <SettingsGroup id="ultra-visibility" title="Armada Ultra">
+              <UltraVisibilitySettings />
+            </SettingsGroup>
           </>
         ),
       },
@@ -197,7 +202,7 @@ function useSettingsPages(): { pages: Partial<Record<SettingsPageId, PageDef>>; 
         render: () => <AboutSettings />,
       },
     };
-    if (user) {
+    if (user && ultraShown) {
       pages.ultra = {
         title: "Armada Ultra",
         icon: Gem,
@@ -207,6 +212,8 @@ function useSettingsPages(): { pages: Partial<Record<SettingsPageId, PageDef>>; 
           : intl.formatMessage({ id: "settingsPage.ultra.summary", defaultMessage: "Premium, for $0.00" }),
         render: () => <UltraSettings />,
       };
+    }
+    if (user) {
       pages.profile = {
         title: intl.formatMessage({ id: "settingsPage.profile.title", defaultMessage: "Profile" }),
         icon: UserRound,
@@ -315,7 +322,7 @@ function useSettingsPages(): { pages: Partial<Record<SettingsPageId, PageDef>>; 
       ["support", "about"],
     ];
     return { pages, groups: groups.map((ids) => ids.filter((id) => pages[id])).filter((ids) => ids.length > 0) };
-  }, [user, intl, ultra]);
+  }, [user, intl, ultra, ultraShown]);
 }
 
 /** The root list's identity card: the account at a glance, opening Profile (or Account when logged out). */
@@ -325,7 +332,6 @@ function ProfileCard({ compact, active, onOpen }: { compact?: boolean; active?: 
   const author = useAuthor(user?.pubkey);
   const metadata = author.data?.metadata;
   const name = metadata?.name || metadata?.display_name;
-  const npub = user ? nip19.npubEncode(user.pubkey) : "";
 
   return (
     <button
@@ -338,12 +344,21 @@ function ProfileCard({ compact, active, onOpen }: { compact?: boolean; active?: 
       )}
     >
       <span className="relative shrink-0">
-        <Avatar shape={getAvatarShape(metadata)} className={compact ? "size-10" : "size-14"}>
-          {user && <AvatarImage src={metadata?.picture} imeta={author.data?.imeta?.picture} alt={name ?? ""} />}
-          <AvatarFallback className="bg-primary/20 text-primary">
-            {name ? name.charAt(0).toUpperCase() : <UserRound className="size-5" />}
-          </AvatarFallback>
-        </Avatar>
+        {user ? (
+          <UserAvatar
+            pubkey={user.pubkey}
+            metadata={metadata}
+            imeta={author.data?.imeta?.picture}
+            alt={name ?? ""}
+            className={compact ? "size-10" : "size-14"}
+          />
+        ) : (
+          <Avatar className={compact ? "size-10" : "size-14"}>
+            <AvatarFallback className="bg-primary/20 text-primary">
+              <UserRound className="size-5" />
+            </AvatarFallback>
+          </Avatar>
+        )}
         {user && !author.isLoading && !name && (
           <span className="absolute -top-0.5 -right-0.5 size-2.5 rounded-full bg-primary ring-2 ring-background" aria-hidden />
         )}
@@ -351,19 +366,19 @@ function ProfileCard({ compact, active, onOpen }: { compact?: boolean; active?: 
       <span className="min-w-0 flex-1 space-y-0.5">
         <span className={cn("block truncate font-semibold leading-tight", compact ? "text-sm" : "text-base", !name && "text-muted-foreground")}>
           {user
-            ? (name ? <DisplayName pubkey={user.pubkey} name={name} tags={author.data?.event?.tags ?? []} /> : (author.isLoading
+            ? (name ? <DisplayName pubkey={user.pubkey} name={name} tags={author.data?.event?.tags ?? []} metadata={metadata} /> : (author.isLoading
               ? "\u00a0"
               : intl.formatMessage({ id: "settingsPage.profileCard.setName", defaultMessage: "Set your name" })))
             : intl.formatMessage({ id: "settingsPage.profileCard.logIn", defaultMessage: "Log in or sign up" })}
         </span>
-        <span className="block truncate text-xs text-muted-foreground">
-          {user
-            ? <span className="font-mono">{npub.slice(0, 12)}…{npub.slice(-6)}</span>
-            : intl.formatMessage({
+        {!user && (
+          <span className="block truncate text-xs text-muted-foreground">
+            {intl.formatMessage({
               id: "settingsPage.profileCard.loggedOutHint",
               defaultMessage: "Sync your settings and join communities",
             })}
-        </span>
+          </span>
+        )}
       </span>
       {!compact && <ChevronRight className="size-4 shrink-0 text-muted-foreground/70" aria-hidden />}
     </button>

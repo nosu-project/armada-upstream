@@ -12,6 +12,9 @@ import { useLocalStorage } from "@/hooks/useLocalStorage";
 import { appThemeFont } from "@/lib/fontLoader";
 import { parseProxyList } from "@/lib/mediaPolicy";
 import { useMediaSrc } from "@/hooks/useMediaPolicy";
+import { applyBlocklistSetting } from "@/lib/blocklistStore";
+import { setClientTagEnabled } from "@/lib/clientTag";
+import { setUltraShown } from "@/lib/ultra";
 import { setPowDifficulty } from "@/lib/pow";
 import { useThemePreview } from "@/lib/themePreview";
 import { hslStringToHex, isDarkTheme } from "@/lib/colorUtils";
@@ -138,6 +141,19 @@ export function AppProvider({ storageKey, children }: AppProviderProps) {
   useLayoutEffect(() => {
     setPowDifficulty(config.powDifficulty);
   }, [config.powDifficulty]);
+
+  useLayoutEffect(() => {
+    setClientTagEnabled(config.clientTag);
+  }, [config.clientTag]);
+
+  useLayoutEffect(() => {
+    setUltraShown(config.showUltra);
+  }, [config.showUltra]);
+
+  // Ahead of the initial sync's blocklist read, like the ones above.
+  useLayoutEffect(() => {
+    applyBlocklistSetting(config.blocklistAuthors);
+  }, [config.blocklistAuthors]);
 
   // public/theme.js handles the very first paint.
   useEffect(() => {

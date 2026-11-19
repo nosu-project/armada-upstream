@@ -314,6 +314,16 @@ export interface AppConfig {
    * the deployment's `POW_DIFFICULTY`. Per-device: what a phone can mine is not what a desktop can.
    */
   powDifficulty?: number;
+  /** Whether what this account signs carries the NIP-89 `client` tag (`lib/clientTag.ts`, default on). Synced. */
+  clientTag: boolean;
+  /** Whether anyone's Armada Ultra (badges, name styles, halos, effects, gifts) is drawn. Synced. */
+  showUltra: boolean;
+  /**
+   * Moderation keys whose blocklist entries count (`lib/blocklist.ts`): `""`
+   * follows the deployment's `BLOCKLIST_AUTHORS`, `"none"` is none, else
+   * comma-separated hex pubkeys. Ignored in store installs. Synced.
+   */
+  blocklistAuthors: string;
 }
 
 /** Cap on message-less DM rows in {@link AppConfig.startedDms} (they ride in synced settings). */
@@ -371,6 +381,9 @@ export const METADATA_CONFIG_KEYS = [
   "defaultZapMethod",
   "zapsEnabled",
   "accountStandingSeen",
+  "clientTag",
+  "showUltra",
+  "blocklistAuthors",
 ] as const satisfies ReadonlyArray<keyof AppConfig>;
 
 /** `${APP_ID}/rail` — grows with every community; rewritten on every drag. */
@@ -479,6 +492,9 @@ export const defaultConfig: AppConfig = {
   defaultZapMethod: "bitcoin",
   zapsEnabled: true,
   accountStandingSeen: false,
+  clientTag: true,
+  showUltra: true,
+  blocklistAuthors: "",
 };
 
 export const AppContext = createContext<AppContextType | undefined>(undefined);
