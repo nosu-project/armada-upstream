@@ -251,6 +251,8 @@ function alignPieces(base: Text, layer: HTMLElement) {
   }
 }
 
+const NO_PAINT: Paint[] = [];
+
 const PaintLayer = memo(function PaintLayer({ paint }: { paint: Paint[] }) {
   // An emoji is keyed by which occurrence of its shortcode it is, not its offset:
   // typing before it would otherwise remount (and reload) its image every keystroke.
@@ -296,12 +298,17 @@ export function RichTextarea({ rich, ref, className, onKeyDown, onCopy, onCut, f
   const innerRef = useRef<HTMLDivElement>(null);
   const paintRef = useRef<HTMLDivElement>(null);
   const [ready, setReady] = useState(false);
-  const [paint, setPaint] = useState<Paint[]>([]);
+  /** The first sync has run; before it the overlay isn't laid out, so there is nothing to measure. */
+  const started = useRef(false);
+  const [paint, setPaint] = useState<Paint[]>(NO_PAINT);
   const fontScale = useFontScale();
   const { textareaRef } = rich;
   const runs = useMemo(() => highlightRuns(rich.display, rich.model.atoms), [rich.display, rich.model.atoms]);
-  const paintInput = useRef({ runs, atoms: rich.model.atoms });
-  paintInput.current = { runs, atoms: rich.model.atoms };
+  // Unstyled text is drawn by the textarea itself: measuring and redrawing every glyph
+  // of it on each keystroke forced several layouts a key, most of typing's cost on a phone.
+  const plain = runs.every((run) => run.flags === 0);
+  const paintInput = useRef({ runs, atoms: rich.model.atoms, plain });
+  paintInput.current = { runs, atoms: rich.model.atoms, plain };
 
   const setRefs = useCallback((el: HTMLTextAreaElement | null) => {
     textareaRef.current = el;
@@ -322,6 +329,10 @@ export function RichTextarea({ rich, ref, className, onKeyDown, onCopy, onCut, f
    * every piece at the previous frame's wrap.
    */
   const syncText = useCallback((now = false) => {
+    if (paintInput.current.plain) {
+      setPaint(NO_PAINT);
+      return;
+    }
     const el = textareaRef.current;
     const inner = innerRef.current;
     const layer = paintRef.current;
@@ -369,11 +380,6 @@ export function RichTextarea({ rich, ref, className, onKeyDown, onCopy, onCut, f
       syncText(now);
     };
     const onEvent = () => sync();
-    sync(false);
-    setReady(true);
-    el.addEventListener("scroll", syncScroll);
-    window.addEventListener("resize", onEvent);
-    document.fonts?.addEventListener("loadingdone", onEvent);
     // The observer reports once on observe() with the box sync(false) just
     // measured; its flushSync would render every pending update (a whole
     // channel's timeline on a switch) synchronously for nothing.
@@ -382,15 +388,46 @@ export function RichTextarea({ rich, ref, className, onKeyDown, onCopy, onCut, f
       if (`${style.width}|${style.height}` !== box) sync();
     };
     const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(onResize);
-    observer?.observe(el);
     // A theme font is a custom property on <html>; one that needs no loading
     // changes the textarea's font with no resize and no `loadingdone`.
     const onRootChange = () => {
       if (getComputedStyle(el).font !== font) sync();
     };
     const rootObserver = typeof MutationObserver === "undefined" ? null : new MutationObserver(onRootChange);
-    rootObserver?.observe(document.documentElement, { attributes: true, attributeFilter: ["style", "class"] });
+    const start = () => {
+      started.current = true;
+      sync(false);
+      setReady(true);
+      el.addEventListener("scroll", syncScroll);
+      window.addEventListener("resize", onEvent);
+      document.fonts?.addEventListener("loadingdone", onEvent);
+      observer?.observe(el);
+      rootObserver?.observe(document.documentElement, { attributes: true, attributeFilter: ["style", "class"] });
+    };
+    // Mounted with a page (a channel switch), measuring now forces the first
+    // layout of the whole half-built page inside the commit: ~0.4 s on a phone.
+    // After the first paint it measures only this field; until then the
+    // textarea draws its own text.
+    let pending = true;
+    let frame = 0;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    if (typeof requestAnimationFrame === "undefined") {
+      pending = false;
+      start();
+    } else {
+      frame = requestAnimationFrame(() => {
+        timer = setTimeout(() => {
+          pending = false;
+          start();
+        }, 0);
+      });
+    }
     return () => {
+      if (pending) {
+        cancelAnimationFrame(frame);
+        clearTimeout(timer);
+        return;
+      }
       el.removeEventListener("scroll", syncScroll);
       window.removeEventListener("resize", onEvent);
       document.fonts?.removeEventListener("loadingdone", onEvent);
@@ -406,7 +443,9 @@ export function RichTextarea({ rich, ref, className, onKeyDown, onCopy, onCut, f
   }, [paint]);
 
   // A new value can scroll the field, or bring in a scrollbar, without an event reaching us first.
-  useLayoutEffect(() => syncText(), [rich.display, rich.model.atoms, syncText]);
+  useLayoutEffect(() => {
+    if (started.current) syncText();
+  }, [rich.display, rich.model.atoms, syncText]);
 
   return (
     <>
@@ -422,7 +461,7 @@ export function RichTextarea({ rich, ref, className, onKeyDown, onCopy, onCut, f
           className="rt-inner relative box-border whitespace-pre-wrap break-words border-solid border-transparent"
         >
           {/* A trailing newline only takes up a line when something follows it. */}
-          {`${rich.display}\u200b`}
+          {plain ? null : `${rich.display}\u200b`}
           <div ref={paintRef} className="absolute left-0 top-0">
             <PaintLayer paint={paint} />
           </div>
@@ -448,7 +487,7 @@ export function RichTextarea({ rich, ref, className, onKeyDown, onCopy, onCut, f
           }
           onCut?.(e);
         }}
-        className={cn(className, ready && "rt-input")}
+        className={cn(className, ready && !plain && "rt-input")}
       />
       {formatToolbar && <FormatToolbar rich={rich} />}
     </>

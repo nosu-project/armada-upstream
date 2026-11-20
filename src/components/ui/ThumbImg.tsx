@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState, type ImgHTMLAttributes } from
 import { MotionImg } from "@/components/ui/MotionImg";
 import { ThumbAnimation } from "@/components/ui/ThumbAnimation";
 import { useImageThumb } from "@/hooks/useImageThumb";
+import { observeIntersection } from "@/lib/sharedIntersection";
 
 /** How far outside the viewport a `loading="lazy"` thumbnail starts loading. */
 const LAZY_MARGIN = "400px";
@@ -13,6 +14,8 @@ const LAZY_MARGIN = "400px";
  * measured once from a placeholder with the same classes, which is what starts
  * the fetch: with `loading="lazy"`, only once that placeholder nears the screen.
  *
+ * `loops` caps an animation's loops each time it comes into view (see `ThumbAnimation`).
+ *
  * `originalWhilePending` fills that placeholder with the original image, for an
  * image that is part of the text (a custom emoji in a name) and so must not be
  * missing while the shared queue reaches it.
@@ -22,29 +25,32 @@ export function ThumbImg({
   className,
   style,
   originalWhilePending,
+  loops,
   ...props
-}: ImgHTMLAttributes<HTMLImageElement> & { originalWhilePending?: boolean }) {
+}: ImgHTMLAttributes<HTMLImageElement> & { originalWhilePending?: boolean; loops?: number }) {
   const lazy = props.loading === "lazy";
   const [box, setBox] = useState(0);
-  const observer = useRef<IntersectionObserver | null>(null);
+  const stopWatching = useRef<(() => void) | null>(null);
   const measure = useCallback((el: HTMLElement | null) => {
-    observer.current?.disconnect();
-    observer.current = null;
+    stopWatching.current?.();
+    stopWatching.current = null;
     if (!el) return;
-    const size = () => Math.max(el.offsetWidth, el.offsetHeight) || 64;
-    if (!lazy || typeof IntersectionObserver === "undefined") {
-      setBox(size());
+    if (typeof IntersectionObserver === "undefined") {
+      setBox(Math.max(el.offsetWidth, el.offsetHeight) || 64);
       return;
     }
-    const io = new IntersectionObserver(([entry]) => {
-      if (!entry.isIntersecting) return;
-      io.disconnect();
-      setBox(size());
-    }, { rootMargin: LAZY_MARGIN });
-    io.observe(el);
-    observer.current = io;
+    // Sized from the observer's report, not `offsetWidth`: read in this ref callback,
+    // mid-commit, that forced a layout of the whole page being mounted. The first
+    // report comes a frame later for every element, so an eager image takes it as is.
+    const stop = observeIntersection(el, (entry) => {
+      if (lazy && !entry.isIntersecting) return;
+      stop();
+      const { width, height } = entry.boundingClientRect;
+      setBox(Math.round(Math.max(width, height)) || 64);
+    }, LAZY_MARGIN);
+    stopWatching.current = stop;
   }, [lazy]);
-  useEffect(() => () => observer.current?.disconnect(), []);
+  useEffect(() => () => stopWatching.current?.(), []);
   const thumb = useImageThumb(src, box);
   if (thumb.pending) {
     return (
@@ -55,6 +61,6 @@ export function ThumbImg({
       </span>
     );
   }
-  if (thumb.anim) return <ThumbAnimation anim={thumb.anim} className={className} style={style} alt={props.alt} title={props.title} />;
+  if (thumb.anim) return <ThumbAnimation anim={thumb.anim} className={className} style={style} alt={props.alt} title={props.title} loops={loops} />;
   return <MotionImg {...props} src={thumb.src} className={className} style={style} />;
 }

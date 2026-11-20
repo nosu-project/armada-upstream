@@ -10,10 +10,9 @@
 
 import { NRelay1, type NRelay1Opts } from "@nostrify/nostrify";
 import type { NostrEvent, NostrRelayMsg } from "@nostrify/types";
-import { getEventHash } from "nostr-tools/pure";
 
 import { relayMsgSchema } from "./relayMsgParse";
-import { type EcVerifyBatch, verifyEventsOnce } from "./verifyCache";
+import { type EcVerifyBatch, idIsHash, primeHashes, verifyEventsOnce } from "./verifyCache";
 import { ecVerifyBatch } from "./verifyPool";
 
 // Replace NRelay1's zod frame parser app-wide with the hand-written one (same verdicts).
@@ -24,14 +23,6 @@ export interface RelayInboxOpts {
   skipVerify?: (event: NostrEvent) => boolean;
   /** The EC verifier for the memo's residue. Default: the worker pool. */
   ecVerify?: EcVerifyBatch;
-}
-
-function idIsHash(event: NostrEvent): boolean {
-  try {
-    return getEventHash(event) === event.id;
-  } catch {
-    return false;
-  }
 }
 
 /** Messages whose delivery must keep wire order relative to one another. */
@@ -87,6 +78,7 @@ export class RelayInbox {
         // Take everything accumulated while the previous verify was awaited.
         const batch = this.pending;
         this.pending = [];
+        await primeHashes(batch.flatMap((msg) => (msg[0] === "EVENT" ? [msg[2]] : [])));
         const events: NostrEvent[] = [];
         for (const msg of batch) if (this.needsVerify(msg)) events.push(msg[2]);
         // Never throws: a dead verifier yields "unverified", dropping those events.

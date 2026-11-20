@@ -10,13 +10,14 @@ import { useNostr } from "@nostrify/react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef } from "react";
 
-import { readAccessPlanes } from "@/concord/hooks/useChannelAccess";
+import { ACCESS_QUORUM_GRACE_MS, queryRelayStrict, readAccessPlanes } from "@/concord/hooks/useChannelAccess";
 import { citationFor, foldStoredControl, publishEdition, useControlFold, useDissolved, withControlWrite } from "@/concord/hooks/useControlPlane";
 import { guestbookWalked, useGuestbook } from "@/concord/hooks/useGuestbook";
 import { runWriterDuty } from "@/concord/hooks/writerDutyRun";
 import { useChannelRekey } from "@/concord/hooks/useRekey";
 import { onDutyNow } from "@/concord/lib/dutyNow";
-import { sweepControl, sweepGuestbook } from "@/concord/lib/planeSync";
+import { sweepControl, sweepGuestbook, whenAuthSettled } from "@/concord/lib/planeSync";
+import { registerStreamKeys } from "@/concord/lib/streamAuth";
 import { accessCandidates, authoritySig, dutyMayAct, mintingRotations, planChannelDuty, rotationRecipients, stillShutOut, type MintingRotation } from "@/concord/lib/accessDuty";
 import { cachedCommunity } from "@/concord/hooks/useCommunityList";
 import { isEntitled } from "@/concord/lib/channelAccess";
@@ -36,6 +37,7 @@ import type { Community, PrivateChannelKey } from "@/concord/lib/types";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { clockNowMs } from "@/lib/relayClock";
 import type { NostrRumor } from "@/lib/nostrRumor";
+import { getArmadaDB } from "@/lib/db/armadaDB";
 import { logSync } from "@/lib/syncLog";
 
 /** How often a holder that can rotate reads the Control Plane again for a change it missed. */
@@ -60,6 +62,37 @@ const rerun = new Set<string>();
 /** Members delivered to this session, by `community:channel:epoch:member` (Vector `AccessLedger`). */
 const delivered = new Set<string>();
 
+/**
+ * This account's own deliveries, kept across launches as one KV key per
+ * `community:channel:epoch:member` (a key per fact). A plane flooded past the paged
+ * read hides the delivery it already holds, and the session ledger alone sent the key
+ * and every past epoch again on each launch, flooding the plane further.
+ */
+const LEDGER_PREFIX = "c2accessled:";
+const ledgerLoads = new Map<string, Promise<void>>();
+
+function loadDeliveredLedger(me: string, communityIdHex: string): Promise<void> {
+  const scope = `${LEDGER_PREFIX}${me}:${communityIdHex}:`;
+  let load = ledgerLoads.get(scope);
+  if (!load) {
+    load = getArmadaDB()
+      .kv.list<number>({ prefix: scope })
+      .then((entries) => {
+        for (const { key } of entries) delivered.add(`${communityIdHex}:${key.slice(scope.length)}`);
+      })
+      .catch(() => {
+        ledgerLoads.delete(scope);
+      });
+    ledgerLoads.set(scope, load);
+  }
+  return load;
+}
+
+function recordDelivered(me: string, key: string): void {
+  delivered.add(key);
+  void getArmadaDB().kv.set(`${LEDGER_PREFIX}${me}:${key}`, 1).catch(() => undefined);
+}
+
 /** Members this device rotated out, by `community:channel:epoch it minted:member`. */
 const cutBySelf = new Set<string>();
 
@@ -82,6 +115,7 @@ export async function historyDeliveriesSettled(): Promise<void> {
 /** Forget whom this session delivered to, so the next account starts afresh. */
 export function clearAccessDutyMemory(): void {
   delivered.clear();
+  ledgerLoads.clear();
   historyDelivered.clear();
   historyGeneration++;
   minted.clear();
@@ -102,8 +136,8 @@ async function pageRekeyWraps(nostr: NPool, url: string, authors: string[], sign
   let until: number | undefined;
   for (let page = 0; page < REKEY_MAX_PAGES && !signal.aborted; page++) {
     const filter = { kinds: [KIND_WRAP], authors, limit: REKEY_PAGE, ...(until !== undefined ? { until } : {}) };
-    const got = await nostr.relay(url).query([filter], { signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]) }).catch(() => undefined);
-    if (!got) break;
+    // A page the relay didn't answer throws: a rotation it hides would read as none.
+    const got = await queryRelayStrict(nostr, url, filter, signal);
     let fresh = 0;
     for (const e of got) {
       if (seen.has(e.id)) continue;
@@ -129,7 +163,22 @@ export async function readMintingRotations(nostr: NPool, community: Community, c
     const a = channelRekeyGroupKey(r.key, channelId, epoch);
     return [a.pk, a] as const;
   }));
-  const events = (await quorum(community.relays.map((url) => pageRekeyWraps(nostr, url, [...addresses.keys()], signal)))).flatMap((r) => r ?? []);
+  // On an auth-gating relay a rekey plane is read AS its key.
+  registerStreamKeys([...addresses.values()], community.relays);
+  const reads = await quorum(
+    community.relays.map(async (url) => {
+      await whenAuthSettled(url, () => [...addresses.values()]);
+      return pageRekeyWraps(nostr, url, [...addresses.keys()], signal);
+    }),
+    ACCESS_QUORUM_GRACE_MS,
+  );
+  // No rotation found is only evidence once a majority read the rekey planes: read as
+  // "none", an unanswered read had the duty mint a fresh epoch on every pass.
+  const answered = reads.filter((r) => r !== undefined).length;
+  if (answered < majorityOf(community.relays.length)) {
+    throw new Error(`rekey planes read on ${answered} of ${community.relays.length} relay(s)`);
+  }
+  const events = reads.flatMap((r) => r ?? []);
   const seen = new Set<string>();
   const parsed = events.flatMap((e) => {
     const a = addresses.get(e.pubkey);
@@ -345,7 +394,7 @@ export async function deliverKeysOnPlane(nostr: NPool, community: Community, ch:
   // The current key is what lets them in, so it lands before any history does.
   const access = await buildAccessDeliveries(user.pubkey, encrypt, { scopeIdHex: idHex, epoch: ch.epoch, key: ch.key, recipients: [...recipients], atSecs });
   await Promise.all(access.map((r) => publish(r, "delivery")));
-  for (const pk of recipients) delivered.add(`${community.idHex}:${idHex}:${ch.epoch}:${pk}`);
+  for (const pk of recipients) recordDelivered(user.pubkey, `${community.idHex}:${idHex}:${ch.epoch}:${pk}`);
 
   // Past epochs read-only, one event each, behind the key rather than ahead of it.
   const historyKey = (epoch: bigint, pk: string) => `${community.idHex}:${idHex}:${epoch}:${pk}`;
@@ -419,6 +468,7 @@ async function runAccessDuty(
   // Judged on a whole read: a stale entitlement would hand a new epoch's key to someone its rotation just cut.
   if (folded.incomplete.length > 0) return false;
   if (!user.signer.nip44) return false;
+  await loadDeliveredLedger(user.pubkey, community.idHex);
   // Before's too: someone only a removed overwrite named still holds what it let them read.
   const candidates = [...new Set([...accessCandidates(folded, members), ...(settledFrom ? accessCandidates(settledFrom, members) : [])])].sort();
   const doneFor = (idHex: string, epoch: bigint) => new Set(candidates.filter((pk) => delivered.has(`${community.idHex}:${idHex}:${epoch}:${pk}`)));

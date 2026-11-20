@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { nip19 } from "nostr-tools";
 import { useRef, useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -87,6 +87,9 @@ describe("RichTextarea painting", () => {
   });
   afterEach(() => vi.restoreAllMocks());
 
+  // The field first measures after the first paint (a mount mid-page-switch must not force layout).
+  const painted = () => act(() => new Promise<void>((resolve) => requestAnimationFrame(() => setTimeout(resolve, 0))));
+
   const pieces = (container: HTMLElement) =>
     [...container.querySelectorAll<HTMLElement>(".rt-piece")].map((n) => ({
       text: n.textContent,
@@ -94,8 +97,9 @@ describe("RichTextarea painting", () => {
       at: [n.style.left, n.style.top].join(","),
     }));
 
-  it("draws each styled run where the text put it, markers upright", () => {
+  it("draws each styled run where the text put it, markers upright", async () => {
     const { container } = render(<Field initial="a **b** *it*" onValue={() => {}} />);
+    await painted();
     const drawn = pieces(container);
     expect(drawn).toContainEqual({ text: "b", cls: "rt-bold", at: "40px,0px" });
     expect(drawn).toContainEqual({ text: "it", cls: "rt-italic", at: "10px,20px" });
@@ -103,16 +107,26 @@ describe("RichTextarea painting", () => {
     expect(drawn.find((p) => p.text === "it")!.cls).not.toContain("muted");
   });
 
-  it("splits a run at each line it wraps across", () => {
-    const { container } = render(<Field initial="abcdefghijklmnopqrst" onValue={() => {}} />);
-    expect(pieces(container)).toEqual([
+  it("leaves unstyled text to the textarea, drawing nothing over it", async () => {
+    const { container } = render(<Field initial="just words" onValue={() => {}} />);
+    await painted();
+    expect(pieces(container)).toEqual([]);
+    expect(screen.getByLabelText("field").className).not.toContain("rt-input");
+  });
+
+  it("splits a run at each line it wraps across", async () => {
+    // The styled line after it puts the overlay in charge of drawing the text.
+    const { container } = render(<Field initial={"abcdefghijklmnopqrst\n**b**"} onValue={() => {}} />);
+    await painted();
+    expect(screen.getByLabelText("field").className).toContain("rt-input");
+    expect(pieces(container).slice(0, 3)).toEqual([
       { text: "abcdefgh", cls: "", at: "0px,0px" },
       { text: "ijklmnop", cls: "", at: "0px,20px" },
       { text: "qrst", cls: "", at: "0px,40px" },
     ]);
   });
 
-  it("keeps a wrapped line on its own line when its first glyph also reports the line before", () => {
+  it("keeps a wrapped line on its own line when its first glyph also reports the line before", async () => {
     // iOS WebKit: a range starting a soft-wrapped line also yields a zero-width box at the previous line's end.
     vi.spyOn(Range.prototype, "getClientRects").mockImplementation(function (this: Range) {
       const rects = [...fixedPitchRects.call(this)];
@@ -121,7 +135,8 @@ describe("RichTextarea painting", () => {
       if (!piece && i > 0 && i % 8 === 0) rects.unshift(new DOMRect(80, (i / 8 - 1) * 20, 0, 20));
       return rects as unknown as DOMRectList;
     });
-    const { container } = render(<Field initial="abcdefghijklmnopqrst" onValue={() => {}} />);
-    expect(pieces(container).map((p) => p.at)).toEqual(["0px,0px", "0px,20px", "0px,40px"]);
+    const { container } = render(<Field initial={"abcdefghijklmnopqrst\n**b**"} onValue={() => {}} />);
+    await painted();
+    expect(pieces(container).slice(0, 3).map((p) => p.at)).toEqual(["0px,0px", "0px,20px", "0px,40px"]);
   });
 });

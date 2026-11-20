@@ -1,6 +1,10 @@
+import { decrypt as nip44Decrypt } from "nostr-tools/nip44";
 import { finalizeEvent, generateSecretKey, getPublicKey } from "nostr-tools/pure";
 import type { EventTemplate } from "nostr-tools/pure";
 import { describe, expect, it } from "vitest";
+
+import { verifyEventsOnce } from "@/lib/verifyCache";
+import { ecVerifyBatch } from "@/lib/verifyPool";
 
 import { channelGroupKey, guestbookGroupKey } from "@/concord/lib/derive";
 import { KIND_MESSAGE, KIND_SEAL_ENCRYPTED, KIND_SEAL_PLAINTEXT, KIND_WRAP, KIND_WRAP_EPHEMERAL } from "@/concord/lib/kinds";
@@ -9,6 +13,7 @@ import {
   channelBindingTags,
   checkChannelBinding,
   openWrap,
+  openWrapsBatched,
   resolveMs,
   rewrapSeal,
   sealRumor,
@@ -213,5 +218,80 @@ describe("wrap expiration (CORD-08 §2)", () => {
     const rumor = buildRumor({ kind: KIND_MESSAGE, content: "x", tags: channelBindingTags(channelIdHex, 0n), pubkey: alice.pubkey, ms: Date.now() });
     const wrap = await wrapSeal(await sealRumor(rumor, KIND_SEAL_ENCRYPTED, stream, alice), stream);
     expect(wrap.tags.some((t) => t[0] === "expiration")).toBe(false);
+  });
+});
+
+describe("openWrap memo", () => {
+  it("opens a wrap seen before by id, but only a copy that is the same wrap", async () => {
+    const alice = testSigner();
+    const stream = channelGroupKey(secret, channelId, 0);
+    const rumor = buildRumor({ kind: KIND_MESSAGE, content: "once", tags: channelBindingTags(channelIdHex, 0n), pubkey: alice.pubkey });
+    const wrap = await wrapSeal(await sealRumor(rumor, KIND_SEAL_ENCRYPTED, stream, alice), stream);
+
+    const first = openWrap(wrap, stream);
+    first.content = "mutated by a caller";
+    expect(openWrap({ ...wrap }, stream).content).toBe("once");
+
+    // Same id over other ciphertext: not the remembered wrap, so it is opened in full (and fails).
+    const other = await wrapSeal(await sealRumor({ ...rumor, content: "x" }, KIND_SEAL_ENCRYPTED, stream, alice), stream);
+    expect(() => openWrap({ ...other, id: wrap.id, content: "garbage" }, stream)).toThrow();
+    // Under another stream it isn't the remembered opening either.
+    expect(() => openWrap(wrap, channelGroupKey(secret, channelId, 1))).toThrow();
+  });
+});
+
+describe("openWrapsBatched", () => {
+  it("opens in order, verifying the seals in one batch, and drops a forged seal", async () => {
+    const alice = testSigner();
+    const stream = channelGroupKey(secret, channelId, 0);
+    const wrapOf = async (content: string) =>
+      wrapSeal(await sealRumor(buildRumor({ kind: KIND_MESSAGE, content, tags: channelBindingTags(channelIdHex, 0n), pubkey: alice.pubkey }), KIND_SEAL_ENCRYPTED, stream, alice), stream);
+    const good = [await wrapOf("one"), await wrapOf("two")];
+    // A seal whose signature doesn't verify, wrapped like any other.
+    const seal = await sealRumor(buildRumor({ kind: KIND_MESSAGE, content: "forged", tags: channelBindingTags(channelIdHex, 0n), pubkey: alice.pubkey }), KIND_SEAL_ENCRYPTED, stream, alice);
+    const forged = await wrapSeal({ ...seal, sig: "00".repeat(64) }, stream);
+    let batches = 0;
+    const verify = (seals: Parameters<typeof verifyEventsOnce>[0]) => (batches++, verifyEventsOnce(seals, ecVerifyBatch));
+    const out = await openWrapsBatched([good[0], forged, good[1]].map((wrap) => ({ wrap, stream })), verify);
+    expect(out.map((o) => o?.content)).toEqual(["one", undefined, "two"]);
+    expect(batches).toBe(1);
+    // Opened before: served from the memo, nothing left to verify.
+    const again = await openWrapsBatched(good.map((wrap) => ({ wrap, stream })), verify);
+    expect(again.map((o) => o?.content)).toEqual(["one", "two"]);
+    expect(batches).toBe(1);
+  });
+});
+
+describe("openWrapsBatched with a decrypt batch", () => {
+  it("opens what the synchronous path opens, through the batch, and still drops a forged seal", async () => {
+    const alice = testSigner();
+    const stream = channelGroupKey(secret, channelId, 0);
+    const rumorOf = (content: string) => buildRumor({ kind: KIND_MESSAGE, content, tags: channelBindingTags(channelIdHex, 0n), pubkey: alice.pubkey });
+    const good = [
+      await wrapSeal(await sealRumor(rumorOf("enc"), KIND_SEAL_ENCRYPTED, stream, alice), stream),
+      await wrapSeal(await sealRumor(rumorOf("plain"), KIND_SEAL_PLAINTEXT, stream, alice), stream),
+    ];
+    const seal = await sealRumor(rumorOf("forged"), KIND_SEAL_ENCRYPTED, stream, alice);
+    const forged = await wrapSeal({ ...seal, sig: "00".repeat(64) }, stream);
+    let decrypts = 0;
+    const decrypt = async (jobs: Array<{ key: Uint8Array; payload: string }>) =>
+      jobs.map((job) => {
+        decrypts++;
+        try {
+          return nip44Decrypt(job.payload, job.key);
+        } catch {
+          return null;
+        }
+      });
+    const out = await openWrapsBatched(
+      [good[0], forged, good[1]].map((wrap) => ({ wrap, stream })),
+      (seals) => verifyEventsOnce(seals, ecVerifyBatch),
+      5,
+      decrypt,
+    );
+    expect(out.map((o) => o?.content)).toEqual(["enc", undefined, "plain"]);
+    expect(out[0]).toMatchObject({ sealKind: KIND_SEAL_ENCRYPTED, author: alice.pubkey, wrapId: good[0].id });
+    // Three wraps, then only the one encrypted seal that verified.
+    expect(decrypts).toBe(4);
   });
 });

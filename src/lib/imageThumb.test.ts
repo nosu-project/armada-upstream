@@ -5,6 +5,9 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+const native = vi.hoisted(() => ({ can: false, fetch: vi.fn(async (_url: string): Promise<Blob | null> => null) }));
+vi.mock("@/lib/nativeImageFetch", () => ({ canFetchNativeImages: () => native.can, fetchNativeImage: native.fetch }));
+
 import { acquireThumb, AnimatedThumb, clearThumbs, releaseThumb, sniffImageType, thumbBucket, thumbsSupported } from "./imageThumb";
 
 describe("imageThumb", () => {
@@ -42,6 +45,47 @@ describe("imageThumb", () => {
     expect(fetch).toHaveBeenCalledTimes(1);
   });
 
+  it("asks again for an image whose download failed, once a while has passed", async () => {
+    vi.stubGlobal("createImageBitmap", vi.fn());
+    vi.stubGlobal("OffscreenCanvas", class {});
+    const fetch = vi.fn(async () => new Response("busy", { status: 429 }));
+    vi.stubGlobal("fetch", fetch);
+    const first = acquireThumb("https://busy.test/a.jpg", 64, false);
+    expect(await first.promise).toBeNull();
+    releaseThumb(first.key);
+    await Promise.resolve();
+    // Within the retry interval the failure stands.
+    releaseThumb(acquireThumb("https://busy.test/a.jpg", 64, false).key);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    const now = Date.now();
+    vi.spyOn(Date, "now").mockReturnValue(now + 31_000);
+    try {
+      await acquireThumb("https://busy.test/a.jpg", 64, false).promise;
+      expect(fetch).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("reads a host that refuses CORS through the Android app, where there is one", async () => {
+    vi.stubGlobal("createImageBitmap", vi.fn());
+    vi.stubGlobal("OffscreenCanvas", class {});
+    const fetch = vi.fn(async (url: string) => {
+      if (url.startsWith("https://nocors.test/")) throw new TypeError("Failed to fetch");
+      return new Response(new Blob([new Uint8Array(16)], { type: "image/png" }));
+    });
+    vi.stubGlobal("fetch", fetch);
+    native.can = true;
+    native.fetch.mockClear();
+    try {
+      await acquireThumb("https://nocors.test/a.gif", 64, false).promise;
+      await acquireThumb("https://cors.test/b.png", 64, false).promise;
+      expect(native.fetch.mock.calls.map(([url]) => url)).toEqual(["https://nocors.test/a.gif"]);
+    } finally {
+      native.can = false;
+    }
+  });
+
   it("leaves an animated image alone unless media is held still", async () => {
     vi.stubGlobal("createImageBitmap", vi.fn(async () => ({ width: 1000, height: 1000, close() {} })));
     vi.stubGlobal("OffscreenCanvas", class {});
@@ -57,6 +101,33 @@ describe("imageThumb", () => {
     expect(sniffImageType(Uint8Array.of(0x89, 0x50, 0x4e, 0x47), "")).toBe("image/png");
     expect(sniffImageType(Uint8Array.of(0xff, 0xd8, 0xff), "x")).toBe("image/jpeg");
     expect(sniffImageType(bytes("<svg"), "image/svg+xml")).toBe("image/svg+xml");
+  });
+
+  it("holds the first frame after a subscriber's loops, while another plays on", () => {
+    vi.useFakeTimers();
+    try {
+      const frames = [0, 1, 2].map((n) => ({ n, close() {} }) as unknown as ImageBitmap);
+      const anim = new AnimatedThumb(8, 8, frames, [100, 100, 100], Infinity);
+      const n = (f: ImageBitmap) => (f as unknown as { n: number }).n;
+      const listed: number[] = [];
+      const profile: number[] = [];
+      anim.subscribe((f) => listed.push(n(f)), 2);
+      anim.subscribe((f) => profile.push(n(f)));
+      vi.advanceTimersByTime(1000);
+      expect(listed).toEqual([0, 1, 2, 0, 1, 2, 0]);
+      expect(profile.length).toBeGreaterThan(listed.length);
+      // Seen again (back into view): it plays its loops again.
+      const again: number[] = [];
+      const off = anim.subscribe((f) => again.push(n(f)), 1);
+      vi.advanceTimersByTime(1000);
+      // A loop's worth of frames from wherever the shared timer is, ending held on the first.
+      expect(again.length).toBeGreaterThanOrEqual(3);
+      expect(again.length).toBeLessThanOrEqual(4);
+      expect(again.at(-1)).toBe(0);
+      off();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("plays an animation on one timer while watched, and stops after its repetitions", () => {

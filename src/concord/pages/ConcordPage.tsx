@@ -93,7 +93,7 @@ import { useChatEditing } from "@/components/chat/useChatEditing";
 import { SyncStatusIndicator } from "@/components/SyncStatusIndicator";
 import { Button } from "@/components/ui/button";
 import { UserAvatar } from "@/components/UserAvatar";
-import { Collapsible, CollapsibleContent } from "@/components/ui/collapsible";
+import { CollapsibleContent, LazyCollapsible } from "@/components/ui/collapsible";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -153,8 +153,10 @@ import { useSyncTaskInScope } from "@/hooks/useSyncActivity";
 import { useSyncTopicState } from "@/sync/useSyncTopic";
 import { concordChannelMuteKey, useMutes } from "@/hooks/useMutes";
 import { useNotifLevels, concordChannelScopeKey } from "@/hooks/useNotifLevels";
-import { concordThreadReadKey, useReadState } from "@/hooks/useReadState";
+import { concordThreadReadKey, useReadStateActions, useReadStateSelect } from "@/hooks/useReadState";
+import type { ReadStateMap } from "@/contexts/ReadStateContext";
 import { useIsBlocked } from "@/lib/blocklistStore";
+import { rememberLastChannel, useLastChannels } from "@/lib/lastChannel";
 import { homeSkippedOf, type HomeLandingState } from "@/lib/railLayout";
 import { usePageCovered } from "@/lib/settingsOverlay";
 import { NotifLevelMenu } from "@/components/NotifLevelMenu";
@@ -1193,6 +1195,46 @@ const lastAllPaneCommunities = new Set<string>();
  * A Concord community rehydrated from the Community List and rendered through
  * the same chat components as NIP-29/DMs.
  */
+/**
+ * The open community's watchers: effects whose results the page never reads. Apart
+ * from the page so a channel switch, which re-renders the page several times,
+ * doesn't re-run them. Each is mounted ONCE, here.
+ */
+const CommunityWatchers = memo(function CommunityWatchers({
+  baseCommunity,
+  community,
+  onSelfRemoved,
+}: {
+  baseCommunity: Community | undefined;
+  /** With the folded name. */
+  community: Community | undefined;
+  onSelfRemoved: () => void;
+}) {
+  // Per-private-channel rotations (CORD-06 §2).
+  useChannelRekeyWatch(baseCommunity);
+  // Adopt a staff write key delivered in my Grant (CORD-04 §3).
+  useStaffKeyWatch(baseCommunity);
+  // Keep our live invite links vending the current epoch (CORD-05 §2).
+  useLinkRefreshWatch(baseCommunity);
+  // Follow the fold's relay list (CORD-02 §6).
+  useRelayFollow(baseCommunity);
+  // Stripped CREATE_INVITE → tombstone my own live links (only my signer_sk can).
+  useLinkAuthorityWatch(baseCommunity);
+  // Keep my live links' bundles vending current metadata + epoch.
+  useLinkFreshnessWatch(baseCommunity);
+  // Durable read-cut: finish a rotating ban dropped by a relay outage.
+  useReadCutRetry(baseCommunity);
+  // An interrupted Refounding of mine: finished at its own epoch.
+  useRefoundResume(baseCommunity);
+  // A Join lost in transit, or a Refounding that omitted this member, is restored once (CORD-02 §5).
+  useRestoreJoin(community);
+  // Compliant self-removal (CORD-04 §4/§6): tear down locally and route home.
+  useSelfRemove(baseCommunity, onSelfRemoved);
+  // Each member carries their own Nickname across a Refounding (CORD-04 §10).
+  useCarryMyNickname(community);
+  return null;
+});
+
 function ConcordCommunityPage() {
   // Parsed via `parseChatRoute` (panes are static segments with no params), the
   // same parse the builder and notifications use.
@@ -1229,11 +1271,13 @@ function ConcordCommunityPage() {
   // What `useSendMessage` stamps messages with, so their attachments can expire alongside.
   const messageTimer = messageExpirationOf(folded?.metadata);
   const resolveMessageTimer = useCallback(async () => messageTimer, [messageTimer]);
+  // Keyed on the name alone, so a fold that changes nothing else keeps every row's `community` prop.
+  const foldedName = folded?.metadata?.name;
   const community = useMemo<Community | undefined>(() => {
     if (!baseCommunity) return undefined;
-    if (!folded?.metadata) return baseCommunity;
-    return { ...baseCommunity, name: folded.metadata.name || baseCommunity.name };
-  }, [baseCommunity, folded]);
+    if (foldedName === undefined) return baseCommunity;
+    return { ...baseCommunity, name: foldedName || baseCommunity.name };
+  }, [baseCommunity, foldedName]);
   const channels = useChannels(baseCommunity);
   // Serial gate before the timeline: rehydrate → fold control plane → Channel
   // exists. Each step gets a profiling milestone.
@@ -1284,10 +1328,11 @@ function ConcordCommunityPage() {
   }, [arrangedChannels, folded, user]);
 
   // A vsk-13 Category stands on its own (CORD-03 §4), so an empty one is offered too.
-  const categoryPicklist = useMemo(
-    () => (folded?.rankedRoster ? categoryOrder(folded).map((c) => c.name) : categoryNames(arrangedChannels, (c) => c.category)),
-    [arrangedChannels, folded],
-  );
+  const categoryNamesNow = folded?.rankedRoster ? categoryOrder(folded).map((c) => c.name) : categoryNames(arrangedChannels, (c) => c.category);
+  // The same names keep the same array, so the memoized rows it's handed to skip.
+  const categoryKey = categoryNamesNow.join("\u0000");
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const categoryPicklist = useMemo(() => categoryNamesNow, [categoryKey]);
 
   /**
    * The sidebar's rendered sequence, flattened. Drop indices index into THIS
@@ -1389,23 +1434,8 @@ function ConcordCommunityPage() {
 
   // Base-rekey rotations. `stranded`: a stale invite left us on a superseded epoch.
   const { stranded } = useRekeyWatch(baseCommunity);
-  // Per-private-channel rotations (CORD-06 §2).
-  useChannelRekeyWatch(baseCommunity);
-  // Key, history and writer collection and the duties run in the background (`CommunityDuties`).
-  // Adopt a staff write key delivered in my Grant (CORD-04 §3).
-  useStaffKeyWatch(baseCommunity);
-  // Keep our live invite links vending the current epoch (CORD-05 §2).
-  useLinkRefreshWatch(baseCommunity);
-  // Follow the fold's relay list (CORD-02 §6).
-  useRelayFollow(baseCommunity);
-  // Stripped CREATE_INVITE → tombstone my own live links (only my signer_sk can).
-  useLinkAuthorityWatch(baseCommunity);
-  // Keep my live links' bundles vending current metadata + epoch.
-  useLinkFreshnessWatch(baseCommunity);
-  // Durable read-cut: finish a rotating ban dropped by a relay outage. Mounted ONCE here.
-  useReadCutRetry(baseCommunity);
-  // An interrupted Refounding of mine: finished at its own epoch. Mounted ONCE here.
-  useRefoundResume(baseCommunity);
+  // The open community's background watchers are `CommunityWatchers`; key, history and
+  // writer collection and the duties run app-wide (`CommunityDuties`).
   // Stranded self-heal: re-resolve our invite link until its bundle is refreshed.
   const { canRecover, checking: recoveryChecking, checkNow: recoveryCheckNow } = useStrandedRecovery(baseCommunity, stranded);
 
@@ -1416,9 +1446,10 @@ function ConcordCommunityPage() {
   // name one: knowing the id at first render lets the timeline snapshot paint
   // before the control fold resolves. Mobile picks none, leaving the channel list up.
   const autoSelectChannel = useIsDesktop();
+  const lastChannels = useLastChannels();
   const channelIdHex =
     routeChannelId ??
-    (autoSelectChannel && lastChannelKey ? config.lastChannelByServer[lastChannelKey] ?? null : null);
+    (autoSelectChannel && lastChannelKey ? lastChannels[lastChannelKey] ?? null : null);
   const view: "channel" | Concord2Pane = routePane ?? "channel";
   const paneHeader =
     view === "channel" ? null : isModerationPane(view) ? MODERATION_TABS[view] : PANE_HEADERS[view];
@@ -1556,19 +1587,19 @@ function ConcordCommunityPage() {
     if (!folded || !autoSelectChannel) return undefined;
     return pickDefaultChannel(
       channels,
-      config.lastChannelByServer[lastChannelKey],
+      lastChannels[lastChannelKey],
       (c) => c.idHex,
       (c) => c.name,
     );
-  }, [channels, channelIdHex, folded, autoSelectChannel, config.lastChannelByServer, lastChannelKey]);
+  }, [channels, channelIdHex, folded, autoSelectChannel, lastChannels, lastChannelKey]);
   // What closing the mobile channel list opens when no channel is selected yet.
   const closeTarget = useMemo(
     () =>
       channel ??
       (folded && !routePane
-        ? pickDefaultChannel(channels, config.lastChannelByServer[lastChannelKey], (c) => c.idHex, (c) => c.name)
+        ? pickDefaultChannel(channels, lastChannels[lastChannelKey], (c) => c.idHex, (c) => c.name)
         : undefined),
-    [channel, folded, routePane, channels, config.lastChannelByServer, lastChannelKey],
+    [channel, folded, routePane, channels, lastChannels, lastChannelKey],
   );
 
   // Chat scope for in-message app affordances and the app stage (like NIP-29).
@@ -1597,8 +1628,8 @@ function ConcordCommunityPage() {
   );
   const communityMuted = Boolean(community && isCommunityMuted(`c2:${community.idHex}`));
 
-  // Remember the channel only once settled: config writes re-render most of the
-  // app. Leaving the community flushes the pending write.
+  // Remember the channel once settled (a write re-renders this page). Leaving the
+  // community flushes the pending write.
   const channelIdToRemember = channel?.idHex;
   const pendingLastChannel = useRef<((() => void) & { key?: string }) | undefined>(undefined);
   useEffect(() => {
@@ -1608,16 +1639,12 @@ function ConcordCommunityPage() {
     }
     const write = () => {
       pendingLastChannel.current = undefined;
-      updateConfig((c) =>
-        c.lastChannelByServer[lastChannelKey] === channelIdToRemember
-          ? c
-          : { ...c, lastChannelByServer: { ...c.lastChannelByServer, [lastChannelKey]: channelIdToRemember } },
-      );
+      rememberLastChannel(lastChannelKey, channelIdToRemember);
     };
     pendingLastChannel.current = Object.assign(write, { key: lastChannelKey });
     const timer = setTimeout(write, LAST_CHANNEL_SETTLE_MS);
     return () => clearTimeout(timer);
-  }, [channelIdToRemember, lastChannelKey, updateConfig]);
+  }, [channelIdToRemember, lastChannelKey]);
   useEffect(() => () => pendingLastChannel.current?.(), []);
 
   // Canonicalize `/c/<id>` to name the resolved default channel, so the URL and
@@ -1691,8 +1718,6 @@ function ConcordCommunityPage() {
   const { data: dissolved } = useDissolved(community);
   // A running Timeout stops composition, edits and reactions (CORD-04 §8).
   const { timeouts: guestbookTimeouts } = useGuestbook(community);
-  // A Join lost in transit, or a Refounding that omitted this member, is restored once (CORD-02 §5).
-  useRestoreJoin(community);
   const timedOut = Boolean(user && timeoutRunning(guestbookTimeouts.get(user.pubkey), clockNowMs()));
   const canWrite = Boolean(user && channel && !dissolved && !excluded && !stranded && !timedOut);
   // A restricted Channel takes posts from its writers alone (CORD-03 §1); reactions still go.
@@ -2093,9 +2118,12 @@ function ConcordCommunityPage() {
     },
     [community, user, activeCall, joinConcordCall, avBrokers, folded],
   );
+  // What every sidebar row gets: stable, reading the latest through a ref.
+  const joinVoiceRef = useRef(handleJoinVoice);
+  joinVoiceRef.current = handleJoinVoice;
+  const onRowJoinVoice = useCallback((ch: Channel, broker: string | null) => joinVoiceRef.current(ch, broker), []);
 
-  // Compliant self-removal (CORD-04 §4/§6): tear down locally and route home.
-  useSelfRemove(baseCommunity, useCallback(() => navigateTo("/"), [navigateTo]));
+  const onSelfRemoved = useCallback(() => navigateTo("/"), [navigateTo]);
   const [creatingChannel, setCreatingChannel] = useState(false);
 
   // Close the create-channel wizard on community switch (permissions differ).
@@ -2310,8 +2338,6 @@ function ConcordCommunityPage() {
   const observed = useMemo(() => observedAuthors(communityRumors, allMessages), [communityRumors, allMessages]);
   // The owner writes the departures of Bans lifted before un-bans wrote their own (Vector).
   useHealBanDepartures(community, observed);
-  // Each member carries their own Nickname across a Refounding (CORD-04 §10).
-  useCarryMyNickname(community);
   // `observed` changes with every message in any channel while the set almost never
   // does: the previous array is kept while its members are the same, so the member
   // panel, composers and everything else handed it don't re-render per message.
@@ -2629,12 +2655,19 @@ function ConcordCommunityPage() {
     [presentation, topLevelMessages, threadRepliesFor, forumSort, pins.isPinned],
   );
   // "New" per post uses the Threads tab's stamp (`c2t:<rootId>`), never for own words.
-  const { readState } = useReadState();
+  // Subscribed to these posts' stamps only, not every read anywhere.
+  const { getLastRead: lastReadOf } = useReadStateActions();
+  const postsReadSig = useReadStateSelect(useCallback((map: ReadStateMap) => {
+    let sig = "";
+    for (const post of feedPosts) sig += `${map[concordThreadReadKey(post.root.id)] ?? 0},`;
+    return sig;
+  }, [feedPosts]));
   const isPostNew = useCallback(
     (post: ForumPost) =>
+      (void postsReadSig,
       post.lastActivityBy !== user?.pubkey &&
-      post.lastActivityAt > (readState[concordThreadReadKey(post.root.id)] ?? 0),
-    [readState, user?.pubkey],
+      post.lastActivityAt > lastReadOf(concordThreadReadKey(post.root.id))),
+    [postsReadSig, lastReadOf, user?.pubkey],
   );
   const openPost = useCallback(
     (post: ForumPost) => {
@@ -3047,7 +3080,7 @@ function ConcordCommunityPage() {
         unread={unreadByChannel[c.idHex]}
         onSelect={handleSelectChannel}
         onOpenChat={handleOpenChannelChat}
-        onJoinVoice={handleJoinVoice}
+        onJoinVoice={onRowJoinVoice}
         categories={categoryPicklist}
         onSetCategory={canManageChannels ? handleSetCategory : undefined}
         onNewCategory={handleNewCategory}
@@ -3102,7 +3135,7 @@ function ConcordCommunityPage() {
       }
       titleExpansion={
         community ? (
-          <Collapsible open={communityMenuOpen} onOpenChange={setCommunityMenuOpen}>
+          <LazyCollapsible open={communityMenuOpen} onOpenChange={setCommunityMenuOpen}>
             <CollapsibleContent className="overflow-hidden data-[state=open]:animate-collapsible-down data-[state=closed]:animate-collapsible-up">
               <div className="mx-3 mb-2 mt-1 p-1 space-y-0.5 clip-corner-lg bg-secondary">
                 {[
@@ -3234,7 +3267,7 @@ function ConcordCommunityPage() {
                 )}
               </div>
             </CollapsibleContent>
-          </Collapsible>
+          </LazyCollapsible>
         ) : undefined
       }
       banner={folded?.metadata?.banner ? <Banner banner={folded.metadata.banner} /> : undefined}
@@ -3467,6 +3500,7 @@ function ConcordCommunityPage() {
     <ChannelNavContext.Provider value={channelNav}>
       {/* Member kind-0s often live only on the community's own relays. */}
       <ProfileRelayHints relays={community?.relays} />
+      <CommunityWatchers baseCommunity={baseCommunity} community={community} onSelfRemoved={onSelfRemoved} />
       <MemberRolesContext.Provider value={memberRolesValue}>
       <CommunityNicknamesContext.Provider value={nicknames}>
       <MemberActionsContext.Provider value={memberActionsValue}>

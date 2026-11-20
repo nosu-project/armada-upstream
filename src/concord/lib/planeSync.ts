@@ -32,7 +32,9 @@ import { KIND_WRAP, type Plane } from "@/concord/lib/kinds";
 import { afterRead, planRead, readWorthSaving, type ReadPlan, type RelayRead } from "@/concord/lib/planeRead";
 import { readControlSnapshot, writeOpened } from "@/concord/lib/rumorStore";
 import { isStreamPubkey, streamAuthsSettled } from "@/concord/lib/streamAuth";
-import { openWrap, type OpenedEvent, type OpenedWireEvent } from "@/concord/lib/stream";
+import { openWrap, openWrapsBatched, type OpenedEvent, type OpenedWireEvent } from "@/concord/lib/stream";
+import { verifyEventsOnce } from "@/lib/verifyCache";
+import { ecDecryptBatch, ecVerifyBatch } from "@/lib/verifyPool";
 import type { StreamKeyView } from "@/concord/lib/derive";
 import type { Community } from "@/concord/lib/types";
 import { getArmadaDB } from "@/lib/db/armadaDB";
@@ -217,28 +219,18 @@ export function openPlaneWraps(wraps: NostrRumor[], groups: StreamKeyView[]): Op
 const PLANE_DECODE_SLICE_MS = 5;
 
 /**
- * Time-sliced {@link openPlaneWraps}: yields every {@link PLANE_DECODE_SLICE_MS},
- * since synchronous NIP-44 + Schnorr over a whole plane freezes a phone's UI.
+ * {@link openPlaneWraps}, time-sliced, with the seals verified in one batch off
+ * this thread: synchronous NIP-44 + Schnorr over a whole plane froze a phone's UI.
  */
 export async function openPlaneWrapsChunked(wraps: NostrRumor[], groups: StreamKeyView[]): Promise<OpenedWireEvent[]> {
   const byPk = new Map(groups.map((g) => [g.pk, g]));
-  const out: OpenedWireEvent[] = [];
-  let sliceStart = performance.now();
-  for (let i = 0; i < wraps.length; i++) {
-    const group = byPk.get(wraps[i].pubkey);
-    if (group) {
-      try {
-        out.push(openWrap(wraps[i], group));
-      } catch {
-        // not ours / malformed
-      }
-    }
-    if (i + 1 < wraps.length && performance.now() - sliceStart >= PLANE_DECODE_SLICE_MS) {
-      await new Promise((resolve) => setTimeout(resolve, 0));
-      sliceStart = performance.now();
-    }
+  const items: Array<{ wrap: NostrRumor; stream: StreamKeyView }> = [];
+  for (const wrap of wraps) {
+    const stream = byPk.get(wrap.pubkey);
+    if (stream) items.push({ wrap, stream });
   }
-  return out;
+  const opened = await openWrapsBatched(items, (seals) => verifyEventsOnce(seals, ecVerifyBatch), PLANE_DECODE_SLICE_MS, ecDecryptBatch);
+  return opened.filter((o): o is OpenedWireEvent => o !== undefined);
 }
 
 /** Paging knobs (test seam via {@link _configureSweepPagingForTests}). */
@@ -749,7 +741,29 @@ async function runScopes(
         }),
   }));
   const out = new Map<string, OpenedEvent[]>(scopes.map((s) => [s.scope, []]));
+  // Only a read that catches up shows as sync activity. The routine delta re-reads
+  // run every few seconds across every community, and an indicator always on keeps
+  // its spinner, and so the compositor, running at full frame rate.
+  const catchingUp = scopes.some((s, i) => (s.complete ? deltaSince[i] === undefined : plans[i]!.since === 0 || plans[i]!.until !== undefined));
+  const task = catchingUp ? beginSyncTask(t({ id: "planeSync.communityUpdates", defaultMessage: "community updates" })) : undefined;
+  try {
+    return await readScopes(nostr, url, scopes, filters, plans, deltaSince, rebuildSnapshot, out);
+  } finally {
+    task?.end();
+  }
+}
 
+/** {@link runScopes}' query and ingest, with its plans made. */
+async function readScopes(
+  nostr: NostrLike,
+  url: string,
+  scopes: PlaneScope[],
+  filters: NostrFilter[],
+  plans: Array<ReadPlan | undefined>,
+  deltaSince: Array<number | undefined>,
+  rebuildSnapshot: boolean[],
+  out: Map<string, OpenedEvent[]>,
+): Promise<Map<string, OpenedEvent[]>> {
   for (let attempt = 1; attempt <= 2; attempt++) {
     const started = Date.now();
     // Invalidate at the TOP of each attempt so a throw leaves no stale verdict
@@ -945,19 +959,13 @@ const batches = new Map<string, RelayBatch[]>();
 function newBatch(nostr: NostrLike, url: string): RelayBatch {
   const b: RelayBatch = { scopes: [], closed: false, promise: Promise.resolve(new Map()) };
   b.promise = (async () => {
-    // The whole batch lifetime counts as sync activity (auth hold can take seconds).
-    const task = beginSyncTask(t({ id: "planeSync.communityUpdates", defaultMessage: "community updates" }));
-    try {
-      await new Promise((r) => setTimeout(r, BATCH_WINDOW_MS));
-      await whenAuthReady(url, () => b.scopes.flatMap((s) => s.groups));
-      b.closed = true;
-      const open = batches.get(url)?.filter((other) => other !== b) ?? [];
-      if (open.length > 0) batches.set(url, open);
-      else batches.delete(url);
-      return await runScopes(nostr, url, b.scopes);
-    } finally {
-      task.end();
-    }
+    await new Promise((r) => setTimeout(r, BATCH_WINDOW_MS));
+    await whenAuthReady(url, () => b.scopes.flatMap((s) => s.groups));
+    b.closed = true;
+    const open = batches.get(url)?.filter((other) => other !== b) ?? [];
+    if (open.length > 0) batches.set(url, open);
+    else batches.delete(url);
+    return runScopes(nostr, url, b.scopes);
   })();
   batches.set(url, [...(batches.get(url) ?? []), b]);
   return b;

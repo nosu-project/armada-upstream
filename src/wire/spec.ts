@@ -373,6 +373,8 @@ export function buildWireSpec(inputs: WireInputs): WireSpec {
   const gitRootById = new Map<string, string>();
   const gitRootAuthorById = new Map<string, string>();
   const rootIdsByRelay = new Map<string, Set<string>>();
+  const repositoryByAddress = new Map((inputs.gitRepositories ?? []).map((entry) => [entry.address, entry]));
+  const rootCreatedAt = new Map((inputs.gitTicketRoots ?? []).map((root) => [root.id, root.created_at]));
   for (const root of inputs.gitTicketRoots ?? []) {
     const ticket = parseGitTicket(root);
     const matched = ticket ? matchGitTicketRepository(ticket, gitByRepository) : undefined;
@@ -380,7 +382,7 @@ export function buildWireSpec(inputs: WireInputs): WireSpec {
     const address = matched.coordinate;
     gitRootById.set(root.id, address);
     gitRootAuthorById.set(root.id, ticket.author);
-    const repository = (inputs.gitRepositories ?? []).find((entry) => entry.address === address);
+    const repository = repositoryByAddress.get(address);
     if (!repository?.attachments.some(({ attachment }) => attachment.detachedAt === undefined)) continue;
     for (const url of repository.relays) {
       if (isGitAnnouncementDiscoveryRelay(url)) continue;
@@ -396,7 +398,7 @@ export function buildWireSpec(inputs: WireInputs): WireSpec {
     for (let offset = 0; offset < ids.length; offset += GIT_ROOT_FILTER_CHUNK_SIZE) {
       const chunk = ids.slice(offset, offset + GIT_ROOT_FILTER_CHUNK_SIZE);
       // Root-based `since` for the first round (the shared relay cursor could skip existing comments).
-      const childSince = Math.min(...chunk.map((id) => inputs.gitTicketRoots?.find((root) => root.id === id)?.created_at ?? 0));
+      const childSince = Math.min(...chunk.map((id) => rootCreatedAt.get(id) ?? 0));
       add(relay, { kinds: [NIP22_COMMENT_KIND], "#E": chunk, since: childSince, limit: 4_000 });
       add(relay, { kinds: [...GIT_STATUS_KINDS], "#e": chunk, since: childSince, limit: 4_000 });
     }

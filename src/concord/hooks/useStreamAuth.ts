@@ -15,7 +15,7 @@ import { useChannels } from "@/concord/hooks/useControlPlane";
 import { useCommunity, useLiveCommunities } from "@/concord/hooks/useCommunityList";
 import { rehydrateCommunity } from "@/concord/lib/communityList";
 import { channelsView, signingStreams } from "@/concord/lib/community";
-import { controlGroups, readControlFold, controlFoldKey } from "@/concord/lib/control";
+import { controlGroups, readControlFold, controlFoldKey, type FoldedControl } from "@/concord/lib/control";
 import { onFoldedWrite } from "@/lib/foldedCache";
 import { logSync } from "@/lib/syncLog";
 
@@ -65,6 +65,12 @@ function channelKeys(channels: Channel[]): GroupKey[] {
  * auth: WireSync's kind-1059 sub filters on `authors: [...streamPubkeys()]`, so
  * channels receive live wraps only once registered. Polls for folds landing later.
  */
+/** Each list entry's derived keys and the fold they came from; weakly held, so they go with the entry. */
+const registeredKeys = new WeakMap<
+  object,
+  { folded: FoldedControl | undefined; batch: { keys: StreamKeyView[]; relays: string[]; idHex: string } }
+>();
+
 export function useRegisterAllStreamKeys(): void {
   const communities = useLiveCommunities();
 
@@ -76,19 +82,23 @@ export function useRegisterAllStreamKeys(): void {
       // Register in one burst: one AUTH wave per relay.
       const batches: Array<{ keys: StreamKeyView[]; relays: string[]; idHex: string }> = [];
       for (const entry of communities) {
+        // Absent on a never-synced community; core keys alone until it folds.
+        const folded = await readControlFold(entry.community_id.toLowerCase()).catch(() => undefined);
+        // The same entry and fold derive the same keys: reused, as the poll repeats them.
+        const known = registeredKeys.get(entry);
+        if (known && known.folded === folded) {
+          batches.push(known.batch);
+          continue;
+        }
         const community = rehydrateCommunity(entry);
         if (!community) continue;
         const keys: StreamKeyView[] = communityCoreKeys(community);
-        // Absent on a never-synced community; core keys alone until it folds.
-        try {
-          const folded = await readControlFold(community.idHex);
-          for (const channel of channelsView(community, folded)) {
-            keys.push(...channel.streams.map((s) => s.group));
-          }
-        } catch {
-          // No fold yet; a later poll picks up its channels.
+        for (const channel of channelsView(community, folded)) {
+          keys.push(...channel.streams.map((s) => s.group));
         }
-        batches.push({ keys, relays: community.relays, idHex: community.idHex });
+        const batch = { keys, relays: community.relays, idHex: community.idHex };
+        registeredKeys.set(entry, { folded, batch });
+        batches.push(batch);
       }
       if (cancelled) return;
       for (const batch of batches) {

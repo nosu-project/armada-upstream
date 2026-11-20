@@ -8,8 +8,8 @@
  *  - FAILED verifies are never memoized, so forgeries can't poison an id.
  */
 import { schnorr } from "@noble/curves/secp256k1.js";
-import { hexToBytes } from "@noble/hashes/utils.js";
-import { getEventHash } from "nostr-tools/pure";
+import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
+import { getEventHash, validateEvent } from "nostr-tools/pure";
 
 import { IdLog, type IdLogKV } from "@/lib/db/idLog";
 import { perfCount } from "@/lib/perf";
@@ -77,6 +77,97 @@ function startPersistence(): void {
   });
 }
 
+type Hashed = Pick<NostrEvent, "pubkey" | "created_at" | "kind" | "tags" | "content">;
+
+/**
+ * Recent copies whose id was proven to be their hash. A relay copy whose hashed
+ * fields all EQUAL a remembered copy has the same hash, so the comparison stands
+ * in for the sha256 — each wrap arrives once per relay.
+ */
+// Sized for a plane: one access plane alone is thousands of wraps, each checked several
+// times a pass, and a smaller FIFO evicted them before the next check, re-hashing each.
+const HASHED_MAX = 16_384;
+/** Max unbroken hashing in {@link verifyEventsOnce} before yielding. */
+const HASH_SLICE_MS = 8;
+const hashed = new Map<string, Hashed>();
+
+function tagsEqual(a: string[][], b: string[][]): boolean {
+  if (a === b) return true;
+  if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    const x = a[i], y = b[i];
+    if (!Array.isArray(x) || !Array.isArray(y) || x.length !== y.length) return false;
+    for (let j = 0; j < x.length; j++) if (x[j] !== y[j]) return false;
+  }
+  return true;
+}
+
+/** Whether `event.id` is the NIP-01 hash of `event`; false for a malformed event. */
+export function idIsHash(event: NostrEvent): boolean {
+  const seen = hashed.get(event.id);
+  if (
+    seen &&
+    seen.content === event.content &&
+    seen.pubkey === event.pubkey &&
+    seen.created_at === event.created_at &&
+    seen.kind === event.kind &&
+    tagsEqual(seen.tags, event.tags)
+  ) {
+    perfCount("crypto.idHash (copy hit)", 0, 1, "events");
+    // Most recently used last, so eviction drops the coldest.
+    hashed.delete(event.id);
+    hashed.set(event.id, seen);
+    return true;
+  }
+  let ok: boolean;
+  try {
+    // Malformed events make getEventHash THROW; they must read as unverified
+    // (e.g. `openWrap` seals parsed from decrypted payloads).
+    ok = getEventHash(event) === event.id;
+  } catch {
+    return false;
+  }
+  if (ok && !seen) rememberHashed(event);
+  return ok;
+}
+
+function rememberHashed(event: NostrEvent): void {
+  if (hashed.size >= HASHED_MAX) hashed.delete(hashed.keys().next().value!);
+  // A snapshot: a caller may go on to mutate the object it passed.
+  const { pubkey, created_at, kind, content } = event;
+  hashed.set(event.id, { pubkey, created_at, kind, content, tags: event.tags.map((t) => [...t]) });
+}
+
+/**
+ * Hash-check `events` with the browser's native SHA-256 ahead of {@link idIsHash},
+ * remembering each whose id is its hash, so the synchronous checks that follow are
+ * copy hits. Same answers, computed here, just not in JavaScript: a relay drain on a
+ * phone hashed thousands of wraps a minute at ~0.3ms each. Anything it can't settle
+ * (no WebCrypto, a malformed event, a mismatch) is left to {@link idIsHash}.
+ */
+export async function primeHashes(events: readonly NostrEvent[]): Promise<void> {
+  const subtle = typeof crypto !== "undefined" ? crypto.subtle : undefined;
+  if (!subtle) return;
+  const todo = events.filter((e) => !hashed.has(e.id) && validateEvent(e));
+  if (todo.length < PRIME_MIN) return;
+  const encoder = new TextEncoder();
+  await Promise.all(todo.map(async (event) => {
+    // A snapshot of what is hashed, so a caller mutating the event meanwhile can't
+    // pair one content with another's verdict.
+    const copy: NostrEvent = { ...event, tags: event.tags.map((t) => [...t]) };
+    try {
+      const serialized = JSON.stringify([0, copy.pubkey, copy.created_at, copy.kind, copy.tags, copy.content]);
+      const digest = new Uint8Array(await subtle.digest("SHA-256", encoder.encode(serialized)));
+      if (bytesToHex(digest) === copy.id && !hashed.has(copy.id)) rememberHashed(copy);
+    } catch {
+      // left to idIsHash
+    }
+  }));
+}
+
+/** Below this, the async round costs more than hashing inline. */
+const PRIME_MIN = 4;
+
 /**
  * Main-thread hash binding shared by both verify paths: `"decided"` (final
  * `result`) or `"needs-ec"` (hash-bound, not memoized — Schnorr must run).
@@ -84,15 +175,7 @@ function startPersistence(): void {
  */
 function hashGate(event: NostrEvent): { state: "decided"; result: boolean } | { state: "needs-ec" } {
   startPersistence();
-  let hash: string;
-  try {
-    // Malformed events make getEventHash THROW; they must read as unverified
-    // (e.g. `openWrap` seals parsed from decrypted payloads).
-    hash = getEventHash(event);
-  } catch {
-    return { state: "decided", result: false };
-  }
-  if (hash !== event.id) return { state: "decided", result: false };
+  if (!idIsHash(event)) return { state: "decided", result: false };
   if (verified.has(memoKey(event.id))) return { state: "decided", result: true };
   return { state: "needs-ec" };
 }
@@ -152,6 +235,7 @@ export async function verifyEventsOnce(
   events: NostrEvent[],
   ecVerify: EcVerifyBatch,
 ): Promise<boolean[]> {
+  await primeHashes(events);
   const start = performance.now();
   const result = new Array<boolean>(events.length);
   const residue: VerifyTriple[] = [];
@@ -159,7 +243,16 @@ export async function verifyEventsOnce(
   const residueSlots: number[][] = [];
   const residueByTriple = new Map<string, number>();
 
+  // The hashes are the main thread's to compute, ~0.3ms each on a phone: a plane
+  // read first seen hands over thousands, which in one task froze the UI for a second.
+  let sliceStart = start;
+  let blocked = 0;
   for (let i = 0; i < events.length; i++) {
+    if (performance.now() - sliceStart >= HASH_SLICE_MS) {
+      blocked += performance.now() - sliceStart;
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      sliceStart = performance.now();
+    }
     const gate = hashGate(events[i]);
     if (gate.state === "decided") {
       result[i] = gate.result;
@@ -177,7 +270,7 @@ export async function verifyEventsOnce(
   }
 
   // Main-thread cost only; the EC verify may be off-thread.
-  perfCount("crypto.verifyEvents", performance.now() - start, events.length, "events");
+  perfCount("crypto.verifyEvents", blocked + performance.now() - sliceStart, events.length, "events");
 
   if (residue.length > 0) {
     perfCount("crypto.ec.verify (batched)", 0, residue.length, "verifies");
@@ -200,5 +293,6 @@ export async function verifyEventsOnce(
 /** Test seam: forget every verified id, and stop persisting. */
 export function _resetVerifyCacheForTests(): void {
   verified.clear();
+  hashed.clear();
   persistence = undefined;
 }
