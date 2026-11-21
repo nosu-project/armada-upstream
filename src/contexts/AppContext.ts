@@ -7,6 +7,7 @@ import { getPreferredVoiceServer } from "@/lib/voiceDevices";
 import type { FloodSensitivity } from "@/concord/lib/floodPolicy";
 import type { MediaAutoload } from "@/concord/lib/mediaTrust";
 import type { BlossomServerMetadata } from "@/lib/blossom";
+import type { LevelRecords, MuteRecords } from "@/lib/notifRecords";
 import type { PaymentTargetType } from "@/lib/paymentTargets";
 import type { RailLayoutNode } from "@/lib/railLayout";
 import type { SendOnEnterPref } from "@/lib/sendOnEnter";
@@ -46,6 +47,8 @@ export interface RelayMetadata {
  */
 export const REPLY_GESTURES = ["off", "swipe", "doubleTap", "both"] as const;
 export type ReplyGestures = (typeof REPLY_GESTURES)[number];
+export const HAPTIC_INTENSITIES = ["off", "low", "medium", "high"] as const;
+export type HapticIntensity = (typeof HAPTIC_INTENSITIES)[number];
 
 export interface AppConfig {
   theme: Theme;
@@ -139,10 +142,15 @@ export interface AppConfig {
    *   - DM: `dm:${pubkey}`
    * Levels: `all`, `mentions` (DMs always count), `nothing` (legacy mutes
    * migrate here). Missing entries inherit channel → community → global prefs.
-   * Supersedes the mute sets (still written for older clients and the push
-   * gateway's `muted_groups`). Synced.
+   * Projected from {@link notifLevelRecords}/{@link notifMuteRecords} together
+   * with the mute sets (`lib/notifRecords.ts`) for older builds, which read and
+   * write them wholesale. Synced.
    */
   notifLevels: Record<string, "all" | "mentions" | "nothing">;
+  /** Per-scope level choices, merged per scope across devices. Synced. */
+  notifLevelRecords: LevelRecords;
+  /** Per-scope mutes, timed or until turned off, merged per scope across devices. Synced. */
+  notifMuteRecords: MuteRecords;
   /** Account-global notification categories, shared by every delivery path. */
   pushPrefs: PushPrefs;
   /**
@@ -292,6 +300,11 @@ export interface AppConfig {
    * a root screen. Off walks history back through earlier chats. Per-device.
    */
   androidBackLeavesApp: boolean;
+  /**
+   * Strength of haptic feedback (`lib/haptics.ts`, default medium); off silences
+   * it. Per-device: motors differ between phones.
+   */
+  hapticIntensity: HapticIntensity;
   /** Unit money amounts are shown/entered in. Synced (wallet connections stay local). */
   currencyDisplay: CurrencyDisplay;
   /**
@@ -387,6 +400,8 @@ export const RAIL_CONFIG_KEYS = ["railLayout"] as const satisfies ReadonlyArray<
 /** `${APP_ID}/notifications` — one entry per conversation the user has tuned. */
 export const NOTIF_CONFIG_KEYS = [
   "notifLevels",
+  "notifLevelRecords",
+  "notifMuteRecords",
   "mutedCommunities",
   "mutedChannels",
   "pushPrefs",
@@ -427,6 +442,7 @@ export const PER_DEVICE_CONFIG_KEYS = [
   "meshIncognito",
   "meshEnabled",
   "androidBackLeavesApp",
+  "hapticIntensity",
   "powDifficulty",
   "discoverUnfiltered",
 ] as const satisfies ReadonlyArray<keyof AppConfig>;
@@ -450,6 +466,8 @@ export const defaultConfig: AppConfig = {
   mutedCommunities: [],
   mutedChannels: [],
   notifLevels: {},
+  notifLevelRecords: {},
+  notifMuteRecords: {},
   // Account defaults must be pure: an origin-global mirror would leak between accounts.
   pushPrefs: { ...DEFAULT_PUSH_PREFS },
   dmProtocol: {},
@@ -481,6 +499,7 @@ export const defaultConfig: AppConfig = {
   meshIncognito: true,
   meshEnabled: false,
   androidBackLeavesApp: true,
+  hapticIntensity: "medium",
   currencyDisplay: "usd",
   defaultZapMethod: "bitcoin",
   zapsEnabled: true,

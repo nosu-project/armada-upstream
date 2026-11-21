@@ -12,7 +12,7 @@ the account.
 | `rail` | `railLayout` | every rail drag | wholesale |
 | `read-state` | `readState`, the whole map | when `read-state-recent` passes 8 KB | max per key |
 | `read-state-recent` | `readState`, only entries newer than `read-state`'s | every channel view (4 s debounce) | max per key |
-| `notifications` | `notifLevels`, `mutedCommunities`, `mutedChannels`, account-global notification categories | a notification preference changes | wholesale |
+| `notifications` | per-conversation level and mute records, their legacy projection (`notifLevels`, `mutedCommunities`, `mutedChannels`), account-global notification categories | a notification preference changes | newest record per scope; categories wholesale |
 | `dms` | `dmProtocol`, `pinnedDms`, `closedDms`, `acceptedDms`, `startedDms` | a DM is pinned, closed, accepted, opened | additive peer maps; `dmProtocol` wholesale |
 | `reactions` | `frequentReactions` | every reaction (10 s debounce) | max count / most recent |
 | `gif-favorites` | every GIF favorite and un-favorite | a GIF is (un)favorited (400 ms debounce) | newest operation per GIF |
@@ -364,6 +364,56 @@ reads prefs and opens sockets long before the app is opened), so it carries
 - **`themes`** — a per-mode override of the builtin light/dark palettes that
   this client only ever read and never wrote. Removed. The schema is loose, so a
   copy left in an older device's document passes through untouched.
+
+## Notification records
+
+Two devices tuning notifications at once must not undo each other, and a
+timed mute has to end on every device without anyone writing anything. So
+`notifications` holds, per scope key (`useNotifLevels`), one LEVEL record
+and one MUTE record (`notifLevelRecords`, `notifMuteRecords`;
+`lib/notifRecords.ts`), each stamped with when the choice was made (`at`, ms on
+the corrected clock) and a random `op` that breaks a tie:
+
+```jsonc
+"notifLevelRecords": { "c2:<id>::<ch>": { "v": "mentions", "at": 1795…123, "op": "…" } },
+"notifMuteRecords":  { "c2:<id>": { "until": 1795003600, "at": 1795…456, "op": "…" },
+                       "dm:<pk>": { "until": 0, "at": 1795…789, "op": "…" } }
+```
+
+`until` is epoch seconds, `-1` for a mute with no end, `0` for unmuted. A
+level with no `v` is "inherit". Both of those are tombstones: a cleared choice
+stays as a newer record, so a device still holding the old one can't bring it
+back. They are never pruned; there is one per scope ever touched.
+
+- **Merge per scope, newest `at` wins**, in both directions: an incoming
+  document is folded into AppConfig (`docToConfigPatch`), and a write folds the
+  stored version into what it publishes (`nextSettingsDoc`), so a version this
+  device hasn't applied yet keeps its choices. When the fold kept a choice the
+  incoming document lacks, `useConfigDocSync` leaves its baseline at what the
+  document says, and the merge is published back. That repair is safe here and
+  not for `dms`, because a removal here is a tombstone rather than an absence.
+- **Expiry is not a write.** A running mute reads as level `nothing`; once
+  `until` passes it simply doesn't, on every device, by the corrected clock.
+  `useMuteNow` keeps one timer for the soonest end so the levels re-resolve then.
+  The background notifiers judge it themselves, so a mute lifts with the app
+  closed: they are configured with the `standing` levels (only mutes with no end
+  applied), so a timed-muted room stays subscribed, plus `roomMutes` — each
+  running timed mute by room key (`c2:<channel|community>`, `h:<relay>[|<group>]`,
+  `dm:<conversation>`) with its end — and stay silent for a room under its own or
+  its parent's until then: the Android service at `enqueueRoomMessage` (and the
+  DM ring), the service worker in `preparePush`, the iOS extension for DMs. iOS
+  can't hide a push it was handed (it shows "Messages synced"), so its gateway
+  subscriptions still leave a timed-muted channel out, and that resumes when the
+  app next resolves the levels; its DM inbox is watched either way, so DMs lift
+  on their own there too.
+- **The legacy fields are a projection**, written in lockstep for older builds,
+  which read and write them wholesale: a chosen level, and a mute with no end as
+  `nothing`. A TIMED mute is left out, since an older build would keep it
+  forever. Where a document's legacy fields disagree with its own records, an
+  older build edited them, and the difference is folded in as records dated
+  when that document was signed, with an `op` from its event id, so every device
+  reads the same edit. A local config that predates records is read the same
+  way at `at` 0, losing to any real record.
 
 ## Known issue: read-state growth
 

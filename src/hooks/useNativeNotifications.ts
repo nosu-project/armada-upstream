@@ -215,7 +215,10 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
     mutedPeers: dmMutedPeers,
     configurationReady: dmPeersConfigReady,
   } = useKnownDmPeers();
-  const { channelLevel, concordChannelLevel } = useNotifLevels();
+  // The service judges timed mutes itself (`roomMutes`), so it stays subscribed through
+  // one and the mute lifts with the app closed.
+  const { standing, roomMutes } = useNotifLevels();
+  const { channelLevel, concordChannelLevel, levels } = standing;
   // Part of the deduped payload, so a language switch re-words the native side.
   const locale = languageOf(useIntl().locale);
 
@@ -327,7 +330,7 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
   // Only explicit DM overrides; native falls back to the global pref. Group keys are exact
   // participant sets.
   const dmLevels = useMemo(() => {
-    const entries = Object.entries(config.notifLevels)
+    const entries = Object.entries(levels)
       .filter(([scope, level]) =>
         scope.startsWith("dm:") &&
         /^(?:[0-9a-f]{64})(?:,[0-9a-f]{64})*$/.test(scope.slice(3)) &&
@@ -336,7 +339,7 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
       .map(([scope, level]) => [scope.slice(3), level] as const)
       .sort(([a], [b]) => a.localeCompare(b));
     return Object.fromEntries(entries) as Record<string, "all" | "mentions" | "nothing">;
-  }, [config.notifLevels]);
+  }, [levels]);
 
   // Same avatar policy as the WebView.
   const mediaPolicy = useMediaPolicyConfig();
@@ -407,8 +410,8 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
     [allConcordSubs, concordChannelLevel],
   );
   const concordLevels = useMemo(
-    () => concordLevelPolicy(config.notifLevels, config.mutedCommunities, config.mutedChannels, prefs),
-    [config.notifLevels, config.mutedCommunities, config.mutedChannels, prefs],
+    () => concordLevelPolicy(levels, prefs),
+    [levels, prefs],
   );
   // The route stays local and is never copied into relay filters.
   const gitRepositories = useMemo<GitRepositoryWireInput[]>(() => {
@@ -516,6 +519,7 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
           concordSubs,
           concordLevels,
           dmLevels,
+          roomMutes,
           dmRequests: prefs.dmRequests,
           gitSubs,
           mediaPolicy,
@@ -531,7 +535,7 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
     configureNative(payload, nativeNeedsRepair).catch((err) => {
       console.warn("[native-notif] configure failed:", err);
     });
-  }, [supported, enablement, user, notificationSettingsReady, selfDocs, relayUrls, groupIds, groupSubs, mentionOnlyGroupIds, prefsRecord, concordSubs, concordLevels, concordSubsReady, concordLeftCommunities, dmRelays, dmRelaysReady, dmFollows, dmKnownPeers, dmKnownConversations, dmLevels, dmMutedPeers, dmPeersConfigReady, prefs.dmRequests, selfRelays, signerCfg, gitSubs, mediaPolicy, groupList, gitRepositories.length, gitAnnouncements.data, health, locale]);
+  }, [supported, enablement, user, notificationSettingsReady, selfDocs, relayUrls, groupIds, groupSubs, mentionOnlyGroupIds, prefsRecord, concordSubs, concordLevels, concordSubsReady, concordLeftCommunities, dmRelays, dmRelaysReady, dmFollows, dmKnownPeers, dmKnownConversations, dmLevels, roomMutes, dmMutedPeers, dmPeersConfigReady, prefs.dmRequests, selfRelays, signerCfg, gitSubs, mediaPolicy, groupList, gitRepositories.length, gitAnnouncements.data, health, locale]);
 
   // Auto-enable on launch only if intended AND already granted; never prompts here (LoginSetup
   // and Settings do).

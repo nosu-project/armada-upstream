@@ -1,6 +1,15 @@
 import { nip19 } from "nostr-tools";
 
 import { t } from "@/i18n";
+import {
+  MAX_DICE,
+  MAX_SIDES,
+  formatRollMessage,
+  parseDiceExpression,
+  rollDice,
+  splitRollArgument,
+} from "@/lib/dice";
+import { ROLL_PRESETS, presetRoll } from "@/lib/dicePresets";
 import type { NostrRumor } from "@/lib/nostrRumor";
 
 /**
@@ -59,8 +68,17 @@ export interface SlashCommand {
    * insert "/name " for the user to type the argument.
    */
   runsOnSelect?: boolean;
+  /** Named first arguments the menu offers after `/name `, like a manifest's commands. */
+  options?: () => SlashOption[];
   /** `arg` is everything after the command word, trimmed. */
   run: (arg: string, ctx: SlashCommandContext) => SlashRunResult;
+}
+
+export interface SlashOption {
+  value: string;
+  /** Shown beside the value, e.g. the dice a preset rolls. */
+  hint?: string;
+  description?: string;
 }
 
 const requireTarget = (
@@ -156,6 +174,60 @@ export const SLASH_COMMANDS: SlashCommand[] = [
       const [target, ...tail] = rest.split(/\s+/);
       const suffix = tail.length ? tail.join(" ") : "around a bit with a large trout";
       return { type: "send", text: `${ME_ACTION_PREFIX}slaps ${target} ${suffix}` };
+    },
+  },
+  {
+    name: "roll",
+    aliases: ["dice"],
+    get description() {
+      return t({ id: "slashCommands.roll.description", defaultMessage: "Roll dice, e.g. 2d6+3 or fireball 5 (a d20 by default)" });
+    },
+    usage: "/roll 2d6+3 · /roll fireball 5",
+    kind: "text",
+    options: () =>
+      ROLL_PRESETS.map((preset) => ({
+        value: preset.name,
+        hint: preset.roll,
+        description: t(
+          {
+            id: "slashCommands.roll.preset",
+            defaultMessage: "{upcast, select, none {Level {level} spell} other {Level {level} spell, +{upcast} per higher slot}}",
+          },
+          { level: preset.level ?? 0, upcast: preset.upcast ?? "none" },
+        ),
+      })),
+    run: (rawArg) => {
+      // `[2d6+3]`, copied from a usage line's optional-argument brackets, is still the roll.
+      const arg = rawArg.replace(/^\s*[[(]\s*([^\])]*?)\s*[\])]/, "$1");
+      const preset = presetRoll(arg);
+      if (preset?.ok) return { type: "send", text: formatRollMessage(rollDice(preset.terms, preset.label)) };
+      if (preset?.reason === "level") {
+        return {
+          type: "error",
+          message: t(
+            { id: "slashCommands.roll.level", defaultMessage: "{name} can be cast with a spell slot of level {min} to 9." },
+            { name: preset.preset.name, min: preset.preset.level ?? 1 },
+          ),
+        };
+      }
+      const { expression, label } = splitRollArgument(arg);
+      // Dice we couldn't read are reported, never quietly turned into a d20's label.
+      const garbled = !expression && /^\S*\d*d\d/i.test(label);
+      const parsed = preset ?? (garbled ? { ok: false as const, reason: "invalid" as const } : parseDiceExpression(expression || "1d20"));
+      if (parsed.ok) return { type: "send", text: formatRollMessage(rollDice(parsed.terms, label)) };
+      if (parsed.reason === "limits") {
+        return {
+          type: "error",
+          message: t(
+            { id: "slashCommands.roll.limits", defaultMessage: "You can roll up to {dice} dice with up to {sides} sides each." },
+            { dice: MAX_DICE, sides: MAX_SIDES },
+          ),
+        };
+      }
+      return {
+        type: "error",
+        message: t({ id: "slashCommands.roll.invalid", defaultMessage: "Couldn't read that roll. Try something like /roll 2d6+3." }),
+      };
     },
   },
   {
@@ -270,6 +342,26 @@ export function matchSlashCommands(
     if (!q) return true;
     return c.name.startsWith(q) || c.aliases?.some((a) => a.startsWith(q));
   });
+}
+
+/**
+ * `commands`' options with a word starting `query` (`bolt` finds `guiding-bolt`;
+ * dashes optional), those starting with it first.
+ */
+export function matchSlashOptions(
+  commands: SlashCommand[],
+  query: string,
+): { command: SlashCommand; option: SlashOption }[] {
+  const squash = (s: string) => s.toLowerCase().replace(/[-_]/g, "");
+  const q = squash(query);
+  const hits = commands.flatMap((command) =>
+    (command.options?.() ?? [])
+      .map((option) => ({ command, option, key: squash(option.value), words: option.value.toLowerCase().split(/[-_]/) }))
+      .filter(({ key, words }) => key.startsWith(q) || words.some((w) => w.startsWith(q))),
+  );
+  return [...hits.filter((h) => h.key.startsWith(q)), ...hits.filter((h) => !h.key.startsWith(q))].map(
+    ({ command, option }) => ({ command, option }),
+  );
 }
 
 /**
