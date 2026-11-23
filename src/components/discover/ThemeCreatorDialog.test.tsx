@@ -85,8 +85,30 @@ describe("ThemeCreatorDialog", () => {
 
     expect(publishButton()).toBeEnabled();
     expect(
-      screen.getByText("Anyone will be able to find and apply this theme."),
+      screen.getByText("Publishing lets anyone find and apply this theme. Saving without publishing makes it your theme only, replacing the one you're wearing."),
     ).toBeInTheDocument();
+  });
+
+  it("saves without publishing: wears the theme and signs nothing", () => {
+    const onOpenChange = vi.fn();
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <ThemeCreatorDialog open onOpenChange={onOpenChange} />
+      </QueryClientProvider>,
+    );
+    const saveButton = screen.getByRole("button", { name: "Save without publishing" });
+    expect(saveButton).toBeDisabled();
+
+    fireEvent.change(nameField(), { target: { value: "  Sunset  " } });
+    fireEvent.click(saveButton);
+
+    expect(h.publishEvent).not.toHaveBeenCalled();
+    expect(h.applyCustomTheme).toHaveBeenCalledWith(expect.objectContaining({ title: "Sunset" }));
+    expect(h.toast).toHaveBeenCalledWith({
+      title: "Theme saved",
+      description: "Sunset, applied as your theme. It isn't published.",
+    });
+    expect(onOpenChange).toHaveBeenCalledWith(false);
   });
 
   it("publishes a kind 36767 definition carrying the trimmed name", async () => {
@@ -152,7 +174,7 @@ describe("ThemeCreatorDialog", () => {
 
     vi.clearAllMocks();
     h.publishEvent.mockResolvedValue(PUBLISHED);
-    fireEvent.click(screen.getByRole("checkbox", { name: "Apply as my theme" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Apply as my theme when publishing" }));
     fireEvent.click(publishButton());
 
     await waitFor(() => expect(h.publishEvent).toHaveBeenCalled());
@@ -315,6 +337,11 @@ describe("ThemeCreatorDialog", () => {
       expect(template.prev).toBe(OWN);
       // Editing doesn't silently re-skin the app.
       expect(h.applyCustomTheme).not.toHaveBeenCalled();
+    });
+
+    it("offers no private save for a theme that is already published", () => {
+      renderEditor();
+      expect(screen.queryByRole("button", { name: "Save without publishing" })).not.toBeInTheDocument();
     });
 
     it("deletes by address after confirming, and drops it from the library", async () => {

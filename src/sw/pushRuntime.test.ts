@@ -635,6 +635,77 @@ describe("preparePush — DM request gating", () => {
     expect(p?.line).toContain("meet at 8");
   });
 
+  describe("stranger filter", () => {
+    // A fresh sender per case: the store persists across tests.
+    function stranger() {
+      const strangerSk = generateSecretKey();
+      const strangerPk = getPublicKey(strangerSk);
+      const send = (content: string, at = now(), kind = 14) => wrap(seal({
+        pubkey: strangerPk,
+        kind,
+        content,
+        tags: [["p", recipientPk]],
+        created_at: at,
+      }, strangerSk, recipientPk), recipientPk);
+      return { strangerPk, send };
+    }
+    const filter = (blockNonMembers = false, communityPeers: string[] = []) =>
+      cfg({ strangerFilter: { communityPeers, blockNonMembers } });
+
+    it("drops a non-member stranger who sends a link", async () => {
+      const { send } = stranger();
+      expect((await push(send("claim your prize https://spam.example/x"), filter()))?.drop).toBe(true);
+    });
+
+    it("keeps dropping the conversation once it carried a link, whatever follows", async () => {
+      const { send } = stranger();
+      expect((await push(send("https://spam.example/x"), filter()))?.drop).toBe(true);
+      expect((await push(send("hello?"), filter()))?.drop).toBe(true);
+    });
+
+    it("judges every message, not the first: a harmless opener doesn't clear a later link", async () => {
+      const { send } = stranger();
+      expect((await push(send("hi, we met at the meetup"), filter()))?.title).toBe("Message requests");
+      expect((await push(send("slides: https://talk.example/s"), filter()))?.drop).toBe(true);
+    });
+
+    it("can't be dodged by backdating the link", async () => {
+      const { send } = stranger();
+      expect((await push(send("hello"), filter()))?.title).toBe("Message requests");
+      expect((await push(send("https://spam.example/x", now() - 400 * 86400), filter()))?.drop).toBe(true);
+    });
+
+    it("never counts a file message's URL as a link", async () => {
+      const { send } = stranger();
+      expect((await push(send("https://blossom.example/abc.jpg", now(), 15), filter()))?.title).toBe("Message requests");
+    });
+
+    it("lets a community member's link through as a request", async () => {
+      const { strangerPk, send } = stranger();
+      expect((await push(send("https://docs.example/agenda"), filter(false, [strangerPk])))?.title).toBe("Message requests");
+    });
+
+    it("drops every non-member stranger when non-members are blocked", async () => {
+      const { send } = stranger();
+      expect((await push(send("hello there"), filter(true)))?.drop).toBe(true);
+    });
+
+    it("never filters a known sender, and is off without a filter config", async () => {
+      const { strangerPk, send } = stranger();
+      const known = await push(send("https://spam.example/x"), cfg({
+        knownPeers: [strangerPk],
+        strangerFilter: { communityPeers: [], blockNonMembers: true },
+      }));
+      expect(known?.line).toContain("spam.example");
+      expect((await push(stranger().send("https://spam.example/x"), cfg()))?.title).toBe("Message requests");
+    });
+
+    it("ignores a malformed filter config", async () => {
+      const malformed = cfg({ strangerFilter: { blockNonMembers: true } as never });
+      expect((await push(stranger().send("hello"), malformed))?.title).toBe("Message requests");
+    });
+  });
+
   it("treats a non-message rumor (reaction/delete) as a quiet request", async () => {
     const p = await push(dmWrap({ kind: 7, content: "+" }), cfg({ knownPeers: [senderPk] }));
     expect(p?.title).toBe("Message requests");

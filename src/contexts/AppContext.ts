@@ -200,6 +200,12 @@ export interface AppConfig {
    */
   showDmRequests: boolean;
   /**
+   * Whether DMs from strangers who share no community with the viewer are dropped
+   * silently (default off). Strangers whose first message is a link are dropped
+   * either way (`dmStrangerFilter.ts`). Synced.
+   */
+  blockNonMemberDms: boolean;
+  /**
    * Whether DM list rows show the latest message's text (default on). Off also
    * keeps it out of the at-rest list snapshot and skips NIP-04 preview decrypts. Synced.
    */
@@ -226,6 +232,8 @@ export interface AppConfig {
    * Per-device, and ignored in store installs.
    */
   discoverUnfiltered: boolean;
+  /** Also list the Vector Hub's communities in Discover (`concord/lib/vectorHub.ts`; default on). Synced. */
+  discoverVectorHub: boolean;
   /**
    * Strip tracking parameters (`si=`, `fbclid`, `utm_*`…) from sent and rendered
    * links (default on); see `lib/trackingParams.ts`. Synced.
@@ -367,10 +375,12 @@ export const METADATA_CONFIG_KEYS = [
   "dmTypingIndicators",
   "dmsDisabled",
   "showDmRequests",
+  "blockNonMemberDms",
   "showDmPreviews",
   "mutedWords",
   "showRecentRailDms",
   "discoverCuration",
+  "discoverVectorHub",
   "stripTrackingParams",
   "mediaProxies",
   "communityMediaAutoload",
@@ -478,11 +488,13 @@ export const defaultConfig: AppConfig = {
   acceptedDms: [],
   startedDms: [],
   showDmRequests: true,
+  blockNonMemberDms: false,
   showDmPreviews: true,
   mutedWords: [],
   showRecentRailDms: true,
   discoverCuration: "",
   discoverUnfiltered: false,
+  discoverVectorHub: true,
   stripTrackingParams: true,
   mediaProxies: [],
   communityMediaAutoload: "trusted",

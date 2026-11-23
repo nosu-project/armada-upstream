@@ -235,6 +235,31 @@ describe("ConversationList viewport gating", () => {
     expect(placeholderCount(container)).toBe(18);
   });
 
+  it("lists filtered strangers only once asked, below the requests", () => {
+    const [request, ...filtered] = conversations(3);
+    const view = render(list([], { requestRows: [request], filteredRows: filtered, view: "requests" }));
+
+    expect(rowCount(view.container)).toBe(1);
+    const toggle = view.getByRole("button", { name: /Filtered/ });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(rowCount(view.container)).toBe(3);
+    fireEvent.click(toggle);
+    expect(rowCount(view.container)).toBe(1);
+  });
+
+  it("keeps the requests reachable when every one of them is filtered", () => {
+    const filtered = conversations(2);
+    const inbox = render(list([], { requestRows: [], filteredRows: filtered }));
+    expect(inbox.getByText("2 filtered conversations")).toBeInTheDocument();
+    inbox.unmount();
+
+    const requests = render(list([], { requestRows: [], filteredRows: filtered, view: "requests", dismissRequests: () => {} }));
+    expect(requests.getByText("No message requests.")).toBeInTheDocument();
+    expect(requests.getByRole("button", { name: "Dismiss all requests" })).toBeInTheDocument();
+  });
+
   it("renders an index-only row without fabricating a preview or unread marker", () => {
     const peer = getPublicKey(generateSecretKey());
     const indexed = [{

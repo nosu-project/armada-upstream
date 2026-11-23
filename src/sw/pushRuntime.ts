@@ -35,7 +35,8 @@ import { appEventStore } from "@/lib/db/mainEventStore";
 import { createAppIntl, setIntl, t } from "@/i18n/intl";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { mediaPolicyFromConfig, mediaSrc, type MediaPolicy } from "@/lib/mediaPolicy";
-import { withArrival, writeDm17Rumors } from "@/lib/nip17/dm17Store";
+import { queryDm17Screen, withArrival, writeDm17Rumors } from "@/lib/nip17/dm17Store";
+import { dmScreenOf, mergeDmScreens, strangerDmFiltered } from "@/lib/dmStrangerFilter";
 import { nip29ThreadRootOf } from "@/lib/nip29Threads";
 import { dmAt, KIND_DM_CHAT, KIND_DM_FILE, openDmWrap } from "@/lib/nip17/protocol";
 import { dmConvKey } from "@/lib/nip17/conversation";
@@ -440,6 +441,15 @@ async function prepareDm(
 
   const known = cfg.knownConversations?.includes(conversation)
     || opened.peers.every((peer) => cfg.knownPeers.includes(peer));
+  if (!known && cfg.strangerFilter && Array.isArray(cfg.strangerFilter.communityPeers)) {
+    // Judged on everything stored for the conversation, this message included.
+    const incoming = dmScreenOf([opened], cfg.self);
+    const stored = await queryDm17Screen(cfg.self, opened.peers).catch(() => undefined);
+    if (strangerDmFiltered(stored ? mergeDmScreens(stored, incoming) : incoming, {
+      communityPeers: new Set(cfg.strangerFilter.communityPeers),
+      blockNonMembers: cfg.strangerFilter.blockNonMembers === true,
+    })) return DROP;
+  }
   if (!known && cfg.policy !== "full") {
     // A stranger controls text, name and avatar: gate all three.
     return requestPing(cfg.policy === "off", opened.rumorId, roomKey);

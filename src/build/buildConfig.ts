@@ -18,10 +18,14 @@ export const CONFIG_NAMES = [
   // Comma-separated Blossom servers, the first preferred for uploads. Unset = Armada's public servers.
   "BLOSSOM_SERVERS",
   "CONCORD_AV_SERVERS",
+  // Comma-separated https iroh relays for peer-to-peer calls where a Community lists none (CORD-07 §8). Unset = iroh's defaults; empty = none.
+  "CONCORD_IROH_RELAYS",
   // Discover's curators, comma-separated: naddr lists, npub/hex seeds, "armada-developers", or empty/"none". Unset = Armada Developers.
   "DISCOVER_CURATION",
   // "off" keeps a user's "none" from reading Discover unvetted (app-store installs never do). Unset = allowed.
   "DISCOVER_UNFILTERED",
+  // Vector Hub directory endpoint whose Concord invite links Discover also lists. Unset = https://vectorapp.io/api/hub; empty = off.
+  "VECTOR_HUB_URL",
   "NIP85_STATS_PUBKEY",
   "DEFAULT_NOISE_SUPPRESSION",
   "DEFAULT_ECHO_CANCELLATION",

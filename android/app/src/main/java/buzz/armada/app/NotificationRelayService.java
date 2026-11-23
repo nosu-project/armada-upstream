@@ -42,6 +42,7 @@ import androidx.core.graphics.drawable.IconCompat;
 
 import buzz.armada.app.db.SelfState;
 import buzz.armada.app.db.ServiceStore;
+import buzz.armada.app.db.StrangerFilter;
 import buzz.armada.app.relayfleet.CircuitBreakerPolicy;
 import buzz.armada.app.relayfleet.CursorGate;
 import buzz.armada.app.relayfleet.DmRelayCover;
@@ -249,6 +250,12 @@ public class NotificationRelayService extends Service {
     // Newest read stamp (unix s) per read-state key seen from another device,
     // so a held message read there is dropped instead of posted.
     private final Map<String, Long> lastReadByKey = new HashMap<>();
+    // Read stamps whose tray dismissal waits for the app to get focus back from
+    // system UI (see setAppCovered). Handler-confined; cleared with the account.
+    private final Map<String, Long> deferredDismissRead = new HashMap<>();
+    // The activity is visible but system UI holds focus over it: the shade, or the
+    // bouncer of a lock-screen Reply tap. Written on the main thread.
+    private static volatile boolean appCovered = false;
     private final Runnable flushHeldRunnable = this::flushHeldMessages;
     private final java.util.Map<String, java.util.ArrayDeque<Long>> mentionBurst = new java.util.HashMap<>();
 
@@ -502,6 +509,9 @@ public class NotificationRelayService extends Service {
     // so the default keeps all three off the lock screen. Empty/unknown value ⇒
     // "generic". Only consulted when the `directMessages` pref is on.
     private String dmRequests = "generic";
+    // The DM stranger filter (StrangerFilter.kt): the viewer's community peers
+    // and whether every non-member is filtered. Null (off) until the app sends it.
+    private StrangerFilter.Policy dmStrangerFilter = null;
     // Where a sender's avatar and a community's icon may be fetched FROM — the
     // WebView's media policy (see MediaPolicy), applied to the two fetches this
     // service makes unprompted. Absent means the default: proxying off.
@@ -1452,17 +1462,52 @@ public class NotificationRelayService extends Service {
         svc.handler.post(() -> svc.applyDismissRead(readByKey));
     }
 
+    /** Record reported read stamps and dismiss the rooms they cover. */
+    private void applyDismissRead(java.util.Map<String, Long> readByKey) {
+        mergeReadStamps(lastReadByKey, readByKey);
+        // Read state that advances while the shade or the bouncer covers the app
+        // (unlocking for a lock-screen Reply resumes the room it had open) would
+        // cancel the notification before its reply field takes focus, and
+        // SystemUI only keeps a cancelled notification once that field is active.
+        if (appCovered) {
+            mergeReadStamps(deferredDismissRead, readByKey);
+            return;
+        }
+        cancelReadRooms(readByKey);
+    }
+
+    /**
+     * The app's activity became covered by system UI (visible, without window
+     * focus) or stopped being so. Uncovering applies the dismissals held meanwhile.
+     */
+    static void setAppCovered(boolean covered) {
+        appCovered = covered;
+        NotificationRelayService svc = instance;
+        if (!covered && svc != null) svc.handler.post(svc::flushDeferredDismissRead);
+    }
+
+    private void flushDeferredDismissRead() {
+        if (appCovered || deferredDismissRead.isEmpty()) return;
+        java.util.Map<String, Long> held = new HashMap<>(deferredDismissRead);
+        deferredDismissRead.clear();
+        cancelReadRooms(held);
+    }
+
+    /** Keep the newest stamp per key in {@code into}. */
+    static void mergeReadStamps(java.util.Map<String, Long> into, java.util.Map<String, Long> from) {
+        for (Map.Entry<String, Long> e : from.entrySet()) {
+            Long prev = into.get(e.getKey());
+            if (prev == null || e.getValue() > prev) into.put(e.getKey(), e.getValue());
+        }
+    }
+
     /**
      * Cancel each posted room whose newest notified message is at/older than
      * the read timestamp the WebView reports for that conversation, and drop its
      * accumulated history so a later message starts fresh rather than
      * resurrecting read lines. A room with a newer unread message is left up.
      */
-    private void applyDismissRead(java.util.Map<String, Long> readByKey) {
-        for (Map.Entry<String, Long> e : readByKey.entrySet()) {
-            Long prev = lastReadByKey.get(e.getKey());
-            if (prev == null || e.getValue() > prev) lastReadByKey.put(e.getKey(), e.getValue());
-        }
+    private void cancelReadRooms(java.util.Map<String, Long> readByKey) {
         NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
         if (manager == null) return;
         java.util.Iterator<Map.Entry<String, RoomNotif>> it = roomNotifs.entrySet().iterator();
@@ -1901,6 +1946,7 @@ public class NotificationRelayService extends Service {
             groupImageCache.evictAll();
             heldMessages.clear();
             lastReadByKey.clear();
+            deferredDismissRead.clear();
         }
         userPubkey = nextUserPubkey;
         relayUrls.clear();
@@ -1923,6 +1969,7 @@ public class NotificationRelayService extends Service {
         dmMutedPeers.clear();
         dmMutedPeers.addAll(parseStringArray(sp.getString("dmMutedPeers", null)));
         dmRequests = sp.getString("dmRequests", "generic");
+        dmStrangerFilter = StrangerFilter.Policy.parse(sp.getString("dmStrangerFilter", null));
         mediaPolicy = MediaPolicy.parse(sp.getString("mediaPolicy", null));
         selfRelays.clear();
         selfRelays.addAll(parseStringArray(sp.getString("selfRelays", null)));
@@ -4643,6 +4690,9 @@ public class NotificationRelayService extends Service {
                         // already stored, so the request remains in-app on open.
                         if (!dmConversationKnown(room, convPeers,
                                 dmKnownPeers, dmKnownConversations)) {
+                            // A filtered stranger raises nothing; the app lists
+                            // them apart under Message requests.
+                            if (dmStrangerFiltered(room, rumor, rumorKind)) return;
                             if ("off".equals(dmRequests)) return;
                             if (!"full".equals(dmRequests)) { // "generic" / unset
                                 long reqTs = rumor.optLong("created_at", 0);
@@ -6083,6 +6133,22 @@ public class NotificationRelayService extends Service {
      * still a request. A conversation whose every participant is independently
      * established is also known, preserving the pre-group peer policy.
      */
+    /**
+     * Whether the stranger filter screens this unknown conversation, judged on
+     * everything stored for it plus the message in hand (already stored, unless
+     * the write failed).
+     */
+    private boolean dmStrangerFiltered(String room, JSONObject rumor, int kind) {
+        StrangerFilter.Policy policy = dmStrangerFilter;
+        if (policy == null || userPubkey == null) return false;
+        StrangerFilter.Screen incoming = StrangerFilter.screen(
+                java.util.Collections.singletonList(new StrangerFilter.Message(
+                        rumor.optString("pubkey", ""), kind, rumor.optString("content", ""))),
+                userPubkey, false);
+        StrangerFilter.Screen stored = ServiceStore.dm17Screen(this, userPubkey, room);
+        return StrangerFilter.filtered(stored != null ? stored.plus(incoming) : incoming, policy);
+    }
+
     static boolean dmConversationKnown(String convKey, List<String> peers,
                                        Set<String> knownPeers,
                                        Set<String> knownConversations) {

@@ -9,6 +9,7 @@ import { useAppContext } from "@/hooks/useAppContext";
 import { useEventStore } from "@/hooks/useEventStore";
 import { useBlossomServers } from "@/hooks/useBlossomServers";
 import { useKnownDmPeers } from "@/hooks/useKnownDmPeers";
+import { useStrangerFilterPolicy } from "@/hooks/useDmStrangerFilter";
 import { useMediaPolicy } from "@/hooks/useMediaPolicy";
 import { useMutedPubkeys } from "@/hooks/useMuteList";
 import { useNotifLevels, type NotifLevel } from "@/hooks/useNotifLevels";
@@ -27,7 +28,8 @@ import { desktopNotificationTag } from "@/lib/desktopNotificationTag";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { mediaSrc } from "@/lib/mediaPolicy";
 import { backgroundPushActive } from "@/lib/nappPush";
-import { queryDm17Conversations } from "@/lib/nip17/dm17Store";
+import { peekDm17Screen, queryDm17Conversations, queryDm17Screen } from "@/lib/nip17/dm17Store";
+import { dmScreenOf, EMPTY_DM_SCREEN, mergeDmScreens, strangerDmFiltered } from "@/lib/dmStrangerFilter";
 import { dmConvPeers } from "@/lib/nip17/conversation";
 import {
   attributedLine,
@@ -89,6 +91,8 @@ const ROOM_ALERT_MAX_TRACKED = 64;
  * the profile lookups, inside the worker's own budget (`PAGE_OPEN_BUDGET_MS`).
  */
 export const PUSH_OPEN_WAIT_MS = 4_000;
+/** How long a stranger's DM waits for the filter's memberships, inside {@link PUSH_OPEN_WAIT_MS}. */
+const STRANGER_POLICY_WAIT_MS = 3_000;
 
 function levelAdmits(level: NotifLevel, mention: boolean): boolean {
   if (level === "nothing") return false;
@@ -318,6 +322,8 @@ export function useForegroundNotifications(): void {
   const { readState } = useReadState();
   const { channelLevel, concordChannelLevel, dmLevel } = useNotifLevels();
   const { isKnown, knownConversationKeys } = useKnownDmPeers();
+  // Native has its own background service; the page notifies on the web and desktop only.
+  const strangerFilter = useStrangerFilterPolicy(!isNativeRuntime());
   const knownConversationSet = useMemo(
     () => new Set(knownConversationKeys),
     [knownConversationKeys],
@@ -378,6 +384,7 @@ export function useForegroundNotifications(): void {
     eventStore,
     nostr,
     dmRequestPolicy: config.pushPrefs.dmRequests,
+    strangerFilter,
     mediaPolicy,
     blossomServers,
     joinedAtByCommunity,
@@ -395,10 +402,18 @@ export function useForegroundNotifications(): void {
     eventStore,
     nostr,
     dmRequestPolicy: config.pushPrefs.dmRequests,
+    strangerFilter,
     mediaPolicy,
     blossomServers,
     joinedAtByCommunity,
   };
+
+  // Stranger DMs held for the filter's memberships, released once they're read.
+  const strangerPolicyWaiters = useRef(new Set<() => void>());
+  useEffect(() => {
+    if (!strangerFilter) return;
+    for (const release of [...strangerPolicyWaiters.current]) release();
+  }, [strangerFilter]);
 
   // Session floor: a fresh login backfilling history must stay silent.
   const sessionFloor = useRef(nowSecs());
@@ -747,6 +762,20 @@ export function useForegroundNotifications(): void {
 
     // Candidates dated ahead, re-judged once due as if they arrived then (CORD-03 §3).
     const heldTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+    // A stranger's DM waits (bounded) for the filter's memberships and the
+    // conversation's stored messages, then is judged once with both in hand.
+    const screenedCandidates = new WeakSet<NotifyCandidate>();
+    const strangerPolicyReady = () => new Promise<void>((resolve) => {
+      if (ctx.current.strangerFilter) return resolve();
+      const release = () => {
+        clearTimeout(timer);
+        strangerPolicyWaiters.current.delete(release);
+        resolve();
+      };
+      const timer = setTimeout(release, STRANGER_POLICY_WAIT_MS);
+      strangerPolicyWaiters.current.add(release);
+    });
     const onCandidates = (candidates: NotifyCandidate[]) => {
       const canShowOsNotification = isForegroundNotifyReady();
       const soundSettings = loadNotificationSoundSettings();
@@ -841,6 +870,26 @@ export function useForegroundNotifications(): void {
           if (cand.peer && !conversationKnown) {
             // The viewer may have written to them since the set was loaded.
             refreshMineConversationKeys();
+            if (!screenedCandidates.has(cand)) {
+              screenedCandidates.add(cand);
+              recordCandidateState(cand, roomKey, "presenting");
+              const peer = cand.peer;
+              void (async () => {
+                await strangerPolicyReady();
+                await queryDm17Screen(user.pubkey, dmConvPeers(peer), cand.eventId).catch(() => undefined);
+                if (mounted) onCandidates([cand]);
+              })();
+              continue;
+            }
+            // A filtered stranger raises nothing at all.
+            const screen = mergeDmScreens(
+              peekDm17Screen(user.pubkey, cand.peer) ?? EMPTY_DM_SCREEN,
+              dmScreenOf([{ author: cand.author, kind: cand.kind, content: cand.content ?? "" }], user.pubkey),
+            );
+            if (strangerDmFiltered(screen, c.strangerFilter)) {
+              suppress(roomKey);
+              continue;
+            }
             const policy = c.dmRequestPolicy;
             if (policy === "off") {
               suppress(roomKey);
