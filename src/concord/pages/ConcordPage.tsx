@@ -65,10 +65,13 @@ import { InviteDialog } from "@/concord/components/InviteDialog";
 import { ShareToDiscoverDialog } from "@/concord/components/ShareToDiscoverDialog";
 import { CommunityDiscoverDialog } from "@/concord/components/CommunityDiscoverDialog";
 import { ModerationView } from "@/concord/components/ModerationView";
+import { OverviewView } from "@/concord/components/OverviewView";
+import { ApprovalGateSection } from "@/concord/components/ApprovalGateSection";
+import { awaitingApproval, gateState } from "@/concord/lib/approvalGate";
 import {
-  MODERATION_TABS,
   firstModerationPane,
-  isModerationPane,
+  managedPaneOf,
+  moderationAccessFor,
   type ModerationAccess,
   type ModerationPane,
 } from "@/concord/lib/moderationPanes";
@@ -217,7 +220,7 @@ import { useTyping, useTypingPublisher } from "@/concord/hooks/useTyping";
 import { resolveVoiceBroker, useVoiceBroker, useVoicePresence } from "@/concord/hooks/useVoice";
 import { peerToPeerAvailable } from "@/concord/hooks/useIrohVoice";
 import { communityVoiceRelays } from "@/concord/lib/irohVoice";
-import { communityAvBrokers, voiceRowTransports } from "@/concord/lib/voice";
+import { communityAvBrokers, connectionOf, voiceRowTransports } from "@/concord/lib/voice";
 import { useRegisterChannelStreamKeys } from "@/concord/hooks/useStreamAuth";
 import { completeMemberlist, timeoutRunning } from "@/concord/lib/guestbook";
 import { badgeOf, byDisplayOrder, canActOnMember, canActOnPosition, channelPermissions, everyoneSends, isAuthorized, isAuthorizedIn, MAX_ROLES_PER_MEMBER, Permissions, staffRoleOf, stockTierOf, tierMoves } from "@/concord/lib/roles";
@@ -257,9 +260,20 @@ const NO_MEMBER_ACTIONS: MemberActionItem[] = [];
 /** Shared empty feed, so a chat-presented channel keeps a stable reference. */
 const NO_POSTS: ForumPost[] = [];
 
-/** Header names (formatted on read) for community-wide panes that aren't moderation ones (those use `MODERATION_TABS`). */
+/** Community-wide panes outside Manage community; `banned` and `suspicious` open its Safety tab. */
+type OtherPane = Exclude<Concord2Pane, ModerationPane | "banned" | "suspicious">;
+
+/** One header for every Manage community section; the section is named on the page. */
+const MANAGE_HEADER: { icon: LucideIcon; readonly label: string } = {
+  icon: Settings,
+  get label() {
+    return t({ id: "concordPage.communityMenu.manage", defaultMessage: "Manage community" });
+  },
+};
+
+/** Header names (formatted on read) for {@link OtherPane}s. */
 const PANE_HEADERS: Record<
-  Exclude<Concord2Pane, ModerationPane>,
+  OtherPane,
   { icon: LucideIcon; readonly label: string }
 > = {
   all: {
@@ -284,18 +298,6 @@ const PANE_HEADERS: Record<
     icon: FolderGit2,
     get label() {
       return t({ id: "concordPage.pane.projects", defaultMessage: "Projects" });
-    },
-  },
-  settings: {
-    icon: Settings,
-    get label() {
-      return t({ id: "concordPage.pane.communitySettings", defaultMessage: "Community settings" });
-    },
-  },
-  suspicious: {
-    icon: Shield,
-    get label() {
-      return t({ id: "concordPage.pane.suspiciousActivity", defaultMessage: "Suspicious activity" });
     },
   },
 };
@@ -516,6 +518,7 @@ export const ChannelRow = memo(function ChannelRow({
   channel,
   active,
   inCall,
+  me,
   speaking,
   muted: mutedVoice,
   unread,
@@ -536,6 +539,8 @@ export const ChannelRow = memo(function ChannelRow({
   active: boolean;
   /** Whether the user's current call is THIS channel's voice room. */
   inCall: boolean;
+  /** The viewer, to tell whether their own presence is off the SFU. */
+  me?: string;
   /** Live speaker set (only passed when `inCall`), for roster voice activity. */
   speaking?: ReadonlySet<string>;
   /** Live muted set (only passed when `inCall`), for the roster mute indicator. */
@@ -597,11 +602,13 @@ export const ChannelRow = memo(function ChannelRow({
     [fold],
   );
   // In the call, the live roster holds the LiveKit room and the peer-to-peer members we're linked to.
+  // Our own presence off the SFU says this call reaches the SFU's members peer to peer.
   const voiceTransports = useMemo(() => {
     const live = inCall && voiceRoomPubkeys ? voiceRoomPubkeys : [];
     const offSfu = new Set(fold.otherTransport.map((p) => p.author));
-    return voiceRowTransports(fold, new Set(live), live.filter((pk) => !offSfu.has(pk)));
-  }, [fold, inCall, voiceRoomPubkeys]);
+    const selfOffSfu = inCall && me !== undefined && offSfu.has(me);
+    return voiceRowTransports(fold, new Set(live), live.filter((pk) => !offSfu.has(pk)), selfOffSfu);
+  }, [fold, inCall, voiceRoomPubkeys, me]);
   // A moderator acts on a call's participants from the roster too, joined or not (CORD-07 §7).
   const voiceMembers = useMemo(() => [...fold.present, ...fold.otherTransport], [fold]);
   const voiceActionsFor = useVoiceActionsFor(community, channel, voiceMembers);
@@ -628,15 +635,12 @@ export const ChannelRow = memo(function ChannelRow({
     return [...new Set([...voiceRoomPubkeys, ...fold.otherTransport.map((p) => p.author)])];
   }, [inCall, voiceRoomPubkeys, foldedParticipants, fold]);
 
-  // Per transport: the live LiveKit roster while in this call, presence otherwise.
-  // The live roster carries peer-to-peer members too; only the rest are on LiveKit.
-  const sfuCount = useMemo(() => {
-    if (!inCall || !voiceRoomPubkeys) return fold.present.length;
-    const offSfu = new Set(fold.otherTransport.map((p) => p.author));
-    return voiceRoomPubkeys.filter((pk) => !offSfu.has(pk)).length;
-  }, [inCall, voiceRoomPubkeys, fold]);
-  // Peer to peer alone: a member on LiveKit counts there, whatever else they announce.
-  const p2pCount = fold.otherTransport.length;
+  // Each member counts once, on the transport this client reaches them over.
+  const [sfuCount, p2pCount] = useMemo(() => {
+    let sfu = 0;
+    for (const pk of participants) if (connectionOf(voiceTransports.get(pk) ?? "sfu") === "sfu") sfu++;
+    return [sfu, participants.length - sfu];
+  }, [participants, voiceTransports]);
 
   const hasUnread = Boolean(unread);
   const hasMention = Boolean(unread?.mention);
@@ -1500,8 +1504,9 @@ function ConcordCommunityPage() {
     routeChannelId ??
     (autoSelectChannel && lastChannelKey ? lastChannels[lastChannelKey] ?? null : null);
   const view: "channel" | Concord2Pane = routePane ?? "channel";
+  const managedPane = managedPaneOf(view);
   const paneHeader =
-    view === "channel" ? null : isModerationPane(view) ? MODERATION_TABS[view] : PANE_HEADERS[view];
+    view === "channel" ? null : managedPane ? MANAGE_HEADER : PANE_HEADERS[view as OtherPane];
   const selectChannel = useCallback(
     (idHex: string) => {
       if (!communityId) return;
@@ -1784,16 +1789,8 @@ function ConcordCommunityPage() {
   const canReact = Boolean(user && channel && reactsIn(folded, channel.idHex, user.pubkey) && reachesReaders);
   const restrictedChannel = Boolean(folded && channel && !everyoneSends(folded.roster, channel.idHex));
 
-  // Audit log and invite links are open to every member, so "Moderation" always shows.
   const moderationAccess: ModerationAccess = useMemo(
-    () => ({
-      members: canManageRoles || canKickAny || canBanAny || canCreateInvite,
-      roles: canManageRoles && !dissolved,
-      invites: true,
-      banned: canBanAny,
-      reports: canReadReports,
-      audit: true,
-    }),
+    () => moderationAccessFor({ canManageRoles, canKickAny, canBanAny, canCreateInvite, canReadReports, dissolved: Boolean(dissolved) }),
     [canManageRoles, canKickAny, canBanAny, canCreateInvite, canReadReports, dissolved],
   );
 
@@ -1845,15 +1842,17 @@ function ConcordCommunityPage() {
     [folded, channel?.idHex, channel?.name, channel?.isPrivate],
   );
   const gitActivity = useChannelGitActivity(channel?.idHex, gitAttachments);
+  // Only moderators are told a banned member's posts were here; for everyone else they're simply gone.
+  const showBannedHidden = canBanAny || canModerateMessages;
   const mixedEntries = useMemo(() => {
-    const extra = bannedEntries.length === 0 ? timerEntries : [...timerEntries, ...bannedEntries];
+    const extra = bannedEntries.length === 0 || !showBannedHidden ? timerEntries : [...timerEntries, ...bannedEntries];
     const merged = mergeChannelTimeline(baseTransport.messages, gitActivity.activities, extra);
     const to = timelineSpan?.to;
     if (!timelineSpan || to === undefined) return merged;
     // A detached run shows only its own span; activity either side sits past a gap.
     const { from } = timelineSpan;
     return merged.filter((entry) => entry.type === "chat" || (entry.createdAt >= from && entry.createdAt <= to));
-  }, [baseTransport.messages, timelineSpan, gitActivity.activities, timerEntries, bannedEntries]);
+  }, [baseTransport.messages, timelineSpan, gitActivity.activities, timerEntries, bannedEntries, showBannedHidden]);
   // Memoized: rebuilding it allocates the full timeline.
   const dividerEntries = useMemo(
     () =>
@@ -2434,6 +2433,16 @@ function ConcordCommunityPage() {
 
   // One Set identity per member-list change, shared by memoized git rows and the ticket panel.
   const memberSet = useMemo(() => new Set(memberPubkeys), [memberPubkeys]);
+
+  // While approval to post is on, who can read but not yet post: the member panel files them apart.
+  const awaitingApprovalRef = useRef<string[]>([]);
+  const awaitingApprovalList = useMemo(() => {
+    const next = folded && gateState(folded).on ? [...awaitingApproval(folded, coalesced)].sort() : [];
+    const prev = awaitingApprovalRef.current;
+    if (prev.length === next.length && next.every((pk, i) => prev[i] === pk)) return prev;
+    awaitingApprovalRef.current = next;
+    return next;
+  }, [folded, coalesced]);
 
   // Hoisted role sections (Role.display): position order, filed under the highest
   // hoisted role only (owner included).
@@ -3260,6 +3269,7 @@ function ConcordCommunityPage() {
         channel={c}
         active={Boolean(view === "channel" && channel && channel.idHex === c.idHex)}
         inCall={inCall}
+        me={user?.pubkey}
         speaking={inCall ? speakingPubkeys : undefined}
         muted={inCall ? mutedPubkeys : undefined}
         unread={unreadByChannel[c.idHex]}
@@ -3332,11 +3342,12 @@ function ConcordCommunityPage() {
                     onClick: markAllChannelsRead,
                   },
                   {
+                    // Settings and every moderation pane, one entry; also closes the mobile drawer.
                     show: true,
                     icon: <Settings className="size-4" />,
-                    label: intl.formatMessage({ id: "concordPage.communityMenu.settings", defaultMessage: "Community settings" }),
+                    label: intl.formatMessage({ id: "concordPage.communityMenu.manage", defaultMessage: "Manage community" }),
                     onClick: () => {
-                      selectPane("settings");
+                      selectPane(firstModerationPane(moderationAccess) ?? "settings");
                       setChannelsOpen(false);
                     },
                   },
@@ -3345,6 +3356,13 @@ function ConcordCommunityPage() {
                     icon: <UserPlus className="size-4" />,
                     label: intl.formatMessage({ id: "concordPage.communityMenu.invitePeople", defaultMessage: "Invite people" }),
                     onClick: () => setInviteOpen(true),
+                  },
+                  {
+                    // The member card's own-name path, reached without finding oneself in the roster.
+                    show: !!user && !dissolved && standing.mayNickname(user.pubkey),
+                    icon: <Tag className="size-4" />,
+                    label: intl.formatMessage({ id: "concordPage.communityMenu.nickname", defaultMessage: "Change my nickname" }),
+                    onClick: () => user && setNicknameTarget(user.pubkey),
                   },
                   {
                     // Only a listed community has anything to boost.
@@ -3365,17 +3383,6 @@ function ConcordCommunityPage() {
                     icon: <Plus className="size-4" />,
                     label: intl.formatMessage({ id: "concordPage.communityMenu.createChannel", defaultMessage: "Create channel" }),
                     onClick: () => setCreatingChannel(true),
-                  },
-                  {
-                    // One entry for the moderation panes; also closes the mobile drawer.
-                    show: true,
-                    icon: <Shield className="size-4" />,
-                    label: intl.formatMessage({ id: "concordPage.communityMenu.moderation", defaultMessage: "Moderation" }),
-                    onClick: () => {
-                      const pane = firstModerationPane(moderationAccess);
-                      if (pane) selectPane(pane);
-                      setChannelsOpen(false);
-                    },
                   },
                 ]
                   .filter((i) => i.show)
@@ -3466,7 +3473,8 @@ function ConcordCommunityPage() {
       preChannels={
         user && community ? (
           <>
-            <SuspiciousActivityBanner community={community} channels={channels} folded={folded} onOpen={() => selectPane("suspicious")} />
+            {/* It opens Safety, so only for those who can open it. */}
+            {moderationAccess.safety && <SuspiciousActivityBanner community={community} channels={channels} folded={folded} onOpen={() => selectPane("safety")} />}
             {offerUpgrade && <LegacyControlBanner key={community.idHex} communityIdHex={community.idHex} onUpgrade={openRotateKeys} />}
             <button
               type="button"
@@ -3926,49 +3934,73 @@ function ConcordCommunityPage() {
                     mentionsEveryone={messageMentionsEveryone}
                   />
                 </div>
-              ) : isModerationPane(view) ? (
+              ) : managedPane ? (
                 <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain scrollbar-stable pb-safe">
                   {community && (
                     <ModerationView
                       community={community}
-                      pane={view}
+                      pane={managedPane}
                       access={moderationAccess}
                       memberPubkeys={memberPubkeys}
                       canModerateMembers={canKickAny || canBanAny}
                       canManageRoles={canManageRoles && !dissolved}
+                      canBan={canBanAny}
                       onSelect={selectPane}
-                    />
-                  )}
-                </div>
-              ) : view === "settings" ? (
-                <div className="flex-1 min-h-0 overflow-y-auto overflow-x-clip overscroll-contain scrollbar-stable pb-safe">
-                  {community && (
-                    <Suspense fallback={paneLoading}>
-                    <CommunitySettingsView
-                      community={community}
-                      metadata={folded?.metadata}
-                      ownerHex={ownerHex}
-                      memberCount={memberPubkeys.length}
-                      canManageMetadata={canManageMetadata}
-                      canManageChannels={canManageChannels}
-                      editorOps={editorOps}
-                      onNewChannel={canManageChannels ? () => setCreatingChannel(true) : undefined}
-                      onOpenInvites={() => selectPane("invites")}
-                    />
-                    </Suspense>
-                  )}
-                </div>
-              ) : view === "suspicious" ? (
-                <div className="flex-1 min-h-0 overflow-y-auto overflow-x-clip overscroll-contain scrollbar-stable pb-safe">
-                  {community && (
-                    <SuspiciousActivityView
-                      community={community}
-                      channels={channels}
-                      folded={folded}
-                      ban={moderation.ban}
-                      kick={(target) => moderation.kick({ target })}
-                      canBan={moderation.canBan}
-                      canKick={moderation.canKick}
+                      overview={
+                        managedPane === "overview" && (
+                          <OverviewView
+                            community={community}
+                            channels={channels}
+                            folded={folded}
+                            memberCount={memberPubkeys.length}
+                            access={moderationAccess}
+                            onSelect={selectPane}
+                            canKick={moderation.canKick}
+                            canBan={moderation.canBan}
+                            onKick={setKickTarget}
+                            onBan={setBanTarget}
+                          />
+                        )
+                      }
+                      settings={
+                        managedPane === "settings" && (
+                          <Suspense fallback={paneLoading}>
+                            <CommunitySettingsView
+                              community={community}
+                              metadata={folded?.metadata}
+                              ownerHex={ownerHex}
+                              memberCount={memberPubkeys.length}
+                              canManageMetadata={canManageMetadata}
+                              canManageChannels={canManageChannels}
+                              editorOps={editorOps}
+                              onNewChannel={canManageChannels ? () => setCreatingChannel(true) : undefined}
+                              onOpenInvites={() => selectPane("invites")}
+                            />
+                          </Suspense>
+                        )
+                      }
+                      safety={
+                        managedPane === "safety" && (
+                          <>
+                            <ApprovalGateSection
+                              community={community}
+                              folded={folded}
+                              channels={channels}
+                              members={memberPubkeys}
+                              observed={observed}
+                            />
+                            <SuspiciousActivityView
+                              community={community}
+                              channels={channels}
+                              folded={folded}
+                              ban={moderation.ban}
+                              kick={(target) => moderation.kick({ target })}
+                              canBan={moderation.canBan}
+                              canKick={moderation.canKick}
+                            />
+                          </>
+                        )
+                      }
                     />
                   )}
                 </div>
@@ -4388,9 +4420,8 @@ function ConcordCommunityPage() {
                   admins={panelAdmins}
                   members={panelMembers}
                   currentUserPubkey={user?.pubkey}
-                  roleCatalog={roleCatalog}
-                  memberRoleIds={memberRoleIds}
                   roleSections={panelSections}
+                  awaiting={awaitingApprovalList}
                   onAddMembers={addableChannelRoles.length > 0 ? openAddMembers : undefined}
                   onClose={closeMembers}
                 />

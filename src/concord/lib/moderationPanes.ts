@@ -1,17 +1,20 @@
-import { Ban, Flag, Link as LinkIcon, ScrollText, Shield, Users } from "lucide-react";
+import { Flag, LayoutDashboard, Link as LinkIcon, ScrollText, Settings, Shield, ShieldAlert, Users } from "lucide-react";
 
 import type { PillTab } from "@/components/ui/pill-tabs";
 import { t } from "@/i18n/intl";
+import type { Concord2Pane } from "@/lib/routes";
 
 /**
- * Moderation panel panes, in tab order. Each is its own route (`/c/<id>/members`,
+ * The Manage community panes, in tab order. Each is its own route (`/c/<id>/members`,
  * …) so panes are linkable and back steps between tabs.
  */
 export const MODERATION_PANES = [
+  "overview",
+  "settings",
   "members",
   "roles",
   "invites",
-  "banned",
+  "safety",
   "reports",
   "audit",
 ] as const;
@@ -22,14 +25,60 @@ export function isModerationPane(value: string): value is ModerationPane {
   return (MODERATION_PANES as readonly string[]).includes(value);
 }
 
+/** The tab a route opens: older routes that became part of Safety keep working. */
+export function managedPaneOf(pane: Concord2Pane | "channel"): ModerationPane | undefined {
+  if (pane === "banned" || pane === "suspicious") return "safety";
+  return isModerationPane(pane) ? pane : undefined;
+}
+
 /**
  * Which tabs this viewer may open — UI only; the fold re-checks each permission
  * (CORD-04), so a wrongly shown tab just costs a refused publish.
  */
 export type ModerationAccess = Readonly<Record<ModerationPane, boolean>>;
 
+/** What the viewer holds that opens the panes. */
+export interface ModerationPowers {
+  canManageRoles: boolean;
+  canKickAny: boolean;
+  canBanAny: boolean;
+  canCreateInvite: boolean;
+  canReadReports: boolean;
+  dissolved: boolean;
+}
+
+/** Settings, audit log and invite links are open to every member, so "Manage community" always shows. */
+export function moderationAccessFor(p: ModerationPowers): ModerationAccess {
+  return {
+    // Manage Roles is who approves members while approval to post is on.
+    overview: p.canKickAny || p.canBanAny || p.canReadReports || p.canManageRoles,
+    settings: true,
+    members: p.canManageRoles || p.canKickAny || p.canBanAny || p.canCreateInvite,
+    roles: p.canManageRoles && !p.dissolved,
+    invites: true,
+    // Bans live here, and so does the approval to post switch, which Manage Roles turns.
+    safety: p.canBanAny || p.canManageRoles,
+    reports: p.canReadReports,
+    audit: true,
+  };
+}
+
 /** Each pane's icon + name (formatted on read), shared by the tab strip and page header. */
 export const MODERATION_TABS: Readonly<Record<ModerationPane, PillTab<ModerationPane>>> = {
+  overview: {
+    id: "overview",
+    icon: LayoutDashboard,
+    get label() {
+      return t({ id: "moderationPanes.overview", defaultMessage: "Overview" });
+    },
+  },
+  settings: {
+    id: "settings",
+    icon: Settings,
+    get label() {
+      return t({ id: "moderationPanes.settings", defaultMessage: "Settings" });
+    },
+  },
   members: {
     id: "members",
     icon: Users,
@@ -51,11 +100,11 @@ export const MODERATION_TABS: Readonly<Record<ModerationPane, PillTab<Moderation
       return t({ id: "moderationPanes.invites", defaultMessage: "Invite links" });
     },
   },
-  banned: {
-    id: "banned",
-    icon: Ban,
+  safety: {
+    id: "safety",
+    icon: ShieldAlert,
     get label() {
-      return t({ id: "moderationPanes.banned", defaultMessage: "Banned" });
+      return t({ id: "moderationPanes.safety", defaultMessage: "Safety" });
     },
   },
   reports: {
@@ -75,8 +124,8 @@ export const MODERATION_TABS: Readonly<Record<ModerationPane, PillTab<Moderation
 };
 
 /**
- * Where "Moderation" lands: the first tab this viewer may open (ordered so
- * moderators land on members, not the log).
+ * Where "Manage community" lands: the first tab this viewer may open (ordered so
+ * moderators land on the overview, everyone else on settings).
  */
 export function firstModerationPane(access: ModerationAccess): ModerationPane | undefined {
   return MODERATION_PANES.find((pane) => access[pane]);
