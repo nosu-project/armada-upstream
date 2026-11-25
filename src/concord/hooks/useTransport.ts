@@ -19,7 +19,7 @@ import { expirationOf, timerNoticeSeconds } from "@/concord/lib/disappearing";
 import { sendRefusal } from "@/concord/lib/sendRateLimit";
 import { hasEveryoneMention } from "@/concord/lib/everyoneMention";
 import { channelKey, type TimelineSpan } from "@/concord/hooks/useChannel";
-import { mergeIntoOrdered, type DmTimerTimelineEntry } from "@/components/chat/channelTimeline";
+import { mergeIntoOrdered, type BannedHiddenTimelineEntry, type DmTimerTimelineEntry } from "@/components/chat/channelTimeline";
 import { buildCalendarTags, type CalendarEvent, type CalendarEventInput, type CalendarTransport, parseCalendarEvents, type RsvpStatus, type RsvpTally, tallyRsvps } from "@/lib/calendar";
 import { buildPollTags, parsePoll, tallyPollVotes, type PollTally, type PollVote } from "@/lib/polls";
 import { zapRumorTags, type ZapTally } from "@/lib/zaps";
@@ -28,6 +28,7 @@ import type { Channel, Community } from "@/concord/lib/types";
 import { sameReactionTallies, stableZapsFor, toChatMsg } from "@/components/chat/transport";
 import type { ChatMsg, ChatTransport, MessageCalendar, MessagePoll, MessageReactions, OnchainZapAnnouncement, PollDraft, ReactInput, ReactionTally, ZapPayment } from "@/components/chat/transport";
 import { t } from "@/i18n";
+import { toast } from "@/hooks/useToast";
 
 /** Stable empties, so memoized rows keep constant props. */
 const EMPTY_TALLIES: ReactionTally[] = [];
@@ -72,6 +73,8 @@ export function useTransport(
   routeChannelIdHex?: string | null,
   /** Exact message/thread targets parsed from the active route. */
   focus?: ChannelTimelineFocus,
+  /** Whether the reader holds ADD_REACTIONS here (CORD-04 §8). */
+  canReact = true,
 ): {
   transport: ChatTransport;
   /** The `created_at` range the timeline shows; `to` is set while a detached run is shown. */
@@ -86,6 +89,8 @@ export function useTransport(
    * via {@link mergeChannelTimeline}.
    */
   timerEntries: DmTimerTimelineEntry[];
+  /** Placeholders for banned members' hidden posts, merged the same way. */
+  bannedEntries: BannedHiddenTimelineEntry[];
   /** Opened rows by rumor id — the ONLY place the original seal (needed for pins) survives. */
   openedById: Map<string, OpenedChat>;
   /** The fold's earned-trust set (`FoldedTimeline.trusted`), for the media hold. */
@@ -225,8 +230,8 @@ export function useTransport(
 
   // Both caches outlive a `talliesById` recompute (which rebuilds every array),
   // so memoized rows keep their `reactions` prop. The react fn reads through a ref.
-  const reactDeps = useRef({ send, queryClient, channelIdHex, targetById });
-  reactDeps.current = { send, queryClient, channelIdHex, targetById };
+  const reactDeps = useRef({ send, queryClient, channelIdHex, targetById, canReact });
+  reactDeps.current = { send, queryClient, channelIdHex, targetById, canReact };
   const reactCacheRef = useRef(new Map<string, (input: ReactInput) => void>());
   const reactionCacheRef = useRef(new Map<string, MessageReactions>());
   const reactionsFor = useMemo(() => {
@@ -235,7 +240,7 @@ export function useTransport(
       let fn = reactCache.get(id);
       if (!fn) {
         fn = (input: ReactInput) => {
-          const { send, queryClient, channelIdHex, targetById } = reactDeps.current;
+          const { send, queryClient, channelIdHex, targetById, canReact } = reactDeps.current;
           if (input.mineEventId) {
             // Optimistic removal: mark deleted now and strip from the query cache.
             markReactionDeleted(input.mineEventId);
@@ -250,6 +255,11 @@ export function useTransport(
               targetKind: KIND_REACTION,
             }).catch(() => {});
           } else {
+            // Readers wouldn't count it (CORD-04 §8).
+            if (!canReact) {
+              toast({ title: t({ id: "useTransport.reactDenied", defaultMessage: "You can't react in this channel" }), variant: "destructive" });
+              return;
+            }
             const reacted = targetById.get(id);
             void send({
               content: input.content,
@@ -546,6 +556,19 @@ export function useTransport(
     [folded.timerNotices],
   );
 
+  // Placeholders where banned members' posts were (CORD-04 §4); unattributed on purpose.
+  const bannedEntries = useMemo<BannedHiddenTimelineEntry[]>(
+    () =>
+      folded.bannedHidden.map((run) => ({
+        type: "banned-hidden" as const,
+        id: `banned-hidden:${run.id}`,
+        createdAt: Math.floor(run.ms / 1000),
+        count: run.count,
+        authors: run.authors,
+      })),
+    [folded.bannedHidden],
+  );
+
   // Defined outside the transport memo so memoized rows get stable props.
   const sendStatusFor = useCallback((id: string) => sendStatus[id], [sendStatus]);
   // A refusal counts as a flooding attempt, so call once per user send, before
@@ -581,6 +604,7 @@ export function useTransport(
       isLoading,
       canWrite,
       canModerate,
+      ...(canReact ? {} : { canReact }),
       canMentionEveryone,
       mentionRoles,
       mentionsEveryone,
@@ -613,7 +637,7 @@ export function useTransport(
       sendThreadReply,
       canSend,
     }),
-    [timeline, isLoading, canWrite, canModerate, canMentionEveryone, mentionRoles, mentionsEveryone, rotationDividerIds, quarantinedIds, pausedIds, ruledIds, loadOlder, hasMore, isLoadingOlder, hasNewer, loadNewer, isLoadingNewer, returnToPresent, sendStatusFor, retryEvent, discard, deleteEvent, editMessage, replyCountFor, reactionsFor, zapsFor, sendZap, sendOnchainZap, pollFor, sendPoll, calendarFor, threadRepliesFor, sendThreadReply, canSend],
+    [timeline, isLoading, canWrite, canModerate, canReact, canMentionEveryone, mentionRoles, mentionsEveryone, rotationDividerIds, quarantinedIds, pausedIds, ruledIds, loadOlder, hasMore, isLoadingOlder, hasNewer, loadNewer, isLoadingNewer, returnToPresent, sendStatusFor, retryEvent, discard, deleteEvent, editMessage, replyCountFor, reactionsFor, zapsFor, sendZap, sendOnchainZap, pollFor, sendPoll, calendarFor, threadRepliesFor, sendThreadReply, canSend],
   );
 
   // From RAW rows: pinning needs the original seal, and edit proofs the consumed Edit rumor.
@@ -623,5 +647,5 @@ export function useTransport(
     return map;
   }, [raw]);
 
-  return { transport, span, reactionsFor, allMessages: messages, calendar, timerEntries, openedById, trustedAuthors: folded.trusted };
+  return { transport, span, reactionsFor, allMessages: messages, calendar, timerEntries, bannedEntries, openedById, trustedAuthors: folded.trusted };
 }

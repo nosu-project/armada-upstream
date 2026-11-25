@@ -10,7 +10,7 @@ import { timeoutRunning } from "@/concord/lib/guestbook";
 import { heldRoleMentions, pingableRoles, rolePings } from "@/concord/lib/roleMentions";
 import { canScrub, scrubbedDeleteExpiry, scrubOwnWraps, sendWrapOwner } from "@/concord/lib/wrapScrub";
 import { useAccountSecret } from "@/hooks/useAccountSecret";
-import { channelRules, mayHideIn, restrictedPostersIn } from "@/concord/lib/channelJudges";
+import { channelRules, mayHideIn, reactsIn, restrictedPostersIn } from "@/concord/lib/channelJudges";
 import { persistTimelineSnapshot, prewarmTimelineSnapshot, takeSnapshotSeed } from "@/concord/hooks/timelineSnapshot";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useKeyedMemo } from "@/hooks/useKeyedMemo";
@@ -319,8 +319,9 @@ export function useChannelTimeline(
     () => (channelIdHex ? channelRules(control, channelIdHex, community?.id, timeouts, history, clockNowMs(), publicUntil) : NO_RULES),
     [control, channelIdHex, community?.id, timeouts, history, publicUntil],
   );
-  // Cutoffs included: retirement can change without the epoch set changing.
-  const epochSig = channel?.streams.map((s) => `${s.epoch}:${s.retiredAt ?? ""}`).join(",") ?? "";
+  // Cutoffs and addresses included: retirement can change without the epoch set changing,
+  // and a published plane (CORD-03 §2) can share an epoch number with a held one.
+  const epochSig = channel?.streams.map((s) => `${s.epoch}:${s.group.pk.slice(0, 16)}:${s.retiredAt ?? ""}`).join(",") ?? "";
   const queryKey = useMemo(() => channelKey(channelIdHex), [channelIdHex]);
   const focusIds = useMemo(
     () => [...new Set([focus?.threadRoot, focus?.messageId].filter((id): id is string => Boolean(id)))],
@@ -1290,6 +1291,10 @@ export function useSendMessage(community: Community | undefined, channel: Channe
           { until: new Date(timeout!.until * 1000).toLocaleString(getLocale(), { dateStyle: "medium", timeStyle: "short" }) },
         ));
       }
+      // Readers wouldn't count it (CORD-04 §8, Vector `refuse_unless_reacting`).
+      if (effectiveKind === KIND_REACTION && !reactsIn(folded, channel.idHex, user.pubkey)) {
+        throw new Error(t({ id: "useTransport.reactDenied", defaultMessage: "You can't react in this channel" }));
+      }
       // Rate-limit before the optimistic insert/seal so a block leaves nothing to
       // reconcile; backstop for paths the composer doesn't check.
       if (!bypassRateLimit && isRateLimitedKind(effectiveKind)) {
@@ -1302,7 +1307,11 @@ export function useSendMessage(community: Community | undefined, channel: Channe
       }
       // In a restricted Channel a post lands at the live writer address, or not at all (Vector `send_group`).
       const at = sendTarget(channel.current.group, effectiveKind, folded, community.id, channel.idHex, user.pubkey, history);
-      if (!at) throw new Error(t({ id: "useChannel.writersOnly", defaultMessage: "Only this channel's writers can post here." }));
+      if (!at) {
+        throw new Error(effectiveKind === KIND_REACTION
+          ? t({ id: "useTransport.reactDenied", defaultMessage: "You can't react in this channel" })
+          : t({ id: "useChannel.writersOnly", defaultMessage: "Only this channel's writers can post here." }));
+      }
       const sendGroup = at.group;
       const effectiveMs = ms ?? clockNowMs();
       const tags: string[][] = [...channelBindingTags(channel.idHex, channel.current.epoch)];
@@ -1564,6 +1573,9 @@ export function useMessageActions(community: Community | undefined, channel: Cha
         old.includes(id) ? old : [...old, id],
       );
       void (async () => {
+        // Asked first: scrubbing the relay copy for a delete that can't be sent splits what
+        // readers see, as in a Locked Channel without a write right (CORD-03 §1).
+        if (!sendTarget(channel.current.group, KIND_DELETE, folded, community.id, channel.idHex, user.pubkey)) throw new Error("this delete can't be sent here");
         // One's own message leaves the relays too, with its edits (they carry its text), by the
         // derived wrap owner; only then may the in-plane delete expire (CORD-01 §Deletions).
         let expiration: number | null = null;

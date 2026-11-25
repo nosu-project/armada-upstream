@@ -1,5 +1,8 @@
 import { Capacitor, registerPlugin } from "@capacitor/core";
 
+import { BRIDGE_CHUNK } from "@/lib/chunkedWrite";
+import { bytesToBase64 } from "@/lib/fileBytes";
+
 // The device's recent photos/videos for the attach sheet (MediaGalleryPlugin.java). Android only.
 
 /** `limited` is Android 14+'s "Select photos": only the user's picks are listed. */
@@ -26,7 +29,10 @@ interface MediaGalleryPlugin {
   openSettings(): Promise<void>;
   list(opts: { limit: number; offset: number }): Promise<{ items: GalleryItem[]; more: boolean }>;
   thumbnail(opts: { id: number; video: boolean; modified: number }): Promise<{ path: string }>;
-  saveToDevice(opts: { filename: string; mime?: string; data: string }): Promise<{ location: string }>;
+  beginSave(opts: { filename: string; mime?: string }): Promise<{ id: string }>;
+  appendSave(opts: { id: string; data: string }): Promise<void>;
+  finishSave(opts: { id: string }): Promise<{ location: string }>;
+  cancelSave(opts: { id: string }): Promise<void>;
 }
 
 const MediaGallery = registerPlugin<MediaGalleryPlugin>("MediaGallery");
@@ -81,8 +87,17 @@ export function galleryThumbnailSrc(item: GalleryItem): Promise<string> {
  * Pictures/Movies/Music, anything else (or none) Download — each under
  * `Armada/`. Resolves the folder it landed in.
  */
-export async function saveToDevice(filename: string, data: string, mime?: string): Promise<string> {
-  return (await MediaGallery.saveToDevice({ filename, data, mime })).location;
+export async function saveToDevice(filename: string, bytes: Uint8Array, mime?: string): Promise<string> {
+  const { id } = await MediaGallery.beginSave({ filename, mime });
+  try {
+    for (let at = 0; at < bytes.length; at += BRIDGE_CHUNK) {
+      await MediaGallery.appendSave({ id, data: bytesToBase64(bytes.subarray(at, at + BRIDGE_CHUNK)) });
+    }
+  } catch (error) {
+    void MediaGallery.cancelSave({ id }).catch(() => {});
+    throw error;
+  }
+  return (await MediaGallery.finishSave({ id })).location;
 }
 
 /** A loadable URL for the item itself, for the full-size preview. */

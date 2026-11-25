@@ -39,6 +39,8 @@ import { clearGuestbookParseMemory } from "@/concord/lib/guestbook";
 import { clearCommunityListMemory } from "@/concord/hooks/useCommunityList";
 import { clearControlPlaneMemory } from "@/concord/hooks/useControlPlane";
 import { clearGuestbookSessionMemory } from "@/concord/hooks/useGuestbook";
+import { resetHistoryBackstop } from "@/concord/hooks/historyBackstop";
+import { clearSealWalkMemory } from "@/concord/lib/sealWalk";
 import { clearVoicePresenceMemory } from "@/concord/hooks/useVoice";
 import { clearTimelineSnapshotMemory } from "@/concord/hooks/timelineSnapshot";
 import { clearChannelSyncContexts } from "@/concord/lib/channelSync";
@@ -228,6 +230,8 @@ export async function purgeClientStorage(): Promise<void> {
   clearRumorStoreMemory();
   clearGuestbookExtrasMemory();
   clearGuestbookParseMemory();
+  resetHistoryBackstop();
+  clearSealWalkMemory();
   clearDeferredFoldMemory();
   clearIconThumbMemory();
   clearAudioMetadata();

@@ -110,6 +110,11 @@ export interface PreparedPush {
   timestamp: number;
   /** Unknown sender under the `off` policy: as quiet as possible, never silent (iOS revokes those). */
   quiet?: boolean;
+  /**
+   * Shown only where the runtime requires every push to display something
+   * (iOS); elsewhere it is dropped like {@link drop}.
+   */
+  onlyIfRequired?: true;
   /** Whether earlier room lines may show; content-blind request pings must not accumulate. */
   accumulate: boolean;
 }
@@ -320,7 +325,10 @@ const DROP: PreparedPush = {
   accumulate: false,
 };
 
-/** The content-blind ping for an unknown sender: nothing they control. */
+/**
+ * The content-blind ping for an unknown sender: nothing they control. Shown
+ * only where a push must display something; elsewhere it is avoidable noise.
+ */
 function requestPing(
   quiet: boolean,
   eventId?: string,
@@ -335,6 +343,7 @@ function requestPing(
     badge: NOTIFICATION_BADGE_ICON,
     timestamp: Date.now(),
     quiet,
+    onlyIfRequired: true,
     accumulate: false,
     eventId,
     roomKey,
@@ -479,7 +488,7 @@ async function prepareDm(
   if (dmLevel === "nothing" || (!dmLevel && cfg.directMessages === false)) return DROP;
   if (roomMutedAt(cfg.roomMutes, [roomKey], nowSecs())) return DROP;
 
-  // Non-message rumors still need something shown on iOS: the request ping.
+  // Non-message rumors are news to nobody; the request ping only satisfies runtimes that must show something.
   if (opened.kind !== KIND_DM_CHAT && opened.kind !== KIND_DM_FILE) {
     return requestPing(true, opened.rumorId, roomKey);
   }
@@ -557,7 +566,9 @@ async function prepareConcord(
   if (stream.banned?.includes(opened.author)) return DROP;
 
   // A post its readers collapse rings nobody (CORD-04 §8): no SEND here, or inside a running Timeout.
-  if (stream.sendDenied?.includes(opened.author)) return DROP;
+  if (opened.kind !== KIND_REACTION && stream.sendDenied?.includes(opened.author)) return DROP;
+  // Nor a reaction they don't count: its author can't react here (CORD-04 §8).
+  if (opened.kind === KIND_REACTION && (stream.reactDenied?.includes(opened.author) || (stream.reactors && !stream.reactors.includes(opened.author)))) return DROP;
   // In a restricted Channel a post rings only from the authors its address takes (CORD-03 §1).
   if (stream.postAuthors && opened.kind !== KIND_REACTION && !stream.postAuthors.includes(opened.author)) return DROP;
   const nowMs = Date.now() + (stream.clockOffsetMs ?? 0);

@@ -35,6 +35,12 @@ import { WrittenIds } from "./writtenIds";
 export interface ArmadaDBPlugin {
   /** Rumors matching any filter, newest-first, as a JSON array string. */
   query(options: { tenant: string; filters: string }): Promise<{ rumors: string }>;
+  /**
+   * One filter's next `limit` rows in the store's own order, below the `before`
+   * cursor, and the `next` one to resume from, absent at the end. Cursors are
+   * decimal text. Absent from desktop shells that predate it.
+   */
+  queryPage?(options: { tenant: string; filter: string; before?: string }): Promise<{ rumors: string; next?: string }>;
   /** Store a JSON array of rumors in one transaction. */
   event(options: { tenant: string; rumors: string }): Promise<void>;
   count(options: { tenant: string; filters: string }): Promise<{ count: number; approximate: boolean }>;
@@ -146,6 +152,30 @@ export class NativeArmadaDB implements ArmadaDB {
   [Symbol.toStringTag] = "NativeArmadaDB";
 }
 
+/**
+ * Most rows one read asks the native store for. The answer crosses as ONE
+ * string that the native side builds, copies and escapes whole, so an
+ * unlimited read of a large tenant exhausts a phone's Java heap.
+ */
+export const READ_PAGE = 2000;
+
+/**
+ * Whether a filter could answer more than {@link READ_PAGE} rows and can be
+ * walked by `until`. Not `ids` (bounded by its list) nor a `distinct:` read,
+ * whose one-per-group collapse would repeat groups across pages.
+ */
+function needsPaging(filter: NostrFilter): boolean {
+  if (filter.ids !== undefined) return false;
+  if (filter.limit !== undefined && filter.limit <= READ_PAGE) return false;
+  return !(typeof filter.search === "string" && /(^|\s)distinct:/.test(filter.search));
+}
+
+/** The engines' order: newest first, then id ascending. */
+function newestFirst(a: NostrRumor, b: NostrRumor): number {
+  if (a.created_at !== b.created_at) return b.created_at - a.created_at;
+  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+}
+
 /** A rumor queued for the next batched write, with its caller's settlers. */
 interface PendingWrite {
   rumor: NostrRumor;
@@ -174,6 +204,8 @@ class NativeRumorStore implements NRumorStore {
   private readonly label: string;
   /** Ids already committed, so the relay cache's re-writes cost nothing. */
   private readonly written = new WrittenIds();
+  /** The bridge refused `queryPage`: an older desktop shell. */
+  private noQueryPage = false;
 
   constructor(private readonly id: string, private readonly bridge: ArmadaDBPlugin) {
     this.label = tenantClass(id);
@@ -182,17 +214,92 @@ class NativeRumorStore implements NRumorStore {
   async query(filters: NostrFilter[], opts?: { signal?: AbortSignal }): Promise<NostrRumor[]> {
     // Read-your-writes: commit writes queued before this read.
     await this.settleWrites(opts?.signal);
+    const paged = filters.filter(needsPaging);
+    if (paged.length === 0) return this.read(filters, opts?.signal);
+    const direct = filters.filter((f) => !needsPaging(f));
+    const byId = new Map<string, NostrRumor>();
+    if (direct.length > 0) for (const row of await this.read(direct, opts?.signal)) byId.set(row.id, row);
+    for (const filter of paged) {
+      for (const row of await this.readPaged(filter, opts?.signal)) byId.set(row.id, row);
+    }
+    return [...byId.values()].sort(newestFirst);
+  }
+
+  /** One crossing. */
+  private async read(filters: NostrFilter[], signal?: AbortSignal): Promise<NostrRumor[]> {
+    signal?.throwIfAborted();
     // Bridge calls serialize on the plugin thread and native lock (shared with
     // the service), so call count matters as much as total time.
     const { rumors } = await perfTime(`db.query ${this.label}`, () =>
       this.bridge.query({ tenant: this.id, filters: JSON.stringify(filters) }),
     );
-    opts?.signal?.throwIfAborted();
+    signal?.throwIfAborted();
     return perfTime(
       `db.parse ${this.label}`,
       async () => JSON.parse(rumors) as NostrRumor[],
       (rows) => rows.length,
     );
+  }
+
+  /** One filter in crossings of at most {@link READ_PAGE} rows. */
+  private async readPaged(filter: NostrFilter, signal?: AbortSignal): Promise<NostrRumor[]> {
+    if (this.bridge.queryPage && !this.noQueryPage) {
+      let crossed = false;
+      try {
+        return await this.readBySeq(filter, () => (crossed = true), signal);
+      } catch (error) {
+        // A shell without `queryPage` refuses the first crossing; anything else is the read's own failure.
+        if (crossed || signal?.aborted) throw error;
+        this.noQueryPage = true;
+      }
+    }
+    return this.readByDate(filter, signal);
+  }
+
+  /** Paged by the store's own cursor, so a second holding any number of rows is still read a page at a time. */
+  private async readBySeq(filter: NostrFilter, crossed: () => void, signal?: AbortSignal): Promise<NostrRumor[]> {
+    const want = filter.limit ?? Infinity;
+    const rows: NostrRumor[] = [];
+    let before: string | undefined;
+    do {
+      signal?.throwIfAborted();
+      const limit = Math.min(READ_PAGE, want - rows.length);
+      const page = await perfTime(`db.queryPage ${this.label}`, () =>
+        this.bridge.queryPage!({ tenant: this.id, filter: JSON.stringify({ ...filter, limit }), ...(before !== undefined && { before }) }),
+      );
+      crossed();
+      signal?.throwIfAborted();
+      rows.push(...(JSON.parse(page.rumors) as NostrRumor[]));
+      before = page.next;
+    } while (before !== undefined && rows.length < want);
+    return rows.sort(newestFirst);
+  }
+
+  /**
+   * For a desktop shell without `queryPage`: walks back by `until`, re-reading
+   * the boundary second (deduped) so no row at it is skipped, and reading a
+   * second holding a full page on its own whole.
+   */
+  private async readByDate(filter: NostrFilter, signal?: AbortSignal): Promise<NostrRumor[]> {
+    const want = filter.limit ?? Infinity;
+    const { limit: _limit, ...unlimited } = filter;
+    const byId = new Map<string, NostrRumor>();
+    let until = filter.until;
+    while (byId.size < want) {
+      const page = await this.read([{ ...unlimited, limit: READ_PAGE, ...(until !== undefined && { until }) }], signal);
+      for (const row of page) byId.set(row.id, row);
+      if (page.length < READ_PAGE) break;
+      const oldest = page[page.length - 1].created_at;
+      if (page[0].created_at === oldest) {
+        for (const row of await this.read([{ ...unlimited, since: oldest, until: oldest }], signal)) byId.set(row.id, row);
+        until = oldest - 1;
+      } else {
+        until = oldest;
+      }
+      if (filter.since !== undefined && until < filter.since) break;
+    }
+    const rows = [...byId.values()].sort(newestFirst);
+    return want < rows.length ? rows.slice(0, want) : rows;
   }
 
   event(event: NostrRumor): Promise<void> {

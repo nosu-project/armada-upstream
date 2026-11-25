@@ -615,19 +615,21 @@ describe("preparePush — DM request gating", () => {
     expect(p?.drop).toBe(true);
   });
 
-  it("shows a content-blind request for an unknown sender under `generic`", async () => {
+  it("shows a content-blind request for an unknown sender under `generic`, only where one is required", async () => {
     const p = await push(dmWrap({ content: "vile slur from a random" }), cfg());
     expect(p?.title).toBe("Message requests");
     expect(p?.accumulate).toBe(false);
+    expect(p?.onlyIfRequired).toBe(true);
     // Nothing the sender controls reaches the notification.
     expect(JSON.stringify(p)).not.toContain("slur");
   });
 
-  it("still shows, quietly, for an unknown sender under `off`", async () => {
-    // Never nothing: iOS revokes a subscription that displays nothing.
+  it("shows, quietly, for an unknown sender under `off` only where a notification is required", async () => {
+    // Never nothing on iOS, which revokes a subscription that displays nothing.
     const p = await push(dmWrap(), cfg({ policy: "off" }));
     expect(p?.title).toBe("Message requests");
     expect(p?.quiet).toBe(true);
+    expect(p?.onlyIfRequired).toBe(true);
   });
 
   it("shows full content for an unknown sender under `full`", async () => {
@@ -706,10 +708,11 @@ describe("preparePush — DM request gating", () => {
     });
   });
 
-  it("treats a non-message rumor (reaction/delete) as a quiet request", async () => {
+  it("treats a non-message rumor (reaction/delete) as a quiet request, only where one is required", async () => {
     const p = await push(dmWrap({ kind: 7, content: "+" }), cfg({ knownPeers: [senderPk] }));
     expect(p?.title).toBe("Message requests");
     expect(p?.quiet).toBe(true);
+    expect(p?.onlyIfRequired).toBe(true);
   });
 
   it("declines a login the worker has no key for (bunker / NIP-07)", async () => {
@@ -1163,6 +1166,31 @@ describe("preparePush — showing nothing on purpose", () => {
     };
     expect((await preparePush({ scope: "c2", event: wrapFrom(stranger, 9, "spam") as never }, config))?.drop).toBe(true);
     expect((await preparePush({ scope: "c2", event: wrapFrom(manager, 9, "news") as never }, config))?.drop).not.toBe(true);
+  });
+
+  it("rings a reaction only from someone who may react there (CORD-04 §8)", async () => {
+    const CHANNEL = "5c".repeat(32);
+    const COMMUNITY = "7c".repeat(32);
+    const streamSk = generateSecretKey();
+    const streamPk = getPublicKey(streamSk);
+    const convKey = getConversationKey(streamSk, streamPk);
+    const self = getPublicKey(generateSecretKey());
+    const reactor = generateSecretKey();
+    const rumor = { pubkey: getPublicKey(reactor), kind: 7, content: "🔥", tags: [["channel", CHANNEL], ["epoch", "1"], ["e", "ab".repeat(32)], ["p", self]], created_at: now() };
+    const withId = { ...rumor, id: getEventHash(rumor as Parameters<typeof getEventHash>[0]) };
+    const sealed = finalizeEvent({ kind: 20013, content: nip44Encrypt(JSON.stringify(withId), convKey), tags: [], created_at: rumor.created_at }, reactor);
+    const wrap = finalizeEvent({ kind: 1059, content: nip44Encrypt(JSON.stringify(sealed), convKey), tags: [["p", getPublicKey(generateSecretKey())]], created_at: now() }, streamSk);
+    const ring = async (gate: { sendDenied?: string[]; reactDenied?: string[]; reactors?: string[] }) => {
+      const stream = { pk: streamPk, convKey: bytesToHex(convKey), epoch: "1", communityId: COMMUNITY, channelId: CHANNEL, ...gate };
+      return (await preparePush({ scope: "c2", event: wrap as never }, { policy: "generic" as const, self, knownPeers: [], concord: [stream] }))?.drop !== true;
+    };
+    const pk = getPublicKey(reactor);
+    expect(await ring({})).toBe(true);
+    expect(await ring({ reactDenied: [pk] })).toBe(false);
+    expect(await ring({ reactors: [self] })).toBe(false);
+    expect(await ring({ reactors: [pk] })).toBe(true);
+    // Denied Send, not Add Reactions: readers count the reaction.
+    expect(await ring({ sendDenied: [pk] })).toBe(true);
   });
 
   it("opens a restricted Channel's writer address and rings only its writers (CORD-03 §1)", async () => {

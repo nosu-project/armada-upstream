@@ -411,6 +411,8 @@ public class NotificationRelayService extends Service {
     private final RelayFleetPolicy fleetPolicy = new CircuitBreakerPolicy();
 
     private OkHttpClient httpClient;
+    /** onCreate finished: the clients exist and the service is in the foreground. Main thread only. */
+    private boolean ready;
 
     /**
      * The confinement thread, and deliberately NOT the main one.
@@ -882,6 +884,10 @@ public class NotificationRelayService extends Service {
         final Set<String> sendDenied;
         // In a restricted Channel, the only authors whose posts ring; null elsewhere (CORD-03 §1).
         final Set<String> postAuthors;
+        // Reactions readers don't count ring nobody (CORD-04 §8): authors who can't react here
+        // while anyone else can, or else the only ones who can (null where everyone may).
+        final Set<String> reactDenied;
+        final Set<String> reactors;
         final Map<String, long[]> timeouts;
         // The Nicknames members go by in this Community (CORD-04 §10), which name the sender.
         final Map<String, String> nicknames;
@@ -895,7 +901,8 @@ public class NotificationRelayService extends Service {
                        String name, String url, CommunityRef community, long timerSecs,
                        boolean mentionOnly, Set<String> banned, Set<String> mentionEveryoneAuthors,
                        boolean mentionEveryoneAnyone, List<RoleMentions.Held> roleMentions, Set<String> roleMentionAuthors,
-                       long clockOffsetMs, Set<String> sendDenied, Set<String> postAuthors, Map<String, long[]> timeouts,
+                       long clockOffsetMs, Set<String> sendDenied, Set<String> postAuthors,
+                       Set<String> reactDenied, Set<String> reactors, Map<String, long[]> timeouts,
                        Map<String, String> nicknames, long joinedAtMs, String wepoch) {
             this.convKey = convKey;
             this.communityId = communityId;
@@ -914,11 +921,29 @@ public class NotificationRelayService extends Service {
             this.clockOffsetMs = clockOffsetMs;
             this.sendDenied = sendDenied;
             this.postAuthors = postAuthors;
+            this.reactDenied = reactDenied;
+            this.reactors = reactors;
             this.timeouts = timeouts;
             this.nicknames = nicknames;
             this.joinedAtMs = joinedAtMs;
             this.wepoch = wepoch;
         }
+    }
+
+    /** Whether readers don't count `author`'s reaction (CORD-04 §8), by the config's two lists; null is no list. */
+    static boolean reactionUncounted(Set<String> reactDenied, Set<String> reactors, String author) {
+        return (reactDenied != null && reactDenied.contains(author)) || (reactors != null && !reactors.contains(author));
+    }
+
+    /** A JSON array of keys as a set, or null where the field is absent. */
+    private static Set<String> optKeySet(JSONArray arr) {
+        if (arr == null) return null;
+        Set<String> out = new HashSet<>();
+        for (int j = 0; j < arr.length(); j++) {
+            String pk = arr.optString(j, null);
+            if (pk != null && !pk.isEmpty()) out.add(pk);
+        }
+        return out;
     }
 
     private static final class GitAttachment {
@@ -1724,7 +1749,6 @@ public class NotificationRelayService extends Service {
     @Override
     public void onCreate() {
         super.onCreate();
-        instance = this;
         createChannels(this);
         try {
             int type = Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE
@@ -1770,6 +1794,8 @@ public class NotificationRelayService extends Service {
                 .pingInterval(0, TimeUnit.SECONDS) // no pings on one-shot image GETs
                 .cache(new Cache(new File(getCacheDir(), "avatar-http"), AVATAR_HTTP_CACHE_BYTES))
                 .build();
+        ready = true;
+        instance = this;
 
         // Both registrations only arm listeners that post, so they stay here
         // and are live before onStartCommand can run. The rest is confined
@@ -1796,6 +1822,9 @@ public class NotificationRelayService extends Service {
         // AlarmManager call is thread-free and cheap, so it stays here rather
         // than riding the queue behind whatever the handler thread is doing.
         BootReceiver.scheduleWatchdog(this);
+        // onCreate bailed before building the clients (foreground start refused)
+        // and has already stopped; the start it was launched for still arrives.
+        if (!ready) return START_NOT_STICKY;
         final String action = intent != null ? intent.getAction() : null;
         // Everything below reads or rebuilds the confined state, so it runs on
         // the handler thread. The intent is ours once delivered — nothing
@@ -2381,6 +2410,8 @@ public class NotificationRelayService extends Service {
                         if (pk != null && !pk.isEmpty()) postAuthors.add(pk);
                     }
                 }
+                Set<String> reactDenied = optKeySet(sub.optJSONArray("reactDenied"));
+                Set<String> reactors = optKeySet(sub.optJSONArray("reactors"));
                 Map<String, String> nicknames = new HashMap<>();
                 JSONObject nicksObj = sub.optJSONObject("nicknames");
                 if (nicksObj != null) {
@@ -2428,7 +2459,8 @@ public class NotificationRelayService extends Service {
                             convKey, communityId, channelId, s.optString("epoch", ""),
                             name, url, ref, Math.max(0, sub.optLong("timerSecs", 0)),
                             mentionOnly, banned, mentionEveryoneAuthors, sub.optBoolean("mentionEveryoneAnyone", false),
-                            roleMentions, roleMentionAuthors, sub.optLong("clockOffsetMs", 0), sendDenied, postAuthors, timeouts, nicknames,
+                            roleMentions, roleMentionAuthors, sub.optLong("clockOffsetMs", 0), sendDenied, postAuthors,
+                            reactDenied, reactors, timeouts, nicknames,
                             Math.max(0, sub.optLong("joinedAtMs", 0)),
                             s.has("wepoch") ? s.optString("wepoch", "") : null));
                 }
@@ -4700,13 +4732,10 @@ public class NotificationRelayService extends Service {
                             // A filtered stranger raises nothing; the app lists
                             // them apart under Message requests.
                             if (dmStrangerFiltered(room, rumor, rumorKind)) return;
-                            if ("off".equals(dmRequests)) return;
-                            if (!"full".equals(dmRequests)) { // "generic" / unset
-                                long reqTs = rumor.optLong("created_at", 0);
-                                notifyDmRequest(reqTs > 0 ? reqTs * 1000L
-                                        : System.currentTimeMillis());
-                                return;
-                            }
+                            // "off" and "generic" raise nothing: the content-blind
+                            // request ping exists only for runtimes that must show
+                            // something per push (iOS), and this service need not.
+                            if (!"full".equals(dmRequests)) return;
                             // "full" falls through and notifies like a friend.
                         }
                         final boolean group = convPeers.size() > 1;
@@ -5213,27 +5242,6 @@ public class NotificationRelayService extends Service {
     }
 
     /**
-     * The content-blind ping for a DM from an unknown sender when `dmRequests`
-     * is "generic". Deliberately carries NOTHING the sender controls — no
-     * display name, no avatar, no message preview — so a stranger can't push
-     * slurs (in the text OR their profile) onto the lock screen. All pending
-     * requests collapse into one "Message requests" conversation; the WebView's
-     * DM requests tier shows who they actually are on open.
-     */
-    private void notifyDmRequest(long timestampMs) {
-        // Viewing any DM thread suppresses, as for the opaque ping: the request
-        // tier is a DM surface, and the peer isn't tied to a single thread here.
-        for (String roomKey : freshActiveRoomKeys()) {
-            if (roomKey.startsWith("dm:")) return;
-        }
-        if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFY dm17 (request)");
-        String requests = str(R.string.notif_message_requests);
-        enqueueRoomMessage(/*community=*/null, "dm:requests", requests, "/dm",
-                /*senderPubkey=*/null, requests, /*picture=*/null,
-                str(R.string.notif_new_message_request), timestampMs, /*mention=*/true);
-    }
-
-    /**
      * Per-room cache key for the plugin's rolling event cache (see
      * ArmadaNotificationPlugin.getRoomEvents): NIP-29 events key by their group
      * (`h` tag), Concord wraps by the channel their stream author maps to,
@@ -5722,7 +5730,9 @@ public class NotificationRelayService extends Service {
             }
             // A post its readers collapse rings nobody (CORD-04 §8): no SEND in this
             // open Channel, or inside a running Timeout's window.
-            if (st.sendDenied.contains(author2)) return;
+            if (rumorKind != 7 && st.sendDenied.contains(author2)) return;
+            // Nor a reaction they don't count: its author can't react here (CORD-04 §8).
+            if (rumorKind == 7 && reactionUncounted(st.reactDenied, st.reactors, author2)) return;
             // In a restricted Channel a post rings only from the authors its address takes (CORD-03 §1).
             if (st.postAuthors != null && rumorKind != 7 && !st.postAuthors.contains(author2)) return;
             long[] timeout = st.timeouts.get(author2);

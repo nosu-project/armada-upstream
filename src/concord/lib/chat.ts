@@ -16,7 +16,8 @@ import type { NostrEvent } from "@nostrify/nostrify";
 import { getEventHash } from "nostr-tools/pure";
 import type { NostrRumor } from "@/lib/nostrRumor";
 
-import { KIND_CALENDAR_DATE, KIND_CALENDAR_RSVP, KIND_CALENDAR_TIME, KIND_COMMENT, KIND_DELETE, KIND_EDIT, KIND_MESSAGE, KIND_ONCHAIN_ZAP, KIND_POLL, KIND_POLL_VOTE, KIND_REACTION, KIND_SEAL_ENCRYPTED, KIND_TIMER_NOTICE, KIND_ZAP } from "@/concord/lib/kinds";
+import { KIND_CALENDAR_DATE, KIND_CALENDAR_RSVP, KIND_CALENDAR_TIME, KIND_COMMENT, KIND_DELETE, KIND_EDIT, KIND_MESSAGE, KIND_ONCHAIN_ZAP, KIND_POLL, KIND_POLL_VOTE, KIND_REACTION, KIND_SEAL_ENCRYPTED, KIND_SEAL_PAGE, KIND_TIMER_NOTICE, KIND_ZAP } from "@/concord/lib/kinds";
+import { isSealedWrap } from "@/concord/lib/sealWalk";
 import { dmTimerSeconds, isExpired } from "@/lib/nip17/protocol";
 import { reactionContentKey } from "@/hooks/useReactions";
 import { isRenderableReaction } from "@/concord/lib/reactionContent";
@@ -126,6 +127,8 @@ export function _chatDecodeMemoSizeForTests(): number {
  */
 interface PendingChat {
   memoKey: string;
+  /** Read below a seal that doesn't name it (CORD-03 §1) once its own date is known. */
+  belowSeal?: number;
   epoch: bigint;
   /** The writer epoch whose address served it (CORD-03 §1), on a restricted Channel. */
   writerEpoch?: bigint;
@@ -144,8 +147,17 @@ function openChatToSeal(
   channel: Channel,
 ): { done: OpenedChat | null } | { pending: PendingChat } {
   const memoKey = `${wrap.id}|${channel.idHex}`;
+  // A Locked Channel's read address takes nothing in a quiet span, and below its seal only
+  // what the seal names (CORD-03 §1): never worth opening. A writer address is never gated.
+  const gate = channel.readGate;
+  const gated = gate !== undefined && !isSealedWrap(channel.idHex, wrap.id) && channel.streams.some((s) => s.group.pk === wrap.pubkey && !s.writer);
+  if (gated) {
+    const at = wrap.created_at * 1000;
+    if (gate.quiet(at) || (gate.seal !== undefined && at + 999 < gate.seal.until)) return { done: null };
+  }
   const cached = decodeMemo.get(memoKey);
   if (cached !== undefined) {
+    if (gated && cached && gate.seal && cached.ms < gate.seal.until) return { done: null };
     const cut = cutOff.get(memoKey);
     const lifted = cut !== undefined && channel.streams.some((s) => s.group.pk === wrap.pubkey && (s.retiredAt === undefined || s.retiredAt > cut));
     if (!lifted) return { done: cached };
@@ -169,7 +181,7 @@ function openChatToSeal(
       // Chat seals MUST be encrypted (CORD-02 §5), or the message is a standalone
       // signed artifact any relay could display.
       if (seal.kind !== KIND_SEAL_ENCRYPTED) throw new Error("chat seal must be encrypted");
-      return { pending: { memoKey, epoch: stream.epoch, writerEpoch: stream.writer?.epoch, retiredAt: stream.retiredAt, seal, finish } };
+      return { pending: { memoKey, epoch: stream.epoch, writerEpoch: stream.writer?.epoch, retiredAt: stream.retiredAt, seal, finish, ...(gated && gate.seal ? { belowSeal: gate.seal.until } : {}) } };
     } catch {
       // not this read key
     }
@@ -199,6 +211,9 @@ function finishChat(pending: PendingChat, channel: Channel, remember: boolean): 
   let opened: OpenedChat | null = null;
   try {
     const ev = pending.finish();
+    // Set aside, not remembered: the seal may name it once a walk reaches it.
+    if (pending.belowSeal !== undefined && ev.ms < pending.belowSeal) return null;
+    if (ev.kind === KIND_SEAL_PAGE) throw new Error("a seal page is no chat");
     checkChannelBinding(ev, channel.idHex, pending.epoch);
     checkWriterBinding(ev.tags, pending.writerEpoch);
     // A retired epoch's rotation time is a hard cutoff: key possession alone must
@@ -515,6 +530,8 @@ export interface FoldedTimeline {
    * notice rows by the transport.
    */
   timerNotices: OpenedChat[];
+  /** Banned authors' timeline posts (CORD-04 §4), as runs of placeholders between visible posts. */
+  bannedHidden: BannedRun[];
   /** Messages an authorized delete removed in this fold, so their cached media can go. */
   removed: OpenedChat[];
 }
@@ -577,6 +594,8 @@ export function foldTimeline(
      * kept out of the history, and judged again on every fold.
      */
     hold?: (message: OpenedChat) => boolean;
+    /** Reactions not counted, by author (CORD-04 §8: ADD_REACTIONS by the Roster as it stands). */
+    ignoreReaction?: (author: string) => boolean;
   },
 ): FoldedTimeline {
   const byId = new Map<string, OpenedChat>();
@@ -598,8 +617,20 @@ export function foldTimeline(
   // One clock per fold: a rumor expiring mid-loop must not split the batch.
   const nowSecs = Math.floor(clockNowMs() / 1000);
 
+  // A banned author's timeline posts never render, but are counted so the reader
+  // sees that something was hidden rather than a silent gap.
+  const bannedPosts = new Map<string, OpenedChat>();
+  const bannedSelfDeletes = new Set<string>();
+
   for (const ev of opened) {
-    if (moderation?.banned.has(ev.author)) continue;
+    if (moderation?.banned.has(ev.author)) {
+      if (isExpired(ev.tags, nowSecs)) continue;
+      if (isTimelinePost(ev)) bannedPosts.set(ev.rumorId, ev);
+      else if (ev.kind === KIND_DELETE) {
+        for (const t of ev.tags) if (t[0] === "e" && t[1]) bannedSelfDeletes.add(`${ev.author}:${t[1]}`);
+      }
+      continue;
+    }
     // Expired rumors (CORD-08 §3) may still reach here from pre-deadline rows or
     // fresh decrypts.
     if (isExpired(ev.tags, nowSecs)) continue;
@@ -612,6 +643,8 @@ export function foldTimeline(
       continue;
     }
     if (ev.kind === KIND_DELETE) {
+      // In a Locked window a deletion is judged like any write (CORD-03 §1).
+      if (opts?.hold?.(ev)) continue;
       for (const t of ev.tags) {
         if (t[0] !== "e" || !t[1]) continue;
         const target = t[1];
@@ -645,6 +678,7 @@ export function foldTimeline(
       const target = eTargetOf(ev);
       if (!target || !ev.content || !isRenderableReaction(ev.content)) continue;
       if (deletedReactionIds.has(ev.rumorId)) continue;
+      if (opts?.ignoreReaction?.(ev.author) || opts?.hold?.(ev)) continue;
       const key = reactionContentKey(ev.content);
       // NIP-30: only the tag naming this reaction's own `:shortcode:` is its image (Vector `parse_chat_rumor`).
       const code = /^:(.+):$/.exec(ev.content)?.[1];
@@ -861,6 +895,17 @@ export function foldTimeline(
   // Last, so the rules above see strict ms order: nudge inline replies after their parents.
   orderRepliesAfterParents(messages);
 
+  const hidden: OpenedChat[] = [];
+  for (const ev of bannedPosts.values()) {
+    if (bannedSelfDeletes.has(`${ev.author}:${ev.rumorId}`)) continue;
+    const deleters = deletes.get(ev.rumorId);
+    if (moderation && deleters && [...deleters].some(([d, act]) => moderation.canDelete(d, ev.author, act, ev.channelIdHex))) continue;
+    if (opts?.hold?.(ev)) continue;
+    if (HELD_KINDS.has(ev.kind) && ev.ms > holdCeilingMs) continue;
+    hidden.push(ev);
+  }
+  const bannedHidden = bannedRuns(messages.filter(isTimelinePost), hidden);
+
   return {
     messages,
     ...(nextRevealMs !== undefined ? { nextRevealMs } : {}),
@@ -874,6 +919,54 @@ export function foldTimeline(
     calendarEvents: [...calendarById.values()],
     rsvps,
     timerNotices: timerNotices.sort((a, b) => (a.ms !== b.ms ? a.ms - b.ms : a.rumorId < b.rumorId ? -1 : 1)),
+    bannedHidden,
     removed,
   };
+}
+
+/** A post that stands in the channel's own timeline: not a thread reply (NIP-22 `E`). */
+function isTimelinePost(ev: OpenedChat): boolean {
+  if (ev.kind === KIND_MESSAGE || ev.kind === KIND_POLL) return true;
+  return ev.kind === KIND_COMMENT && !ev.tags.some((t) => t[0] === "E");
+}
+
+/** A run of consecutive banned authors' posts, shown as one placeholder row. */
+export interface BannedRun {
+  /** The run's first hidden rumor id. */
+  id: string;
+  /** The first hidden post's `ms`. */
+  ms: number;
+  /** Posts in the run. */
+  count: number;
+  /** Distinct banned authors in the run. */
+  authors: number;
+}
+
+/**
+ * Group `hidden` posts into runs no visible post interrupts, by `ms` (a visible
+ * post at the same instant comes first).
+ */
+export function bannedRuns(visible: readonly { ms: number }[], hidden: readonly OpenedChat[]): BannedRun[] {
+  if (hidden.length === 0) return [];
+  // Visible order can lift a reply after its parent; runs are judged by time alone.
+  const at = visible.map((m) => m.ms).sort((a, b) => a - b);
+  const sorted = [...hidden].sort((a, b) => (a.ms !== b.ms ? a.ms - b.ms : a.rumorId < b.rumorId ? -1 : 1));
+  const runs: BannedRun[] = [];
+  let open: { run: BannedRun; authors: Set<string> } | undefined;
+  let v = 0;
+  for (const ev of sorted) {
+    let interrupted = false;
+    while (v < at.length && at[v]! <= ev.ms) {
+      v++;
+      interrupted = true;
+    }
+    if (!open || interrupted) {
+      open = { run: { id: ev.rumorId, ms: ev.ms, count: 0, authors: 0 }, authors: new Set() };
+      runs.push(open.run);
+    }
+    open.run.count++;
+    open.authors.add(ev.author);
+    open.run.authors = open.authors.size;
+  }
+  return runs;
 }

@@ -10,7 +10,8 @@ import type { AuthorityCitation } from "@/concord/lib/edition";
 import type { OpenedEvent } from "@/concord/lib/stream";
 import { awayAt, foldNicknames, foldTimeouts, inTimeoutWindow, isMemberIn, kickedAwayIn, timeoutRunning, type FoldedTimeout, type GuestbookHistory } from "@/concord/lib/guestbook";
 import { canActOnMember, channelPermissions, everyoneSends, hasPermission, mayName, outranksMember, Permissions } from "@/concord/lib/roles";
-import { ledgerRestricted, postStands, readAddressTakes, ridesWriterAddress, writerWindows } from "@/concord/lib/writers";
+import { maySendKind } from "@/concord/lib/writerRights";
+import { ledgerRestricted, lockedAt, postStands, readAddressQuiet, readAddressTakes, ridesWriterAddress, writerWindows } from "@/concord/lib/writers";
 
 /** Posts inside their author's running Timeout, and, in an open Channel, posts whose author can't send there. */
 export function timelineCollapse(
@@ -31,6 +32,33 @@ export function timelineCollapse(
     inTimeoutWindow(timeouts.get(m.author), m.ms, nowMs) ||
     (m.editedMs !== undefined && inTimeoutWindow(timeouts.get(m.author), m.editedMs, nowMs)) ||
     (open && !(publicUntilMs !== undefined && m.ms < publicUntilMs) && (channelPermissions(control.roster, control.ownerHex, m.author, channelIdHex, isPrivate) & Permissions.SEND_MESSAGES) === 0n);
+}
+
+/**
+ * Reactions a reader doesn't count (CORD-04 §8): one whose author lacks ADD_REACTIONS
+ * in the Channel by the Roster as it stands. Ignored rather than deleted, so a Roster
+ * that gives the bit back counts it again. Nothing on the legacy Roster.
+ */
+export function reactionIgnored(
+  control: FoldedControl | undefined,
+  channelIdHex: string | null,
+): ((author: string) => boolean) | undefined {
+  if (!control?.rankedRoster || !channelIdHex) return undefined;
+  const isPrivate = control.channels.get(channelIdHex)?.isPrivate ?? false;
+  const verdicts = new Map<string, boolean>();
+  return (author: string) => {
+    let ignored = verdicts.get(author);
+    if (ignored === undefined) {
+      ignored = (channelPermissions(control.roster, control.ownerHex, author, channelIdHex, isPrivate) & Permissions.ADD_REACTIONS) === 0n;
+      verdicts.set(author, ignored);
+    }
+    return ignored;
+  };
+}
+
+/** Whether `me` may react in the Channel (CORD-04 §8): always on the legacy Roster. */
+export function reactsIn(control: FoldedControl | undefined, channelIdHex: string, me: string): boolean {
+  return !reactionIgnored(control, channelIdHex)?.(me);
 }
 
 /**
@@ -59,6 +87,26 @@ export function sendDeniedIn(control: FoldedControl | undefined, channelIdHex: s
   return [...candidates]
     .filter((pk) => pk !== control.ownerHex && (channelPermissions(control.roster, control.ownerHex, pk, channelIdHex, isPrivate) & Permissions.SEND_MESSAGES) === 0n)
     .sort();
+}
+
+/**
+ * Whose reactions in a Channel count, for notifiers that can't resolve the Roster
+ * (CORD-04 §8): while a member with no Grant or overwrite may react there, the exact
+ * list of those who can't (`reactDenied`); otherwise the only ones who can (`reactors`),
+ * the owner included. Neither on the legacy Roster, or when everyone may.
+ */
+export function reactionGateIn(control: FoldedControl | undefined, channelIdHex: string): { reactDenied?: string[]; reactors?: string[] } {
+  const ignored = reactionIgnored(control, channelIdHex);
+  if (!control || !ignored) return {};
+  const candidates = new Set<string>(control.roster.grants.map((g) => g.member));
+  for (const o of control.roster.overwrites ?? []) if (o.target.kind === "member") candidates.add(o.target.id);
+  candidates.delete(control.ownerHex);
+  // Anyone without a Grant or member overwrite resolves as this key does.
+  if (!ignored("0".repeat(64))) {
+    const reactDenied = [...candidates].filter(ignored).sort();
+    return reactDenied.length > 0 ? { reactDenied } : {};
+  }
+  return { reactors: [control.ownerHex, ...[...candidates].filter((pk) => !ignored(pk))].sort() };
 }
 
 /**
@@ -144,22 +192,27 @@ export function communityNicknames(
   return Object.fromEntries([...nicks].sort(([a], [b]) => (a < b ? -1 : 1)));
 }
 
+/** What a judge reads of a write: a chat row, or a call's signal (CORD-07 §4, §7). */
+export type JudgedWrite = Pick<OpenedChat, "author" | "ms" | "kind" | "tags">;
+
 /** How far past the ledger entry that moved an address a post crossing it still stands (CORD-03 §1). */
 export const ENTRY_SKEW_MS = 10 * 60_000;
 
 /**
- * A restricted Channel's judge (CORD-03 §1, Vector's `Judge`): a post stands by the
- * ledger, at an address that takes it from a writer who hadn't left, or on the
- * Roster, from a member who manages the Channel or may post there and crossed a
- * move of the ledger. `history` is the Guestbook; while it's unread, membership
- * and departures aren't judged.
+ * A restricted Channel's judge (CORD-03 §1, Vector's `Judge`): a write stands by the
+ * ledger, at an address that takes it from a writer who hadn't left, on a certificate
+ * covering its kind, or on the Roster, from a member who manages the Channel or may
+ * make it there and crossed a move of the ledger. In a Locked window every write is
+ * judged so, reactions and deletions included, and the read address takes nothing
+ * once its quiet span begins. `history` is the Guestbook; while it's unread,
+ * membership and departures aren't judged.
  */
 export function writerJudge(
   control: FoldedControl | undefined,
   channelIdHex: string | null,
   communityId: Uint8Array | undefined,
   history?: GuestbookHistory,
-): { stands: (m: OpenedChat) => boolean } | undefined {
+): { stands: (m: JudgedWrite) => boolean } | undefined {
   const ledger = channelIdHex ? control?.writers?.get(channelIdHex) : undefined;
   if (!control || !ledger || !communityId || !channelIdHex) return undefined;
   const owner = control.ownerHex;
@@ -167,31 +220,30 @@ export function writerJudge(
     pk === owner || (!control.banned.has(pk) && hasPermission(control.roster, pk, Permissions.MANAGE_CHANNELS));
   const member = (pk: string) => history === undefined || isMemberIn(history, pk);
   const departed = (pk: string, at: number) => history !== undefined && awayAt(history, pk, at);
-  const isPrivate = control.channels.get(channelIdHex)?.isPrivate ?? false;
-  const mayPost = (pk: string) =>
-    (channelPermissions(control.roster, owner, pk, channelIdHex, isPrivate) & Permissions.SEND_MESSAGES) !== 0n;
   const windows = writerWindows(ledger);
   const crossedAMove = (at: number, wepoch: number | undefined) => {
     const justPast = (edge: number) => edge <= at && at - edge < ENTRY_SKEW_MS;
     return windows.some((w) => (wepoch === undefined ? justPast(w.from) : w.epoch === wepoch && w.to !== undefined && justPast(w.to)));
   };
-  const byLedger = (m: OpenedChat, wepoch: number | undefined) => {
+  const byLedger = (m: JudgedWrite, wepoch: number | undefined) => {
+    const quiet = readAddressQuiet(ledger, m.ms);
     const open = readAddressTakes(ledger, m.ms);
-    if (wepoch === undefined) return open || !ridesWriterAddress(m.kind);
-    if (open) return true;
+    if (wepoch === undefined) return !ridesWriterAddress(m.kind, lockedAt(ledger, m.ms) || quiet) || (open && !quiet);
     const start = windows.find((w) => w.epoch === wepoch)?.from ?? 0;
+    // Dated before its window, the key it rides wasn't given yet.
+    if (open && m.ms >= start) return true;
     return (
       postStands(ledger, communityId, m) &&
       !(history !== undefined && kickedAwayIn(history, m.author, start, m.ms)) &&
       !departed(m.author, m.ms)
     );
   };
-  const vouched = (m: OpenedChat, wepoch: number | undefined) => {
+  const vouched = (m: JudgedWrite, wepoch: number | undefined) => {
     if (m.author === owner) return true;
-    const writes = ledgerRestricted(ledger) && crossedAMove(m.ms, wepoch) && mayPost(m.author);
+    const writes = ledgerRestricted(ledger) && crossedAMove(m.ms, wepoch) && maySendKind(control, m.author, channelIdHex, m.kind);
     return (manages(m.author) || writes) && member(m.author) && !departed(m.author, m.ms);
   };
-  const stands = (m: OpenedChat) => {
+  const stands = (m: JudgedWrite) => {
     if (control.banned.has(m.author) && m.author !== owner) return false;
     const tag = m.tags.find((t) => t[0] === "wepoch")?.[1];
     const wepoch = tag === undefined ? undefined : Number(tag);
@@ -208,10 +260,12 @@ export function writerJudge(
 export function timelineRules(
   collapse: ((m: OpenedChat) => boolean) | undefined,
   judge: { stands: (m: OpenedChat) => boolean } | undefined,
-): { collapse?: (m: OpenedChat) => boolean; hold?: (m: OpenedChat) => boolean } {
+  ignoreReaction?: (author: string) => boolean,
+): { collapse?: (m: OpenedChat) => boolean; hold?: (m: OpenedChat) => boolean; ignoreReaction?: (author: string) => boolean } {
   return {
     ...(collapse ? { collapse } : {}),
     ...(judge ? { hold: (m: OpenedChat) => !judge.stands(m) } : {}),
+    ...(ignoreReaction ? { ignoreReaction } : {}),
   };
 }
 
@@ -229,6 +283,7 @@ export function channelRules(
   return timelineRules(
     timelineCollapse(control, channelIdHex, timeouts, nowMs, publicUntilMs),
     writerJudge(control, channelIdHex, communityId, history),
+    reactionIgnored(control, channelIdHex),
   );
 }
 

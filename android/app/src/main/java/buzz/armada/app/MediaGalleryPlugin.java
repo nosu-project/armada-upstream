@@ -32,7 +32,9 @@ import com.getcapacitor.annotation.Permission;
 import com.getcapacitor.annotation.PermissionCallback;
 
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileOutputStream;
+import java.io.InputStream;
 import java.io.OutputStream;
 import java.util.Arrays;
 import java.util.Comparator;
@@ -58,7 +60,7 @@ import java.util.concurrent.Executors;
  * case MediaStore simply returns those. Re-requesting in the limited state is
  * how the user changes the selection.
  *
- * <p>It also writes the other way: {@link #saveToDevice} puts a saved photo or
+ * <p>It also writes the other way: {@link #beginSave} puts a saved photo or
  * video into the gallery's own collections, which needs no grant at all.
  */
 @CapacitorPlugin(
@@ -80,9 +82,13 @@ public class MediaGalleryPlugin extends Plugin {
      */
     private final ExecutorService io = Executors.newFixedThreadPool(3);
 
+    private SaveStaging saves;
+
     @Override
     public void load() {
+        saves = new SaveStaging(new File(getContext().getCacheDir(), "pending-saves"));
         io.execute(this::trimThumbCache);
+        io.execute(saves::clearStale);
     }
 
     @Override
@@ -184,37 +190,92 @@ public class MediaGalleryPlugin extends Plugin {
      * Save bytes where the user looks for them: an image into Pictures/Armada,
      * a video into Movies/Armada, audio into Music/Armada (the gallery and
      * music apps' own collections), anything else into Download/Armada.
-     * `{ filename, mime?, data }` (data base64) → `{ location }`, a folder
-     * name for the confirmation message.
+     *
+     * <p>The bytes arrive in pieces — {@code beginSave} → {@code { id }},
+     * {@code appendSave({ id, data })} (base64) per piece, {@code finishSave({ id })}
+     * → {@code { location }}, a folder name for the confirmation message — and
+     * are staged in the cache, so no call ever holds a whole video in the heap.
+     * The staging file is named by an id minted here, never a caller's path.
      *
      * <p>API 29+ goes through MediaStore, which needs no storage permission
      * and renames on collision. Older devices write to the app's external
      * files dir (also permission-free) and ask the scanner to index it.
      */
     @PluginMethod
-    public void saveToDevice(PluginCall call) {
+    public void beginSave(PluginCall call) {
         String filename = call.getString("filename");
-        String data = call.getString("data");
-        if (filename == null || filename.isEmpty() || data == null) {
-            call.reject("filename and data are required");
+        if (filename == null || filename.isEmpty()) {
+            call.reject("filename is required");
             return;
         }
         // The caller sanitizes too; MediaStore would reject a separator anyway.
         String name = filename.replaceAll("[/\\\\]", "_");
-        String declared = call.getString("mime");
+        String id;
+        try {
+            id = saves.begin(name, mediaMime(call.getString("mime")));
+        } catch (Exception e) {
+            call.reject("Could not save the file", e);
+            return;
+        }
+        JSObject result = new JSObject();
+        result.put("id", id);
+        call.resolve(result);
+    }
+
+    @PluginMethod
+    public void appendSave(PluginCall call) {
+        SaveStaging.Pending save = saves.get(call.getString("id"));
+        String data = call.getString("data");
+        if (save == null || data == null) {
+            call.reject("Unknown save or missing data");
+            return;
+        }
+        io.execute(() -> {
+            // Pieces are appended in order: the caller awaits each before the next.
+            try (OutputStream os = new FileOutputStream(save.staged, true)) {
+                os.write(Base64.decode(data, Base64.DEFAULT));
+                answer(call::resolve);
+            } catch (Exception e) {
+                saves.discard(call.getString("id"));
+                answer(() -> call.reject("Could not save the file", e));
+            }
+        });
+    }
+
+    @PluginMethod
+    public void finishSave(PluginCall call) {
+        SaveStaging.Pending save = saves.take(call.getString("id"));
+        if (save == null) {
+            call.reject("Unknown save");
+            return;
+        }
         io.execute(() -> {
             try {
-                byte[] bytes = Base64.decode(data, Base64.DEFAULT);
                 String location = Build.VERSION.SDK_INT >= 29
-                    ? saveMediaStore(name, mediaMime(declared), bytes)
-                    : saveLegacy(name, mediaMime(declared), bytes);
+                    ? saveMediaStore(save.name, save.mime, save.staged)
+                    : saveLegacy(save.name, save.mime, save.staged);
                 JSObject result = new JSObject();
                 result.put("location", location);
                 answer(() -> call.resolve(result));
             } catch (Exception e) {
                 answer(() -> call.reject("Could not save the file", e));
+            } finally {
+                save.staged.delete();
             }
         });
+    }
+
+    @PluginMethod
+    public void cancelSave(PluginCall call) {
+        saves.discard(call.getString("id"));
+        call.resolve();
+    }
+
+    private static void copy(File src, OutputStream os) throws Exception {
+        try (InputStream in = new FileInputStream(src)) {
+            byte[] buf = new byte[64 * 1024];
+            for (int n; (n = in.read(buf)) > 0; ) os.write(buf, 0, n);
+        }
     }
 
     /** Only image/video/audio pick a media collection; anything else is a plain download. */
@@ -240,18 +301,18 @@ public class MediaGalleryPlugin extends Plugin {
     }
 
     @RequiresApi(29)
-    private String saveMediaStore(String name, String mime, byte[] bytes) throws Exception {
+    private String saveMediaStore(String name, String mime, File src) throws Exception {
         try {
-            if (mime != null) return insert(name, mime, bytes);
+            if (mime != null) return insert(name, mime, src);
         } catch (Exception e) {
             // MediaStore refuses a type its collection doesn't take (e.g. an
             // image/* it can't index); the file still belongs in Downloads.
         }
-        return insert(name, null, bytes);
+        return insert(name, null, src);
     }
 
     @RequiresApi(29)
-    private String insert(String name, String mime, byte[] bytes) throws Exception {
+    private String insert(String name, String mime, File src) throws Exception {
         String folder = folderFor(mime);
         Uri collection;
         if (mime == null) collection = MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY);
@@ -271,7 +332,7 @@ public class MediaGalleryPlugin extends Plugin {
         try {
             try (OutputStream os = resolver.openOutputStream(item)) {
                 if (os == null) throw new IllegalStateException("No output stream");
-                os.write(bytes);
+                copy(src, os);
             }
             ContentValues done = new ContentValues();
             done.put(MediaStore.MediaColumns.IS_PENDING, 0);
@@ -283,7 +344,7 @@ public class MediaGalleryPlugin extends Plugin {
         return folder + "/Armada";
     }
 
-    private String saveLegacy(String name, String mime, byte[] bytes) throws Exception {
+    private String saveLegacy(String name, String mime, File src) throws Exception {
         File dir = new File(getContext().getExternalFilesDir(folderFor(mime)), "Armada");
         if (!dir.exists() && !dir.mkdirs()) throw new IllegalStateException("Could not create " + dir);
         File file = new File(dir, name);
@@ -292,7 +353,7 @@ public class MediaGalleryPlugin extends Plugin {
         String ext = dot > 0 ? name.substring(dot) : "";
         for (int n = 1; file.exists(); n++) file = new File(dir, stem + " (" + n + ")" + ext);
         try (OutputStream os = new FileOutputStream(file)) {
-            os.write(bytes);
+            copy(src, os);
         }
         MediaScannerConnection.scanFile(
             getContext(), new String[] { file.getAbsolutePath() }, null, null);

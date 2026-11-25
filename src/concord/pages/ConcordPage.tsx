@@ -1,6 +1,6 @@
 import { observedAuthors } from "@/concord/lib/observedAuthors";
 import { useCommunityRumors } from "@/concord/hooks/useCommunityRumors";
-import { AtSign, Ban, CalendarClock, CheckCheck, ChevronDown, Crown, Folder, FolderGit2, GripVertical, Hash, Headphones, KeyRound, Loader2, Lock, LogOut, Megaphone, Gem, MessageSquareText, MessagesSquare, Pause, Pencil, Phone, Pin, Play, Plus, RefreshCw, Rss, Search, Settings, Shield, ShieldAlert, ShieldOff, Tag, Timer, Trash2, UserMinus, UserPlus, X, type LucideIcon } from "lucide-react";
+import { AtSign, Ban, CalendarClock, CheckCheck, ChevronDown, Copy, Crown, Folder, FolderGit2, GripVertical, Hash, Headphones, KeyRound, Loader2, Lock, LogOut, Megaphone, Gem, MessageSquareText, MessagesSquare, Pause, Pencil, Phone, Pin, Play, Plus, RefreshCw, Rss, Search, Settings, Shield, ShieldAlert, ShieldOff, Tag, Timer, Trash2, UserMinus, UserPlus, X, type LucideIcon } from "lucide-react";
 import { createRef, lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { Navigate, useLocation, useNavigationType, useSearchParams } from "react-router-dom";
 
@@ -23,9 +23,12 @@ import type { RolePickerOption } from "@/components/chat/RolePickerItems";
 import { ProfileRelayHints } from "@/components/ProfileRelayHints";
 import { ChannelCategoryHeading } from "@/concord/components/ChannelCategoryHeading";
 import { CategoryNameDialog } from "@/concord/components/CategoryNameDialog";
+import { DuplicateChannelDialog } from "@/concord/components/DuplicateChannelDialog";
+import { logSync } from "@/lib/syncLog";
 import { useRankedCategoryControls } from "@/concord/components/RankedCategoryControls";
 import { mayConnect } from "@/concord/lib/callGate";
 import { sendsIn } from "@/concord/lib/writerKeys";
+import { reactsIn } from "@/concord/lib/channelJudges";
 import { categoryOrder } from "@/concord/lib/rankedWrites";
 import { MemberNicknameDialog } from "@/concord/components/MemberNicknameDialog";
 import { MemberTimeoutDialog } from "@/concord/components/MemberTimeoutDialog";
@@ -190,7 +193,7 @@ import { useDecryptedImage } from "@/concord/hooks/useDecryptedImage";
 import { useCarryMyNickname, useGuestbook, useHealBanDepartures, useMemberStanding, useRestoreJoin } from "@/concord/hooks/useGuestbook";
 import { useModeration, useReadCutRetry } from "@/concord/hooks/useModeration";
 import { useChannelRekey, useChannelRekeyWatch, useLinkRefreshWatch, useRefoundResume, useRekeyWatch, type RefoundProgress } from "@/concord/hooks/useRekey";
-import { useCanPost } from "@/concord/hooks/useWriterAccess";
+import { useCanPost, useCanReact } from "@/concord/hooks/useWriterAccess";
 import { clockNowMs, nowSecs } from "@/lib/relayClock";
 import { CommunityNicknamesContext } from "@/contexts/CommunityNicknamesContext";
 import { isEntitled } from "@/concord/lib/channelAccess";
@@ -353,6 +356,7 @@ interface ChatMessage2Props {
   replies: ChatMsg[];
   continuation: boolean;
   canWrite: boolean;
+  canReact: boolean;
   canModerate: boolean;
   everyoneMention: boolean;
   sendStatus: SendStatus | undefined;
@@ -392,6 +396,7 @@ const ConcordChatMessage = memo(function ConcordChatMessage({
   replies,
   continuation,
   canWrite,
+  canReact,
   canModerate,
   everyoneMention,
   sendStatus,
@@ -439,6 +444,7 @@ const ConcordChatMessage = memo(function ConcordChatMessage({
       rumor={rumor}
       heading={heading}
       canWrite={canWrite}
+      canReact={canReact}
       canModerate={canModerate}
       everyoneMention={everyoneMention}
       reactions={reactions}
@@ -522,6 +528,7 @@ export const ChannelRow = memo(function ChannelRow({
   onMove,
   onEdit,
   onPermissions,
+  onDuplicate,
   voiceOnlyCalls,
 }: {
   community: Community | undefined;
@@ -550,6 +557,8 @@ export const ChannelRow = memo(function ChannelRow({
   onEdit?: (channel: Channel) => void;
   /** The editor on its permissions (CORD-04 §8); undefined without MANAGE_ROLES on the vsk-13 Roster. */
   onPermissions?: (channel: Channel) => void;
+  /** Asks for a name and makes a Channel like this one; undefined without MANAGE_CHANNELS. */
+  onDuplicate?: (channel: Channel) => void;
   /** On ranked roles a row offers a call only for one running in a text Channel; a voice Channel joins on click. */
   voiceOnlyCalls?: boolean;
 }) {
@@ -793,6 +802,12 @@ export const ChannelRow = memo(function ChannelRow({
           <ContextMenuItem onSelect={() => onPermissions(channel)}>
             <KeyRound className="mr-2 size-4" />
             <FormattedMessage id="channelPermissions.title" defaultMessage="Permissions" />
+          </ContextMenuItem>
+        )}
+        {onDuplicate && (
+          <ContextMenuItem onSelect={() => onDuplicate(channel)}>
+            <Copy className="mr-2 size-4" />
+            <FormattedMessage id="concordPage.channelRow.duplicate" defaultMessage="Duplicate channel" />
           </ContextMenuItem>
         )}
         {onSetCategory && (
@@ -1186,6 +1201,22 @@ function TimerNotice({ author, seconds, self }: { author: string; seconds: numbe
     </div>
   );
 }
+
+/** Where banned members' posts were (CORD-04 §4): a count, never their names or content. */
+const BannedHiddenNotice = memo(function BannedHiddenNotice({ count, authors }: { count: number; authors: number }) {
+  return (
+    <div className="flex items-center justify-center gap-1.5 px-4 py-1.5 select-none" role="status">
+      <Ban className="size-3.5 shrink-0 text-muted-foreground/70" aria-hidden />
+      <span className="text-2xs text-muted-foreground/80 text-center">
+        <FormattedMessage
+          id="concordPage.bannedHidden"
+          defaultMessage="{count, plural, one {# message from a banned member is hidden} other {# messages from {authors, plural, one {a banned member} other {# banned members}} are hidden}}"
+          values={{ count, authors }}
+        />
+      </span>
+    </div>
+  );
+});
 
 /**
  * A Concord community (CORD-01..06) at `/c/:communityId`, or
@@ -1749,6 +1780,8 @@ function ConcordCommunityPage() {
   // A restricted Channel takes posts from its writers alone (CORD-03 §1); reactions still go.
   const canPost = useCanPost(community, channel?.idHex);
   const sendDenied = Boolean(user && channel && !sendsIn(folded, channel.idHex, user.pubkey));
+  const reachesReaders = useCanReact(community, channel?.idHex);
+  const canReact = Boolean(user && channel && reactsIn(folded, channel.idHex, user.pubkey) && reachesReaders);
   const restrictedChannel = Boolean(folded && channel && !everyoneSends(folded.roster, channel.idHex));
 
   // Audit log and invite links are open to every member, so "Moderation" always shows.
@@ -1764,13 +1797,14 @@ function ConcordCommunityPage() {
     [canManageRoles, canKickAny, canBanAny, canCreateInvite, canReadReports, dissolved],
   );
 
-  const { transport: baseTransport, span: timelineSpan, reactionsFor, allMessages, calendar, timerEntries, openedById, trustedAuthors } = useTransport(
+  const { transport: baseTransport, span: timelineSpan, reactionsFor, allMessages, calendar, timerEntries, bannedEntries, openedById, trustedAuthors } = useTransport(
     community,
     channel,
     canWrite,
     canModerateMessages,
     channelIdHex,
     route,
+    canReact,
   );
 
   // Purge expired disappearing messages (CORD-08 §3); hygiene, reads filter anyway.
@@ -1812,21 +1846,23 @@ function ConcordCommunityPage() {
   );
   const gitActivity = useChannelGitActivity(channel?.idHex, gitAttachments);
   const mixedEntries = useMemo(() => {
-    const merged = mergeChannelTimeline(baseTransport.messages, gitActivity.activities, timerEntries);
+    const extra = bannedEntries.length === 0 ? timerEntries : [...timerEntries, ...bannedEntries];
+    const merged = mergeChannelTimeline(baseTransport.messages, gitActivity.activities, extra);
     const to = timelineSpan?.to;
     if (!timelineSpan || to === undefined) return merged;
     // A detached run shows only its own span; activity either side sits past a gap.
     const { from } = timelineSpan;
     return merged.filter((entry) => entry.type === "chat" || (entry.createdAt >= from && entry.createdAt <= to));
-  }, [baseTransport.messages, timelineSpan, gitActivity.activities, timerEntries]);
+  }, [baseTransport.messages, timelineSpan, gitActivity.activities, timerEntries, bannedEntries]);
   // Memoized: rebuilding it allocates the full timeline.
   const dividerEntries = useMemo(
     () =>
-      mixedEntries.map((entry) => ({
+      // A placeholder for hidden posts is nothing new to read.
+      mixedEntries.flatMap((entry) => entry.type === "banned-hidden" ? [] : [{
         id: entry.id,
         createdAt: entry.createdAt,
         author: entry.type === "chat" ? entry.message.pubkey : entry.type === "dm-timer" ? entry.author : entry.type === "git-ticket-opened" ? entry.activity.ticket.author : entry.type === "git-comment" ? entry.activity.comment.author : entry.type === "git-ci-run" ? entry.activity.run.author : entry.activity.status.author,
-      })),
+      }]),
     [mixedEntries],
   );
   const newDividerId = useNewMessagesDivider(channel?.idHex ?? "", dividerEntries, user?.pubkey, baseTransport.hasMore);
@@ -1947,7 +1983,7 @@ function ConcordCommunityPage() {
     return () => document.removeEventListener("visibilitychange", stamp);
   }, [readerPubkey, channelIdForRead, mixedEntries, allMessages, threads, markChannelRead, markMentionsRead, markThreadRead, covered]);
 
-  const { leave, isLeaving, dissolve, createChannel, mintAccessRole, setChannelCategory, arrangeChannels, nameCategory } =
+  const { leave, isLeaving, dissolve, createChannel, duplicateChannel, mintAccessRole, setChannelCategory, arrangeChannels, nameCategory } =
     useCommunityManagement(community);
   const retireLinks = useRetireCommunityLinks(community);
   /** Dissolve toast Retry: runs the retirement's own `retry` with what missed. */
@@ -2911,6 +2947,30 @@ function ConcordCommunityPage() {
     (c: Channel) => setCategoryPrompt({ channels: [c], initial: "" }),
     [],
   );
+  const [duplicating, setDuplicating] = useState<Channel | null>(null);
+  const handleDuplicate = useCallback((c: Channel) => setDuplicating(c), []);
+  const runDuplicate = async (source: Channel, name: string) => {
+    const made = await duplicateChannel({ sourceIdHex: source.idHex, name });
+    // On the legacy Roster the copy's readers are the original's, let in by its access Role.
+    const roleId = made.accessRoleId;
+    let left = 0;
+    if (roleId) {
+      for (const pk of made.readers) {
+        await setMemberRoles({ member: pk, roleIds: [...roleIntent.rolesFor(pk), roleId] }).catch((e: unknown) => {
+          left++;
+          logSync("control", `a reader of #${source.name} isn't let into the copy: ${e instanceof Error ? e.message : String(e)}`);
+        });
+      }
+    }
+    selectChannel(made.channelIdHex);
+    // The copy stands, so the dialog closes on it and what didn't reach it is said here.
+    if (made.partial || left > 0) {
+      toast({
+        title: made.partial ?? t({ id: "concordPage.duplicate.readersLeft", defaultMessage: "{count, plural, one {# reader} other {# readers}} of #{name} couldn't be let into the copy." }, { count: left, name: source.name }),
+        variant: "destructive",
+      });
+    }
+  };
 
   const publishTyping = useTypingPublisher(community, channel, allMessages);
   const typingPubkeys = useTyping(community, channel, allMessages);
@@ -2931,7 +2991,7 @@ function ConcordCommunityPage() {
     transport={transport}
     entries={mixedEntries}
     newDividerId={newDividerId}
-    renderEntry={(entry, relatedEntries) => isGitTimelineEntry(entry) ? <GitTimelineRow entry={entry} onOpen={openChannelTicket} related={relatedEntries} /> : entry.type === "dm-timer" ? <TimerNotice author={entry.author} seconds={entry.seconds} self={user?.pubkey} /> : null}
+    renderEntry={(entry, relatedEntries) => isGitTimelineEntry(entry) ? <GitTimelineRow entry={entry} onOpen={openChannelTicket} related={relatedEntries} /> : entry.type === "dm-timer" ? <TimerNotice author={entry.author} seconds={entry.seconds} self={user?.pubkey} /> : entry.type === "banned-hidden" ? <BannedHiddenNotice count={entry.count} authors={entry.authors} /> : null}
     handleRef={timelineHandleFor(channel?.idHex ?? "")}
     syncing={channelSyncing || gateResolving}
     syncFailed={channelSyncFailed}
@@ -2968,6 +3028,7 @@ function ConcordCommunityPage() {
         replies={transport.threadRepliesFor?.(msg.id) ?? EMPTY_REPLIES}
         continuation={continuation}
         canWrite={transport.canWrite}
+        canReact={transport.canReact !== false}
         canModerate={transport.canModerate}
         everyoneMention={Boolean(transport.mentionsEveryone?.(msg))}
         isPinned={Boolean(transport.isPinned?.(msg.id))}
@@ -3211,6 +3272,7 @@ function ConcordCommunityPage() {
         onMove={draggable && canManageChannels && isTouchDevice ? channelDrag.arm : undefined}
         onEdit={rankedControls.editChannel}
         onPermissions={rankedControls.openChannelPermissions}
+        onDuplicate={canManageChannels ? handleDuplicate : undefined}
         voiceOnlyCalls={rankedControls.ranked}
       />
       </span>
@@ -4420,6 +4482,14 @@ function ConcordCommunityPage() {
           upgrade={legacyControl}
           onClose={() => setRotateKeysOpen(false)}
           onConfirm={runRotateKeys}
+        />
+      </MountWhenOpened>
+      <MountWhenOpened open={Boolean(duplicating)}>
+        <DuplicateChannelDialog
+          open={Boolean(duplicating)}
+          source={duplicating?.name ?? ""}
+          onOpenChange={(next) => !next && setDuplicating(null)}
+          onSubmit={(name) => (duplicating ? runDuplicate(duplicating, name) : Promise.resolve())}
         />
       </MountWhenOpened>
       <MountWhenOpened open={Boolean(categoryPrompt)}>
